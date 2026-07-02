@@ -80,6 +80,13 @@ async function init() {
         
         item.classList.add('active');
         document.getElementById(`tab-${tabId}`).classList.add('active');
+
+        // Refresh user subscription status when visiting the account page
+        if (tabId === 'account') {
+          invoke('get_user_info').then(info => {
+            updateAuthUI(info);
+          });
+        }
       });
     });
 
@@ -228,15 +235,72 @@ async function finishOnboarding() {
 // Authentication Controller
 // ==========================================
 
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return "0 seconds";
+  if (seconds < 60) return `${Math.round(seconds)} seconds`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}m ${s}s`;
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return "N/A";
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch (_) {
+    return dateStr;
+  }
+}
+
 function updateAuthUI(userInfo) {
+  const accountDesc = document.getElementById('account-desc');
+  
   if (userInfo) {
-    const [name, email] = userInfo;
-    userNameEl.textContent = name;
-    userEmailEl.textContent = email;
+    userNameEl.textContent = userInfo.name;
+    userEmailEl.textContent = userInfo.email;
+    
+    // Bind subscription fields
+    const subPlan = document.getElementById('sub-plan');
+    const subStatus = document.getElementById('sub-status');
+    const subActivated = document.getElementById('sub-activated');
+    const subUsage = document.getElementById('sub-usage');
+    
+    if (subPlan) subPlan.textContent = userInfo.plan_tier.toUpperCase();
+    if (subStatus) {
+      if (userInfo.plan_active) {
+        subStatus.textContent = "Active";
+        subStatus.className = "sub-value badge-active";
+      } else {
+        subStatus.textContent = "Inactive";
+        subStatus.className = "sub-value badge-inactive";
+      }
+    }
+    if (subActivated) subActivated.textContent = formatDate(userInfo.plan_activated_at);
+    if (subUsage) subUsage.textContent = formatDuration(userInfo.duration_seconds);
+
+    // Enforce 50-hour monthly limit progress bar calculations (50 hours = 180,000 seconds)
+    const maxSeconds = 180000.0;
+    const usageSeconds = userInfo.duration_seconds || 0.0;
+    const percent = Math.min(100.0, (usageSeconds / maxSeconds) * 100.0).toFixed(1);
+    
+    const subUsagePercent = document.getElementById('sub-usage-percent');
+    const subUsageBar = document.getElementById('sub-usage-bar');
+    
+    if (subUsagePercent) subUsagePercent.textContent = `${percent}%`;
+    if (subUsageBar) subUsageBar.style.width = `${percent}%`;
+
+    // Hide descriptive text when user is successfully logged in
+    if (accountDesc) accountDesc.classList.add('hidden');
+
     authLoggedOut.classList.add('hidden');
     authLoggingIn.classList.add('hidden');
     authLoggedIn.classList.remove('hidden');
   } else {
+    // Show descriptive text when logged out
+    if (accountDesc) accountDesc.classList.remove('hidden');
+
     authLoggedIn.classList.add('hidden');
     authLoggingIn.classList.add('hidden');
     authLoggedOut.classList.remove('hidden');
@@ -245,9 +309,8 @@ function updateAuthUI(userInfo) {
 
 function updateOnboardAuthUI(userInfo) {
   if (userInfo) {
-    const [name, email] = userInfo;
-    onboardUserNameEl.textContent = name;
-    onboardUserEmailEl.textContent = email;
+    onboardUserNameEl.textContent = userInfo.name;
+    onboardUserEmailEl.textContent = userInfo.email;
     onboardAuthLoggedOut.classList.add('hidden');
     onboardAuthLoggingIn.classList.add('hidden');
     onboardAuthLoggedIn.classList.remove('hidden');
@@ -295,15 +358,15 @@ async function triggerLogout() {
 async function setupOAuthListeners() {
   // Listen for login-success emitted by Rust thread
   unlistenLoginSuccess = await listen('login-success', (event) => {
-    const [name, email] = event.payload;
+    const userInfo = event.payload;
     
     // Automatically retrieve session token locally
     invoke('get_config').then(cfg => {
       currentConfig = cfg;
     });
 
-    updateAuthUI([name, email]);
-    updateOnboardAuthUI([name, email]);
+    updateAuthUI(userInfo);
+    updateOnboardAuthUI(userInfo);
   });
 
   // Listen for login-failed emitted by Rust thread

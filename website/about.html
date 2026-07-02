@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About Us | speekto.me</title>
+  <meta name="description" content="Learn about speekto.me AI voice dictation and the Synaptican team.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="navbar">
+    <a href="/" class="nav-logo">
+      speekto<span class="logo-dot">.</span>me
+    </a>
+    <ul class="nav-links">
+      <li class="nav-item"><a href="/">Home</a></li>
+      <li class="nav-item active"><a href="/about">About Us</a></li>
+      <li class="nav-item"><a href="/pricing">Pricing</a></li>
+    </ul>
+    <a href="/pricing" class="btn btn-primary nav-btn">Get Started</a>
+  </nav>
+
+  <!-- About Us Section -->
+  <article class="editorial-container">
+    <h1>About Us</h1>
+    <p>At <strong>speekto.me</strong>, our mission is to eliminate typing friction completely. Typing limits our speed of thought. We built a solution that lets you speak naturally and see your thoughts instantly translated into polished, grammatically correct text inside any input field.</p>
+    
+    <h2>Our Technology</h2>
+    <p>Our desktop client captures voice input, downmixes it to 16,000 Hz mono, and compresses it using the Opus audio codec—reducing bandwidth consumption by 99% (converting 15.4 MB of raw WAV audio into a tiny 161 KB Ogg stream). The server parses the Ogg header positions instantly, forwards it to Groq's Whisper v3 Turbo model for high-speed transcription (under 450ms), and applies grammar formatting via DeepSeek LLM models.</p>
+
+    <h2>Built by Synaptican</h2>
+    <p>speekto.me is designed and built with passion by the team at <strong>Synaptican</strong>. We focus on lightweight, highly optimized tools that enhance daily developer and office workflow speeds.</p>
+
+    <h2>Contact Us</h2>
+    <p>Have questions, suggestions, or need business integration support? Contact us at: <a href="mailto:contact@synaptican.com" class="synaptican-link">contact@synaptican.com</a>.</p>
+  </article>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-copy">
+      Built with 💚 by <a href="https://synaptican.com" class="synaptican-link" target="_blank">Synaptican</a>. &copy; 2026.
+    </div>
+    <ul class="footer-nav">
+      <li><a href="/">Home</a></li>
+      <li><a href="/about">About Us</a></li>
+      <li><a href="/pricing">Pricing</a></li>
+      <li><a href="/privacy">Privacy Policy</a></li>
+      <li><a href="/terms">Terms & Conditions</a></li>
+    </ul>
+  </footer>
+
+  <script src="/script.js"></script>
+</body>
+</html>

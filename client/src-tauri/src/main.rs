@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 
 pub mod config;
 pub mod audio;
@@ -74,8 +74,8 @@ fn start_login(window: tauri::WebviewWindow) {
             active.session_token = Some(token.clone());
             config::save_config(&active);
             
-            if let Some((name, email)) = api::fetch_user_info(&token) {
-                let _ = window.emit("login-success", (name, email));
+            if let Some(user_info) = api::fetch_user_info(&token) {
+                let _ = window.emit("login-success", user_info);
             } else {
                 let _ = window.emit("login-failed", "Failed to retrieve user info.");
             }
@@ -102,7 +102,7 @@ fn logout() {
 }
 
 #[tauri::command]
-fn get_user_info() -> Option<(String, String)> {
+fn get_user_info() -> Option<api::UserInfo> {
     let config = get_active_config().lock().unwrap();
     if let Some(ref token) = config.session_token {
         api::fetch_user_info(token)

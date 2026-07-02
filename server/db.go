@@ -16,7 +16,17 @@ func NewDatabase(connStr string) (*Database, error) {
 		return nil, err
 	}
 	
-	// Create tables
+	// Configure SQLite connection pooling (Group A Optimization)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
+
+	// Enable WAL journal mode and busy timeout (Group A Optimization)
+	_, _ = db.Exec("PRAGMA journal_mode=WAL;")
+	_, _ = db.Exec("PRAGMA synchronous=NORMAL;")
+	_, _ = db.Exec("PRAGMA busy_timeout = 5000;")
+	
+	// Create tables and indices (Group A Optimization)
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,6 +61,8 @@ func NewDatabase(connStr string) (*Database, error) {
 			key TEXT PRIMARY KEY,
 			value TEXT
 		);
+		CREATE INDEX IF NOT EXISTS idx_usage_logs_user_status_timestamp ON usage_logs(user_id, status, timestamp);
+		CREATE INDEX IF NOT EXISTS idx_sessions_token_expires ON sessions(token, expires_at);
 	`)
 	if err != nil {
 		db.Close()
@@ -61,6 +73,8 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_tier TEXT DEFAULT 'free'")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_active INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN audio_size_bytes INTEGER DEFAULT 0")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_activated_at TIMESTAMP")
+	_, _ = db.Exec("UPDATE users SET plan_activated_at = created_at WHERE plan_activated_at IS NULL")
 
 	// Set default configurations
 	configs := map[string]string{
@@ -97,22 +111,23 @@ func (d *Database) CreateSession(token string, userID int64) error {
 }
 
 type UserProfile struct {
-	ID         int64
-	Email      string
-	Name       string
-	PlanTier   string
-	PlanActive int
+	ID              int64
+	Email           string
+	Name            string
+	PlanTier        string
+	PlanActive      int
+	PlanActivatedAt string
 }
 
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active 
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at) 
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -164,8 +179,38 @@ func (d *Database) GetUserDurationLast24Hours(userID int64) (float64, error) {
 
 // Admin helpers
 func (d *Database) UpdateUserPlan(userID int64, planTier string, planActive int) error {
-	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ? WHERE id = ?", planTier, planActive, userID)
+	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP WHERE id = ?", planTier, planActive, userID)
 	return err
+}
+
+func (d *Database) IsUserPlanActive(userID int64) (bool, error) {
+	var planActive int
+	err := d.db.QueryRow("SELECT plan_active FROM users WHERE id = ?", userID).Scan(&planActive)
+	if err != nil {
+		return false, err
+	}
+	return planActive == 1, nil
+}
+
+func (d *Database) GetUserDurationSincePlanActivation(userID int64) (float64, error) {
+	var duration float64
+	err := d.db.QueryRow(`
+		SELECT COALESCE(SUM(audio_duration), 0.0) 
+		FROM usage_logs 
+		WHERE user_id = ? AND timestamp >= (SELECT COALESCE(plan_activated_at, created_at) FROM users WHERE id = ?) AND status = 'success'
+	`, userID, userID).Scan(&duration)
+	return duration, err
+}
+
+func (d *Database) GetUserDurationLast30Days(userID int64) (float64, error) {
+	last30Days := time.Now().UTC().Add(-30 * 24 * time.Hour).Format("2006-01-02 15:04:05")
+	var duration float64
+	err := d.db.QueryRow(`
+		SELECT COALESCE(SUM(audio_duration), 0.0) 
+		FROM usage_logs 
+		WHERE user_id = ? AND timestamp >= ? AND status = 'success'
+	`, userID, last30Days).Scan(&duration)
+	return duration, err
 }
 
 func (d *Database) GetSaasConfig() (map[string]string, error) {

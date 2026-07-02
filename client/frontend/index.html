@@ -259,7 +259,7 @@
       <!-- Account Tab -->
       <div class="tab-pane" id="tab-account">
         <h2>Account</h2>
-        <p class="section-desc">Sign in to unlock Speekey transcription services.</p>
+        <p class="section-desc" id="account-desc">Sign in to unlock Speekey transcription services.</p>
 
         <div id="auth-logged-out" class="auth-section">
           <div class="auth-card">
@@ -284,6 +284,40 @@
               <p id="user-email">email@example.com</p>
             </div>
           </div>
+          
+          <div class="subscription-card">
+            <div class="subscription-header">Plan & Subscription</div>
+            <div class="subscription-body">
+              <div class="sub-row">
+                <span class="sub-label">Current Plan:</span>
+                <span id="sub-plan" class="sub-value">Free</span>
+              </div>
+              <div class="sub-row">
+                <span class="sub-label">Status:</span>
+                <span id="sub-status" class="sub-value badge-inactive">Inactive</span>
+              </div>
+              <div class="sub-row">
+                <span class="sub-label">Activated On:</span>
+                <span id="sub-activated" class="sub-value">N/A</span>
+              </div>
+              <div class="sub-row">
+                <span class="sub-label">Transcribed:</span>
+                <span id="sub-usage" class="sub-value">0 seconds</span>
+              </div>
+              
+              <!-- Usage Progress Bar -->
+              <div class="usage-progress-container">
+                <div class="usage-progress-header">
+                  <span>Usage (50 hrs monthly limit)</span>
+                  <span id="sub-usage-percent">0%</span>
+                </div>
+                <div class="progress-bar-bg">
+                  <div id="sub-usage-bar" class="progress-bar-fill" style="width: 0%;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <button id="logout-btn" class="fluent-button danger">Log Out</button>
         </div>
       </div>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy | speekto.me</title>
+  <meta name="description" content="Privacy Policy for speekto.me AI voice dictation.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="navbar">
+    <a href="/" class="nav-logo">
+      speekto<span class="logo-dot">.</span>me
+    </a>
+    <ul class="nav-links">
+      <li class="nav-item"><a href="/">Home</a></li>
+      <li class="nav-item"><a href="/about">About Us</a></li>
+      <li class="nav-item"><a href="/pricing">Pricing</a></li>
+    </ul>
+    <a href="/pricing" class="btn btn-primary nav-btn">Get Started</a>
+  </nav>
+
+  <!-- Privacy Policy Content -->
+  <article class="editorial-container">
+    <h1>Privacy Policy</h1>
+    <p>Last updated: July 2, 2026</p>
+    <p>At <strong>speekto.me</strong>, we value your privacy. This policy outlines how we handle audio recordings and transcribed text when you use our desktop application and cloud API services.</p>
+
+    <h2>1. Data Collection & Processing</h2>
+    <p>To perform transcription, our application records audio locally from your microphone ONLY when you trigger the hotkey. This audio is downmixed to 16kHz mono and immediately compressed into a secure Ogg/Opus container.</p>
+    <p>This compressed audio is sent via HTTPS POST requests directly to our backend server. We do **NOT** store raw audio recordings on our servers. Once the transcription request is completed by Groq Whisper, the audio data is discarded immediately from temporary memory.</p>
+
+    <h2>2. Transcription and Enhancement API</h2>
+    <p>Audio transcription is processed via Groq's Whisper v3 Turbo API. If text formatting or enhancement is enabled, the resulting transcript is sent to DeepSeek's AI models. Both APIs process the data in real-time under strict confidentiality agreements. None of your data is used to train machine learning models.</p>
+
+    <h2>3. Usage Logging</h2>
+    <p>To enforce rate limits and subscription quotas (like the 50-hour monthly limit), we log metadata about requests in a secure database. This includes: user ID, timestamp, transcribed audio duration (in seconds), Whisper and LLM latency statistics, and request status.</p>
+
+    <h2>4. Changes to This Policy</h2>
+    <p>We may update this policy occasionally. Any changes will be posted on this page.</p>
+
+    <h2>5. Contact Us</h2>
+    <p>For questions regarding privacy or data handling, contact us at: <a href="mailto:contact@synaptican.com" class="synaptican-link">contact@synaptican.com</a>.</p>
+  </article>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-logo">speekto<span class="logo-dot">.</span>me</div>
+    <ul class="footer-nav">
+      <li><a href="/">Home</a></li>
+      <li><a href="/about">About Us</a></li>
+      <li><a href="/pricing">Pricing</a></li>
+      <li><a href="/privacy">Privacy Policy</a></li>
+      <li><a href="/terms">Terms & Conditions</a></li>
+    </ul>
+  </footer>
+
+  <script src="/script.js"></script>
+</body>
+</html>

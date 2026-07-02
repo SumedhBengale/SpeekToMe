@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
@@ -67,6 +68,8 @@ func main() {
 	mux.HandleFunc("POST /auth/logout", handleAuthLogout)
 	mux.HandleFunc("POST /generate", handleGenerate)
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /mock-payment", handleMockPayment)
+	mux.HandleFunc("POST /mock-payment/complete", handleMockPaymentComplete)
 
 	// Admin API routes
 	mux.HandleFunc("GET /admin/users", handleAdminListUsers)
@@ -269,8 +272,20 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Redirect browser to client local loopback listener
-	loopbackURL := fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s", port, token)
+	// Check user plan status to determine if payment is required
+	planActive, _ := database.IsUserPlanActive(userID)
+
+	var loopbackURL string
+	if !planActive {
+		paymentURL := os.Getenv("REVENUECAT_PAYMENT_URL")
+		if paymentURL == "" {
+			paymentURL = fmt.Sprintf("%s/mock-payment?token=%s", BACKEND_URL, token)
+		}
+		loopbackURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&payment_url=%s", port, token, url.QueryEscape(paymentURL))
+	} else {
+		loopbackURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s", port, token)
+	}
+
 	http.Redirect(w, r, loopbackURL, http.StatusFound)
 }
 
@@ -281,10 +296,16 @@ func handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	durationSinceActive, _ := database.GetUserDurationSincePlanActivation(user.ID)
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"email": user.Email,
-		"name":  user.Name,
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"email":             user.Email,
+		"name":              user.Name,
+		"plan_tier":         user.PlanTier,
+		"plan_active":       user.PlanActive == 1,
+		"plan_activated_at": user.PlanActivatedAt,
+		"duration_seconds":  durationSinceActive,
 	})
 }
 
@@ -387,8 +408,11 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	oggStart := time.Now()
+	audioDuration := getOggOpusDuration(audioBytes)
+	oggParseDuration := time.Since(oggStart)
+
 	// 3. FUP Limit Check (Daily audio duration in seconds)
-	audioDuration := getWavDuration(audioBytes)
 	dailyDuration, err := database.GetUserDurationLast24Hours(user.ID)
 	if err == nil && dailyDuration+audioDuration > fupLimitSeconds {
 		log.Printf("[FUP LIMIT] Request from %s denied: Exceeded limit (%.1f + %.1f > %.1f daily seconds)", user.Email, dailyDuration, audioDuration, fupLimitSeconds)
@@ -397,6 +421,19 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error": fmt.Sprintf("Fair Usage Policy (FUP) limit exceeded. Maximum daily audio duration allowed is %.0f seconds. You have already used %.1f seconds in the last 24 hours.", fupLimitSeconds, dailyDuration),
+		})
+		return
+	}
+
+	// 4. Monthly Usage Limit Check (50 hours = 180,000 seconds)
+	monthlyDuration, err := database.GetUserDurationLast30Days(user.ID)
+	if err == nil && monthlyDuration+audioDuration > 180000.0 {
+		log.Printf("[MONTHLY LIMIT] Request from %s denied: Exceeded monthly limit (%.1f + %.1f > 180000.0 seconds)", user.Email, monthlyDuration, audioDuration)
+		_ = database.LogUsage(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_monthly_limit", audioSizeBytes)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("Monthly usage limit exceeded. Your plan is limited to 50 hours of transcription per month. You have already used %.1f hours in the last 30 days.", monthlyDuration/3600.0),
 		})
 		return
 	}
@@ -421,14 +458,17 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	groqBody := &bytes.Buffer{}
 	writer := multipart.NewWriter(groqBody)
 	_ = writer.WriteField("model", model)
-	filePart, err := writer.CreateFormFile("file", "recording.wav")
+	filePart, err := writer.CreateFormFile("file", "recording.ogg")
 	if err == nil {
 		_, _ = filePart.Write(audioBytes)
 	}
 	_ = writer.Close()
 
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
 	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("POST", GROQ_API_URL, groqBody)
+	req, err := http.NewRequestWithContext(ctx, "POST", GROQ_API_URL, groqBody)
 	if err == nil {
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("Authorization", "Bearer "+GROQ_API_KEY)
@@ -486,7 +526,10 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		jsonPayload, _ := json.Marshal(dsPayload)
 		dsStart := time.Now()
 
-		req, err := http.NewRequest("POST", DEEPSEEK_API_URL, bytes.NewBuffer(jsonPayload))
+		dsCtx, dsCancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer dsCancel()
+
+		req, err := http.NewRequestWithContext(dsCtx, "POST", DEEPSEEK_API_URL, bytes.NewBuffer(jsonPayload))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+DEEPSEEK_API_KEY)
@@ -542,6 +585,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("User:             %s (ID: %d)\n", user.Email, user.ID)
 	fmt.Printf("Audio Duration:   %.2f seconds\n", audioDuration)
 	fmt.Printf("Bandwidth / Size: %s (%d bytes)\n", formatSize(audioSizeBytes), audioSizeBytes)
+	fmt.Printf("Ogg Header Parse: %v\n", oggParseDuration)
 	fmt.Printf("Groq Whisper:     %.3f seconds\n", groqLatency)
 	if enhance && rawText != "" {
 		fmt.Printf("DeepSeek LLM:     %.3f seconds\n", dsLatency)
@@ -663,4 +707,202 @@ func handleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+// getOggOpusDuration parses an Ogg/Opus file header and returns its duration in seconds
+func getOggOpusDuration(data []byte) float64 {
+	const signature = "OggS"
+	var lastGranule int64 = 0
+	offset := 0
+	for offset+27 <= len(data) {
+		if string(data[offset:offset+4]) != signature {
+			break
+		}
+		// Read granule position at offset + 6 (8 bytes, little endian)
+		granule := int64(binary.LittleEndian.Uint64(data[offset+6 : offset+14]))
+		if granule > 0 {
+			lastGranule = granule
+		}
+		// Read segments count at offset 26
+		segmentsCount := int(data[offset+26])
+		if offset+27+segmentsCount > len(data) {
+			break
+		}
+		// Sum segment sizes
+		var pageDataSize int
+		for i := 0; i < segmentsCount; i++ {
+			pageDataSize += int(data[offset+27+i])
+		}
+		// Jump to next page (27 bytes header + segment table + data size)
+		offset += 27 + segmentsCount + pageDataSize
+	}
+	return float64(lastGranule) / 48000.0
+}
+
+// GET /mock-payment - Mock checkout portal page
+func handleMockPayment(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "Bad request: missing session token", http.StatusBadRequest)
+		return
+	}
+
+	html := `<!DOCTYPE html>
+<html>
+<head>
+	<title>Speekey Subscription Checkout</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		body {
+			margin: 0; padding: 0;
+			font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+			background: linear-gradient(135deg, #121214 0%, #1a1a24 100%);
+			color: #ffffff;
+			display: flex; justify-content: center; align-items: center;
+			min-height: 100vh;
+		}
+		.card {
+			background: rgba(28, 28, 30, 0.75);
+			border: 1px solid rgba(255, 255, 255, 0.08);
+			border-radius: 12px;
+			padding: 30px;
+			width: 400px;
+			box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+			backdrop-filter: blur(20px);
+		}
+		h2 { margin: 0 0 10px 0; color: #00e676; text-align: center; }
+		.desc { color: rgba(255, 255, 255, 0.7); text-align: center; font-size: 14px; margin-bottom: 25px; }
+		.plan-details {
+			background: rgba(255, 255, 255, 0.04);
+			border: 1px solid rgba(255, 255, 255, 0.06);
+			border-radius: 8px;
+			padding: 15px;
+			margin-bottom: 25px;
+		}
+		.plan-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; }
+		.plan-row:last-child { margin-bottom: 0; }
+		.btn {
+			background: #00e676;
+			border: none;
+			border-radius: 6px;
+			color: #121214;
+			padding: 12px;
+			width: 100%;
+			font-size: 15px;
+			font-weight: bold;
+			cursor: pointer;
+			transition: background 0.2s ease;
+		}
+		.btn:hover { background: #00c853; }
+	</style>
+</head>
+<body>
+	<div class="card">
+		<h2>🎙️ Speekey Checkout</h2>
+		<p class="desc">Simulate subscription payment to activate your Speekey Pro plan.</p>
+		
+		<div class="plan-details">
+			<div class="plan-row">
+				<span>Subscription Tier:</span>
+				<strong>Speekey Pro</strong>
+			</div>
+			<div class="plan-row">
+				<span>Transcription Limit:</span>
+				<strong>50 hours / month</strong>
+			</div>
+			<div class="plan-row">
+				<span>Price:</span>
+				<strong>$9.99 / month</strong>
+			</div>
+		</div>
+
+		<form action="/mock-payment/complete" method="POST">
+			<input type="hidden" name="token" value="` + token + `">
+			<button type="submit" class="btn">💳 Simulate Payment ($9.99)</button>
+		</form>
+	</div>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(html))
+}
+
+// POST /mock-payment/complete - Handle mock checkout success
+func handleMockPaymentComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := r.FormValue("token")
+	if token == "" {
+		http.Error(w, "Bad request: missing session token", http.StatusBadRequest)
+		return
+	}
+
+	user, err := database.GetUserBySession(token)
+	if err != nil {
+		http.Error(w, "Session invalid or expired", http.StatusUnauthorized)
+		return
+	}
+
+	err = database.UpdateUserPlan(user.ID, "pro", 1)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update plan: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	html := `<!DOCTYPE html>
+<html>
+<head>
+	<title>Subscription Success</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		body {
+			margin: 0; padding: 0;
+			font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+			background: linear-gradient(135deg, #121214 0%, #1a1a24 100%);
+			color: #ffffff;
+			display: flex; justify-content: center; align-items: center;
+			min-height: 100vh;
+		}
+		.card {
+			background: rgba(28, 28, 30, 0.75);
+			border: 1px solid rgba(255, 255, 255, 0.08);
+			border-radius: 12px;
+			padding: 35px;
+			width: 400px;
+			text-align: center;
+			box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+			backdrop-filter: blur(20px);
+		}
+		h2 { margin: 0 0 10px 0; color: #00e676; }
+		p { color: rgba(255, 255, 255, 0.7); font-size: 14px; margin-bottom: 25px; }
+		.btn {
+			background: rgba(255, 255, 255, 0.08);
+			border: 1px solid rgba(255, 255, 255, 0.12);
+			border-radius: 6px;
+			color: #ffffff;
+			padding: 10px 20px;
+			text-decoration: none;
+			font-size: 13.5px;
+			font-weight: 500;
+			cursor: pointer;
+			transition: all 0.2s ease;
+		}
+		.btn:hover { background: rgba(255, 255, 255, 0.15); }
+	</style>
+</head>
+<body>
+	<div class="card">
+		<h2>🎉 Payment Successful!</h2>
+		<p>Your subscription is now active. You have been upgraded to the Speekey Pro plan with a limit of 50 hours per month.</p>
+		<p>You can return to the Speekey desktop application now.</p>
+		<button class="btn" onclick="window.close()">Close Window</button>
+	</div>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(html))
 }
