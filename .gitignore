@@ -1,0 +1,39 @@
+# Rust target directory
+client/src-tauri/target/
+target/
+
+# Go build outputs
+server/speekey-server.exe
+*.exe
+*.exe.local
+*.dll
+*.so
+*.dylib
+
+# SQLite Database files
+server/speekey.db
+server/speekey.db-journal
+*.db
+*.db-journal
+
+# Environment variables & secrets
+server/.env
+.env
+.env.local
+
+# Dependency directories (Node / Frontend)
+node_modules/
+dist/
+
+# OS-specific temporary files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates

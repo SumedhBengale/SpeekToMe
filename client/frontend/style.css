@@ -1,0 +1,549 @@
+/* Windows 11 Fluent UI inspired theme for Speekey */
+
+:root {
+  --bg-sidebar: rgba(20, 20, 22, 0.4);
+  --bg-content: rgba(28, 28, 30, 0.65);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --accent-color: #00e676; /* Speekey Neon Green */
+  --accent-hover: #00c853;
+  --text-primary: #ffffff;
+  --text-secondary: #aaaaac;
+  --input-bg: rgba(40, 40, 45, 0.6);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --input-focus-border: #00e676;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--text-primary);
+  background: transparent !important;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+}
+
+#app {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  background: rgba(18, 18, 20, 0.6);
+  backdrop-filter: blur(25px) saturate(1.8);
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+/* Sidebar Styling */
+.sidebar {
+  width: 155px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+  box-sizing: border-box;
+}
+
+.app-logo {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  margin-bottom: 25px;
+}
+
+.logo-icon {
+  font-size: 20px;
+  margin-right: 8px;
+}
+
+.logo-text {
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.5px;
+  color: var(--text-primary);
+}
+
+.nav-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13.5px;
+  border-radius: 5px;
+  transition: all 0.15s ease;
+}
+
+.nav-item .icon {
+  margin-right: 10px;
+  font-size: 14px;
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.nav-item.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--accent-color);
+  font-weight: 500;
+}
+
+/* Main Content Area */
+.content {
+  flex: 1;
+  background: var(--bg-content);
+  padding: 20px 24px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+}
+
+.tab-pane {
+  display: none;
+  flex-direction: column;
+  animation: fadeIn 0.2s ease-out;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.tab-pane.active {
+  display: flex;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+h2 {
+  margin: 0 0 4px 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.section-desc {
+  margin: 0 0 20px 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* Form Settings Layout */
+.setting-group {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-group label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.setting-group label.accent-label {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.setting-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: -2px;
+  margin-left: 24px;
+}
+
+/* Dropdowns */
+.select-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.fluent-select {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 6px 12px;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  transition: border-color 0.15s ease;
+}
+
+.fluent-select:focus {
+  border-color: var(--input-focus-border);
+}
+
+/* Custom Checkbox (Fluent Toggle Design) */
+.checkbox-group {
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.fluent-checkbox-container {
+  display: flex;
+  align-items: center;
+  position: relative;
+  padding-left: 26px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+
+.fluent-checkbox-container input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+
+.checkmark {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  height: 16px;
+  width: 16px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+
+.fluent-checkbox-container:hover input ~ .checkmark {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.fluent-checkbox-container input:checked ~ .checkmark {
+  background-color: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.checkmark:after {
+  content: "";
+  position: absolute;
+  display: none;
+}
+
+.fluent-checkbox-container input:checked ~ .checkmark:after {
+  display: block;
+}
+
+.fluent-checkbox-container .checkmark:after {
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid #121214;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Textarea */
+.fluent-textarea {
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+  resize: none;
+  height: 65px;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.fluent-textarea:focus {
+  border-color: var(--input-focus-border);
+}
+
+/* Buttons */
+.fluent-button {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.fluent-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.fluent-button.accent {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #121214;
+  font-weight: 600;
+}
+
+.fluent-button.accent:hover {
+  background: var(--accent-hover);
+}
+
+.fluent-button.primary {
+  background: #3466de;
+  border-color: #3466de;
+  color: #ffffff;
+}
+
+.fluent-button.primary:hover {
+  background: #2a52b8;
+}
+
+.fluent-button.danger {
+  background: #b43232;
+  border-color: #b43232;
+  color: #ffffff;
+}
+
+.fluent-button.danger:hover {
+  background: #962828;
+}
+
+/* Account UI Cards */
+.auth-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 180px;
+}
+
+.auth-section.hidden {
+  display: none !important;
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.profile-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 14px 20px;
+  width: 90%;
+  box-sizing: border-box;
+  margin-bottom: 16px;
+}
+
+.avatar {
+  font-size: 32px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-info h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.profile-info p {
+  margin: 2px 0 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Loading Spinner */
+.spinner {
+  border: 3px solid rgba(255, 255, 255, 0.08);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border-left-color: var(--accent-color);
+  animation: spin 1s linear infinite;
+  margin-bottom: 8px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Footer layout */
+.footer {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 14px;
+  margin-top: 8px;
+}
+
+/* Scrollbar Customization for scrollable areas */
+.tab-pane::-webkit-scrollbar {
+  width: 6px;
+}
+.tab-pane::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tab-pane::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  transition: background 0.15s ease;
+}
+.tab-pane::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-color);
+}
+
+/* Onboarding overlay */
+#onboarding {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(10, 10, 12, 0.85);
+  backdrop-filter: blur(30px) saturate(1.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.25s ease-out;
+  border-radius: 8px;
+}
+
+#onboarding.hidden {
+  display: none !important;
+}
+
+.onboarding-card {
+  width: 500px;
+  background: rgba(28, 28, 30, 0.75);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px 30px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.onboarding-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 12px;
+}
+
+.step-tracker {
+  display: flex;
+  gap: 8px;
+}
+
+.step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  transition: all 0.2s ease;
+}
+
+.step-dot.active {
+  background: var(--accent-color);
+  box-shadow: 0 0 8px var(--accent-color);
+}
+
+.onboarding-content {
+  min-height: 250px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.onboarding-step {
+  display: none;
+  flex-direction: column;
+  animation: slideIn 0.25s ease-out;
+  height: 100%;
+}
+
+.onboarding-step.active {
+  display: flex;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.step-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 4px 0 20px 0;
+  line-height: 1.4;
+}
+
+/* Onboarding large primary buttons */
+.fluent-button.large {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  width: 100%;
+}
+
+/* Onboarding completion / tutorial card */
+.tutorial-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 14px 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.tutorial-card p {
+  margin: 0 0 8px 0;
+  color: var(--accent-color);
+}
+
+.tutorial-card ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+}
+
+.tutorial-card li {
+  margin-bottom: 4px;
+}

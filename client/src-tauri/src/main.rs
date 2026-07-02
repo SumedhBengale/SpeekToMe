@@ -1,0 +1,160 @@
+#![windows_subsystem = "windows"]
+
+pub mod config;
+pub mod audio;
+pub mod api;
+pub mod keyboard;
+pub mod win32;
+
+use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::AtomicBool;
+use std::thread;
+
+use tauri::{Manager, Emitter};
+use crate::config::AppConfig;
+use crate::win32::SendHWND;
+
+// Global static Tauri App handle
+pub static TAURI_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+// Global thread-safe flags
+pub static STATE: OnceLock<Mutex<RecordingState>> = OnceLock::new();
+pub static OVERLAY_HWND: OnceLock<SendHWND> = OnceLock::new();
+pub static ACTIVE_CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
+pub static SIMULATING_KEY: AtomicBool = AtomicBool::new(false);
+pub static LAST_RELEASE_TIME: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+pub static IS_CONSECUTIVE: AtomicBool = AtomicBool::new(false);
+
+pub struct RecordingState {
+    pub is_key_held: bool,
+    pub press_time: Option<std::time::Instant>,
+    pub stop_tx: Option<std::sync::mpsc::Sender<()>>,
+}
+
+pub fn get_state() -> &'static Mutex<RecordingState> {
+    STATE.get_or_init(|| {
+        Mutex::new(RecordingState {
+            is_key_held: false,
+            press_time: None,
+            stop_tx: None,
+        })
+    })
+}
+
+pub fn get_active_config() -> &'static Mutex<AppConfig> {
+    ACTIVE_CONFIG.get_or_init(|| Mutex::new(config::load_config()))
+}
+
+// ==========================================
+// Tauri Commands
+// ==========================================
+
+#[tauri::command]
+fn get_config() -> AppConfig {
+    get_active_config().lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn save_config(config: AppConfig) {
+    let mut active = get_active_config().lock().unwrap();
+    *active = config.clone();
+    config::save_config(&config);
+}
+
+#[tauri::command]
+fn hide_window(window: tauri::WebviewWindow) {
+    let _ = window.hide();
+}
+
+#[tauri::command]
+fn start_login(window: tauri::WebviewWindow) {
+    thread::spawn(move || {
+        if let Some(token) = api::listen_for_token() {
+            let mut active = get_active_config().lock().unwrap();
+            active.session_token = Some(token.clone());
+            config::save_config(&active);
+            
+            if let Some((name, email)) = api::fetch_user_info(&token) {
+                let _ = window.emit("login-success", (name, email));
+            } else {
+                let _ = window.emit("login-failed", "Failed to retrieve user info.");
+            }
+        } else {
+            let _ = window.emit("login-failed", "Authentication listener closed.");
+        }
+    });
+}
+
+#[tauri::command]
+fn logout() {
+    let mut active = get_active_config().lock().unwrap();
+    if let Some(ref token) = active.session_token {
+        let token_clone = token.clone();
+        thread::spawn(move || {
+            let client = reqwest::blocking::Client::new();
+            let _ = client.post("http://127.0.0.1:8000/auth/logout")
+                .header("Authorization", format!("Bearer {}", token_clone))
+                .send();
+        });
+    }
+    active.session_token = None;
+    config::save_config(&active);
+}
+
+#[tauri::command]
+fn get_user_info() -> Option<(String, String)> {
+    let config = get_active_config().lock().unwrap();
+    if let Some(ref token) = config.session_token {
+        api::fetch_user_info(token)
+    } else {
+        None
+    }
+}
+
+fn main() {
+    // 1. Initialize global loaded config
+    let _ = get_active_config();
+    
+    // 2. Spawn Keyboard Hook & System Tray Worker Thread
+    thread::spawn(|| {
+        unsafe {
+            win32::run_win32_hook_and_tray_thread();
+        }
+    });
+    
+    // 3. Launch Tauri app
+    tauri::Builder::default()
+        .setup(|app| {
+            // Apply Mica vibrancy effect in Windows 11
+            #[cfg(target_os = "windows")]
+            {
+                use window_vibrancy::apply_mica;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = apply_mica(&window, None);
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Intercept close button and hide the window instead
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            save_config,
+            hide_window,
+            start_login,
+            logout,
+            get_user_info
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Ready = event {
+                let _ = TAURI_APP.set(app_handle.clone());
+            }
+        });
+}
