@@ -643,3 +643,197 @@ p {
     gap: 16px;
   }
 }
+
+/* Sleek Desktop Client Mockup (WISPR style) */
+.client-mockup {
+  background: var(--bg-card);
+  border: var(--border-flat);
+  border-radius: 24px;
+  width: 100%;
+  max-width: 440px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.04);
+}
+
+.mockup-header {
+  background: #f7f7e6;
+  border-bottom: var(--border-flat);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mockup-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.mockup-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--color-text-dark);
+  border-radius: 50%;
+  opacity: 0.3;
+}
+
+.mockup-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(26,26,26,0.5);
+}
+
+.mockup-body {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.mockup-profile {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px dashed rgba(26,26,26,0.1);
+  padding-bottom: 16px;
+}
+
+.mockup-avatar {
+  width: 40px;
+  height: 40px;
+  background: var(--color-btn-primary);
+  border: var(--border-flat);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.mockup-profile-text h4 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.mockup-profile-text p {
+  font-size: 12px;
+  color: rgba(26,26,26,0.5);
+}
+
+.mockup-card {
+  background: var(--bg-canvas);
+  border: var(--border-flat);
+  border-radius: 16px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mockup-card-header {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--bg-dark);
+  margin-bottom: 4px;
+}
+
+.mockup-card-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13.5px;
+}
+
+.badge-active {
+  background: var(--color-btn-accent);
+  border: 1px solid var(--color-text-dark);
+  padding: 1px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+}
+
+.mockup-progress-bg {
+  width: 100%;
+  height: 5px;
+  background: rgba(26,26,26,0.06);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.mockup-progress-fill {
+  height: 100%;
+  background: var(--color-text-dark);
+  border-radius: 3px;
+}
+
+/* Comparison Table Styling */
+.comparison-section {
+  padding: 100px 6%;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 40px;
+  background: var(--bg-card);
+  border: var(--border-flat);
+  border-radius: 24px;
+  overflow: hidden;
+}
+
+.comparison-table th, .comparison-table td {
+  padding: 20px 24px;
+  text-align: left;
+  border-bottom: 1px solid rgba(26,26,26,0.08);
+}
+
+.comparison-table th {
+  background: #f7f7e6;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.comparison-table tr:last-child td {
+  border-bottom: none;
+}
+
+.comparison-table td {
+  font-size: 14.5px;
+}
+
+.text-highlight-green {
+  color: #0f766e;
+  font-weight: 600;
+}
+
+/* FAQ Accordion Styling */
+.faq-section {
+  padding: 100px 6%;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.faq-item {
+  border-bottom: 1px solid rgba(26,26,26,0.1);
+  padding: 24px 0;
+}
+
+.faq-question {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--color-text-dark);
+}
+
+.faq-answer {
+  font-size: 15px;
+  color: rgba(26,26,26,0.7);
+  line-height: 1.6;
+}
+

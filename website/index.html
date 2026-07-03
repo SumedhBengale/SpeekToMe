@@ -44,10 +44,44 @@
       </div>
     </div>
 
+    <!-- Sleek Desktop Client Mockup (Replacing moving visualizer icon) -->
     <div class="hero-visualizer">
-      <div class="wave-container">
-        <div class="wave-center">🎙️</div>
-        <div class="wave-bars"></div>
+      <div class="client-mockup">
+        <div class="mockup-header">
+          <div class="mockup-dots">
+            <span class="mockup-dot"></span>
+            <span class="mockup-dot"></span>
+            <span class="mockup-dot"></span>
+          </div>
+          <div class="mockup-title">speekto.me settings</div>
+        </div>
+        <div class="mockup-body">
+          <div class="mockup-profile">
+            <div class="mockup-avatar">👤</div>
+            <div class="mockup-profile-text">
+              <h4>Sumedh Bengale</h4>
+              <p>Active Pro Subscriber</p>
+            </div>
+          </div>
+          <div class="mockup-card">
+            <div class="mockup-card-header">Plan & Subscription</div>
+            <div class="mockup-card-row">
+              <span>Current Plan:</span>
+              <strong>PRO UNLIMITED</strong>
+            </div>
+            <div class="mockup-card-row">
+              <span>Status:</span>
+              <span class="badge-active">ACTIVE</span>
+            </div>
+            <div class="mockup-card-row">
+              <span>Usage:</span>
+              <strong>7hr 40m 29s / 50 hrs</strong>
+            </div>
+            <div class="mockup-progress-bg">
+              <div class="mockup-progress-fill" style="width: 15%;"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </header>
@@ -80,11 +114,112 @@
     </div>
   </section>
 
+  <!-- How It Works Section (New Content) -->
+  <section class="features-grid-section" style="background: #f7f7e6; border-top: var(--border-flat); border-bottom: var(--border-flat);">
+    <div class="section-header">
+      <h2>How it works in three steps.</h2>
+      <p>Using speekto.me is designed to feel like a natural extension of your operating system's keyboard layout.</p>
+    </div>
+
+    <div class="grid-container">
+      <div class="grid-card" style="background: var(--bg-canvas);">
+        <div class="card-num">I</div>
+        <h3>Trigger Global Hotkey</h3>
+        <p>Press and hold the CapsLock key (or your custom mapped global shortcut) anywhere on your system to begin recording.</p>
+      </div>
+
+      <div class="grid-card" style="background: var(--bg-canvas);">
+        <div class="card-num">II</div>
+        <h3>Speak Naturally</h3>
+        <p>Talk at your normal pace. Our client downmixes your voice to 16kHz mono and packs it into a high-density Opus audio container.</p>
+      </div>
+
+      <div class="grid-card" style="background: var(--bg-canvas);">
+        <div class="card-num">III</div>
+        <h3>Release to Type</h3>
+        <p>Release the hotkey. The backend parses headers, transcribes via Whisper, formats via DeepSeek, and pastes the result directly into your active text box.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Comparison Section (New Content) -->
+  <section class="comparison-section">
+    <div class="section-header" style="text-align: center;">
+      <h2>Built for professionals.</h2>
+      <p>Compare how speekto.me outperforms traditional voice dictation applications across key engineering parameters.</p>
+    </div>
+
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th>Feature</th>
+          <th>Standard Dictation</th>
+          <th>speekto.me Pro</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Average Latency</strong></td>
+          <td>1.5s - 3.0s</td>
+          <td class="text-highlight-green">Under 450ms</td>
+        </tr>
+        <tr>
+          <td><strong>Bandwidth Size (60s Audio)</strong></td>
+          <td>~15.4 MB (Raw WAV)</td>
+          <td class="text-highlight-green">~161 KB (Ogg/Opus 99% saved)</td>
+        </tr>
+        <tr>
+          <td><strong>AI Editing &amp; Formatting</strong></td>
+          <td>None (Literal transcript)</td>
+          <td class="text-highlight-green">DeepSeek Grammar Formatting</td>
+        </tr>
+        <tr>
+          <td><strong>Global Hotkeys</strong></td>
+          <td>System restricted</td>
+          <td class="text-highlight-green">CapsLock (Any active window)</td>
+        </tr>
+        <tr>
+          <td><strong>Microphone Downmixing</strong></td>
+          <td>Bypassed (High-fidelity stereo)</td>
+          <td class="text-highlight-green">Sleek 16kHz Mono Resampling</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
   <!-- Social Proof Testimonial -->
-  <section class="testimonials-section">
-    <div class="testimonial-card">
+  <section class="testimonials-section" style="border-top: var(--border-flat); border-bottom: var(--border-flat); background: #fffdf9;">
+    <div class="testimonial-card" style="border: none; background: transparent; padding: 0; text-align: center; max-width: 900px; margin: 0 auto;">
       <p>"speekto.me has changed the way I write emails, code comments, and project documentation. It feels like a natural extension of my keyboard. The speed is absolutely insane."</p>
       <div class="testimonial-author">Sumedh Bengale, Lead Developer</div>
+    </div>
+  </section>
+
+  <!-- FAQ Section (New Content) -->
+  <section class="faq-section">
+    <div class="section-header" style="text-align: center;">
+      <h2>Frequently Asked Questions</h2>
+      <p>Got questions about limits, privacy, or setup? We have answers.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4 class="faq-question">How is the transcription latency so low?</h4>
+      <div class="faq-answer">By downmixing audio locally to 16kHz mono and encoding to Opus, we reduce transmission payloads by 99%. Small payloads travel faster over networks. Combined with Groq's high-speed Whisper v3 Turbo hardware, transcription completes almost instantly.</div>
+    </div>
+
+    <div class="faq-item">
+      <h4 class="faq-question">What happens if I reach the 50-hour monthly limit?</h4>
+      <div class="faq-answer">Your dictation services will temporarily pause until the start of your next billing cycle. We will alert you on the desktop Account panel if you are nearing your limit. If you need more hours, you can contact us for custom plans.</div>
+    </div>
+
+    <div class="faq-item">
+      <h4 class="faq-question">Is my voice recording data stored permanently?</h4>
+      <div class="faq-answer">No. We process all audio memory buffers ephemerally. Once Whisper finishes translating the Ogg/Opus container to text, the audio clip is immediately deleted from our servers. We never train models on your data.</div>
+    </div>
+
+    <div class="faq-item">
+      <h4 class="faq-question">Can I customize how DeepSeek formats my voice?</h4>
+      <div class="faq-answer">Yes. Inside the client dashboard, you can define custom formatting prompts to instruct the AI (e.g. "Write as Python code comments" or "Keep it in bullet points").</div>
     </div>
   </section>
 
@@ -106,6 +241,7 @@
       <li><a href="/pricing">Pricing</a></li>
       <li><a href="/privacy">Privacy Policy</a></li>
       <li><a href="/terms">Terms & Conditions</a></li>
+      <li><a href="/refund">Refund Policy</a></li>
     </ul>
   </footer>
 
