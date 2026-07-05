@@ -25,10 +25,21 @@
         <!-- Step 1: Login -->
         <div class="onboarding-step active" id="onboard-step-1">
           <h2>Welcome to Speekey</h2>
-          <p class="step-desc">First, sign in to your Google Account to activate Speekey transcription services.</p>
+          <p class="step-desc">First, sign in to your Speekey account to activate transcription services.</p>
           
           <div id="onboard-auth-logged-out" class="auth-section">
             <button id="onboard-login-btn" class="fluent-button primary large">🔑 Sign in with Google</button>
+            <div class="divider">or use email</div>
+            <div class="auth-form" id="onboard-auth-form">
+              <input type="text" id="onboard-name-input" placeholder="Your Name" style="display: none;">
+              <input type="email" id="onboard-email-input" placeholder="Email Address">
+              <input type="password" id="onboard-password-input" placeholder="Password">
+              <button id="onboard-email-submit-btn" class="fluent-button primary">Sign In</button>
+              <div class="auth-form-links">
+                <a id="onboard-form-toggle-link">Need an account? Sign up</a>
+              </div>
+              <div id="onboard-auth-error" class="auth-error-msg" style="display: none;"></div>
+            </div>
           </div>
           
           <div id="onboard-auth-logging-in" class="auth-section hidden">
@@ -64,6 +75,18 @@
                 <option value="Right Alt">Right Alt</option>
                 <option value="Left Alt">Left Alt</option>
                 <option value="Space">Space</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label for="onboard-theme-select">App Theme</label>
+            <div class="select-wrapper">
+              <select id="onboard-theme-select" class="fluent-select">
+                <option value="forest">🧁 Pale Cream (Default)</option>
+                <option value="lavender">💜 Sleek Lavender</option>
+                <option value="mint">🌿 Dark Mint</option>
+                <option value="classic_dark">🌌 Classic Dark</option>
               </select>
             </div>
           </div>
@@ -166,6 +189,12 @@
           <span class="icon">👤</span> Account
         </a>
       </nav>
+      <!-- Sidebar Footer containing the Refresh option -->
+      <div class="sidebar-footer" id="sidebar-footer" style="margin-top: auto; padding: 0 12px; width: 100%; box-sizing: border-box; display: none;">
+        <button id="refresh-data-btn" class="fluent-button secondary small" style="width: 100%; justify-content: center; gap: 5px; font-size: 11px; padding: 6px 8px; display: flex; align-items: center;">
+          <span>🔄</span> Refresh
+        </button>
+      </div>
     </div>
 
     <!-- Main Content Area -->
@@ -185,6 +214,18 @@
               <option value="Right Alt">Right Alt</option>
               <option value="Left Alt">Left Alt</option>
               <option value="Space">Space</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label for="theme-select">App Theme</label>
+          <div class="select-wrapper">
+            <select id="theme-select" class="fluent-select">
+              <option value="forest">🧁 Pale Cream (Default)</option>
+              <option value="lavender">💜 Sleek Lavender</option>
+              <option value="mint">🌿 Dark Mint</option>
+              <option value="classic_dark">🌌 Classic Dark</option>
             </select>
           </div>
         </div>
@@ -251,7 +292,7 @@
         </div>
 
         <div class="setting-group">
-          <label for="custom-prompt-text" class="accent-label">Custom AI Instructions (DeepSeek Prompt)</label>
+          <label for="custom-prompt-text" class="accent-label">Custom AI Instructions</label>
           <textarea id="custom-prompt-text" class="fluent-textarea" placeholder="e.g. Translate to French, rewrite as email..."></textarea>
         </div>
       </div>
@@ -265,6 +306,17 @@
           <div class="auth-card">
             <p>You are currently signed out.</p>
             <button id="login-btn" class="fluent-button primary">🔑 Sign in with Google</button>
+            <div class="divider">or use email</div>
+            <div class="auth-form" id="app-auth-form">
+              <input type="text" id="app-name-input" placeholder="Your Name" style="display: none;">
+              <input type="email" id="app-email-input" placeholder="Email Address">
+              <input type="password" id="app-password-input" placeholder="Password">
+              <button id="app-email-submit-btn" class="fluent-button primary">Sign In</button>
+              <div class="auth-form-links">
+                <a id="app-form-toggle-link">Need an account? Sign up</a>
+              </div>
+              <div id="app-auth-error" class="auth-error-msg" style="display: none;"></div>
+            </div>
           </div>
         </div>
 

@@ -1,4 +1,5 @@
 /* Windows 11 Fluent UI inspired theme for Speekey */
+@import url('https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
 :root {
   --bg-sidebar: rgba(20, 20, 22, 0.4);
@@ -11,12 +12,17 @@
   --input-bg: rgba(40, 40, 45, 0.6);
   --input-border: rgba(255, 255, 255, 0.12);
   --input-focus-border: #00e676;
+  --onboard-bg: rgba(28, 28, 30, 0.75);
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --avatar-bg: rgba(255, 255, 255, 0.08);
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
 }
 
 body {
   margin: 0;
   padding: 0;
-  font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Figtree', 'Inter', sans-serif;
   color: var(--text-primary);
   background: transparent !important;
   overflow: hidden;
@@ -94,8 +100,8 @@ body {
 }
 
 .nav-item.active {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--accent-color);
+  background: var(--nav-active-bg, rgba(255, 255, 255, 0.08));
+  color: var(--nav-active-text, var(--accent-color));
   font-weight: 500;
 }
 
@@ -253,7 +259,7 @@ h2 {
   top: 2px;
   width: 4px;
   height: 8px;
-  border: solid #121214;
+  border: solid var(--checkmark-color, #121214);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
@@ -307,13 +313,13 @@ h2 {
 }
 
 .fluent-button.primary {
-  background: #3466de;
-  border-color: #3466de;
-  color: #ffffff;
+  background: var(--btn-primary-bg, #3466de);
+  border-color: var(--btn-primary-border, #3466de);
+  color: var(--btn-primary-text, #ffffff);
 }
 
 .fluent-button.primary:hover {
-  background: #2a52b8;
+  background: var(--btn-primary-hover-bg, #2a52b8);
 }
 
 .fluent-button.danger {
@@ -332,11 +338,89 @@ h2 {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 180px;
+  min-height: 180px;
+  height: auto;
+  padding: 10px 0;
 }
 
 .auth-section.hidden {
   display: none !important;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 280px;
+  margin-top: 10px;
+}
+
+.auth-form input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.auth-form input:focus {
+  border-color: var(--accent-color);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.auth-form-links {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.auth-form-links a {
+  color: #00e676;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.auth-form-links a:hover {
+  text-decoration: underline;
+}
+
+.auth-error-msg {
+  color: #ff5252;
+  font-size: 12.5px;
+  margin-top: 5px;
+  text-align: center;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+  width: 100%;
+  max-width: 280px;
+  margin: 10px 0;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.divider:not(:empty)::before {
+  margin-right: .5em;
+}
+
+.divider:not(:empty)::after {
+  margin-left: .5em;
 }
 
 .auth-card {
@@ -351,7 +435,7 @@ h2 {
   display: flex;
   align-items: center;
   gap: 16px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--card-bg);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 14px 20px;
@@ -362,7 +446,7 @@ h2 {
 
 .avatar {
   font-size: 32px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--avatar-bg);
   border-radius: 50%;
   width: 48px;
   height: 48px;
@@ -417,7 +501,7 @@ h2 {
   background: transparent;
 }
 .tab-pane::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--scroll-thumb);
   border-radius: 3px;
   transition: background 0.15s ease;
 }
@@ -448,7 +532,7 @@ h2 {
 
 .onboarding-card {
   width: 500px;
-  background: rgba(28, 28, 30, 0.75);
+  background: var(--onboard-bg);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 24px 30px;
@@ -524,7 +608,7 @@ h2 {
 
 /* Onboarding completion / tutorial card */
 .tutorial-card {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--card-bg);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 14px 18px;
@@ -535,7 +619,7 @@ h2 {
 
 .tutorial-card p {
   margin: 0 0 8px 0;
-  color: var(--accent-color);
+  color: var(--card-header-color, var(--accent-color));
 }
 
 .tutorial-card ul {
@@ -550,7 +634,7 @@ h2 {
 
 /* Subscription Card Styles */
 .subscription-card {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--card-bg);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 16px;
@@ -567,7 +651,7 @@ h2 {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--accent-color);
+  color: var(--card-header-color, var(--accent-color));
   border-bottom: 1px solid var(--border-color);
   padding-bottom: 6px;
 }
@@ -596,8 +680,8 @@ h2 {
 
 /* Badge Styles */
 .badge-active {
-  color: #00e676 !important; /* Active light neon green matching Speekey theme */
-  background: rgba(0, 230, 118, 0.12);
+  color: var(--badge-active-color, #00e676) !important;
+  background: var(--badge-active-bg, rgba(0, 230, 118, 0.12));
   padding: 2px 8px;
   border-radius: 12px;
   font-size: 10.5px;
@@ -606,8 +690,8 @@ h2 {
 }
 
 .badge-inactive {
-  color: #ff5252 !important; /* Active red */
-  background: rgba(255, 82, 82, 0.12);
+  color: var(--badge-inactive-color, #ff5252) !important;
+  background: var(--badge-inactive-bg, rgba(255, 82, 82, 0.12));
   padding: 2px 8px;
   border-radius: 12px;
   font-size: 10.5px;
@@ -635,7 +719,7 @@ h2 {
 .progress-bar-bg {
   width: 100%;
   height: 6px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--progress-bg);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -646,4 +730,118 @@ h2 {
   background: var(--accent-color);
   border-radius: 3px;
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==========================================
+   Themes Configuration
+   ========================================== */
+
+/* Forest Theme (Default / Brand Matching / Pale Cream & Lavender Layout) */
+body[data-theme="forest"] {
+  --bg-sidebar: #ffffee;           /* Warm/Pale Cream */
+  --bg-content: #fffdf9;           /* Near White */
+  --border-color: #1a1a1a;         /* Dark Charcoal borders */
+  --accent-color: #f0d7ff;         /* Pastel Lavender active highlights */
+  --accent-hover: #e5cdff;
+  --text-primary: #1a1a1a;         /* Dark Charcoal text */
+  --text-secondary: #4a4a4d;       /* Muted Charcoal text */
+  --input-bg: #ffffff;
+  --input-border: #1a1a1a;
+  --input-focus-border: #1a1a1a;
+  --onboard-bg: #fffdf9;
+  --card-bg: #ffffee;
+  --avatar-bg: #f0d7ff;
+  --progress-bg: rgba(26, 26, 26, 0.08);
+  --scroll-thumb: rgba(26, 26, 26, 0.15);
+  
+  /* Sidebar Navigation Active states */
+  --nav-active-bg: #f0d7ff;        /* Lavender active tab */
+  --nav-active-text: #1a1a1a;      /* Charcoal active text */
+  
+  /* Card Header elements (Lavender or Forest Green highlights) */
+  --card-header-color: #034f46;    /* Deep Forest Green headings */
+  
+  /* Active status badges on light canvas */
+  --badge-active-color: #034f46;
+  --badge-active-bg: #d1fae5;
+  --badge-inactive-color: #b43232;
+  --badge-inactive-bg: #fee2e2;
+  
+  /* Buttons and checkmarks overrides */
+  --btn-primary-bg: #f0d7ff;
+  --btn-primary-border: #1a1a1a;
+  --btn-primary-text: #1a1a1a;
+  --btn-primary-hover-bg: #e5cdff;
+  
+  --checkmark-color: #1a1a1a;
+}
+body[data-theme="forest"] #app {
+  background: #fffdf9;
+  border: 2px solid #1a1a1a;
+}
+
+/* Lavender Theme (Sleek Pastel Lavender) */
+body[data-theme="lavender"] {
+  --bg-sidebar: #120a21;
+  --bg-content: #1a102f;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --accent-color: #f0d7ff;
+  --accent-hover: #ffffff;
+  --text-primary: #ffffff;
+  --text-secondary: #b5a8c4;
+  --input-bg: rgba(18, 10, 33, 0.6);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --input-focus-border: #f0d7ff;
+  --onboard-bg: #1a102f;
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --avatar-bg: rgba(255, 255, 255, 0.08);
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
+}
+body[data-theme="lavender"] #app {
+  background: #1a102f;
+}
+
+/* Mint Theme (Mint Dark) */
+body[data-theme="mint"] {
+  --bg-sidebar: #051511;
+  --bg-content: #0a221c;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --accent-color: #a7f3d0;
+  --accent-hover: #ffffff;
+  --text-primary: #ffffff;
+  --text-secondary: #8fa89e;
+  --input-bg: rgba(5, 21, 17, 0.6);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --input-focus-border: #a7f3d0;
+  --onboard-bg: #0a221c;
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --avatar-bg: rgba(255, 255, 255, 0.08);
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
+}
+body[data-theme="mint"] #app {
+  background: #0a221c;
+}
+
+/* Classic Dark Theme */
+body[data-theme="classic_dark"] {
+  --bg-sidebar: rgba(20, 20, 22, 0.4);
+  --bg-content: rgba(28, 28, 30, 0.65);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --accent-color: #00e676;
+  --accent-hover: #00c853;
+  --text-primary: #ffffff;
+  --text-secondary: #aaaaac;
+  --input-bg: rgba(40, 40, 45, 0.6);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --input-focus-border: #00e676;
+  --onboard-bg: rgba(28, 28, 30, 0.75);
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --avatar-bg: rgba(255, 255, 255, 0.08);
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
+}
+body[data-theme="classic_dark"] #app {
+  background: rgba(18, 18, 20, 0.6);
 }

@@ -244,3 +244,74 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
         }
     }
 }
+
+#[derive(Deserialize)]
+struct AuthResponse {
+    token: String,
+}
+
+pub fn login_with_credentials(email: &str, password: &str) -> Result<(String, UserInfo), String> {
+    let client = reqwest::blocking::Client::new();
+    
+    let mut map = std::collections::HashMap::new();
+    map.insert("email", email);
+    map.insert("password", password);
+    
+    match client.post("http://127.0.0.1:8000/auth/login")
+        .json(&map)
+        .send()
+    {
+        Ok(res) => {
+            let status = res.status();
+            let body_text = res.text().unwrap_or_default();
+            if status.is_success() {
+                if let Ok(auth_res) = serde_json::from_str::<AuthResponse>(&body_text) {
+                    if let Some(user_info) = fetch_user_info(&auth_res.token) {
+                        return Ok((auth_res.token, user_info));
+                    }
+                    return Err("Failed to retrieve user profile after login".to_string());
+                }
+                return Err("Failed to parse login response".to_string());
+            }
+            let body_trimmed = body_text.trim().to_string();
+            if !body_trimmed.is_empty() {
+                return Err(body_trimmed);
+            }
+            Err(format!("Login failed with status: {}", status))
+        }
+        Err(e) => Err(format!("Failed to connect to server: {}", e)),
+    }
+}
+
+pub fn signup_with_credentials(email: &str, password: &str, name: &str) -> Result<String, String> {
+    let client = reqwest::blocking::Client::new();
+    
+    let mut map = std::collections::HashMap::new();
+    map.insert("email", email);
+    map.insert("password", password);
+    map.insert("name", name);
+    
+    match client.post("http://127.0.0.1:8000/auth/signup")
+        .json(&map)
+        .send()
+    {
+        Ok(res) => {
+            let status = res.status();
+            let body_text = res.text().unwrap_or_default();
+            if status.is_success() {
+                if let Ok(json_res) = serde_json::from_str::<serde_json::Value>(&body_text) {
+                    if let Some(msg) = json_res.get("message").and_then(|v| v.as_str()) {
+                        return Ok(msg.to_string());
+                    }
+                }
+                return Ok("Account created successfully. Please check your email to verify your address.".to_string());
+            }
+            let body_trimmed = body_text.trim().to_string();
+            if !body_trimmed.is_empty() {
+                return Err(body_trimmed);
+            }
+            Err(format!("Signup failed with status: {}", status))
+        }
+        Err(e) => Err(format!("Failed to connect to server: {}", e)),
+    }
+}

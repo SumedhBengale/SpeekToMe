@@ -29,11 +29,11 @@
     <p>At <strong>speekto.me</strong>, we value your privacy. This policy outlines how we handle audio recordings and transcribed text when you use our desktop application and cloud API services.</p>
 
     <h2>1. Data Collection & Processing</h2>
-    <p>To perform transcription, our application records audio locally from your microphone ONLY when you trigger the hotkey. This audio is downmixed to 16kHz mono and immediately compressed into a secure Ogg/Opus container.</p>
-    <p>This compressed audio is sent via HTTPS POST requests directly to our backend server. We do **NOT** store raw audio recordings on our servers. Once the transcription request is completed by Groq Whisper, the audio data is discarded immediately from temporary memory.</p>
+    <p>To perform transcription, our application records audio locally from your microphone only when you actively trigger the hotkey. This audio is immediately compressed using secure local processing.</p>
+    <p>This compressed audio is sent via secure encrypted requests directly to our backend server. We do not store raw audio recordings on our servers. Once the transcription request is completed, the audio data is discarded immediately from temporary memory.</p>
 
-    <h2>2. Transcription and Enhancement API</h2>
-    <p>Audio transcription is processed via Groq's Whisper v3 Turbo API. If text formatting or enhancement is enabled, the resulting transcript is sent to DeepSeek's AI models. Both APIs process the data in real-time under strict confidentiality agreements. None of your data is used to train machine learning models.</p>
+    <h2>2. Transcription and Enhancement</h2>
+    <p>Audio transcription is processed via secure, state-of-the-art translation systems. If text formatting or enhancement is enabled, the resulting transcript is processed using modern language models to clean grammar and punctuation. Both services process the data in real-time under strict confidentiality agreements. None of your data is ever used to train machine learning models.</p>
 
     <h2>3. Usage Logging</h2>
     <p>To enforce rate limits and subscription quotas (like the 50-hour monthly limit), we log metadata about requests in a secure database. This includes: user ID, timestamp, transcribed audio duration (in seconds), Whisper and LLM latency statistics, and request status.</p>

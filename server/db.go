@@ -2,8 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
+
 	_ "modernc.org/sqlite"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Database struct {
@@ -33,7 +36,13 @@ func NewDatabase(connStr string) (*Database, error) {
 			email TEXT UNIQUE,
 			name TEXT,
 			google_id TEXT UNIQUE,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			plan_tier TEXT DEFAULT 'free',
+			plan_active INTEGER DEFAULT 0,
+			plan_activated_at TIMESTAMP,
+			password_hash TEXT,
+			is_verified INTEGER DEFAULT 0,
+			verification_token TEXT
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY,
@@ -75,11 +84,18 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN audio_size_bytes INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_activated_at TIMESTAMP")
 	_, _ = db.Exec("UPDATE users SET plan_activated_at = created_at WHERE plan_activated_at IS NULL")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN password_hash TEXT")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN verification_token TEXT")
 
 	// Set default configurations
 	configs := map[string]string{
-		"paid_rate_limit_rpm":         "15",
+		"free_rate_limit_rpm":          "3",
+		"paid_rate_limit_rpm":          "15",
+		"free_fup_limit_seconds_daily": "300",
 		"paid_fup_limit_seconds_daily": "3600",
+		"free_monthly_limit_seconds":   "3600",
+		"paid_monthly_limit_seconds":   "180000",
 	}
 	for k, v := range configs {
 		_, _ = db.Exec("INSERT OR IGNORE INTO saas_config (key, value) VALUES (?, ?)", k, v)
@@ -96,7 +112,7 @@ func (d *Database) GetOrCreateUser(googleID, email, name string) (int64, error) 
 		return id, nil
 	}
 	
-	res, err := d.db.Exec("INSERT INTO users (google_id, email, name) VALUES (?, ?, ?)", googleID, email, name)
+	res, err := d.db.Exec("INSERT INTO users (google_id, email, name, is_verified) VALUES (?, ?, ?, 1)", googleID, email, name)
 	if err != nil {
 		return 0, err
 	}
@@ -273,4 +289,93 @@ func (d *Database) ListUsersWithStats() ([]map[string]interface{}, error) {
 		}
 	}
 	return result, nil
+}
+
+// CreateEmailUser creates a new user with an email and password hash
+func (d *Database) CreateEmailUser(email, password, name, verificationToken string) (int64, error) {
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return 0, err
+	}
+
+	// Insert into DB (Google ID is NULL for email/password users)
+	res, err := d.db.Exec("INSERT INTO users (email, password_hash, name, is_verified, verification_token) VALUES (?, ?, ?, 0, ?)", email, string(hashedPassword), name, verificationToken)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// AuthenticateEmailUser checks email/password credentials and returns the User ID if valid
+func (d *Database) AuthenticateEmailUser(email, password string) (int64, error) {
+	var id int64
+	var hashedPassword string
+	var isVerified int
+
+	err := d.db.QueryRow("SELECT id, password_hash, is_verified FROM users WHERE email = ? AND password_hash IS NOT NULL", email).Scan(&id, &hashedPassword, &isVerified)
+	if err != nil {
+		return 0, fmt.Errorf("user not found or invalid login method")
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+	if err != nil {
+		return 0, fmt.Errorf("invalid password")
+	}
+
+	if isVerified == 0 {
+		return 0, fmt.Errorf("EMAIL_UNVERIFIED")
+	}
+
+	return id, nil
+}
+
+// VerifyUserEmail checks the verification token, marks user as verified, and returns user email
+func (d *Database) VerifyUserEmail(token string) (string, error) {
+	var id int64
+	var email string
+	err := d.db.QueryRow("SELECT id, email FROM users WHERE verification_token = ?", token).Scan(&id, &email)
+	if err != nil {
+		return "", fmt.Errorf("invalid or expired verification token")
+	}
+
+	_, err = d.db.Exec("UPDATE users SET is_verified = 1, verification_token = NULL WHERE id = ?", id)
+	if err != nil {
+		return "", fmt.Errorf("failed to update verification status")
+	}
+
+	return email, nil
+}
+
+type UsageLog struct {
+	Timestamp       string  `json:"timestamp"`
+	AudioDuration   float64 `json:"audio_duration"`
+	TotalTime       float64 `json:"total_time"`
+	Status          string  `json:"status"`
+	InputTranscript string  `json:"input_transcript"`
+	FinalOutput     string  `json:"final_output"`
+}
+
+func (d *Database) GetUserUsageLogs(userID int64) ([]UsageLog, error) {
+	rows, err := d.db.Query(`
+		SELECT timestamp, audio_duration, total_time, status, COALESCE(input_transcript, ''), COALESCE(final_output, '')
+		FROM usage_logs
+		WHERE user_id = ?
+		ORDER BY timestamp DESC
+		LIMIT 50
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	logs := make([]UsageLog, 0)
+	for rows.Next() {
+		var l UsageLog
+		err := rows.Scan(&l.Timestamp, &l.AudioDuration, &l.TotalTime, &l.Status, &l.InputTranscript, &l.FinalOutput)
+		if err == nil {
+			logs = append(logs, l)
+		}
+	}
+	return logs, nil
 }

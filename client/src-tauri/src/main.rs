@@ -111,6 +111,24 @@ fn get_user_info() -> Option<api::UserInfo> {
     }
 }
 
+#[tauri::command]
+fn login_with_credentials(email: String, password: String) -> Result<api::UserInfo, String> {
+    match api::login_with_credentials(&email, &password) {
+        Ok((token, user_info)) => {
+            let mut active = get_active_config().lock().unwrap();
+            active.session_token = Some(token);
+            config::save_config(&active);
+            Ok(user_info)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+fn signup_with_credentials(email: String, password: String, name: String) -> Result<String, String> {
+    api::signup_with_credentials(&email, &password, &name)
+}
+
 fn main() {
     // 1. Initialize global loaded config
     let _ = get_active_config();
@@ -148,7 +166,9 @@ fn main() {
             hide_window,
             start_login,
             logout,
-            get_user_info
+            get_user_info,
+            login_with_credentials,
+            signup_with_credentials
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

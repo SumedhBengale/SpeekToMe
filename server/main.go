@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -64,12 +68,18 @@ func main() {
 
 	mux.HandleFunc("GET /auth/login", handleAuthLogin)
 	mux.HandleFunc("GET /auth/callback", handleAuthCallback)
+	mux.HandleFunc("POST /auth/signup", handleAuthSignup)
+	mux.HandleFunc("POST /auth/login", handleAuthLoginCredentials)
+	mux.HandleFunc("GET /auth/verify", handleAuthVerify)
 	mux.HandleFunc("GET /auth/me", handleAuthMe)
+	mux.HandleFunc("GET /usage/history", handleGetUserHistory)
 	mux.HandleFunc("POST /auth/logout", handleAuthLogout)
 	mux.HandleFunc("POST /generate", handleGenerate)
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /mock-payment", handleMockPayment)
 	mux.HandleFunc("POST /mock-payment/complete", handleMockPaymentComplete)
+	mux.HandleFunc("POST /billing/create-subscription", handleCreateSubscription)
+	mux.HandleFunc("POST /billing/verify-subscription", handleVerifySubscription)
 
 	// Admin API routes
 	mux.HandleFunc("GET /admin/users", handleAdminListUsers)
@@ -154,21 +164,32 @@ func authenticate(r *http.Request) (*UserProfile, error) {
 
 func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	portStr := r.URL.Query().Get("port")
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 {
-		http.Error(w, "Bad request: missing local redirect port", http.StatusBadRequest)
+	redirectTo := r.URL.Query().Get("redirect_to")
+
+	var state string
+
+	if portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port <= 0 {
+			http.Error(w, "Bad request: invalid local redirect port", http.StatusBadRequest)
+			return
+		}
+		state = fmt.Sprintf("%d_%s", port, generateNonce())
+	} else if redirectTo != "" {
+		state = fmt.Sprintf("web_%x_%s", []byte(redirectTo), generateNonce())
+	} else {
+		http.Error(w, "Bad request: missing port or redirect_to parameters", http.StatusBadRequest)
 		return
 	}
 
 	if MOCK_AUTH {
-		// Immediately redirect to callback
-		redirectURL := fmt.Sprintf("%s/auth/callback?code=mock_code&state=%d_mock", BACKEND_URL, port)
+		// Immediately redirect to callback with the state parameter
+		redirectURL := fmt.Sprintf("%s/auth/callback?code=mock_code&state=%s", BACKEND_URL, state)
 		http.Redirect(w, r, redirectURL, http.StatusFound)
 		return
 	}
 
 	redirectURI := fmt.Sprintf("%s/auth/callback", BACKEND_URL)
-	state := fmt.Sprintf("%d_%s", port, generateNonce())
 
 	oauthURL := fmt.Sprintf(
 		"https://accounts.google.com/o/oauth2/v2/auth?client_id=%s&redirect_uri=%s&response_type=code&scope=openid%%20email%%20profile&state=%s",
@@ -182,14 +203,30 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 
 	parts := strings.Split(state, "_")
-	if len(parts) < 1 {
+	if len(parts) < 2 {
 		http.Error(w, "Bad request: invalid state parameter", http.StatusBadRequest)
 		return
 	}
-	port, err := strconv.Atoi(parts[0])
-	if err != nil || port <= 0 {
-		http.Error(w, "Bad request: invalid state port value", http.StatusBadRequest)
-		return
+
+	var isWeb bool
+	var port int
+	var redirectTo string
+
+	if parts[0] == "web" {
+		isWeb = true
+		decodedBytes, err := hex.DecodeString(parts[1])
+		if err != nil {
+			http.Error(w, "Bad request: invalid redirect hex", http.StatusBadRequest)
+			return
+		}
+		redirectTo = string(decodedBytes)
+	} else {
+		var err error
+		port, err = strconv.Atoi(parts[0])
+		if err != nil || port <= 0 {
+			http.Error(w, "Bad request: invalid state port value", http.StatusBadRequest)
+			return
+		}
 	}
 
 	var googleID, email, name string
@@ -275,18 +312,49 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// Check user plan status to determine if payment is required
 	planActive, _ := database.IsUserPlanActive(userID)
 
-	var loopbackURL string
-	if !planActive {
-		paymentURL := os.Getenv("REVENUECAT_PAYMENT_URL")
-		if paymentURL == "" {
-			paymentURL = fmt.Sprintf("%s/mock-payment?token=%s", BACKEND_URL, token)
+	var finalURL string
+	if isWeb {
+		if !planActive {
+			frontendURL := os.Getenv("FRONTEND_URL")
+			if frontendURL == "" {
+				frontendURL = "http://localhost:8080"
+			}
+			paymentURL := fmt.Sprintf("%s/dashboard/?token=%s", frontendURL, token)
+			u, err := url.Parse(redirectTo)
+			if err != nil {
+				finalURL = fmt.Sprintf("%s?token=%s&payment_url=%s", redirectTo, token, url.QueryEscape(paymentURL))
+			} else {
+				q := u.Query()
+				q.Set("token", token)
+				q.Set("payment_url", paymentURL)
+				u.RawQuery = q.Encode()
+				finalURL = u.String()
+			}
+		} else {
+			u, err := url.Parse(redirectTo)
+			if err != nil {
+				finalURL = fmt.Sprintf("%s?token=%s", redirectTo, token)
+			} else {
+				q := u.Query()
+				q.Set("token", token)
+				u.RawQuery = q.Encode()
+				finalURL = u.String()
+			}
 		}
-		loopbackURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&payment_url=%s", port, token, url.QueryEscape(paymentURL))
 	} else {
-		loopbackURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s", port, token)
+		if !planActive {
+			frontendURL := os.Getenv("FRONTEND_URL")
+			if frontendURL == "" {
+				frontendURL = "http://localhost:8080"
+			}
+			paymentURL := fmt.Sprintf("%s/dashboard/?token=%s", frontendURL, token)
+			finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&payment_url=%s", port, token, url.QueryEscape(paymentURL))
+		} else {
+			finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s", port, token)
+		}
 	}
 
-	http.Redirect(w, r, loopbackURL, http.StatusFound)
+	http.Redirect(w, r, finalURL, http.StatusFound)
 }
 
 func handleAuthMe(w http.ResponseWriter, r *http.Request) {
@@ -309,6 +377,23 @@ func handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func handleGetUserHistory(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	logs, err := database.GetUserUsageLogs(user.ID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to retrieve transcription history: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(logs)
+}
+
 func handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
@@ -319,6 +404,219 @@ func handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status": "logged_out",
 	})
+}
+
+type SignupRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name"`
+}
+
+func handleAuthSignup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SignupRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	req.Name = strings.TrimSpace(req.Name)
+
+	if req.Email == "" || req.Password == "" || req.Name == "" {
+		http.Error(w, "Email, password, and name are required", http.StatusBadRequest)
+		return
+	}
+
+	// Generate 32-character hex verification token
+	verificationToken := generateNonce() + generateNonce()
+
+	// Create user (unverified by default)
+	userID, err := database.CreateEmailUser(req.Email, req.Password, req.Name, verificationToken)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to register user (email might be taken): %v", err), http.StatusConflict)
+		return
+	}
+
+	// Send verification email via AWS SES (or simulation fallback)
+	err = SendVerificationEmail(req.Email, req.Name, verificationToken)
+	if err != nil {
+		log.Printf("ERROR: Failed to send verification email to %s: %v", req.Email, err)
+		// We log the error but don't fail the signup so local development still works smoothly
+	}
+
+	// Respond with verification status
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "verification_required",
+		"message": "Account created! Please check your email to verify your address before logging in.",
+		"user": map[string]interface{}{
+			"id":          userID,
+			"email":       req.Email,
+			"name":        req.Name,
+			"plan_tier":   "free",
+			"plan_active": false,
+		},
+	})
+}
+
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req LoginRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+
+	if req.Email == "" || req.Password == "" {
+		http.Error(w, "Email and password are required", http.StatusBadRequest)
+		return
+	}
+
+	// Authenticate
+	userID, err := database.AuthenticateEmailUser(req.Email, req.Password)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if err.Error() == "EMAIL_UNVERIFIED" {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "Email is not verified. Please check your email for the verification link.",
+			})
+		} else {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "Invalid email or password",
+			})
+		}
+		return
+	}
+
+	// Get User Profile details
+	token := generateSessionToken()
+	err = database.CreateSession(token, userID)
+	if err != nil {
+		http.Error(w, "Failed to create session", http.StatusInternalServerError)
+		return
+	}
+
+	user, err := database.GetUserBySession(token)
+	if err != nil {
+		http.Error(w, "Failed to load user info", http.StatusInternalServerError)
+		return
+	}
+
+	// Respond with token and profile info
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"token": token,
+		"user": map[string]interface{}{
+			"id":          user.ID,
+			"email":       user.Email,
+			"name":        user.Name,
+			"plan_tier":   user.PlanTier,
+			"plan_active": user.PlanActive == 1,
+		},
+	})
+}
+
+func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "Bad request: missing verification token", http.StatusBadRequest)
+		return
+	}
+
+	email, err := database.VerifyUserEmail(token)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Verification failed: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Redirect back to the frontend dashboard with a verified flag!
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:8080" // local dev wrangler pages port
+	}
+
+	redirectURL := fmt.Sprintf("%s/dashboard?verified=true&email=%s", frontendURL, url.QueryEscape(email))
+
+	// Return a beautiful visual confirmation page that redirects after 3 seconds, or immediate redirect.
+	// A visual confirmation page is extremely premium!
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+	<title>Account Verified</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		body {
+			margin: 0; padding: 0;
+			font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+			background: linear-gradient(135deg, #ffffee 0%, #fffdf9 100%);
+			color: #1a1a1a;
+			display: flex; justify-content: center; align-items: center;
+			min-height: 100vh;
+		}
+		.card {
+			background: #fffdf9;
+			border: 2px solid #1a1a1a;
+			border-radius: 12px;
+			padding: 35px;
+			width: 400px;
+			text-align: center;
+			box-shadow: 4px 4px 0px #1a1a1a;
+		}
+		h2 { margin: 0 0 10px 0; color: #034f46; }
+		p { color: rgba(26, 26, 26, 0.8); font-size: 14px; margin-bottom: 25px; }
+		.btn {
+			display: inline-block;
+			background: #f0d7ff;
+			border: 2px solid #1a1a1a;
+			border-radius: 6px;
+			color: #1a1a1a;
+			padding: 10px 20px;
+			text-decoration: none;
+			font-size: 14.5px;
+			font-weight: bold;
+			box-shadow: 2px 2px 0px #1a1a1a;
+			transition: all 0.15s ease;
+		}
+		.btn:hover { background: #e2c1fb; transform: translate(-1px, -1px); box-shadow: 3px 3px 0px #1a1a1a; }
+	</style>
+	<script>
+		setTimeout(function() {
+			window.location.href = "%s";
+		}, 3000);
+	</script>
+</head>
+<body>
+	<div class="card">
+		<h2>🎉 Email Verified!</h2>
+		<p>Thank you. Your email address <strong>%s</strong> has been successfully verified.</p>
+		<p>Redirecting you to the Speekey Dashboard in 3 seconds...</p>
+		<a class="btn" href="%s">Go to Dashboard</a>
+	</div>
+</body>
+</html>`, redirectURL, email, redirectURL)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(html))
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -378,19 +676,54 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	audioBytes := wavBuf.Bytes()
 	audioSizeBytes := len(audioBytes)
 
-	// Fetch dynamic configurations
-	rpmLimit := 15
-	fupLimitSeconds := 3600.0
+	// Fetch dynamic configurations based on user plan active tier
+	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
+
+	var rpmLimit int
+	var fupLimitSeconds float64
+	var monthlyLimitSeconds float64
+
 	config, err := database.GetSaasConfig()
-	if err == nil {
-		if val, ok := config["paid_rate_limit_rpm"]; ok {
-			if limit, err := strconv.Atoi(val); err == nil {
-				rpmLimit = limit
+	if isPaid {
+		rpmLimit = 15
+		fupLimitSeconds = 3600.0
+		monthlyLimitSeconds = 180000.0
+		if err == nil {
+			if val, ok := config["paid_rate_limit_rpm"]; ok {
+				if limit, err := strconv.Atoi(val); err == nil {
+					rpmLimit = limit
+				}
+			}
+			if val, ok := config["paid_fup_limit_seconds_daily"]; ok {
+				if limit, err := strconv.ParseFloat(val, 64); err == nil {
+					fupLimitSeconds = limit
+				}
+			}
+			if val, ok := config["paid_monthly_limit_seconds"]; ok {
+				if limit, err := strconv.ParseFloat(val, 64); err == nil {
+					monthlyLimitSeconds = limit
+				}
 			}
 		}
-		if val, ok := config["paid_fup_limit_seconds_daily"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				fupLimitSeconds = limit
+	} else {
+		rpmLimit = 3
+		fupLimitSeconds = 300.0
+		monthlyLimitSeconds = 3600.0
+		if err == nil {
+			if val, ok := config["free_rate_limit_rpm"]; ok {
+				if limit, err := strconv.Atoi(val); err == nil {
+					rpmLimit = limit
+				}
+			}
+			if val, ok := config["free_fup_limit_seconds_daily"]; ok {
+				if limit, err := strconv.ParseFloat(val, 64); err == nil {
+					fupLimitSeconds = limit
+				}
+			}
+			if val, ok := config["free_monthly_limit_seconds"]; ok {
+				if limit, err := strconv.ParseFloat(val, 64); err == nil {
+					monthlyLimitSeconds = limit
+				}
 			}
 		}
 	}
@@ -425,15 +758,15 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Monthly Usage Limit Check (50 hours = 180,000 seconds)
+	// 4. Monthly Usage Limit Check
 	monthlyDuration, err := database.GetUserDurationLast30Days(user.ID)
-	if err == nil && monthlyDuration+audioDuration > 180000.0 {
-		log.Printf("[MONTHLY LIMIT] Request from %s denied: Exceeded monthly limit (%.1f + %.1f > 180000.0 seconds)", user.Email, monthlyDuration, audioDuration)
+	if err == nil && monthlyDuration+audioDuration > monthlyLimitSeconds {
+		log.Printf("[MONTHLY LIMIT] Request from %s denied: Exceeded monthly limit (%.1f + %.1f > %.1f seconds)", user.Email, monthlyDuration, audioDuration, monthlyLimitSeconds)
 		_ = database.LogUsage(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_monthly_limit", audioSizeBytes)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": fmt.Sprintf("Monthly usage limit exceeded. Your plan is limited to 50 hours of transcription per month. You have already used %.1f hours in the last 30 days.", monthlyDuration/3600.0),
+			"error": fmt.Sprintf("Monthly usage limit exceeded. Your plan is limited to %.1f hours of transcription per month. You have already used %.1f hours in the last 30 days.", monthlyLimitSeconds/3600.0, monthlyDuration/3600.0),
 		})
 		return
 	}
@@ -812,13 +1145,13 @@ func handleMockPayment(w http.ResponseWriter, r *http.Request) {
 			</div>
 			<div class="plan-row">
 				<span>Price:</span>
-				<strong>$9.99 / month</strong>
+				<strong>$2.00 / month</strong>
 			</div>
 		</div>
 
 		<form action="/mock-payment/complete" method="POST">
 			<input type="hidden" name="token" value="` + token + `">
-			<button type="submit" class="btn">💳 Simulate Payment ($9.99)</button>
+			<button type="submit" class="btn">💳 Simulate Payment ($2.00)</button>
 		</form>
 	</div>
 </body>
@@ -905,4 +1238,191 @@ func handleMockPaymentComplete(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(html))
+}
+
+// POST /billing/create-subscription
+func handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 1. Authenticate user
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		http.Error(w, "Unauthorized: missing bearer token", http.StatusUnauthorized)
+		return
+	}
+	token := strings.TrimPrefix(auth, "Bearer ")
+	_, err := database.GetUserBySession(token)
+	if err != nil {
+		http.Error(w, "Unauthorized: invalid or expired session", http.StatusUnauthorized)
+		return
+	}
+
+	razorpayKeyID := os.Getenv("RAZORPAY_KEY_ID")
+	razorpayKeySecret := os.Getenv("RAZORPAY_KEY_SECRET")
+	razorpayPlanID := os.Getenv("RAZORPAY_PLAN_ID")
+
+	// 2. If Razorpay is not configured, fall back to mock simulator mode
+	if razorpayKeyID == "" || razorpayKeySecret == "" || razorpayKeyID == "your_razorpay_key_id_here" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"subscription_id": "sub_mock_123456789",
+			"razorpay_key_id": "",
+			"mock_mode":       true,
+		})
+		return
+	}
+
+	// 3. Make request to Razorpay Subscriptions API
+	// POST https://api.razorpay.com/v1/subscriptions
+	type RazorpaySubReq struct {
+		PlanID         string `json:"plan_id"`
+		TotalCount     int    `json:"total_count"`
+		Quantity       int    `json:"quantity"`
+		CustomerNotify int    `json:"customer_notify"`
+	}
+
+	subReqBody := RazorpaySubReq{
+		PlanID:         razorpayPlanID,
+		TotalCount:     120, // 10 years of monthly billing
+		Quantity:       1,
+		CustomerNotify: 1,
+	}
+
+	jsonBytes, err := json.Marshal(subReqBody)
+	if err != nil {
+		http.Error(w, "Failed to encode subscription request", http.StatusInternalServerError)
+		return
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("POST", "https://api.razorpay.com/v1/subscriptions", bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		http.Error(w, "Failed to create Razorpay HTTP request", http.StatusInternalServerError)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	// Basic authentication: base64(key_id:key_secret)
+	req.SetBasicAuth(razorpayKeyID, razorpayKeySecret)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Razorpay connection failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "Failed to read Razorpay response", http.StatusInternalServerError)
+		return
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("Razorpay API Error Status %d: %s", resp.StatusCode, string(bodyBytes))
+		http.Error(w, fmt.Sprintf("Razorpay subscription initialization failed: %s", string(bodyBytes)), http.StatusBadGateway)
+		return
+	}
+
+	var rzResp struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(bodyBytes, &rzResp); err != nil {
+		http.Error(w, "Failed to parse Razorpay subscription details", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"subscription_id": rzResp.ID,
+		"razorpay_key_id": razorpayKeyID,
+		"amount":          200, // $2.00 in USD cents or INR equivalents
+		"currency":        "USD",
+		"mock_mode":       false,
+	})
+}
+
+// POST /billing/verify-subscription
+func handleVerifySubscription(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 1. Authenticate user
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		http.Error(w, "Unauthorized: missing bearer token", http.StatusUnauthorized)
+		return
+	}
+	token := strings.TrimPrefix(auth, "Bearer ")
+	user, err := database.GetUserBySession(token)
+	if err != nil {
+		http.Error(w, "Unauthorized: invalid or expired session", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Parse request payload
+	var req struct {
+		PaymentID      string `json:"razorpay_payment_id"`
+		SubscriptionID string `json:"razorpay_subscription_id"`
+		Signature      string `json:"razorpay_signature"`
+	}
+	err = json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	razorpayKeyID := os.Getenv("RAZORPAY_KEY_ID")
+	razorpayKeySecret := os.Getenv("RAZORPAY_KEY_SECRET")
+
+	// 3. Mock mode verification
+	if razorpayKeyID == "" || razorpayKeySecret == "" || razorpayKeyID == "your_razorpay_key_id_here" {
+		// Instantly activate subscription in simulator
+		err = database.UpdateUserPlan(user.ID, "pro", 1)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to update user plan: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "success",
+		})
+		return
+	}
+
+	// 4. Real Razorpay signature verification
+	// Message string is: payment_id + "|" + subscription_id
+	message := req.PaymentID + "|" + req.SubscriptionID
+	
+	mac := hmac.New(sha256.New, []byte(razorpayKeySecret))
+	mac.Write([]byte(message))
+	expectedSignature := hex.EncodeToString(mac.Sum(nil))
+
+	// ConstantTimeCompare to prevent timing attacks
+	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(req.Signature)) != 1 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "Invalid Razorpay signature. Verification failed.",
+		})
+		return
+	}
+
+	// 5. Success! Update plan in db
+	err = database.UpdateUserPlan(user.ID, "pro", 1)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update user plan in database: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "success",
+	})
 }

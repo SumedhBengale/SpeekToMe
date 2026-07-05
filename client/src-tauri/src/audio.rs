@@ -1,5 +1,8 @@
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, Ordering};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+pub static CURRENT_VOLUME: AtomicU32 = AtomicU32::new(0);
 
 // Encode samples to WAV in memory
 pub fn write_wav_to_memory(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
@@ -103,6 +106,15 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
             device.build_input_stream(
                 &config.into(),
                 move |data: &[f32], _| {
+                    if !data.is_empty() {
+                        let mut sum_squares = 0.0;
+                        for &sample in data {
+                            sum_squares += sample * sample;
+                        }
+                        let rms = (sum_squares / data.len() as f32).sqrt();
+                        let vol = (rms * 1000.0) as u32;
+                        CURRENT_VOLUME.store(vol, Ordering::Relaxed);
+                    }
                     if let Ok(mut buf) = samples_buf_clone.lock() {
                         for &sample in data {
                             let i16_val = (sample * i16::MAX as f32) as i16;
@@ -118,6 +130,16 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
             device.build_input_stream(
                 &config.into(),
                 move |data: &[i16], _| {
+                    if !data.is_empty() {
+                        let mut sum_squares = 0.0;
+                        for &sample in data {
+                            let val = sample as f32 / i16::MAX as f32;
+                            sum_squares += val * val;
+                        }
+                        let rms = (sum_squares / data.len() as f32).sqrt();
+                        let vol = (rms * 1000.0) as u32;
+                        CURRENT_VOLUME.store(vol, Ordering::Relaxed);
+                    }
                     if let Ok(mut buf) = samples_buf_clone.lock() {
                         buf.extend_from_slice(data);
                     }
@@ -130,6 +152,16 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
             device.build_input_stream(
                 &config.into(),
                 move |data: &[u16], _| {
+                    if !data.is_empty() {
+                        let mut sum_squares = 0.0;
+                        for &sample in data {
+                            let val = (sample as f32 - 32768.0) / 32768.0;
+                            sum_squares += val * val;
+                        }
+                        let rms = (sum_squares / data.len() as f32).sqrt();
+                        let vol = (rms * 1000.0) as u32;
+                        CURRENT_VOLUME.store(vol, Ordering::Relaxed);
+                    }
                     if let Ok(mut buf) = samples_buf_clone.lock() {
                         for &sample in data {
                             let i16_val = (sample as i32 - 32768) as i16;
@@ -160,6 +192,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
             
             // Drop stream to stop recording
             drop(s);
+            CURRENT_VOLUME.store(0, Ordering::Relaxed);
             println!("Recording stopped.");
             
             let samples = samples_buf.lock().unwrap().clone();

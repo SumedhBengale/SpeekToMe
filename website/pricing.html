@@ -3,11 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pricing Plans | speekto.me</title>
-  <meta name="description" content="Affordable plans for speekto.me AI voice dictation. Start for just $2 per month.">
+  <title>Pricing Plans | speekto.me — AI Voice Dictation</title>
+  <meta name="description" content="Simple, transparent pricing for speekto.me AI voice dictation. Pro Unlimited for just $2/month. 50 hours, AI formatting, global hotkeys.">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+
+  <div class="noise-overlay" aria-hidden="true"></div>
 
   <!-- Navigation -->
   <nav class="navbar">
@@ -20,53 +22,362 @@
       <li class="nav-item active"><a href="/pricing">Pricing</a></li>
     </ul>
     <a href="/pricing" class="btn btn-primary nav-btn">Get Started</a>
+    <div class="nav-hamburger" onclick="this.classList.toggle('open')">
+      <span></span><span></span><span></span>
+    </div>
   </nav>
 
-  <!-- Pricing Section -->
-  <main class="pricing-wrapper">
-    <h1>Simple, transparent <span style="font-weight: 500;">pricing</span>.</h1>
-    <p class="subtitle">Get access to the ultra-fast voice client. No hidden fees. Cancel anytime.</p>
+  <!-- ═══════════════════════════════════════
+       1. PRICING HERO
+       ═══════════════════════════════════════ -->
+  <section class="pricing-wrapper">
+    <div class="reveal">
+      <span class="section-label">Pricing</span>
+      <h1>Simple, transparent <span class="heading-accent">pricing</span>.</h1>
+      <p class="subtitle text-muted">Get access to the ultra-fast voice client. No hidden fees. Cancel anytime.</p>
+    </div>
 
-    <div class="pricing-cards">
-      <section class="flat-pricing-card">
-        <span class="pricing-badge">Popular</span>
-        <h2>Pro Unlimited</h2>
-        
+    <!-- ═══════════════════════════════════════
+         2. PRICING CARDS
+         ═══════════════════════════════════════ -->
+    <div class="pricing-cards" data-stagger>
+      <!-- Free Tier -->
+      <div class="pricing-free-card reveal stagger-1">
+        <h2 style="font-size: 24px; margin-bottom: 8px;">Starter</h2>
+        <div class="price-title-row">
+          <span class="currency">$</span>
+          <span class="amount" style="font-size: 56px;">0</span>
+          <span class="period">/ forever</span>
+        </div>
+
+        <div class="plan-features-header">What's included</div>
+        <ul class="pricing-features-list">
+          <li>1 hour / month transcription limit</li>
+          <li>5 minutes / day daily session limit</li>
+          <li>Fast AI voice dictation</li>
+          <li>Global keyboard shortcut trigger</li>
+          <li>Standard latency queue</li>
+          <li>Community support</li>
+        </ul>
+
+        <a href="/dashboard/" class="btn btn-secondary btn-pricing-cta">Try Free</a>
+      </div>
+
+      <!-- Pro Plan -->
+      <section class="flat-pricing-card reveal stagger-2">
+        <span class="pricing-badge">Most Popular</span>
+        <h2>Pro</h2>
+
         <div class="price-title-row">
           <span class="currency">$</span>
           <span class="amount">2</span>
           <span class="period">/ month</span>
         </div>
-        
-        <div class="plan-features-header">What's included</div>
+
+        <div class="plan-features-header">Everything in Starter, plus</div>
         <ul class="pricing-features-list">
           <li><strong>50 Hours</strong> monthly dictation limit</li>
-          <li>Whisper v3 Turbo transcription (&lt;450ms)</li>
-          <li>DeepSeek Grammar &amp; Punctuation formatting</li>
-          <li>Global caps-lock shortcut key trigger</li>
-          <li>99% bandwidth saving via Opus encoding</li>
-          <li>Synaptican secure cloud API access</li>
-          <li>Email Customer Support</li>
+          <li><strong>1 Hour</strong> daily usage limit</li>
+          <li>High-priority transcription queues (under 450ms)</li>
+          <li>Intelligent AI formatting and correction</li>
+          <li>Custom formatting prompts and presets</li>
+          <li>Cross-platform desktop & mobile support</li>
+          <li>Priority Email Support</li>
         </ul>
 
-        <a href="http://localhost:8000/auth/login" class="btn btn-primary btn-pricing-cta" target="_blank">Subscribe to Pro</a>
+        <a href="/dashboard/" class="btn btn-primary btn-pricing-cta btn-lg">Subscribe to Pro →</a>
       </section>
     </div>
-  </main>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       3. FEATURE COMPARISON TABLE
+       ═══════════════════════════════════════ -->
+  <section class="comparison-section section-alt section-bordered">
+    <div class="container">
+      <div class="section-header reveal">
+        <h2>Full feature <span class="heading-accent">breakdown</span>.</h2>
+      </div>
+
+      <div class="reveal">
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>Starter</th>
+              <th>Pro ($2/mo)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Monthly Dictation Limit</strong></td>
+              <td>1 hour/month</td>
+              <td class="text-highlight-green">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-success); vertical-align: middle; margin-right: 4px; display: inline-block;"><polyline points="20 6 9 17 4 12"/></svg>
+                50 hours/month
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Daily Session Limit</strong></td>
+              <td>5 minutes/day</td>
+              <td class="text-highlight-green">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-success); vertical-align: middle; margin-right: 4px; display: inline-block;"><polyline points="20 6 9 17 4 12"/></svg>
+                1 hour/day
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Transcription Speed</strong></td>
+              <td>Standard queue</td>
+              <td class="text-highlight-green">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-success); vertical-align: middle; margin-right: 4px; display: inline-block;"><polyline points="20 6 9 17 4 12"/></svg>
+                Under 450ms priority
+              </td>
+            </tr>
+            <tr>
+              <td><strong>AI Formatting</strong></td>
+              <td>—</td>
+              <td class="text-highlight-green">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-success); vertical-align: middle; margin-right: 4px; display: inline-block;"><polyline points="20 6 9 17 4 12"/></svg>
+                Intelligent Formatting
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Custom Prompts</strong></td>
+              <td>—</td>
+              <td class="text-highlight-green">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-success); vertical-align: middle; margin-right: 4px; display: inline-block;"><polyline points="20 6 9 17 4 12"/></svg>
+                Custom presets
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Global Hotkeys</strong></td>
+              <td>Standard shortcut</td>
+              <td class="text-highlight-green">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-success); vertical-align: middle; margin-right: 4px; display: inline-block;"><polyline points="20 6 9 17 4 12"/></svg>
+                Control + custom hotkeys
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Support</strong></td>
+              <td>Community</td>
+              <td class="text-highlight-green">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-success); vertical-align: middle; margin-right: 4px; display: inline-block;"><polyline points="20 6 9 17 4 12"/></svg>
+                Priority Email
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       4. USAGE CALCULATOR
+       ═══════════════════════════════════════ -->
+  <section class="section">
+    <div class="container">
+      <div class="calculator-section reveal">
+        <span class="section-label">Calculator</span>
+        <h2 style="margin-bottom: 12px;">See how far <span class="heading-accent">$2 goes</span>.</h2>
+        <p>Drag the slider to see the cost per hour of dictation at your usage level.</p>
+
+        <input type="range" id="usage-slider" class="calculator-slider" min="1" max="50" value="25">
+
+        <div id="calc-result" class="calculator-result">
+          At <strong>25 hours/month</strong>, that's just <span class="highlight">$2.00/month</span> — or <span class="highlight">$0.080/hour</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       5. MONEY-BACK GUARANTEE
+       ═══════════════════════════════════════ -->
+  <section class="guarantee-section reveal">
+    <div class="guarantee-badge">
+      <span class="guarantee-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+      <div style="text-align: left;">
+        <h4 style="margin-bottom: 4px;">7-Day Money-Back Guarantee</h4>
+        <p style="font-size: 14px; margin: 0;">Not satisfied? Get a full refund within 7 days. No questions asked.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       6. SOCIAL PROOF
+       ═══════════════════════════════════════ -->
+  <section class="section section-alt section-bordered testimonials-section">
+    <div class="container">
+      <div class="reveal" style="max-width: 800px; margin: 0 auto;">
+        <div class="testimonial-card" style="text-align: center;">
+          <p style="position: relative;">
+            <span class="testimonial-quote-mark">"</span>
+            $2 a month for 50 hours of premium AI dictation? That's cheaper than a cup of coffee. The ROI is insane when you consider how many hours of typing it saves.
+          </p>
+          <div class="testimonial-author">Early Beta User — Freelance Developer</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       7. PRICING FAQ
+       ═══════════════════════════════════════ -->
+  <section class="section faq-section">
+    <div class="container-narrow">
+      <div class="section-header reveal">
+        <span class="section-label">FAQ</span>
+        <h2>Pricing <span class="heading-accent">questions</span>.</h2>
+      </div>
+
+      <div class="reveal">
+        <div class="faq-item">
+          <div class="faq-question">
+            How does billing work?
+            <span class="faq-icon">+</span>
+          </div>
+          <div class="faq-answer">
+            <div class="faq-answer-text">You're billed $2 per month from the date you subscribe. Your 50-hour usage resets at the start of each billing cycle. You can cancel anytime from the dashboard — no contracts, no lock-in.</div>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <div class="faq-question">
+            Can I get a refund?
+            <span class="faq-icon">+</span>
+          </div>
+          <div class="faq-answer">
+            <div class="faq-answer-text">Yes! We offer a 7-day money-back guarantee. If you're not satisfied with speekto.me Pro within the first 7 days of your subscription, contact us for a full refund. See our <a href="/refund" class="synaptican-link">Refund Policy</a> for details.</div>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <div class="faq-question">
+            What happens after 50 hours?
+            <span class="faq-icon">+</span>
+          </div>
+          <div class="faq-answer">
+            <div class="faq-answer-text">Your dictation services pause until your next billing cycle starts. We'll alert you on the desktop app when you're approaching your limit. For most users, 50 hours is more than enough — that's over 1.5 hours of dictation every day.</div>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <div class="faq-question">
+            Is there a free plan?
+            <span class="faq-icon">+</span>
+          </div>
+          <div class="faq-answer">
+            <div class="faq-answer-text">Yes! The free tier gives you basic transcription with a 5-minute per session limit. It's perfect for trying out speekto.me before committing to Pro. No credit card required.</div>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <div class="faq-question">
+            Do you offer team or enterprise plans?
+            <span class="faq-icon">+</span>
+          </div>
+          <div class="faq-answer">
+            <div class="faq-answer-text">Not yet, but we're working on it! If you need custom volume, team management, or enterprise features, reach out to us at <a href="mailto:contact@synaptican.com" class="synaptican-link">contact@synaptican.com</a> and we'll work something out.</div>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <div class="faq-question">
+            What payment methods do you accept?
+            <span class="faq-icon">+</span>
+          </div>
+          <div class="faq-answer">
+            <div class="faq-answer-text">We accept all major credit and debit cards, including Visa, Mastercard, and American Express. Payments are securely processed through our billing partner.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       8. STATS BAR
+       ═══════════════════════════════════════ -->
+  <section class="section section-dark stats-section section-bordered">
+    <div class="container">
+      <div class="stats-grid" data-stagger>
+        <div class="stat-item reveal">
+          <div class="stat-number" data-count="2" data-prefix="$" data-suffix="">$0</div>
+          <div class="stat-label">Per Month</div>
+        </div>
+        <div class="stat-item reveal">
+          <div class="stat-number" data-count="50" data-suffix="hr">0hr</div>
+          <div class="stat-label">Monthly Limit</div>
+        </div>
+        <div class="stat-item reveal">
+          <div class="stat-number" data-count="0.04" data-prefix="$" data-suffix="" data-decimals="2">$0</div>
+          <div class="stat-label">Per Hour</div>
+        </div>
+        <div class="stat-item reveal">
+          <div class="stat-number" data-count="7" data-suffix=" day">0 day</div>
+          <div class="stat-label">Money Back</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       9. BOTTOM CTA
+       ═══════════════════════════════════════ -->
+  <section class="cta-banner">
+    <div class="reveal">
+      <h2>Ready to start flowing?</h2>
+      <p>Join speekto.me Pro today. 50 hours of premium AI dictation for just $2/month. Cancel anytime.</p>
+      <a href="/dashboard/" class="btn btn-lg">Subscribe to Pro →</a>
+    </div>
+  </section>
 
   <!-- Footer -->
   <footer class="footer">
-    <div class="footer-copy">
-      Built with 💚 by <a href="https://synaptican.com" class="synaptican-link" target="_blank">Synaptican</a>. &copy; 2026.
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="/" class="nav-logo">
+          speekto<span class="logo-dot">.</span>me
+        </a>
+        <p>High-performance AI voice dictation. Speak naturally, type instantly. Built with <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="color: #be185d; display: inline-block; vertical-align: middle; margin: 0 2px;"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg> by Synaptican.</p>
+      </div>
+
+      <div class="footer-col">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="/">Home</a></li>
+          <li><a href="/about">About Us</a></li>
+          <li><a href="/pricing">Pricing</a></li>
+          <li><a href="/dashboard/">Dashboard</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="/about">How It Works</a></li>
+          <li><a href="/pricing">Get Started</a></li>
+          <li><a href="mailto:contact@synaptican.com">Contact Us</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="/privacy">Privacy Policy</a></li>
+          <li><a href="/terms">Terms & Conditions</a></li>
+          <li><a href="/refund">Refund Policy</a></li>
+        </ul>
+      </div>
     </div>
-    <ul class="footer-nav">
-      <li><a href="/">Home</a></li>
-      <li><a href="/about">About Us</a></li>
-      <li><a href="/pricing">Pricing</a></li>
-      <li><a href="/privacy">Privacy Policy</a></li>
-      <li><a href="/terms">Terms & Conditions</a></li>
-      <li><a href="/refund">Refund Policy</a></li>
-    </ul>
+
+    <div class="footer-bottom">
+      <div class="footer-copy">
+        © 2026 <a href="https://synaptican.com" class="synaptican-link" target="_blank">Synaptican</a>. All rights reserved.
+      </div>
+      <div class="footer-social">
+        <a href="mailto:contact@synaptican.com" title="Email" class="footer-social-icon" style="display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: var(--border-light); border-radius: 50%; color: var(--color-text-muted); transition: all 0.25s;"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: block;"><path d="M4 4h16c1.1 0 2-.9 2-2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></a>
+      </div>
+    </div>
   </footer>
 
   <script src="/script.js"></script>

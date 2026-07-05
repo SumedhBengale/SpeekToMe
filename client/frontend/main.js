@@ -23,6 +23,7 @@ const smartSpacingCheck = document.getElementById('smart-spacing-check');
 const modelSelect = document.getElementById('model-select');
 const enhanceCheck = document.getElementById('enhance-check');
 const customPromptText = document.getElementById('custom-prompt-text');
+const themeSelect = document.getElementById('theme-select');
 
 // Dashboard Account Elements
 const authLoggedOut = document.getElementById('auth-logged-out');
@@ -62,6 +63,7 @@ const onboardSoundFeedbackCheck = document.getElementById('onboard-sound-feedbac
 const onboardModelSelect = document.getElementById('onboard-model-select');
 const onboardEnhanceCheck = document.getElementById('onboard-enhance-check');
 const onboardCustomPromptText = document.getElementById('onboard-custom-prompt-text');
+const onboardThemeSelect = document.getElementById('onboard-theme-select');
 
 // ==========================================
 // Initialization & Config Binding
@@ -99,6 +101,41 @@ async function init() {
     updateAuthUI(userInfo);
     updateOnboardAuthUI(userInfo);
 
+    // 3.5. Bind Refresh Button Click Event
+    const refreshBtn = document.getElementById('refresh-data-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', async () => {
+        const originalText = refreshBtn.innerHTML;
+        refreshBtn.disabled = true;
+        refreshBtn.innerHTML = '<span>🔄</span> Refreshing...';
+        
+        try {
+          const freshInfo = await invoke('get_user_info');
+          if (freshInfo) {
+            updateAuthUI(freshInfo);
+            updateOnboardAuthUI(freshInfo);
+          }
+        } catch (err) {
+          console.error("Failed to refresh user data:", err);
+        } finally {
+          refreshBtn.disabled = false;
+          refreshBtn.innerHTML = originalText;
+        }
+      });
+    }
+
+    // 3.8. Theme preview listeners
+    if (themeSelect) {
+      themeSelect.addEventListener('change', (e) => {
+        document.body.setAttribute('data-theme', e.target.value);
+      });
+    }
+    if (onboardThemeSelect) {
+      onboardThemeSelect.addEventListener('change', (e) => {
+        document.body.setAttribute('data-theme', e.target.value);
+      });
+    }
+
     // 4. Setup Onboarding flow state
     if (!currentConfig.session_token) {
       // User is logged out / first run: Show Onboarding Flow
@@ -126,6 +163,29 @@ async function init() {
 
     // 7. Setup OAuth event listeners
     setupOAuthListeners();
+
+    // 8. Setup Credential Forms (Onboarding & Dashboard)
+    setupCredentialForm(
+      'onboard-auth-form',
+      'onboard-name-input',
+      'onboard-email-input',
+      'onboard-password-input',
+      'onboard-email-submit-btn',
+      'onboard-form-toggle-link',
+      'onboard-auth-error',
+      true
+    );
+
+    setupCredentialForm(
+      'app-auth-form',
+      'app-name-input',
+      'app-email-input',
+      'app-password-input',
+      'app-email-submit-btn',
+      'app-form-toggle-link',
+      'app-auth-error',
+      false
+    );
   } catch (err) {
     console.error("Failed to initialize Speekey UI:", err);
   }
@@ -141,6 +201,7 @@ function applyConfigToUI(config) {
   modelSelect.value = config.model;
   enhanceCheck.checked = config.enhance;
   customPromptText.value = config.custom_prompt;
+  if (themeSelect) themeSelect.value = config.theme || 'forest';
 
   // Onboarding inputs
   onboardHotkeySelect.value = config.hotkey;
@@ -150,6 +211,10 @@ function applyConfigToUI(config) {
   onboardModelSelect.value = config.model;
   onboardEnhanceCheck.checked = config.enhance;
   onboardCustomPromptText.value = config.custom_prompt;
+  if (onboardThemeSelect) onboardThemeSelect.value = config.theme || 'forest';
+
+  // Apply theme class to document body
+  document.body.setAttribute('data-theme', config.theme || 'forest');
 }
 
 function gatherConfigFromUI(isOnboarding) {
@@ -163,7 +228,8 @@ function gatherConfigFromUI(isOnboarding) {
       model: onboardModelSelect.value,
       enhance: onboardEnhanceCheck.checked,
       custom_prompt: onboardCustomPromptText.value,
-      session_token: currentConfig ? currentConfig.session_token : null
+      session_token: currentConfig ? currentConfig.session_token : null,
+      theme: onboardThemeSelect ? onboardThemeSelect.value : 'forest'
     };
   } else {
     return {
@@ -175,7 +241,8 @@ function gatherConfigFromUI(isOnboarding) {
       model: modelSelect.value,
       enhance: enhanceCheck.checked,
       custom_prompt: customPromptText.value,
-      session_token: currentConfig ? currentConfig.session_token : null
+      session_token: currentConfig ? currentConfig.session_token : null,
+      theme: themeSelect ? themeSelect.value : 'forest'
     };
   }
 }
@@ -297,6 +364,9 @@ function updateAuthUI(userInfo) {
     authLoggedOut.classList.add('hidden');
     authLoggingIn.classList.add('hidden');
     authLoggedIn.classList.remove('hidden');
+
+    const sidebarFooter = document.getElementById('sidebar-footer');
+    if (sidebarFooter) sidebarFooter.style.display = 'block';
   } else {
     // Show descriptive text when logged out
     if (accountDesc) accountDesc.classList.remove('hidden');
@@ -304,6 +374,9 @@ function updateAuthUI(userInfo) {
     authLoggedIn.classList.add('hidden');
     authLoggingIn.classList.add('hidden');
     authLoggedOut.classList.remove('hidden');
+
+    const sidebarFooter = document.getElementById('sidebar-footer');
+    if (sidebarFooter) sidebarFooter.style.display = 'none';
   }
 }
 
@@ -383,6 +456,110 @@ window.addEventListener('beforeunload', () => {
   if (unlistenLoginSuccess) unlistenLoginSuccess();
   if (unlistenLoginFailed) unlistenLoginFailed();
 });
+
+function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId, submitBtnId, toggleLinkId, errorId, isOnboarding) {
+  const nameInput = document.getElementById(nameInputId);
+  const emailInput = document.getElementById(emailInputId);
+  const passwordInput = document.getElementById(passwordInputId);
+  const submitBtn = document.getElementById(submitBtnId);
+  const toggleLink = document.getElementById(toggleLinkId);
+  const errorEl = document.getElementById(errorId);
+
+  let isSignUp = false;
+
+  toggleLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    isSignUp = !isSignUp;
+    if (isSignUp) {
+      nameInput.style.display = 'block';
+      submitBtn.textContent = 'Create Account';
+      toggleLink.textContent = 'Already have an account? Sign in';
+    } else {
+      nameInput.style.display = 'none';
+      submitBtn.textContent = 'Sign In';
+      toggleLink.textContent = 'Need an account? Sign up';
+    }
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+  });
+
+  submitBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
+    const name = nameInput.value.trim();
+
+    if (!email || !password || (isSignUp && !name)) {
+      errorEl.textContent = 'All fields are required.';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    errorEl.style.display = 'none';
+    submitBtn.disabled = true;
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = isSignUp ? 'Creating Account...' : 'Signing In...';
+
+    try {
+      if (isSignUp) {
+        const msg = await invoke('signup_with_credentials', { email, password, name });
+        // Show success message in green
+        errorEl.textContent = msg;
+        errorEl.style.color = '#00e676';
+        errorEl.style.display = 'block';
+        
+        // Auto-switch to login pane after 4 seconds
+        setTimeout(() => {
+          isSignUp = false;
+          nameInput.style.display = 'none';
+          submitBtn.textContent = 'Sign In';
+          toggleLink.textContent = 'Need an account? Sign up';
+          errorEl.style.display = 'none';
+          errorEl.style.color = ''; // reset color to default
+        }, 4000);
+
+        // Clear input fields (leave email for quick login)
+        passwordInput.value = '';
+        nameInput.value = '';
+      } else {
+        const userInfo = await invoke('login_with_credentials', { email, password });
+        
+        // Fetch updated config so we have the new session token
+        currentConfig = await invoke('get_config');
+        
+        updateAuthUI(userInfo);
+        updateOnboardAuthUI(userInfo);
+
+        // Clear input fields
+        emailInput.value = '';
+        passwordInput.value = '';
+        nameInput.value = '';
+      }
+    } catch (err) {
+      errorEl.style.color = ''; // reset to default red
+      errorEl.textContent = formatAuthError(err);
+      errorEl.style.display = 'block';
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalText;
+    }
+  });
+}
+
+function formatAuthError(err) {
+  if (typeof err === 'string') {
+    try {
+      const parsed = JSON.parse(err);
+      if (parsed && parsed.error) {
+        return parsed.error;
+      }
+    } catch (e) {
+      // Not a JSON string
+    }
+    return err;
+  }
+  return err.message || JSON.stringify(err);
+}
 
 // Run initialization
 document.addEventListener('DOMContentLoaded', init);

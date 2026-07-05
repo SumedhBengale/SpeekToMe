@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub custom_prompt: String,// String prompt instructions
     pub session_token: Option<String>,
     pub autostart: bool,      // true/false
+    pub theme: String,        // "forest", "lavender", "mint", "classic_dark"
 }
 
 impl Default for AppConfig {
@@ -25,6 +26,7 @@ impl Default for AppConfig {
             custom_prompt: "".to_string(),
             session_token: None,
             autostart: false,
+            theme: "forest".to_string(),
         }
     }
 }
