@@ -18,7 +18,10 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sort"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -36,10 +39,12 @@ var (
 	GROQ_API_URL     = "https://api.groq.com/openai/v1/audio/transcriptions"
 	DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
-	database *Database
+	database   *Database
+	vocabCache *VocabularyCache
 )
 
 func main() {
+	vocabCache = NewVocabularyCache()
 	_ = godotenv.Load()
 
 	GROQ_API_KEY = os.Getenv("GROQ_API_KEY")
@@ -76,6 +81,14 @@ func main() {
 	mux.HandleFunc("POST /auth/logout", handleAuthLogout)
 	mux.HandleFunc("POST /generate", handleGenerate)
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /auth/vocabulary", handleGetVocabulary)
+	mux.HandleFunc("POST /auth/vocabulary", handleAddVocabulary)
+	mux.HandleFunc("DELETE /auth/vocabulary", handleDeleteVocabulary)
+	mux.HandleFunc("POST /meetings", handleUploadMeeting)
+	mux.HandleFunc("GET /meetings", handleGetMeetings)
+	mux.HandleFunc("GET /meetings/{id}", handleGetMeetingDetail)
+	mux.HandleFunc("DELETE /meetings/{id}", handleDeleteMeeting)
+	mux.HandleFunc("GET /meetings/{id}/audio", handleGetMeetingAudio)
 	mux.HandleFunc("GET /mock-payment", handleMockPayment)
 	mux.HandleFunc("POST /mock-payment/complete", handleMockPaymentComplete)
 	mux.HandleFunc("POST /billing/create-subscription", handleCreateSubscription)
@@ -568,7 +581,7 @@ func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		body {
 			margin: 0; padding: 0;
 			font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-			background: linear-gradient(135deg, #ffffee 0%, #fffdf9 100%);
+			background: linear-gradient(135deg, #ffffee 0%%, #fffdf9 100%%);
 			color: #1a1a1a;
 			display: flex; justify-content: center; align-items: center;
 			min-height: 100vh;
@@ -627,6 +640,22 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"deepseek_key_configured": DEEPSEEK_API_KEY != "",
 		"google_auth_mock":        MOCK_AUTH,
 	})
+}
+
+func getOrCompileUserVocabulary(userID int64) (*UserVocabulary, error) {
+	vocab := vocabCache.Get(userID)
+	if vocab != nil {
+		return vocab, nil
+	}
+
+	terms, err := database.GetVocabularyTerms(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	vocab = CompileUserVocabulary(terms)
+	vocabCache.Set(userID, vocab)
+	return vocab, nil
 }
 
 func handleGenerate(w http.ResponseWriter, r *http.Request) {
@@ -783,7 +812,6 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	groqStart := time.Now()
 
 	var rawText string
-	var enhancedText string
 	var groqLatency float64
 	var dsLatency float64
 
@@ -830,78 +858,81 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		rawText = ""
 	}
 
-	// 2. Call DeepSeek enhancement
-	if enhance && rawText != "" {
-		if DEEPSEEK_API_KEY == "" {
-			totalLatency := time.Since(totalStart).Seconds()
-			_ = database.LogUsage(user.ID, audioDuration, groqLatency, 0, totalLatency, true, "deepseek-v4-flash", rawText, "", "failed_missing_deepseek_key", audioSizeBytes)
-			http.Error(w, "DEEPSEEK_API_KEY environment variable is not set", http.StatusInternalServerError)
-			return
+	// 2. Fetch or Compile Vocabulary Cache
+	vocab, err := getOrCompileUserVocabulary(user.ID)
+	if err != nil {
+		log.Printf("[VOCABULARY CACHE ERROR] Failed to load/compile vocabulary for user %d: %v", user.ID, err)
+		vocab = &UserVocabulary{
+			NormalizedLookup: make(map[string]string),
+			TermsByCount:     make(map[int][]CompiledTerm),
 		}
+	}
 
-		systemPrompt := "You are an expert transcription editor. Enhance the provided transcription by correcting grammar, punctuation, and typos. Preserve all technical terms, proper names, and original meaning. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text."
-		if strings.TrimSpace(prompt) != "" {
-			systemPrompt = fmt.Sprintf(
-				"You are an expert transcription editor. Enhance the provided transcription according to these custom instructions:\n%s\n\nPreserve the original meaning unless instructed otherwise. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text.",
-				strings.TrimSpace(prompt),
-			)
+	// 3. Assemble and run the modular TextTransform pipeline
+	var pipeline []TextTransform
+	if enhance {
+		pipeline = []TextTransform{
+			NewVocabNormalizerTransform("Vocab Normalizer Pass 1", false, 0.0),
+			NewAIEnhancementTransform(prompt, "deepseek-v4-flash", DEEPSEEK_API_KEY, DEEPSEEK_API_URL),
+			NewVocabNormalizerTransform("Vocab Verification Pass 2", true, 0.88),
 		}
-
-		dsPayload := map[string]interface{}{
-			"model": "deepseek-v4-flash",
-			"messages": []map[string]string{
-				{"role": "system", "content": systemPrompt},
-				{"role": "user", "content": rawText},
-			},
-			"thinking": map[string]string{"type": "disabled"},
+	} else {
+		pipeline = []TextTransform{
+			NewVocabNormalizerTransform("Vocab Normalizer Pass 1", true, 0.88),
 		}
+	}
 
-		jsonPayload, _ := json.Marshal(dsPayload)
-		dsStart := time.Now()
+	pctx := NewPipelineContext(user.ID, vocab)
+	pctx.Debug = os.Getenv("SPEEKEY_DEBUG") == "true" || os.Getenv("SPEEKEY_DEBUG_VOCAB") == "true"
+	currentText := rawText
 
-		dsCtx, dsCancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer dsCancel()
+	type transformTime struct {
+		name     string
+		duration time.Duration
+	}
+	var transformTimes []transformTime
 
-		req, err := http.NewRequestWithContext(dsCtx, "POST", DEEPSEEK_API_URL, bytes.NewBuffer(jsonPayload))
-		if err == nil {
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+DEEPSEEK_API_KEY)
-
-			resp, postErr := client.Do(req)
-			if postErr == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					var result struct {
-						Choices []struct {
-							Message struct {
-								Content string `json:"content"`
-							} `json:"message"`
-						} `json:"choices"`
-					}
-					if json.NewDecoder(resp.Body).Decode(&result) == nil && len(result.Choices) > 0 {
-						enhancedText = strings.TrimSpace(result.Choices[0].Message.Content)
-						dsLatency = time.Since(dsStart).Seconds()
-					}
-				}
+	pipelineStart := time.Now()
+	for _, transform := range pipeline {
+		if currentText == "" {
+			continue
+		}
+		
+		tstart := time.Now()
+		var terr error
+		currentText, terr = transform.Transform(ctx, currentText, pctx)
+		if terr != nil {
+			log.Printf("[PIPELINE ERROR] Transform %s failed: %v", transform.Name(), terr)
+			if transform.Name() == "AI Enhancement" {
+				currentText = rawText
 			}
+		}
+		
+		transformTimes = append(transformTimes, transformTime{
+			name:     transform.Name(),
+			duration: time.Since(tstart),
+		})
+	}
+	pipelineDuration := time.Since(pipelineStart)
+
+	// Extract AI Enhancement latency for database logging
+	for _, tTime := range transformTimes {
+		if tTime.name == "AI Enhancement" {
+			dsLatency = tTime.duration.Seconds()
 		}
 	}
 
 	totalLatency := time.Since(totalStart).Seconds()
-	finalOutput := rawText
-	if enhance && rawText != "" {
-		finalOutput = enhancedText
-	}
+	finalOutput := currentText
 
 	status := "success"
 	if rawText == "" && enhance {
 		status = "success_skipped_empty"
 	}
-	if enhance && rawText != "" && enhancedText == "" {
+	if enhance && rawText != "" && finalOutput == "" {
 		status = "failed_deepseek_error"
 	}
 	if rawText == "" && !enhance {
-		// Empty audio file or silence check bypassed
 		status = "success_empty"
 	}
 	if rawText == "" && groqLatency == 0.0 {
@@ -912,25 +943,56 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	_ = database.LogUsage(user.ID, audioDuration, groqLatency, dsLatency, totalLatency, enhance, "deepseek-v4-flash", rawText, finalOutput, status, audioSizeBytes)
 
 	// Output beautiful analytics block to the console
-	fmt.Println("\n" + strings.Repeat("=", 50))
+	fmt.Println("\n" + strings.Repeat("=", 55))
 	fmt.Println("                SPEEKEY ANALYTICS (GO)")
-	fmt.Println(strings.Repeat("=", 50))
+	fmt.Println(strings.Repeat("=", 55))
 	fmt.Printf("User:             %s (ID: %d)\n", user.Email, user.ID)
 	fmt.Printf("Audio Duration:   %.2f seconds\n", audioDuration)
 	fmt.Printf("Bandwidth / Size: %s (%d bytes)\n", formatSize(audioSizeBytes), audioSizeBytes)
 	fmt.Printf("Ogg Header Parse: %v\n", oggParseDuration)
 	fmt.Printf("Groq Whisper:     %.3f seconds\n", groqLatency)
-	if enhance && rawText != "" {
-		fmt.Printf("DeepSeek LLM:     %.3f seconds\n", dsLatency)
-		fmt.Printf("Enhancement:      Enabled (Model: deepseek-v4-flash)\n")
-		fmt.Printf("Raw Transcript:   %s\n", rawText)
-		fmt.Printf("Final Output:     %s\n", enhancedText)
-	} else {
-		fmt.Printf("DeepSeek LLM:     N/A (Disabled/Skipped)\n")
-		fmt.Printf("Final Output:     %s\n", rawText)
+	
+	// Print Pipeline transform details
+	fmt.Println("\n--- Pipeline Transforms & Latencies ---")
+	for _, tTime := range transformTimes {
+		fmt.Printf("  * %-25s: %.3f seconds (%.2f ms)\n", 
+			tTime.name, 
+			tTime.duration.Seconds(), 
+			float64(tTime.duration.Nanoseconds())/1e6,
+		)
 	}
-	fmt.Printf("Total Server Time:%.3f seconds\n", totalLatency)
-	fmt.Println(strings.Repeat("=", 50) + "\n")
+	fmt.Printf("  Total Pipeline:           %.3f seconds (%.2f ms)\n", 
+		pipelineDuration.Seconds(), 
+		float64(pipelineDuration.Nanoseconds())/1e6,
+	)
+
+	// Print Vocabulary matching metrics
+	fmt.Println("\n--- Vocabulary Engine Metrics ---")
+	vocabSize := 0
+	if vocab != nil && vocab.Terms != nil {
+		vocabSize = len(vocab.Terms)
+	}
+	fmt.Printf("  Vocabulary Size:          %d terms\n", vocabSize)
+	fmt.Printf("  Exact Matches:            %d\n", pctx.Metrics.ExactMatches)
+	fmt.Printf("  Normalized Matches:       %d\n", pctx.Metrics.NormalizedMatches)
+	fmt.Printf("  Fuzzy Matches:            %d\n", pctx.Metrics.FuzzyMatches)
+	
+	var matchedList []string
+	uniqueMatched := make(map[string]bool)
+	for _, m := range pctx.Matches {
+		uniqueMatched[m.Canonical] = true
+	}
+	for term := range uniqueMatched {
+		matchedList = append(matchedList, term)
+	}
+	sort.Strings(matchedList)
+	fmt.Printf("  Matched Terms:            %v\n", matchedList)
+	
+	fmt.Println("\n--- Final Text Output ---")
+	fmt.Printf("  Raw Transcript:           %s\n", rawText)
+	fmt.Printf("  Final Output:             %s\n", finalOutput)
+	fmt.Printf("Total Server Latency:       %.3f seconds\n", totalLatency)
+	fmt.Println(strings.Repeat("=", 55) + "\n")
 
 	// Return response
 	w.Header().Set("Content-Type", "application/json")
@@ -1426,3 +1488,592 @@ func handleVerifySubscription(w http.ResponseWriter, r *http.Request) {
 		"status": "success",
 	})
 }
+
+func handleGetVocabulary(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	terms, err := database.GetVocabularyTerms(user.ID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to load vocabulary: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(terms)
+}
+
+func handleAddVocabulary(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Canonical string `json:"canonical_term"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request: invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	canonical := strings.TrimSpace(req.Canonical)
+	if canonical == "" {
+		http.Error(w, "Bad request: term cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	normalized := NormalizeString(canonical)
+
+	_, err = database.AddVocabularyTerm(user.ID, canonical, normalized)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to add vocabulary term: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	vocabCache.Invalidate(user.ID)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleDeleteVocabulary(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Canonical string `json:"canonical_term"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request: invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	canonical := strings.TrimSpace(req.Canonical)
+	if canonical == "" {
+		http.Error(w, "Bad request: term cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	err = database.DeleteVocabularyTerm(user.ID, canonical)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete vocabulary term: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	vocabCache.Invalidate(user.ID)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+type WhisperSegment struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+}
+
+func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
+	if GROQ_API_KEY == "" {
+		return "", nil, fmt.Errorf("GROQ_API_KEY is not set")
+	}
+
+	groqBody := &bytes.Buffer{}
+	writer := multipart.NewWriter(groqBody)
+	_ = writer.WriteField("model", "whisper-large-v3-turbo")
+	_ = writer.WriteField("response_format", "verbose_json")
+	filePart, err := writer.CreateFormFile("file", "recording.ogg")
+	if err != nil {
+		return "", nil, err
+	}
+	_, _ = filePart.Write(audioBytes)
+	_ = writer.Close()
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	req, err := http.NewRequestWithContext(ctxTimeout, "POST", GROQ_API_URL, groqBody)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+GROQ_API_KEY)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyB, _ := io.ReadAll(resp.Body)
+		return "", nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
+	}
+
+	var result struct {
+		Text     string           `json:"text"`
+		Segments []WhisperSegment `json:"segments"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", nil, err
+	}
+
+	rawText := strings.TrimSpace(result.Text)
+	hallucinations := map[string]bool{
+		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
+		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
+	}
+	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
+	if hallucinations[checkText] {
+		rawText = ""
+		result.Segments = nil
+	}
+	if result.Segments == nil {
+		result.Segments = make([]WhisperSegment, 0)
+	}
+
+	return rawText, result.Segments, nil
+}
+
+func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Parse multipart form up to 100MB
+	err = r.ParseMultipartForm(100 << 20)
+	if err != nil {
+		http.Error(w, "Failed to parse multipart form", http.StatusBadRequest)
+		return
+	}
+
+	title := r.FormValue("title")
+	if title == "" {
+		title = fmt.Sprintf("Meeting on %s", time.Now().Format("2006-01-02 15:04"))
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Missing file parameter", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Read audio file
+	var audioBuf bytes.Buffer
+	if _, err := io.Copy(&audioBuf, file); err != nil {
+		http.Error(w, "Failed to read audio file payload", http.StatusInternalServerError)
+		return
+	}
+	audioBytes := audioBuf.Bytes()
+	audioSizeBytes := len(audioBytes)
+
+	// Calculate audio duration
+	duration := getOggOpusDuration(audioBytes)
+
+	// Ensure uploads directory exists
+	dir := "uploads/meetings"
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		http.Error(w, "Failed to create uploads directory", http.StatusInternalServerError)
+		return
+	}
+
+	// Save audio file to disk
+	filename := fmt.Sprintf("meeting_%d_%d.ogg", user.ID, time.Now().UnixNano())
+	audioPath := filepath.Join(dir, filename)
+	if err := os.WriteFile(audioPath, audioBytes, 0644); err != nil {
+		http.Error(w, "Failed to save audio file to disk", http.StatusInternalServerError)
+		return
+	}
+
+	// Insert meeting row in DB
+	meetingID, err := database.CreateMeeting(user.ID, title, duration, audioPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to record meeting in database: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// 1. Post to Groq Whisper for transcription with verbose_json for timestamps
+	var rawText string
+	var segmentsJSON string = "[]"
+
+	fileMic, _, errMic := r.FormFile("file_mic")
+	fileLoopback, _, errLb := r.FormFile("file_loopback")
+
+	if errMic == nil && errLb == nil {
+		defer fileMic.Close()
+		defer fileLoopback.Close()
+
+		var micBuf, lbBuf bytes.Buffer
+		_, err1 := io.Copy(&micBuf, fileMic)
+		_, err2 := io.Copy(&lbBuf, fileLoopback)
+
+		if err1 == nil && err2 == nil {
+			var micSegs, lbSegs []WhisperSegment
+			var errMicTrans, errLbTrans error
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			go func() {
+				defer wg.Done()
+				_, micSegs, errMicTrans = runWhisperTranscribe(r.Context(), micBuf.Bytes())
+			}()
+
+			go func() {
+				defer wg.Done()
+				_, lbSegs, errLbTrans = runWhisperTranscribe(r.Context(), lbBuf.Bytes())
+			}()
+
+			wg.Wait()
+
+			if errMicTrans == nil && errLbTrans == nil {
+				type Segment struct {
+					Start   float64 `json:"start"`
+					End     float64 `json:"end"`
+					Text    string  `json:"text"`
+					Speaker string  `json:"speaker"`
+				}
+				var merged []Segment
+
+				userName := user.Name
+				if userName == "" {
+					userName = "Local Speaker"
+				}
+
+				for _, s := range micSegs {
+					merged = append(merged, Segment{
+						Start:   s.Start,
+						End:     s.End,
+						Text:    s.Text,
+						Speaker: userName,
+					})
+				}
+				for _, s := range lbSegs {
+					merged = append(merged, Segment{
+						Start:   s.Start,
+						End:     s.End,
+						Text:    s.Text,
+						Speaker: "Remote Speaker",
+					})
+				}
+
+				sort.Slice(merged, func(i, j int) bool {
+					return merged[i].Start < merged[j].Start
+				})
+
+				var transcriptBuilder strings.Builder
+				for _, s := range merged {
+					transcriptBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", s.Speaker, s.Text))
+				}
+				rawText = transcriptBuilder.String()
+
+				segBytes, _ := json.Marshal(merged)
+				segmentsJSON = string(segBytes)
+			} else {
+				log.Printf("[DIARIZATION ERROR] Parallel transcription failed (mic_err=%v, lb_err=%v). Falling back to mixed audio.", errMicTrans, errLbTrans)
+			}
+		}
+	}
+
+	// Fallback if rawText is still empty
+	if rawText == "" && GROQ_API_KEY != "" {
+		var errWhisper error
+		var segments []WhisperSegment
+		rawText, segments, errWhisper = runWhisperTranscribe(r.Context(), audioBytes)
+		if errWhisper == nil {
+			type Segment struct {
+				Start   float64 `json:"start"`
+				End     float64 `json:"end"`
+				Text    string  `json:"text"`
+				Speaker string  `json:"speaker,omitempty"`
+			}
+			var segList []Segment
+			for _, s := range segments {
+				segList = append(segList, Segment{
+					Start: s.Start,
+					End:   s.End,
+					Text:  s.Text,
+				})
+			}
+			segBytes, _ := json.Marshal(segList)
+			segmentsJSON = string(segBytes)
+		} else {
+			log.Printf("[GROQ ERROR] Combined track transcription failed: %v", errWhisper)
+		}
+	}
+
+	// 2. Fetch or Compile Vocabulary Cache & run normalizer pass
+	vocab, err := getOrCompileUserVocabulary(user.ID)
+	if err != nil {
+		vocab = &UserVocabulary{
+			NormalizedLookup: make(map[string]string),
+			TermsByCount:     make(map[int][]CompiledTerm),
+		}
+	}
+
+	pctx := NewPipelineContext(user.ID, vocab)
+	normalizer := NewVocabNormalizerTransform("Vocab Normalizer Pass 1", true, 0.88)
+	normalizedTranscript, _ := normalizer.Transform(r.Context(), rawText, pctx)
+
+	// 3. Generate summary and action items using DeepSeek
+	var polished string = normalizedTranscript
+	var summary string = "AI Summary not available (DeepSeek key missing or request failed)."
+	var actionItems string = "No action items extracted."
+
+	if DEEPSEEK_API_KEY != "" && normalizedTranscript != "" {
+		polished, summary, actionItems, err = generateMeetingAIAnalysis(r.Context(), normalizedTranscript, pctx)
+		if err != nil {
+			log.Printf("[DEEPSEEK ERROR] Failed to generate AI analysis: %v", err)
+			polished = normalizedTranscript
+		}
+	}
+
+	// Update DB record
+	err = database.UpdateMeetingResult(meetingID, polished, summary, actionItems, segmentsJSON)
+	if err != nil {
+		log.Printf("[DB ERROR] Failed to update meeting: %v", err)
+	}
+
+	// Log usage to database
+	_ = database.LogUsage(user.ID, duration, 0, 0, 0, false, "meeting-whisper", rawText, polished, "success", audioSizeBytes)
+
+	// Return updated meeting object
+	updatedMeeting, err := database.GetMeeting(meetingID)
+	if err != nil {
+		http.Error(w, "Failed to load updated meeting details", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(updatedMeeting)
+}
+
+func handleGetMeetings(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	meetings, err := database.GetUserMeetings(user.ID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to retrieve meetings: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(meetings)
+}
+
+func handleGetMeetingDetail(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	idStr := r.PathValue("id")
+	meetingID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid meeting ID format", http.StatusBadRequest)
+		return
+	}
+
+	meeting, err := database.GetMeeting(meetingID)
+	if err != nil {
+		http.Error(w, "Meeting not found", http.StatusNotFound)
+		return
+	}
+
+	if meeting.UserID != user.ID {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(meeting)
+}
+
+func handleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	idStr := r.PathValue("id")
+	meetingID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid meeting ID format", http.StatusBadRequest)
+		return
+	}
+
+	meeting, err := database.GetMeeting(meetingID)
+	if err != nil {
+		http.Error(w, "Meeting not found", http.StatusNotFound)
+		return
+	}
+
+	if meeting.UserID != user.ID {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Delete file from disk
+	_ = os.Remove(meeting.AudioPath)
+
+	err = database.DeleteMeeting(meetingID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete meeting: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+}
+
+func handleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	idStr := r.PathValue("id")
+	meetingID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid meeting ID format", http.StatusBadRequest)
+		return
+	}
+
+	meeting, err := database.GetMeeting(meetingID)
+	if err != nil {
+		http.Error(w, "Meeting not found", http.StatusNotFound)
+		return
+	}
+
+	if meeting.UserID != user.ID {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Set content type for Ogg audio playback
+	w.Header().Set("Content-Type", "audio/ogg")
+	http.ServeFile(w, r, meeting.AudioPath)
+}
+
+func generateMeetingAIAnalysis(ctx context.Context, transcript string, pctx *PipelineContext) (polished string, summary string, actionItems string, err error) {
+	systemPrompt := `You are an expert meeting assistant. Analyze the provided meeting transcript.
+If the transcript contains speaker labels in square brackets (e.g. "[John Doe]: ...", "[Remote Speaker]: ..."), you must format the "polished_transcript" output as a clean dialogue script where each line is prefixed with the speaker's name (e.g. "John Doe: ...", "Bob: ...").
+You should analyze the conversation context to resolve actual names for "[Remote Speaker]" indicators (e.g., if someone says "Hi Bob" and the remote speaker replies, label that remote speaker as "Bob"). If names cannot be resolved, use a generic label like "Remote Speaker" or "Remote Speaker 1".
+Polish all speech for punctuation, grammar, and typos, while keeping all original meaning.
+
+You must return your response in JSON format with exactly three fields:
+- "polished_transcript": The polished transcript formatted as dialogue (if speaker labels are present).
+- "summary": A concise, professional markdown summary of the meeting, including key discussion points.
+- "action_items": A markdown list of action items, tasks, and owners (if mentioned).
+
+Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" + `json) or conversational text outside the JSON structure.`
+
+	var matchedTerms []string
+	uniqueMatched := make(map[string]bool)
+	for _, m := range pctx.Matches {
+		uniqueMatched[m.Canonical] = true
+	}
+	for term := range uniqueMatched {
+		matchedTerms = append(matchedTerms, term)
+	}
+	sort.Strings(matchedTerms)
+	
+	if len(matchedTerms) > 0 {
+		vocabLines := make([]string, len(matchedTerms))
+		for i, term := range matchedTerms {
+			vocabLines[i] = fmt.Sprintf("- %s", term)
+		}
+		systemPrompt += "\n\nThe following user-specific vocabulary terms are present in the text and MUST remain unchanged and spelled exactly as shown:\n" + strings.Join(vocabLines, "\n")
+	}
+
+	dsPayload := map[string]interface{}{
+		"model": "deepseek-v4-flash",
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": transcript},
+		},
+		"thinking": map[string]string{"type": "disabled"},
+	}
+
+	jsonPayload, err := json.Marshal(dsPayload)
+	if err != nil {
+		return transcript, "", "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", DEEPSEEK_API_URL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return transcript, "", "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+DEEPSEEK_API_KEY)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return transcript, "", "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return transcript, "", "", fmt.Errorf("DeepSeek API call failed: %d - %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return transcript, "", "", err
+	}
+
+	if len(result.Choices) == 0 {
+		return transcript, "", "", fmt.Errorf("DeepSeek returned empty choices")
+	}
+
+	content := strings.TrimSpace(result.Choices[0].Message.Content)
+	// Remove potential markdown code blocks
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	var analysis struct {
+		PolishedTranscript string `json:"polished_transcript"`
+		Summary            string `json:"summary"`
+		ActionItems        string `json:"action_items"`
+	}
+	if err := json.Unmarshal([]byte(content), &analysis); err != nil {
+		// If JSON parsing fails, we fallback to returning the whole content as summary
+		return transcript, content, "No action items extracted.", nil
+	}
+
+	return analysis.PolishedTranscript, analysis.Summary, analysis.ActionItems, nil
+}
+

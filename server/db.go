@@ -70,8 +70,34 @@ func NewDatabase(connStr string) (*Database, error) {
 			key TEXT PRIMARY KEY,
 			value TEXT
 		);
+		CREATE TABLE IF NOT EXISTS vocabulary (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			canonical_term TEXT NOT NULL,
+			normalized_term TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+			UNIQUE(user_id, canonical_term)
+		);
 		CREATE INDEX IF NOT EXISTS idx_usage_logs_user_status_timestamp ON usage_logs(user_id, status, timestamp);
 		CREATE INDEX IF NOT EXISTS idx_sessions_token_expires ON sessions(token, expires_at);
+		CREATE INDEX IF NOT EXISTS idx_vocabulary_user ON vocabulary(user_id);
+
+		CREATE TABLE IF NOT EXISTS meetings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			title TEXT NOT NULL,
+			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			duration REAL NOT NULL,
+			audio_path TEXT NOT NULL,
+			transcript TEXT,
+			summary TEXT,
+			action_items TEXT,
+			segments_json TEXT,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_meetings_user ON meetings(user_id);
 	`)
 	if err != nil {
 		db.Close()
@@ -379,3 +405,127 @@ func (d *Database) GetUserUsageLogs(userID int64) ([]UsageLog, error) {
 	}
 	return logs, nil
 }
+
+type VocabularyTerm struct {
+	Canonical  string `json:"canonical_term"`
+	Normalized string `json:"normalized_term"`
+}
+
+func (d *Database) AddVocabularyTerm(userID int64, canonical, normalized string) (int64, error) {
+	res, err := d.db.Exec(`
+		INSERT INTO vocabulary (user_id, canonical_term, normalized_term)
+		VALUES (?, ?, ?)
+		ON CONFLICT(user_id, canonical_term) DO UPDATE SET
+			normalized_term = excluded.normalized_term,
+			updated_at = CURRENT_TIMESTAMP
+	`, userID, canonical, normalized)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (d *Database) GetVocabularyTerms(userID int64) ([]VocabularyTerm, error) {
+	rows, err := d.db.Query(`
+		SELECT canonical_term, normalized_term
+		FROM vocabulary
+		WHERE user_id = ?
+		ORDER BY canonical_term ASC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	terms := make([]VocabularyTerm, 0)
+	for rows.Next() {
+		var vt VocabularyTerm
+		if err := rows.Scan(&vt.Canonical, &vt.Normalized); err == nil {
+			terms = append(terms, vt)
+		}
+	}
+	return terms, nil
+}
+
+func (d *Database) DeleteVocabularyTerm(userID int64, canonical string) error {
+	_, err := d.db.Exec(`
+		DELETE FROM vocabulary
+		WHERE user_id = ? AND canonical_term = ?
+	`, userID, canonical)
+	return err
+}
+
+type Meeting struct {
+	ID           int64   `json:"id"`
+	UserID       int64   `json:"user_id"`
+	Title        string  `json:"title"`
+	Timestamp    string  `json:"timestamp"`
+	Duration     float64 `json:"duration"`
+	AudioPath    string  `json:"audio_path"`
+	Transcript   string  `json:"transcript"`
+	Summary      string  `json:"summary"`
+	ActionItems  string  `json:"action_items"`
+	SegmentsJSON string  `json:"segments_json"`
+}
+
+func (d *Database) CreateMeeting(userID int64, title string, duration float64, audioPath string) (int64, error) {
+	res, err := d.db.Exec(`
+		INSERT INTO meetings (user_id, title, duration, audio_path, transcript, summary, action_items, segments_json)
+		VALUES (?, ?, ?, ?, '', '', '', '[]')
+	`, userID, title, duration, audioPath)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (d *Database) UpdateMeetingResult(meetingID int64, transcript string, summary string, actionItems string, segmentsJSON string) error {
+	_, err := d.db.Exec(`
+		UPDATE meetings
+		SET transcript = ?, summary = ?, action_items = ?, segments_json = ?
+		WHERE id = ?
+	`, transcript, summary, actionItems, segmentsJSON, meetingID)
+	return err
+}
+
+func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
+	rows, err := d.db.Query(`
+		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json
+		FROM meetings
+		WHERE user_id = ?
+		ORDER BY timestamp DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	meetings := make([]Meeting, 0)
+	for rows.Next() {
+		var m Meeting
+		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON)
+		if err == nil {
+			meetings = append(meetings, m)
+		}
+	}
+	return meetings, nil
+}
+
+func (d *Database) GetMeeting(meetingID int64) (*Meeting, error) {
+	var m Meeting
+	err := d.db.QueryRow(`
+		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json
+		FROM meetings
+		WHERE id = ?
+	`, meetingID).Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (d *Database) DeleteMeeting(meetingID int64) error {
+	_, err := d.db.Exec("DELETE FROM meetings WHERE id = ?", meetingID)
+	return err
+}
+

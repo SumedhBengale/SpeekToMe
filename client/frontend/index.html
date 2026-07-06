@@ -185,6 +185,12 @@
         <a href="#" class="nav-item" data-tab="ai">
           <span class="icon">🤖</span> AI Assistant
         </a>
+        <a href="#" class="nav-item" data-tab="vocabulary">
+          <span class="icon">📖</span> Vocabulary
+        </a>
+        <a href="#" class="nav-item" data-tab="meetings">
+          <span class="icon">📝</span> Meeting Notes
+        </a>
         <a href="#" class="nav-item" data-tab="account">
           <span class="icon">👤</span> Account
         </a>
@@ -297,6 +303,31 @@
         </div>
       </div>
 
+      <!-- Vocabulary Tab -->
+      <div class="tab-pane" id="tab-vocabulary">
+        <h2>Custom Vocabulary</h2>
+        <p class="section-desc">Add words, names, or abbreviations you want the transcription to match and correct.</p>
+
+        <div class="vocab-input-row">
+          <input type="text" id="vocab-input" class="fluent-input" placeholder="e.g. Speekey, DeepSeek">
+          <button id="vocab-add-btn" class="fluent-button primary">Add Word</button>
+        </div>
+
+        <div class="vocab-warning hidden" id="vocab-warning">
+          <span>⚠️</span> <span>Warning: Having more than 1000 terms may slightly affect latency.</span>
+        </div>
+
+        <div class="vocab-list-container">
+          <div id="vocab-empty-msg" class="vocab-empty">
+            No custom vocabulary terms yet. Add one above!
+          </div>
+          <ul id="vocab-list" class="vocab-list">
+            <!-- Rendered dynamically -->
+          </ul>
+        </div>
+        <span class="setting-hint" style="margin-left: 0; margin-top: 10px; display: block;">Terms are synced to all your devices. Matching is case-insensitive.</span>
+      </div>
+
       <!-- Account Tab -->
       <div class="tab-pane" id="tab-account">
         <h2>Account</h2>
@@ -373,6 +404,135 @@
           <button id="logout-btn" class="fluent-button danger">Log Out</button>
         </div>
       </div>
+
+      <!-- Meeting Notes Tab -->
+      <div class="tab-pane" id="tab-meetings">
+        <h2>Meeting Notes</h2>
+        <p class="section-desc">Record, transcribe, and summarize your meetings, Google Meet, Zoom, or local audio.</p>
+
+        <!-- Dynamic Content Switcher -->
+        <div id="meetings-container">
+          <!-- 1. Dashboard View (default) -->
+          <div id="meetings-dashboard-view">
+            <div class="meetings-header-row" style="display: flex; gap: 10px; margin-bottom: 20px; align-items: center;">
+              <input type="text" id="meetings-search-input" class="fluent-input" placeholder="Search meetings..." style="flex: 1;">
+              <button id="meetings-start-rec-btn" class="fluent-button primary">🔴 Record New Note</button>
+            </div>
+            
+            <div class="meetings-list-container" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; min-height: 200px; padding: 15px;">
+              <div id="meetings-empty-msg" class="meetings-empty" style="text-align: center; color: var(--text-secondary); padding: 50px 0;">
+                No meeting notes recorded yet. Click "Record New Note" to start!
+              </div>
+              <div id="meetings-list" class="meetings-list-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 15px;">
+                <!-- Rendered dynamically -->
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Recording View -->
+          <div id="meetings-recording-view" class="hidden">
+            <div class="recorder-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 30px; text-align: center;">
+              <div class="recorder-status" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 15px;">
+                <span class="pulse-dot" style="width: 10px; height: 10px; background: #ff3b30; border-radius: 50%; display: inline-block; animation: pulse 1.5s infinite;"></span>
+                <span class="status-label" style="font-weight: 500; font-size: 14px; color: #ff453a;">Recording Audio...</span>
+              </div>
+              
+              <div id="meetings-timer" class="recorder-timer" style="font-size: 48px; font-weight: bold; font-family: monospace; color: var(--text-primary); margin-bottom: 25px; letter-spacing: 2px;">00:00:00</div>
+              
+              <!-- Live Level Meters -->
+              <div class="visualizer-row" style="display: flex; flex-direction: column; gap: 12px; max-width: 400px; margin: 0 auto 25px auto; text-align: left;">
+                <div class="meter-container">
+                  <span class="meter-label" style="font-size: 11.5px; opacity: 0.8; display: block; margin-bottom: 4px;">🎙️ Microphone Level</span>
+                  <div class="meter-bg" style="height: 6px; background: var(--progress-bg); border-radius: 3px; overflow: hidden;">
+                    <div id="mic-level-fill" class="meter-fill" style="width: 0%; height: 100%; background: #00e676; transition: width 0.08s ease;"></div>
+                  </div>
+                </div>
+                <div class="meter-container">
+                  <span class="meter-label" style="font-size: 11.5px; opacity: 0.8; display: block; margin-bottom: 4px;">🔊 System Loopback Level</span>
+                  <div class="meter-bg" style="height: 6px; background: var(--progress-bg); border-radius: 3px; overflow: hidden;">
+                    <div id="loopback-level-fill" class="meter-fill" style="width: 0%; height: 100%; background: #2f80ed; transition: width 0.08s ease;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group" style="margin-top: 25px; text-align: left; max-width: 400px; margin: 0 auto 25px auto;">
+                <label for="meeting-title-input">Meeting / Note Title</label>
+                <input type="text" id="meeting-title-input" class="fluent-input" placeholder="e.g. Project Sync with Team" style="width: 100%; box-sizing: border-box;">
+              </div>
+
+              <div class="recorder-actions" style="display: flex; gap: 10px; justify-content: center;">
+                <button id="meetings-stop-rec-btn" class="fluent-button danger large">🛑 Stop & Transcribe</button>
+                <button id="meetings-cancel-rec-btn" class="fluent-button secondary">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. Detail View -->
+          <div id="meetings-detail-view" class="hidden">
+            <button id="meetings-back-btn" class="fluent-button secondary" style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
+              <span>⬅</span> Back to List
+            </button>
+            
+            <div class="meeting-detail-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px;">
+              <div class="meeting-detail-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
+                <div>
+                  <h3 id="meeting-detail-title" style="margin: 0; font-size: 18px; color: var(--text-primary);">Meeting Title</h3>
+                  <span id="meeting-detail-date" class="meeting-date" style="font-size: 12px; color: var(--text-secondary);">July 6, 2026</span>
+                </div>
+              </div>
+              
+              <!-- Audio Player Section -->
+              <div class="audio-player-container" style="margin-bottom: 20px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px;">
+                <audio id="meeting-audio-player" controls style="width: 100%; height: 40px; border-radius: 4px;"></audio>
+              </div>
+
+              <!-- Tabs: Transcript vs AI Summary -->
+              <div class="detail-tabs" style="display: flex; gap: 5px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 15px; align-items: center;">
+                <button class="detail-tab-btn active" data-detail-tab="transcript" style="background: none; border: none; padding: 6px 12px; color: var(--text-secondary); font-size: 13.5px; font-weight: 500; cursor: pointer; border-radius: 4px;">Transcript</button>
+                <button class="detail-tab-btn" data-detail-tab="summary" style="background: none; border: none; padding: 6px 12px; color: var(--text-secondary); font-size: 13.5px; font-weight: 500; cursor: pointer; border-radius: 4px;">AI Summary</button>
+                <button class="detail-tab-btn" data-detail-tab="actions" style="background: none; border: none; padding: 6px 12px; color: var(--text-secondary); font-size: 13.5px; font-weight: 500; cursor: pointer; border-radius: 4px;">Action Items</button>
+                <button id="meeting-delete-btn" class="fluent-button danger small" style="margin-left: auto; font-size: 11px; padding: 5px 8px; display: flex; align-items: center; gap: 3px;">
+                  <span>🗑️</span> Delete
+                </button>
+              </div>
+
+              <div class="detail-tab-content">
+                <!-- Transcript Pane -->
+                <div class="detail-tab-pane active" id="detail-pane-transcript">
+                  <div id="meeting-transcript-text" class="transcript-view" style="font-size: 14px; line-height: 1.6; color: var(--text-primary); max-height: 250px; overflow-y: auto; padding-right: 8px; text-align: justify; word-wrap: break-word;">
+                    <!-- Loaded dynamically with clickable words/sentences -->
+                  </div>
+                </div>
+
+                <!-- Summary Pane -->
+                <div class="detail-tab-pane" id="detail-pane-summary">
+                  <div id="meeting-summary-text" class="markdown-view" style="font-size: 13.5px; line-height: 1.6; color: var(--text-primary); max-height: 250px; overflow-y: auto; padding-right: 8px;">
+                    <!-- Loaded dynamically -->
+                  </div>
+                </div>
+
+                <!-- Action Items Pane -->
+                <div class="detail-tab-pane" id="detail-pane-actions">
+                  <div id="meeting-actions-text" class="markdown-view" style="font-size: 13.5px; line-height: 1.6; color: var(--text-primary); max-height: 250px; overflow-y: auto; padding-right: 8px;">
+                    <!-- Loaded dynamically -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Loading/Processing View -->
+          <div id="meetings-processing-view" class="hidden">
+            <div class="processing-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 40px; text-align: center;">
+              <div class="spinner" style="margin: 0 auto 20px auto; width: 40px; height: 40px; border: 3px solid var(--border-color); border-radius: 50%; border-top-color: var(--accent-color); animation: spin 1s linear infinite;"></div>
+              <h3 style="color: var(--text-primary); margin-bottom: 10px;">Transcribing & Summarizing Note...</h3>
+              <p style="font-size: 13px; color: var(--text-secondary); max-width: 400px; margin: 0 auto; line-height: 1.5;">Uploading Opus compressed audio and running AI enhancement. This might take a few seconds depending on the meeting length.</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
 
       <!-- Footer Buttons -->
       <div class="footer">

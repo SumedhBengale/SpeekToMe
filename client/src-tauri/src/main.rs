@@ -129,6 +129,27 @@ fn signup_with_credentials(email: String, password: String, name: String) -> Res
     api::signup_with_credentials(&email, &password, &name)
 }
 
+#[tauri::command]
+fn get_vocabulary() -> Result<Vec<api::ClientVocabularyTerm>, String> {
+    let config = get_active_config().lock().unwrap();
+    let token = config.session_token.as_ref().ok_or("Not logged in")?;
+    api::fetch_vocabulary(token)
+}
+
+#[tauri::command]
+fn add_vocabulary_term(term: String) -> Result<(), String> {
+    let config = get_active_config().lock().unwrap();
+    let token = config.session_token.as_ref().ok_or("Not logged in")?;
+    api::add_vocab_term(token, &term)
+}
+
+#[tauri::command]
+fn delete_vocabulary_term(term: String) -> Result<(), String> {
+    let config = get_active_config().lock().unwrap();
+    let token = config.session_token.as_ref().ok_or("Not logged in")?;
+    api::delete_vocab_term(token, &term)
+}
+
 fn main() {
     // 1. Initialize global loaded config
     let _ = get_active_config();
@@ -168,7 +189,14 @@ fn main() {
             logout,
             get_user_info,
             login_with_credentials,
-            signup_with_credentials
+            signup_with_credentials,
+            get_vocabulary,
+            add_vocabulary_term,
+            delete_vocabulary_term,
+            start_meeting,
+            stop_meeting,
+            get_meeting_levels,
+            upload_meeting
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -178,3 +206,53 @@ fn main() {
             }
         });
 }
+
+pub static CURRENT_MEETING_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+#[tauri::command]
+fn start_meeting(title: String) -> Result<String, String> {
+    println!("Starting meeting: {}", title);
+    
+    let temp_dir = std::env::temp_dir();
+    let filename = format!("speekey_meeting_{}.ogg", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let path = temp_dir.join(filename);
+    
+    if let Err(e) = crate::audio::start_meeting_recording(path.clone()) {
+        return Err(format!("Failed to start recording: {}", e));
+    }
+    
+    let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap();
+    *path_lock = Some(path.clone());
+    
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn stop_meeting() -> Result<String, String> {
+    println!("Stopping meeting...");
+    crate::audio::stop_meeting_recording();
+    
+    let path_lock = CURRENT_MEETING_PATH.lock().unwrap();
+    if let Some(ref path) = *path_lock {
+        Ok(path.to_string_lossy().to_string())
+    } else {
+        Err("No active meeting recording found".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_meeting_levels() -> (u32, u32) {
+    use std::sync::atomic::Ordering;
+    let mic = crate::audio::MIC_VOLUME.load(Ordering::Relaxed);
+    let loopback = crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed);
+    (mic, loopback)
+}
+
+#[tauri::command]
+fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
+    let config = get_active_config().lock().unwrap();
+    let token = config.session_token.as_ref().ok_or("Not logged in")?;
+    crate::api::upload_meeting(token, &title, &filepath)
+}
+
+

@@ -88,6 +88,10 @@ async function init() {
           invoke('get_user_info').then(info => {
             updateAuthUI(info);
           });
+        } else if (tabId === 'vocabulary') {
+          loadVocabulary();
+        } else if (tabId === 'meetings') {
+          loadMeetings();
         }
       });
     });
@@ -186,6 +190,36 @@ async function init() {
       'app-auth-error',
       false
     );
+    // 9. Vocabulary Engine UI binding
+    const vocabInput = document.getElementById('vocab-input');
+    const vocabAddBtn = document.getElementById('vocab-add-btn');
+    if (vocabAddBtn && vocabInput) {
+      vocabAddBtn.addEventListener('click', async () => {
+        const term = vocabInput.value.trim();
+        if (!term) return;
+        
+        vocabAddBtn.disabled = true;
+        try {
+          await invoke('add_vocabulary_term', { term });
+          vocabInput.value = '';
+          await loadVocabulary();
+        } catch (err) {
+          console.error("Failed to add vocabulary term:", err);
+          alert("Failed to add term: " + err);
+        } finally {
+          vocabAddBtn.disabled = false;
+        }
+      });
+      
+      vocabInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          vocabAddBtn.click();
+        }
+      });
+    }
+
+    // Initialize Meeting Notes UI event listeners
+    setupMeetingsUI();
   } catch (err) {
     console.error("Failed to initialize Speekey UI:", err);
   }
@@ -561,6 +595,550 @@ function formatAuthError(err) {
   return err.message || JSON.stringify(err);
 }
 
+// ==========================================
+// Vocabulary Settings
+// ==========================================
+
+async function loadVocabulary() {
+  const vocabList = document.getElementById('vocab-list');
+  const vocabEmpty = document.getElementById('vocab-empty-msg');
+  const vocabWarning = document.getElementById('vocab-warning');
+  if (!vocabList) return;
+
+  try {
+    const terms = await invoke('get_vocabulary');
+    vocabList.innerHTML = '';
+    
+    if (!terms || terms.length === 0) {
+      vocabEmpty.style.display = 'block';
+      vocabList.style.display = 'none';
+      vocabWarning.classList.add('hidden');
+      return;
+    }
+
+    vocabEmpty.style.display = 'none';
+    vocabList.style.display = 'flex';
+
+    if (terms.length > 1000) {
+      vocabWarning.classList.remove('hidden');
+    } else {
+      vocabWarning.classList.add('hidden');
+    }
+
+    terms.forEach(term => {
+      const li = document.createElement('li');
+      li.className = 'vocab-item';
+      
+      const textSpan = document.createElement('span');
+      textSpan.className = 'vocab-term-text';
+      textSpan.textContent = term.canonical_term;
+      
+      const normSpan = document.createElement('span');
+      normSpan.className = 'vocab-term-normalized';
+      normSpan.textContent = ` (${term.normalized_term})`;
+      textSpan.appendChild(normSpan);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'vocab-delete-btn';
+      deleteBtn.innerHTML = '🗑️';
+      deleteBtn.title = 'Delete word';
+      deleteBtn.addEventListener('click', async () => {
+        deleteBtn.disabled = true;
+        try {
+          await invoke('delete_vocabulary_term', { term: term.canonical_term });
+          await loadVocabulary();
+        } catch (err) {
+          console.error("Failed to delete term:", err);
+          alert("Failed to delete term: " + err);
+        }
+      });
+
+      li.appendChild(textSpan);
+      li.appendChild(deleteBtn);
+      vocabList.appendChild(li);
+    });
+  } catch (err) {
+    console.error("Failed to load vocabulary:", err);
+    vocabList.innerHTML = `<li class="vocab-empty" style="color: #ff5252;">Error loading vocabulary: ${err}</li>`;
+    vocabEmpty.style.display = 'none';
+  }
+}
+
 // Run initialization
 document.addEventListener('DOMContentLoaded', init);
+
+// ==========================================
+// Meetings & Notes Feature Controller
+// ==========================================
+
+let recordingInterval = null;
+let timerInterval = null;
+let meetingSeconds = 0;
+let currentMeetingFile = null;
+let activeMeetingId = null;
+
+function setupMeetingsUI() {
+  const startRecBtn = document.getElementById('meetings-start-rec-btn');
+  const stopRecBtn = document.getElementById('meetings-stop-rec-btn');
+  const cancelRecBtn = document.getElementById('meetings-cancel-rec-btn');
+  const backBtn = document.getElementById('meetings-back-btn');
+  const deleteBtn = document.getElementById('meeting-delete-btn');
+  const searchInput = document.getElementById('meetings-search-input');
+  
+  if (startRecBtn) startRecBtn.addEventListener('click', startMeetingRecording);
+  if (stopRecBtn) stopRecBtn.addEventListener('click', stopMeetingRecording);
+  if (cancelRecBtn) cancelRecBtn.addEventListener('click', cancelMeetingRecording);
+  if (backBtn) backBtn.addEventListener('click', () => {
+    const player = document.getElementById('meeting-audio-player');
+    player.pause();
+    player.src = '';
+    showDashboardView();
+    loadMeetings();
+  });
+  if (deleteBtn) deleteBtn.addEventListener('click', confirmDeleteMeeting);
+  
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase();
+      if (!window.allMeetings) return;
+      const filtered = window.allMeetings.filter(m => 
+        m.title.toLowerCase().includes(query) || 
+        (m.transcript && m.transcript.toLowerCase().includes(query)) ||
+        (m.summary && m.summary.toLowerCase().includes(query))
+      );
+      renderMeetingsList(filtered);
+    });
+  }
+}
+
+function showDashboardView() {
+  document.getElementById('meetings-dashboard-view').classList.remove('hidden');
+  document.getElementById('meetings-recording-view').classList.add('hidden');
+  document.getElementById('meetings-detail-view').classList.add('hidden');
+  document.getElementById('meetings-processing-view').classList.add('hidden');
+}
+
+function showRecordingView() {
+  document.getElementById('meetings-dashboard-view').classList.add('hidden');
+  document.getElementById('meetings-recording-view').classList.remove('hidden');
+  document.getElementById('meetings-detail-view').classList.add('hidden');
+  document.getElementById('meetings-processing-view').classList.add('hidden');
+}
+
+function showDetailView() {
+  document.getElementById('meetings-dashboard-view').classList.add('hidden');
+  document.getElementById('meetings-recording-view').classList.add('hidden');
+  document.getElementById('meetings-detail-view').classList.remove('hidden');
+  document.getElementById('meetings-processing-view').classList.add('hidden');
+}
+
+function showProcessingView() {
+  document.getElementById('meetings-dashboard-view').classList.add('hidden');
+  document.getElementById('meetings-recording-view').classList.add('hidden');
+  document.getElementById('meetings-detail-view').classList.add('hidden');
+  document.getElementById('meetings-processing-view').classList.remove('hidden');
+}
+
+async function loadMeetings() {
+  const emptyMsg = document.getElementById('meetings-empty-msg');
+  const listGrid = document.getElementById('meetings-list');
+  if (!listGrid) return;
+
+  const token = currentConfig ? currentConfig.session_token : null;
+  if (!token) {
+    listGrid.innerHTML = '';
+    emptyMsg.textContent = 'Please sign in to view and record meeting notes.';
+    emptyMsg.style.display = 'block';
+    return;
+  }
+
+  try {
+    const res = await fetch('http://127.0.0.1:8000/meetings', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!res.ok) throw new Error("Server error");
+    const meetings = await res.json();
+    
+    window.allMeetings = meetings;
+    renderMeetingsList(meetings);
+  } catch (err) {
+    console.error("Failed to load meetings:", err);
+    listGrid.innerHTML = '';
+    emptyMsg.textContent = 'Error connecting to Speekey server. Ensure the server is running.';
+    emptyMsg.style.display = 'block';
+  }
+}
+
+function renderMeetingsList(meetings) {
+  const emptyMsg = document.getElementById('meetings-empty-msg');
+  const listGrid = document.getElementById('meetings-list');
+  listGrid.innerHTML = '';
+
+  if (!meetings || meetings.length === 0) {
+    emptyMsg.style.display = 'block';
+    emptyMsg.textContent = 'No meeting notes found.';
+    return;
+  }
+  emptyMsg.style.display = 'none';
+
+  meetings.forEach(m => {
+    const card = document.createElement('div');
+    card.className = 'meeting-card';
+    card.addEventListener('click', () => viewMeeting(m.id));
+
+    const title = document.createElement('div');
+    title.className = 'meeting-card-title';
+    title.textContent = m.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'meeting-card-meta';
+
+    const dateSpan = document.createElement('span');
+    dateSpan.textContent = formatDate(m.timestamp);
+
+    const durSpan = document.createElement('span');
+    durSpan.textContent = formatDuration(m.duration);
+
+    meta.appendChild(dateSpan);
+    meta.appendChild(durSpan);
+
+    card.appendChild(title);
+    card.appendChild(meta);
+    listGrid.appendChild(card);
+  });
+}
+
+async function viewMeeting(id) {
+  showProcessingView();
+  const token = currentConfig ? currentConfig.session_token : null;
+  try {
+    const res = await fetch(`http://127.0.0.1:8000/meetings/${id}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!res.ok) throw new Error("Failed to load meeting details");
+    const m = await res.json();
+    activeMeetingId = id;
+
+    showDetailView();
+
+    document.getElementById('meeting-detail-title').textContent = m.title;
+    document.getElementById('meeting-detail-date').textContent = `${formatDate(m.timestamp)} • ${formatDuration(m.duration)}`;
+
+    // Set Audio source using Object URL to authorize playback request
+    const player = document.getElementById('meeting-audio-player');
+    const audioRes = await fetch(`http://127.0.0.1:8000/meetings/${id}/audio`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const blob = await audioRes.blob();
+    player.src = URL.createObjectURL(blob);
+
+    // Setup active tab
+    const tabBtns = document.querySelectorAll('.detail-tab-btn');
+    const panes = document.querySelectorAll('.detail-tab-pane');
+    tabBtns.forEach(b => b.classList.remove('active'));
+    panes.forEach(p => p.classList.remove('active'));
+    document.querySelector('.detail-tab-btn[data-detail-tab="transcript"]').classList.add('active');
+    document.getElementById('detail-pane-transcript').classList.add('active');
+
+    // Parse and render transcripts with sync highlights
+    const transcriptTextEl = document.getElementById('meeting-transcript-text');
+    transcriptTextEl.innerHTML = '';
+    
+    let segments = [];
+    try {
+      segments = JSON.parse(m.segments_json);
+    } catch (_) {
+      segments = [];
+    }
+
+    // Helper functions for avatars
+    const getInitials = (name) => {
+      if (!name) return 'SP';
+      const cleanName = name.replace(/[\[\]]/g, ''); // strip brackets
+      const parts = cleanName.split(' ');
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+      }
+      return cleanName.slice(0, 2).toUpperCase();
+    };
+
+    const getAvatarColor = (name) => {
+      if (!name) return '#757575';
+      let hash = 0;
+      for (let i = 0; i < name.length; i++) {
+        hash = name.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      const colors = [
+        '#5c6bc0', '#26a69a', '#ec407a', '#7e57c2', 
+        '#26c6da', '#ff7043', '#8d6e63', '#66bb6a'
+      ];
+      return colors[Math.abs(hash) % colors.length];
+    };
+
+    const formatOffset = (seconds) => {
+      if (isNaN(seconds)) return '0:00';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      const sStr = s < 10 ? '0' + s : s;
+      if (h > 0) {
+        const mStr = m < 10 ? '0' + m : m;
+        return `${h}:${mStr}:${sStr}`;
+      }
+      return `${m}:${sStr}`;
+    };
+
+    if (segments && segments.length > 0) {
+      let currentSpeaker = null;
+      let currentBlock = null;
+      let currentBlockText = null;
+
+      segments.forEach(seg => {
+        const speakerName = seg.speaker || 'Speaker';
+        
+        if (speakerName !== currentSpeaker) {
+          currentSpeaker = speakerName;
+          
+          currentBlock = document.createElement('div');
+          currentBlock.className = 'meeting-speaker-block';
+          
+          const header = document.createElement('div');
+          header.className = 'meeting-speaker-header';
+          
+          const avatar = document.createElement('div');
+          avatar.className = 'meeting-speaker-avatar';
+          avatar.textContent = getInitials(speakerName);
+          avatar.style.backgroundColor = getAvatarColor(speakerName);
+          
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'meeting-speaker-name';
+          nameSpan.textContent = speakerName;
+          
+          const timeSpan = document.createElement('span');
+          timeSpan.className = 'meeting-speaker-time';
+          timeSpan.textContent = formatOffset(seg.start);
+          
+          header.appendChild(avatar);
+          header.appendChild(nameSpan);
+          header.appendChild(timeSpan);
+          currentBlock.appendChild(header);
+          
+          currentBlockText = document.createElement('div');
+          currentBlockText.className = 'meeting-speaker-text';
+          currentBlock.appendChild(currentBlockText);
+          
+          transcriptTextEl.appendChild(currentBlock);
+        }
+        
+        const span = document.createElement('span');
+        span.className = 'transcript-segment';
+        span.dataset.start = seg.start;
+        span.dataset.end = seg.end;
+        span.textContent = seg.text + ' ';
+        
+        span.addEventListener('click', () => {
+          player.currentTime = seg.start;
+          player.play();
+        });
+        
+        if (currentBlockText) {
+          currentBlockText.appendChild(span);
+        }
+      });
+    } else {
+      transcriptTextEl.textContent = m.transcript || 'No transcript text available.';
+    }
+
+    player.ontimeupdate = () => {
+      const time = player.currentTime;
+      const spans = transcriptTextEl.querySelectorAll('.transcript-segment');
+      spans.forEach(span => {
+        const start = parseFloat(span.dataset.start);
+        const end = parseFloat(span.dataset.end);
+        if (time >= start && time <= end) {
+          span.classList.add('active');
+          span.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } else {
+          span.classList.remove('active');
+        }
+      });
+    };
+
+    // Render summary and actions
+    document.getElementById('meeting-summary-text').innerHTML = parseMarkdownToHTML(m.summary);
+    document.getElementById('meeting-actions-text').innerHTML = parseMarkdownToHTML(m.action_items);
+
+    // Detail Tabs switching
+    tabBtns.forEach(btn => {
+      // Remove existing event listener if any (by cloning)
+      const newBtn = btn.cloneNode(true);
+      btn.parentNode.replaceChild(newBtn, btn);
+      newBtn.addEventListener('click', () => {
+        const activeBtns = document.querySelectorAll('.detail-tab-btn');
+        const activePanes = document.querySelectorAll('.detail-tab-pane');
+        activeBtns.forEach(b => b.classList.remove('active'));
+        activePanes.forEach(p => p.classList.remove('active'));
+        
+        newBtn.classList.add('active');
+        const targetPane = newBtn.getAttribute('data-detail-tab');
+        document.getElementById(`detail-pane-${targetPane}`).classList.add('active');
+      });
+    });
+
+  } catch (err) {
+    console.error(err);
+    alert("Failed to load meeting: " + err);
+    showDashboardView();
+  }
+}
+
+async function startMeetingRecording() {
+  const token = currentConfig ? currentConfig.session_token : null;
+  if (!token) {
+    alert("Please sign in to record meeting notes.");
+    return;
+  }
+
+  showRecordingView();
+  const titleInput = document.getElementById('meeting-title-input');
+  titleInput.value = '';
+  
+  const timerEl = document.getElementById('meetings-timer');
+  timerEl.textContent = '00:00:00';
+  meetingSeconds = 0;
+  
+  timerInterval = setInterval(() => {
+    meetingSeconds++;
+    const hrs = String(Math.floor(meetingSeconds / 3600)).padStart(2, '0');
+    const mins = String(Math.floor((meetingSeconds % 3600) / 60)).padStart(2, '0');
+    const secs = String(meetingSeconds % 60).padStart(2, '0');
+    timerEl.textContent = `${hrs}:${mins}:${secs}`;
+  }, 1000);
+
+  recordingInterval = setInterval(async () => {
+    try {
+      const micFill = document.getElementById('mic-level-fill');
+      const loopbackFill = document.getElementById('loopback-level-fill');
+      const [mic, loopback] = await invoke('get_meeting_levels');
+      const micPercent = Math.min(100, mic / 10); // normalize 0-1000 to 0-100%
+      const loopbackPercent = Math.min(100, loopback / 10);
+      if (micFill) micFill.style.width = `${micPercent}%`;
+      if (loopbackFill) loopbackFill.style.width = `${loopbackPercent}%`;
+    } catch (e) {
+      console.error(e);
+    }
+  }, 100);
+
+  try {
+    currentMeetingFile = await invoke('start_meeting', { title: "Recording..." });
+  } catch (err) {
+    console.error(err);
+    alert("Failed to start meeting: " + err);
+    cancelMeetingRecording();
+  }
+}
+
+async function stopMeetingRecording() {
+  clearInterval(timerInterval);
+  clearInterval(recordingInterval);
+  
+  showProcessingView();
+  
+  const titleInput = document.getElementById('meeting-title-input');
+  let title = titleInput.value.trim();
+  if (!title) {
+    title = `Meeting on ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+  }
+
+  try {
+    const oggPath = await invoke('stop_meeting');
+    const resultJson = await invoke('upload_meeting', { title, filepath: oggPath });
+    const m = JSON.parse(resultJson);
+    
+    showDashboardView();
+    loadMeetings();
+    viewMeeting(m.id);
+  } catch (err) {
+    console.error(err);
+    alert("Failed to finalize meeting note: " + err);
+    showDashboardView();
+    loadMeetings();
+  }
+}
+
+async function cancelMeetingRecording() {
+  clearInterval(timerInterval);
+  clearInterval(recordingInterval);
+  try {
+    await invoke('stop_meeting');
+  } catch (e) {}
+  showDashboardView();
+  loadMeetings();
+}
+
+async function confirmDeleteMeeting() {
+  if (!activeMeetingId) return;
+  if (!confirm("Are you sure you want to delete this meeting note? This action cannot be undone.")) return;
+  
+  const token = currentConfig ? currentConfig.session_token : null;
+  try {
+    const res = await fetch(`http://127.0.0.1:8000/meetings/${activeMeetingId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!res.ok) throw new Error("Failed to delete");
+    activeMeetingId = null;
+    showDashboardView();
+    loadMeetings();
+  } catch (err) {
+    console.error(err);
+    alert("Failed to delete meeting note: " + err);
+  }
+}
+
+function parseMarkdownToHTML(md) {
+  if (!md) return '';
+  let html = md;
+  // Convert headers
+  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  // Convert bold
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  
+  const lines = html.split('\n');
+  let inList = false;
+  let parsedLines = [];
+  for (let line of lines) {
+    let clean = line.trim();
+    if (clean.startsWith('- ') || clean.startsWith('* ')) {
+      if (!inList) {
+        parsedLines.push('<ul style="margin: 0 0 10px 0; padding-left: 20px;">');
+        inList = true;
+      }
+      parsedLines.push(`<li>${clean.substring(2)}</li>`);
+    } else {
+      if (inList) {
+        parsedLines.push('</ul>');
+        inList = false;
+      }
+      if (clean) {
+        parsedLines.push(`<p style="margin: 0 0 8px 0;">${line}</p>`);
+      } else {
+        parsedLines.push('<br>');
+      }
+    }
+  }
+  if (inList) {
+    parsedLines.push('</ul>');
+  }
+  return parsedLines.join('\n');
+}
+
 
