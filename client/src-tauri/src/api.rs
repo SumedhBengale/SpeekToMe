@@ -394,14 +394,41 @@ pub fn upload_meeting(token: &str, title: &str, filepath: &str) -> Result<String
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).map_err(|e| format!("Failed to read meeting audio file: {}", e))?;
 
+    let path = std::path::Path::new(filepath);
+    let mic_filepath = path.with_extension("mic.ogg");
+    let loopback_filepath = path.with_extension("loopback.ogg");
+
     let client = reqwest::blocking::Client::new();
     let part = reqwest::blocking::multipart::Part::bytes(bytes)
         .file_name("recording.ogg")
         .mime_str("audio/ogg")
         .unwrap();
-    let form = reqwest::blocking::multipart::Form::new()
+
+    let mut form = reqwest::blocking::multipart::Form::new()
         .part("file", part)
         .text("title", title.to_string());
+
+    if let Ok(mut mic_file) = std::fs::File::open(&mic_filepath) {
+        let mut mic_bytes = Vec::new();
+        if mic_file.read_to_end(&mut mic_bytes).is_ok() {
+            let mic_part = reqwest::blocking::multipart::Part::bytes(mic_bytes)
+                .file_name("recording_mic.ogg")
+                .mime_str("audio/ogg")
+                .unwrap();
+            form = form.part("file_mic", mic_part);
+        }
+    }
+
+    if let Ok(mut lb_file) = std::fs::File::open(&loopback_filepath) {
+        let mut lb_bytes = Vec::new();
+        if lb_file.read_to_end(&mut lb_bytes).is_ok() {
+            let lb_part = reqwest::blocking::multipart::Part::bytes(lb_bytes)
+                .file_name("recording_loopback.ogg")
+                .mime_str("audio/ogg")
+                .unwrap();
+            form = form.part("file_loopback", lb_part);
+        }
+    }
 
     match client.post("http://127.0.0.1:8000/meetings")
         .header("Authorization", format!("Bearer {}", token))
@@ -411,6 +438,11 @@ pub fn upload_meeting(token: &str, title: &str, filepath: &str) -> Result<String
         Ok(res) => {
             let status = res.status();
             let body = res.text().unwrap_or_default();
+            
+            // Clean up temporary files since they are uploaded successfully
+            let _ = std::fs::remove_file(mic_filepath);
+            let _ = std::fs::remove_file(loopback_filepath);
+            
             if status.is_success() {
                 Ok(body)
             } else {

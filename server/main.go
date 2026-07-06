@@ -21,6 +21,7 @@ import (
 	"sort"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -1573,6 +1574,75 @@ func handleDeleteVocabulary(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
+type WhisperSegment struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+}
+
+func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
+	if GROQ_API_KEY == "" {
+		return "", nil, fmt.Errorf("GROQ_API_KEY is not set")
+	}
+
+	groqBody := &bytes.Buffer{}
+	writer := multipart.NewWriter(groqBody)
+	_ = writer.WriteField("model", "whisper-large-v3-turbo")
+	_ = writer.WriteField("response_format", "verbose_json")
+	filePart, err := writer.CreateFormFile("file", "recording.ogg")
+	if err != nil {
+		return "", nil, err
+	}
+	_, _ = filePart.Write(audioBytes)
+	_ = writer.Close()
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	req, err := http.NewRequestWithContext(ctxTimeout, "POST", GROQ_API_URL, groqBody)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+GROQ_API_KEY)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyB, _ := io.ReadAll(resp.Body)
+		return "", nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
+	}
+
+	var result struct {
+		Text     string           `json:"text"`
+		Segments []WhisperSegment `json:"segments"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", nil, err
+	}
+
+	rawText := strings.TrimSpace(result.Text)
+	hallucinations := map[string]bool{
+		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
+		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
+	}
+	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
+	if hallucinations[checkText] {
+		rawText = ""
+		result.Segments = nil
+	}
+	if result.Segments == nil {
+		result.Segments = make([]WhisperSegment, 0)
+	}
+
+	return rawText, result.Segments, nil
+}
+
 func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1642,64 +1712,111 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	var rawText string
 	var segmentsJSON string = "[]"
 
-	if GROQ_API_KEY != "" {
-		groqBody := &bytes.Buffer{}
-		writer := multipart.NewWriter(groqBody)
-		_ = writer.WriteField("model", "whisper-large-v3-turbo")
-		_ = writer.WriteField("response_format", "verbose_json")
-		filePart, err := writer.CreateFormFile("file", "recording.ogg")
-		if err == nil {
-			_, _ = filePart.Write(audioBytes)
-		}
-		_ = writer.Close()
+	fileMic, _, errMic := r.FormFile("file_mic")
+	fileLoopback, _, errLb := r.FormFile("file_loopback")
 
-		ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
-		defer cancel()
+	var parallelSuccess bool
+	if errMic == nil && errLb == nil {
+		defer fileMic.Close()
+		defer fileLoopback.Close()
 
-		client := &http.Client{Timeout: 120 * time.Second}
-		req, err := http.NewRequestWithContext(ctx, "POST", GROQ_API_URL, groqBody)
-		if err == nil {
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("Authorization", "Bearer "+GROQ_API_KEY)
-			resp, postErr := client.Do(req)
-			if postErr == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					var result struct {
-						Text     string `json:"text"`
-						Segments []struct {
-							Start float64 `json:"start"`
-							End   float64 `json:"end"`
-							Text  string  `json:"text"`
-						} `json:"segments"`
-					}
-					if json.NewDecoder(resp.Body).Decode(&result) == nil {
-						rawText = strings.TrimSpace(result.Text)
-						// Filter hallucinations
-						hallucinations := map[string]bool{
-							"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
-							"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
-						}
-						checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
-						if hallucinations[checkText] {
-							rawText = ""
-							result.Segments = nil
-						}
-						if result.Segments == nil {
-							result.Segments = make([]struct {
-								Start float64 `json:"start"`
-								End   float64 `json:"end"`
-								Text  string  `json:"text"`
-							}, 0)
-						}
-						segBytes, _ := json.Marshal(result.Segments)
-						segmentsJSON = string(segBytes)
-					}
-				} else {
-					bodyB, _ := io.ReadAll(resp.Body)
-					log.Printf("[GROQ ERROR] Status %d: %s", resp.StatusCode, string(bodyB))
+		var micBuf, lbBuf bytes.Buffer
+		_, err1 := io.Copy(&micBuf, fileMic)
+		_, err2 := io.Copy(&lbBuf, fileLoopback)
+
+		if err1 == nil && err2 == nil && GROQ_API_KEY != "" {
+			var micSegs, lbSegs []WhisperSegment
+			var errMicTrans, errLbTrans error
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			go func() {
+				defer wg.Done()
+				_, micSegs, errMicTrans = runWhisperTranscribe(r.Context(), micBuf.Bytes())
+			}()
+
+			go func() {
+				defer wg.Done()
+				_, lbSegs, errLbTrans = runWhisperTranscribe(r.Context(), lbBuf.Bytes())
+			}()
+
+			wg.Wait()
+
+			if errMicTrans == nil && errLbTrans == nil {
+				type Segment struct {
+					Start   float64 `json:"start"`
+					End     float64 `json:"end"`
+					Text    string  `json:"text"`
+					Speaker string  `json:"speaker"`
 				}
+				var merged []Segment
+
+				userName := user.Name
+				if userName == "" {
+					userName = "Local Speaker"
+				}
+
+				for _, s := range micSegs {
+					merged = append(merged, Segment{
+						Start:   s.Start,
+						End:     s.End,
+						Text:    s.Text,
+						Speaker: userName,
+					})
+				}
+				for _, s := range lbSegs {
+					merged = append(merged, Segment{
+						Start:   s.Start,
+						End:     s.End,
+						Text:    s.Text,
+						Speaker: "Remote Speaker",
+					})
+				}
+
+				sort.Slice(merged, func(i, j int) bool {
+					return merged[i].Start < merged[j].Start
+				})
+
+				var transcriptBuilder strings.Builder
+				for _, s := range merged {
+					transcriptBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", s.Speaker, s.Text))
+				}
+				rawText = transcriptBuilder.String()
+
+				segBytes, _ := json.Marshal(merged)
+				segmentsJSON = string(segBytes)
+				parallelSuccess = true
+			} else {
+				log.Printf("[DIARIZATION ERROR] Parallel transcription failed (mic_err=%v, lb_err=%v). Falling back to mixed audio.", errMicTrans, errLbTrans)
 			}
+		}
+	}
+
+	// Fallback to mixed audio if parallel failed or files not present
+	if !parallelSuccess && GROQ_API_KEY != "" {
+		var errWhisper error
+		var segments []WhisperSegment
+		rawText, segments, errWhisper = runWhisperTranscribe(r.Context(), audioBytes)
+		if errWhisper == nil {
+			type Segment struct {
+				Start   float64 `json:"start"`
+				End     float64 `json:"end"`
+				Text    string  `json:"text"`
+				Speaker string  `json:"speaker,omitempty"`
+			}
+			var segList []Segment
+			for _, s := range segments {
+				segList = append(segList, Segment{
+					Start: s.Start,
+					End:   s.End,
+					Text:  s.Text,
+				})
+			}
+			segBytes, _ := json.Marshal(segList)
+			segmentsJSON = string(segBytes)
+		} else {
+			log.Printf("[GROQ ERROR] Transcription failed: %v", errWhisper)
 		}
 	}
 
@@ -1865,10 +1982,14 @@ func handleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 
 func generateMeetingAIAnalysis(ctx context.Context, transcript string, pctx *PipelineContext) (polished string, summary string, actionItems string, err error) {
 	systemPrompt := `You are an expert meeting assistant. Analyze the provided meeting transcript.
+The transcript contains speaker labels in square brackets (e.g. "[John Doe]: ...", "[Remote Speaker]: ...").
+You must format the "polished_transcript" output as a clean dialogue script where each line is prefixed with the speaker's name (e.g. "John Doe: ...", "Remote Speaker: ...").
+Polish all speech for punctuation, grammar, and typos, while keeping all original meaning.
+
 You must return your response in JSON format with exactly three fields:
-- "polished_transcript": The transcription text corrected for punctuation, grammar, and typos, keeping all original meaning.
+- "polished_transcript": The polished transcript formatted as dialogue script.
 - "summary": A concise, professional markdown summary of the meeting, including key discussion points.
-- "action_items": A markdown list of action items, tasks, and owners (if mentioned).
+- "action_items": A markdown list of action items, tasks, and owners.
 
 Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" + `json) or conversational text outside the JSON structure.`
 
