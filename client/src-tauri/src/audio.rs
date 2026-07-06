@@ -558,73 +558,26 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
     loopback_stream.play()?;
 
     std::thread::spawn(move || {
-        let mic_path = {
-            let mut p = output_ogg_path.clone();
-            p.set_extension("mic.ogg");
-            p
-        };
-        let loopback_path = {
-            let mut p = output_ogg_path.clone();
-            p.set_extension("loopback.ogg");
-            p
-        };
-
-        let mut encoder_mixed = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
+        let mut encoder = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
             Ok(enc) => enc,
             Err(e) => {
-                eprintln!("Failed to create Opus mixed encoder: {:?}", e);
+                eprintln!("Failed to create Opus encoder: {:?}", e);
                 return;
             }
         };
-        let mut encoder_mic = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
-            Ok(enc) => enc,
-            Err(e) => {
-                eprintln!("Failed to create Opus mic encoder: {:?}", e);
-                return;
-            }
-        };
-        let mut encoder_loopback = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
-            Ok(enc) => enc,
-            Err(e) => {
-                eprintln!("Failed to create Opus loopback encoder: {:?}", e);
-                return;
-            }
-        };
+        let _ = encoder.set_bitrate(opus::Bitrate::Bits(24000));
+        let _ = encoder.set_complexity(1);
 
-        for enc in [&mut encoder_mixed, &mut encoder_mic, &mut encoder_loopback] {
-            let _ = enc.set_bitrate(opus::Bitrate::Bits(24000));
-            let _ = enc.set_complexity(1);
-        }
-
-        let file_mixed = match std::fs::File::create(&output_ogg_path) {
+        let file = match std::fs::File::create(&output_ogg_path) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Failed to create mixed Ogg output file: {:?}", e);
-                return;
-            }
-        };
-        let file_mic = match std::fs::File::create(&mic_path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to create mic Ogg output file: {:?}", e);
-                return;
-            }
-        };
-        let file_loopback = match std::fs::File::create(&loopback_path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to create loopback Ogg output file: {:?}", e);
+                eprintln!("Failed to create Ogg output file: {:?}", e);
                 return;
             }
         };
 
-        let mut writer_mixed = ogg::writing::PacketWriter::new(file_mixed);
-        let mut writer_mic = ogg::writing::PacketWriter::new(file_mic);
-        let mut writer_loopback = ogg::writing::PacketWriter::new(file_loopback);
-
-        let serial_mixed = 987654321;
-        let serial_mic = 987654322;
-        let serial_lb = 987654323;
+        let mut writer = ogg::writing::PacketWriter::new(file);
+        let serial = 987654321;
 
         let mut head = Vec::new();
         head.extend_from_slice(b"OpusHead");
@@ -634,6 +587,10 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
         head.extend_from_slice(&16000u32.to_le_bytes());
         head.extend_from_slice(&0i16.to_le_bytes());
         head.push(0);
+        if let Err(e) = writer.write_packet(head.into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0) {
+            eprintln!("Failed to write Ogg header: {:?}", e);
+            return;
+        }
 
         let mut tags = Vec::new();
         tags.extend_from_slice(b"OpusTags");
@@ -641,32 +598,15 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
         tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
         tags.extend_from_slice(vendor);
         tags.extend_from_slice(&0u32.to_le_bytes());
-
-        // Write headers and tags to all three writers
-        for (w, serial) in [
-            (&mut writer_mixed, serial_mixed),
-            (&mut writer_mic, serial_mic),
-            (&mut writer_loopback, serial_lb)
-        ] {
-            if let Err(e) = w.write_packet(head.clone().into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0) {
-                eprintln!("Failed to write Ogg header for serial {}: {:?}", serial, e);
-                return;
-            }
-            if let Err(e) = w.write_packet(tags.clone().into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0) {
-                eprintln!("Failed to write Ogg tags for serial {}: {:?}", serial, e);
-                return;
-            }
+        if let Err(e) = writer.write_packet(tags.into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0) {
+            eprintln!("Failed to write Ogg tags: {:?}", e);
+            return;
         }
 
         let mut loopback_carry: Vec<i16> = Vec::new();
-        let mut mic_carry_encode: Vec<i16> = Vec::new();
-        let mut loopback_carry_encode: Vec<i16> = Vec::new();
         let mut mixed_carry: Vec<i16> = Vec::new();
         let mut granule_pos: u64 = 0;
-
-        let mut encoded_buf_mixed = [0u8; 512];
-        let mut encoded_buf_mic = [0u8; 512];
-        let mut encoded_buf_lb = [0u8; 512];
+        let mut encoded_buf = [0u8; 512];
 
         loop {
             if shutdown_rx.recv_timeout(std::time::Duration::from_millis(100)).is_ok() {
@@ -704,47 +644,19 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
                 mixed.push(clamped);
             }
 
-            let mut mic_all = std::mem::take(&mut mic_carry_encode);
-            mic_all.extend(mic_16k);
-
-            let mut lb_all = std::mem::take(&mut loopback_carry_encode);
-            lb_all.extend(loopback_aligned);
-
             let mut mixed_all = std::mem::take(&mut mixed_carry);
             mixed_all.extend(mixed);
 
             let chunk_size = 960;
-            let chunks_count = mixed_all.len() / chunk_size;
-
-            for c_idx in 0..chunks_count {
-                let start = c_idx * chunk_size;
-                let end = start + chunk_size;
-
-                let mic_chunk = &mic_all[start..end];
-                let lb_chunk = &lb_all[start..end];
-                let mixed_chunk = &mixed_all[start..end];
-
-                granule_pos += 2880;
-
-                if let Ok(len) = encoder_mic.encode(mic_chunk, &mut encoded_buf_mic) {
-                    let packet = encoded_buf_mic[..len].to_vec();
-                    let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
-                }
-
-                if let Ok(len) = encoder_loopback.encode(lb_chunk, &mut encoded_buf_lb) {
-                    let packet = encoded_buf_lb[..len].to_vec();
-                    let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
-                }
-
-                if let Ok(len) = encoder_mixed.encode(mixed_chunk, &mut encoded_buf_mixed) {
-                    let packet = encoded_buf_mixed[..len].to_vec();
-                    let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
+            let mut chunks = mixed_all.chunks_exact(chunk_size);
+            for chunk in &mut chunks {
+                if let Ok(len) = encoder.encode(chunk, &mut encoded_buf) {
+                    granule_pos += 2880;
+                    let packet = encoded_buf[..len].to_vec();
+                    let _ = writer.write_packet(packet.into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
                 }
             }
-
-            mic_carry_encode = mic_all[chunks_count * chunk_size..].to_vec();
-            loopback_carry_encode = lb_all[chunks_count * chunk_size..].to_vec();
-            mixed_carry = mixed_all[chunks_count * chunk_size..].to_vec();
+            mixed_carry = chunks.remainder().to_vec();
         }
 
         let mic_raw = {
@@ -775,71 +687,27 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
             mixed.push(sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
         }
 
-        let mut mic_all = std::mem::take(&mut mic_carry_encode);
-        mic_all.extend(mic_16k);
-
-        let mut lb_all = std::mem::take(&mut loopback_carry_encode);
-        lb_all.extend(loopback_aligned);
-
         let mut mixed_all = std::mem::take(&mut mixed_carry);
         mixed_all.extend(mixed);
 
         let chunk_size = 960;
-        let chunks_count = mixed_all.len() / chunk_size;
-
-        for c_idx in 0..chunks_count {
-            let start = c_idx * chunk_size;
-            let end = start + chunk_size;
-
-            let mic_chunk = &mic_all[start..end];
-            let lb_chunk = &lb_all[start..end];
-            let mixed_chunk = &mixed_all[start..end];
-
-            granule_pos += 2880;
-
-            if let Ok(len) = encoder_mic.encode(mic_chunk, &mut encoded_buf_mic) {
-                let packet = encoded_buf_mic[..len].to_vec();
-                let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
-            }
-
-            if let Ok(len) = encoder_loopback.encode(lb_chunk, &mut encoded_buf_lb) {
-                let packet = encoded_buf_lb[..len].to_vec();
-                let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
-            }
-
-            if let Ok(len) = encoder_mixed.encode(mixed_chunk, &mut encoded_buf_mixed) {
-                let packet = encoded_buf_mixed[..len].to_vec();
-                let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
+        let mut chunks = mixed_all.chunks_exact(chunk_size);
+        for chunk in &mut chunks {
+            if let Ok(len) = encoder.encode(chunk, &mut encoded_buf) {
+                granule_pos += 2880;
+                let packet = encoded_buf[..len].to_vec();
+                let _ = writer.write_packet(packet.into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
             }
         }
 
-        let mic_remainder = &mic_all[chunks_count * chunk_size..];
-        let lb_remainder = &lb_all[chunks_count * chunk_size..];
-        let mixed_remainder = &mixed_all[chunks_count * chunk_size..];
-
-        if !mixed_remainder.is_empty() {
-            let mut final_chunk_mic = mic_remainder.to_vec();
-            final_chunk_mic.resize(chunk_size, 0);
-            let mut final_chunk_lb = lb_remainder.to_vec();
-            final_chunk_lb.resize(chunk_size, 0);
-            let mut final_chunk_mixed = mixed_remainder.to_vec();
-            final_chunk_mixed.resize(chunk_size, 0);
-
-            granule_pos += 2880;
-
-            if let Ok(len) = encoder_mic.encode(&final_chunk_mic, &mut encoded_buf_mic) {
-                let packet = encoded_buf_mic[..len].to_vec();
-                let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos);
-            }
-
-            if let Ok(len) = encoder_loopback.encode(&final_chunk_lb, &mut encoded_buf_lb) {
-                let packet = encoded_buf_lb[..len].to_vec();
-                let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos);
-            }
-
-            if let Ok(len) = encoder_mixed.encode(&final_chunk_mixed, &mut encoded_buf_mixed) {
-                let packet = encoded_buf_mixed[..len].to_vec();
-                let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos);
+        let remainder = chunks.remainder();
+        if !remainder.is_empty() {
+            let mut final_chunk = remainder.to_vec();
+            final_chunk.resize(chunk_size, 0);
+            if let Ok(len) = encoder.encode(&final_chunk, &mut encoded_buf) {
+                granule_pos += 2880;
+                let packet = encoded_buf[..len].to_vec();
+                let _ = writer.write_packet(packet.into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos);
             }
         }
     });

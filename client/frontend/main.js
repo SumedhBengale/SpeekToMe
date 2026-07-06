@@ -855,85 +855,8 @@ async function viewMeeting(id) {
       segments = [];
     }
 
-    // Helper functions for avatars
-    const getInitials = (name) => {
-      if (!name) return 'SP';
-      const cleanName = name.replace(/[\[\]]/g, ''); // strip brackets
-      const parts = cleanName.split(' ');
-      if (parts.length >= 2) {
-        return (parts[0][0] + parts[1][0]).toUpperCase();
-      }
-      return cleanName.slice(0, 2).toUpperCase();
-    };
-
-    const getAvatarColor = (name) => {
-      if (!name) return '#757575';
-      let hash = 0;
-      for (let i = 0; i < name.length; i++) {
-        hash = name.charCodeAt(i) + ((hash << 5) - hash);
-      }
-      const colors = [
-        '#5c6bc0', '#26a69a', '#ec407a', '#7e57c2', 
-        '#26c6da', '#ff7043', '#8d6e63', '#66bb6a'
-      ];
-      return colors[Math.abs(hash) % colors.length];
-    };
-
-    const formatOffset = (seconds) => {
-      if (isNaN(seconds)) return '0:00';
-      const h = Math.floor(seconds / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = Math.floor(seconds % 60);
-      const sStr = s < 10 ? '0' + s : s;
-      if (h > 0) {
-        const mStr = m < 10 ? '0' + m : m;
-        return `${h}:${mStr}:${sStr}`;
-      }
-      return `${m}:${sStr}`;
-    };
-
     if (segments && segments.length > 0) {
-      let currentSpeaker = null;
-      let currentBlock = null;
-      let currentBlockText = null;
-
       segments.forEach(seg => {
-        const speakerName = seg.speaker || 'Speaker';
-        
-        if (speakerName !== currentSpeaker) {
-          currentSpeaker = speakerName;
-          
-          currentBlock = document.createElement('div');
-          currentBlock.className = 'meeting-speaker-block';
-          
-          const header = document.createElement('div');
-          header.className = 'meeting-speaker-header';
-          
-          const avatar = document.createElement('div');
-          avatar.className = 'meeting-speaker-avatar';
-          avatar.textContent = getInitials(speakerName);
-          avatar.style.backgroundColor = getAvatarColor(speakerName);
-          
-          const nameSpan = document.createElement('span');
-          nameSpan.className = 'meeting-speaker-name';
-          nameSpan.textContent = speakerName;
-          
-          const timeSpan = document.createElement('span');
-          timeSpan.className = 'meeting-speaker-time';
-          timeSpan.textContent = formatOffset(seg.start);
-          
-          header.appendChild(avatar);
-          header.appendChild(nameSpan);
-          header.appendChild(timeSpan);
-          currentBlock.appendChild(header);
-          
-          currentBlockText = document.createElement('div');
-          currentBlockText.className = 'meeting-speaker-text';
-          currentBlock.appendChild(currentBlockText);
-          
-          transcriptTextEl.appendChild(currentBlock);
-        }
-        
         const span = document.createElement('span');
         span.className = 'transcript-segment';
         span.dataset.start = seg.start;
@@ -944,10 +867,8 @@ async function viewMeeting(id) {
           player.currentTime = seg.start;
           player.play();
         });
-        
-        if (currentBlockText) {
-          currentBlockText.appendChild(span);
-        }
+
+        transcriptTextEl.appendChild(span);
       });
     } else {
       transcriptTextEl.textContent = m.transcript || 'No transcript text available.';
