@@ -2,14 +2,13 @@
 set -e
 
 # Establish directories
-sudo mkdir -p /var/www/speektome
-sudo mkdir -p /var/www/speektome/uploads/meetings
-sudo chown -R $USER:$USER /var/www/speektome
+mkdir -p /home/ec2-user/speektome
+mkdir -p /home/ec2-user/speektome/uploads/meetings
 
 # Copy .env.example to .env if it does not exist
-if [ ! -f /var/www/speektome/.env ]; then
-  cp /var/www/speektome/.env.example /var/www/speektome/.env
-  echo "Default .env created. Please configure your API keys in /var/www/speektome/.env"
+if [ ! -f /home/ec2-user/speektome/.env ]; then
+  cp /home/ec2-user/speektome/.env.example /home/ec2-user/speektome/.env
+  echo "Default .env created. Please configure your API keys in /home/ec2-user/speektome/.env"
 fi
 
 # Set up systemd service configuration file
@@ -20,9 +19,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
-WorkingDirectory=/var/www/speektome
-ExecStart=/var/www/speektome/speektome-server
+User=ec2-user
+WorkingDirectory=/home/ec2-user/speektome
+ExecStart=/home/ec2-user/speektome/speektome-server
 Restart=always
 RestartSec=5
 StandardOutput=journal
