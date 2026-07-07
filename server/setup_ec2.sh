@@ -4,6 +4,7 @@ set -e
 # Establish directories
 mkdir -p /home/ec2-user/speektome
 mkdir -p /home/ec2-user/speektome/uploads/meetings
+chmod +x /home/ec2-user/speektome/speektome-server
 
 # Copy .env.example to .env if it does not exist
 if [ ! -f /home/ec2-user/speektome/.env ]; then
