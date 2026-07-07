@@ -84,8 +84,8 @@ func TestJaroWinkler(t *testing.T) {
 		s2       string
 		minScore float64
 	}{
-		{"speaky", "speekey", 0.88},
-		{"speakey", "speekey", 0.88},
+		{"speaktome", "speektome", 0.88},
+		{"speakto.me", "speektome", 0.88},
 		{"sumed", "sumedh", 0.94},
 	}
 
@@ -99,7 +99,7 @@ func TestJaroWinkler(t *testing.T) {
 
 func TestPipelineVocabMatching(t *testing.T) {
 	dbTerms := []VocabularyTerm{
-		{"Speekey", "speekey"},
+		{"SpeekTo.Me", "speektome"},
 		{"DeepSeek", "deepseek"},
 		{"Payload CMS Enterprise", "payloadcmsenterprise"},
 		{"Payload CMS", "payloadcms"},
@@ -112,13 +112,13 @@ func TestPipelineVocabMatching(t *testing.T) {
 	// Test Pass 1 normalizer (exact + normalized exact)
 	p1 := NewVocabNormalizerTransform("Pass 1", false, 0.0)
 	
-	input := "we are using deep seek with payload cms enterprise and speaky"
+	input := "we are using deep seek with payload cms enterprise and speaktome"
 	got, err := p1.Transform(context.Background(), input, pctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	expected := "we are using DeepSeek with Payload CMS Enterprise and speaky"
+	expected := "we are using DeepSeek with Payload CMS Enterprise and speaktome"
 	if got != expected {
 		t.Errorf("Pass 1 match output = %q; want %q", got, expected)
 	}
@@ -129,8 +129,8 @@ func TestPipelineVocabMatching(t *testing.T) {
 	if !hasMatch(pctx, "Payload CMS Enterprise") {
 		t.Error("Payload CMS Enterprise should be in Matches")
 	}
-	if hasMatch(pctx, "Speekey") {
-		t.Error("Speekey should not be in Matches")
+	if hasMatch(pctx, "SpeekTo.Me") {
+		t.Error("SpeekTo.Me should not be in Matches")
 	}
 
 	// Verify metrics after Pass 1 (should have 2 normalized matches, 0 exact matches)
@@ -148,13 +148,13 @@ func TestPipelineVocabMatching(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expected2 := "we are using DeepSeek with Payload CMS Enterprise and Speekey"
+	expected2 := "we are using DeepSeek with Payload CMS Enterprise and SpeekTo.Me"
 	if got2 != expected2 {
 		t.Errorf("Pass 2 match output = %q; want %q", got2, expected2)
 	}
 
-	if !hasMatch(pctx, "Speekey") {
-		t.Error("Speekey should be in Matches after Pass 2 fuzzy match")
+	if !hasMatch(pctx, "SpeekTo.Me") {
+		t.Error("SpeekTo.Me should be in Matches after Pass 2 fuzzy match")
 	}
 
 	// Verify metrics after Pass 2 (should have 1 fuzzy match)
@@ -257,7 +257,7 @@ func TestVocabularyCacheLifecycle(t *testing.T) {
 	defer cache.Close()
 
 	dbTerms := []VocabularyTerm{
-		{"Speekey", "speekey"},
+		{"SpeekTo.Me", "speektome"},
 	}
 	vocab := CompileUserVocabulary(dbTerms)
 	cache.Set(10, vocab)

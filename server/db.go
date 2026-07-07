@@ -64,6 +64,9 @@ func NewDatabase(connStr string) (*Database, error) {
 			input_transcript TEXT,
 			final_output TEXT,
 			status TEXT,
+			audio_size_bytes INTEGER DEFAULT 0,
+			transcription_provider TEXT DEFAULT '',
+			llm_provider TEXT DEFAULT '',
 			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
 		);
 		CREATE TABLE IF NOT EXISTS saas_config (
@@ -113,6 +116,8 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN password_hash TEXT")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN verification_token TEXT")
+	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN transcription_provider TEXT DEFAULT ''")
+	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
 
 	// Set default configurations
 	configs := map[string]string{
@@ -182,7 +187,7 @@ func (d *Database) DeleteSession(token string) error {
 }
 
 // Usage logging
-func (d *Database) LogUsage(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int) error {
+func (d *Database) LogUsage(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int, transcriptionProvider, llmProvider string) error {
 	enhanceVal := 0
 	if enhanceEnabled {
 		enhanceVal = 1
@@ -190,9 +195,10 @@ func (d *Database) LogUsage(userID int64, duration, whisperTime, llmTime, totalT
 	_, err := d.db.Exec(`
 		INSERT INTO usage_logs (
 			user_id, audio_duration, whisper_time, llm_time, total_time, 
-			enhance_enabled, enhance_model, input_transcript, final_output, status, audio_size_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, userID, duration, whisperTime, llmTime, totalTime, enhanceVal, model, input, output, status, audioSizeBytes)
+			enhance_enabled, enhance_model, input_transcript, final_output, status, audio_size_bytes,
+			transcription_provider, llm_provider
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, userID, duration, whisperTime, llmTime, totalTime, enhanceVal, model, input, output, status, audioSizeBytes, transcriptionProvider, llmProvider)
 	return err
 }
 

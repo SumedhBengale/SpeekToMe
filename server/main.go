@@ -14,7 +14,9 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"strconv"
@@ -28,16 +30,18 @@ import (
 )
 
 var (
-	GROQ_API_KEY        string
-	DEEPSEEK_API_KEY    string
-	GOOGLE_CLIENT_ID    string
+	GROQ_API_KEY         string
+	DEEPINFRA_API_KEY    string
+	DEEPSEEK_API_KEY     string
+	GOOGLE_CLIENT_ID     string
 	GOOGLE_CLIENT_SECRET string
-	BACKEND_URL         string
-	DATABASE_URL        string
-	MOCK_AUTH           bool
+	BACKEND_URL          string
+	DATABASE_URL         string
+	MOCK_AUTH            bool
 
-	GROQ_API_URL     = "https://api.groq.com/openai/v1/audio/transcriptions"
-	DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+	GROQ_API_URL        = "https://api.groq.com/openai/v1/audio/transcriptions"
+	DEEPINFRA_BASE_URL  = "https://api.deepinfra.com/v1/inference/"
+	DEEPSEEK_API_URL    = "https://api.deepseek.com/chat/completions"
 
 	database   *Database
 	vocabCache *VocabularyCache
@@ -46,15 +50,19 @@ var (
 func main() {
 	vocabCache = NewVocabularyCache()
 	_ = godotenv.Load()
+	if os.Getenv("GROQ_API_KEY") == "" && os.Getenv("DEEPINFRA_API_KEY") == "" {
+		_ = godotenv.Load("server/.env")
+	}
 
 	GROQ_API_KEY = os.Getenv("GROQ_API_KEY")
+	DEEPINFRA_API_KEY = os.Getenv("DEEPINFRA_API_KEY")
 	DEEPSEEK_API_KEY = os.Getenv("DEEPSEEK_API_KEY")
 	GOOGLE_CLIENT_ID = os.Getenv("GOOGLE_CLIENT_ID")
 	GOOGLE_CLIENT_SECRET = os.Getenv("GOOGLE_CLIENT_SECRET")
 	BACKEND_URL = os.Getenv("BACKEND_URL")
 	DATABASE_URL = os.Getenv("DATABASE_URL")
 	if DATABASE_URL == "" {
-		DATABASE_URL = "speekey.db"
+		DATABASE_URL = "speektome.db"
 	}
 	if BACKEND_URL == "" {
 		BACKEND_URL = "http://localhost:8000"
@@ -103,7 +111,7 @@ func main() {
 	// Wrap in CORS middleware
 	handler := corsMiddleware(mux)
 
-	log.Printf("Starting Speekey Go Server on port 8000...")
+	log.Printf("Starting SpeekTo.Me Go Server on port 8000...")
 	log.Printf("Google Auth Mock Mode: %t", MOCK_AUTH)
 	log.Fatal(http.ListenAndServe(":8000", handler))
 }
@@ -128,7 +136,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 func generateSessionToken() string {
 	b := make([]byte, 24)
 	_, _ = rand.Read(b)
-	return fmt.Sprintf("speekey_session_%x", b)
+	return fmt.Sprintf("speektome_session_%x", b)
 }
 
 // Generate random hex nonces for OAuth states
@@ -622,7 +630,7 @@ func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	<div class="card">
 		<h2>🎉 Email Verified!</h2>
 		<p>Thank you. Your email address <strong>%s</strong> has been successfully verified.</p>
-		<p>Redirecting you to the Speekey Dashboard in 3 seconds...</p>
+		<p>Redirecting you to the SpeekTo.Me Dashboard in 3 seconds...</p>
 		<a class="btn" href="%s">Go to Dashboard</a>
 	</div>
 </body>
@@ -635,10 +643,11 @@ func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":                  "ok",
-		"groq_key_configured":     GROQ_API_KEY != "",
-		"deepseek_key_configured": DEEPSEEK_API_KEY != "",
-		"google_auth_mock":        MOCK_AUTH,
+		"status":                   "ok",
+		"groq_key_configured":      GROQ_API_KEY != "",
+		"deepinfra_key_configured": DEEPINFRA_API_KEY != "",
+		"deepseek_key_configured":  DEEPSEEK_API_KEY != "",
+		"google_auth_mock":         MOCK_AUTH,
 	})
 }
 
@@ -672,13 +681,13 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "No active paid plan. Please subscribe or activate your plan to use Speekey.",
+			"error": "No active paid plan. Please subscribe or activate your plan to use SpeekTo.Me.",
 		})
 		return
 	}
 
-	if GROQ_API_KEY == "" {
-		http.Error(w, "GROQ_API_KEY environment variable is not set", http.StatusInternalServerError)
+	if DEEPINFRA_API_KEY == "" && GROQ_API_KEY == "" {
+		http.Error(w, "Neither DEEPINFRA_API_KEY nor GROQ_API_KEY environment variable is set", http.StatusInternalServerError)
 		return
 	}
 
@@ -761,7 +770,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	reqCount, err := database.GetUserRequestCountLastMinute(user.ID)
 	if err == nil && reqCount >= rpmLimit {
 		log.Printf("[RATE LIMIT] Request from %s denied: Exceeded limit (%d/%d requests in the last minute)", user.Email, reqCount, rpmLimit)
-		_ = database.LogUsage(user.ID, 0, 0, 0, 0, false, "", "", "", "failed_rate_limit", audioSizeBytes)
+		_ = database.LogUsage(user.ID, 0, 0, 0, 0, false, "", "", "", "failed_rate_limit", audioSizeBytes, "", "")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -778,7 +787,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	dailyDuration, err := database.GetUserDurationLast24Hours(user.ID)
 	if err == nil && dailyDuration+audioDuration > fupLimitSeconds {
 		log.Printf("[FUP LIMIT] Request from %s denied: Exceeded limit (%.1f + %.1f > %.1f daily seconds)", user.Email, dailyDuration, audioDuration, fupLimitSeconds)
-		_ = database.LogUsage(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_fup_limit", audioSizeBytes)
+		_ = database.LogUsage(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_fup_limit", audioSizeBytes, "", "")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -791,7 +800,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	monthlyDuration, err := database.GetUserDurationLast30Days(user.ID)
 	if err == nil && monthlyDuration+audioDuration > monthlyLimitSeconds {
 		log.Printf("[MONTHLY LIMIT] Request from %s denied: Exceeded monthly limit (%.1f + %.1f > %.1f seconds)", user.Email, monthlyDuration, audioDuration, monthlyLimitSeconds)
-		_ = database.LogUsage(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_monthly_limit", audioSizeBytes)
+		_ = database.LogUsage(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_monthly_limit", audioSizeBytes, "", "")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -801,61 +810,30 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Capture options
-	model := r.FormValue("model")
-	if model == "" {
-		model = "whisper-large-v3-turbo"
-	}
 	enhance := r.FormValue("enhance") == "true"
 	prompt := r.FormValue("prompt")
 
+	// Model is directly decided by backend
+	model := "whisper-large-v3-turbo"
+
 	totalStart := time.Now()
-	groqStart := time.Now()
+	whisperStart := time.Now()
 
 	var rawText string
+	var whisperProvider string
+	var whisperErr error
 	var groqLatency float64
 	var dsLatency float64
 
-	// 1. Post to Groq Whisper
-	groqBody := &bytes.Buffer{}
-	writer := multipart.NewWriter(groqBody)
-	_ = writer.WriteField("model", model)
-	filePart, err := writer.CreateFormFile("file", "recording.ogg")
-	if err == nil {
-		_, _ = filePart.Write(audioBytes)
-	}
-	_ = writer.Close()
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "POST", GROQ_API_URL, groqBody)
-	if err == nil {
-		req.Header.Set("Content-Type", writer.FormDataContentType())
-		req.Header.Set("Authorization", "Bearer "+GROQ_API_KEY)
-		resp, postErr := client.Do(req)
-		if postErr == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				var result struct {
-					Text string `json:"text"`
-				}
-				if json.NewDecoder(resp.Body).Decode(&result) == nil {
-					rawText = strings.TrimSpace(result.Text)
-					groqLatency = time.Since(groqStart).Seconds()
-				}
-			}
-		}
-	}
-
-	// Filter common Whisper silence hallucinations
-	hallucinations := map[string]bool{
-		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
-		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
-	}
-	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
-	if hallucinations[checkText] {
-		rawText = ""
+	var whisperRouting string
+	rawText, _, whisperProvider, whisperRouting, whisperErr = runWhisperTranscribeWithModel(ctx, audioBytes, model)
+	if whisperErr == nil {
+		groqLatency = time.Since(whisperStart).Seconds()
+	} else {
+		log.Printf("[TRANSCRIBE ERROR] Transcription failed: %v", whisperErr)
 	}
 
 	// 2. Fetch or Compile Vocabulary Cache
@@ -883,7 +861,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pctx := NewPipelineContext(user.ID, vocab)
-	pctx.Debug = os.Getenv("SPEEKEY_DEBUG") == "true" || os.Getenv("SPEEKEY_DEBUG_VOCAB") == "true"
+	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true" || os.Getenv("SPEEKTOME_DEBUG_VOCAB") == "true"
 	currentText := rawText
 
 	type transformTime struct {
@@ -935,22 +913,25 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	if rawText == "" && !enhance {
 		status = "success_empty"
 	}
-	if rawText == "" && groqLatency == 0.0 {
-		status = "failed_groq_error"
+	if rawText == "" && whisperErr != nil {
+		status = "failed_whisper_error"
 	}
 
 	// Log usage to database
-	_ = database.LogUsage(user.ID, audioDuration, groqLatency, dsLatency, totalLatency, enhance, "deepseek-v4-flash", rawText, finalOutput, status, audioSizeBytes)
+	_ = database.LogUsage(user.ID, audioDuration, groqLatency, dsLatency, totalLatency, enhance, "deepseek-v4-flash", rawText, finalOutput, status, audioSizeBytes, whisperProvider, pctx.LLMProvider)
 
 	// Output beautiful analytics block to the console
 	fmt.Println("\n" + strings.Repeat("=", 55))
-	fmt.Println("                SPEEKEY ANALYTICS (GO)")
+	fmt.Println("                SPEEKTOME ANALYTICS (GO)")
 	fmt.Println(strings.Repeat("=", 55))
 	fmt.Printf("User:             %s (ID: %d)\n", user.Email, user.ID)
 	fmt.Printf("Audio Duration:   %.2f seconds\n", audioDuration)
 	fmt.Printf("Bandwidth / Size: %s (%d bytes)\n", formatSize(audioSizeBytes), audioSizeBytes)
 	fmt.Printf("Ogg Header Parse: %v\n", oggParseDuration)
-	fmt.Printf("Groq Whisper:     %.3f seconds\n", groqLatency)
+	fmt.Printf("Whisper (%s):     %.3f seconds [Routing: %s]\n", whisperProvider, groqLatency, whisperRouting)
+	if enhance && pctx.LLMProvider != "" {
+		fmt.Printf("LLM (%s):         %.3f seconds [Routing: %s]\n", pctx.LLMProvider, dsLatency, pctx.LLMRouting)
+	}
 	
 	// Print Pipeline transform details
 	fmt.Println("\n--- Pipeline Transforms & Latencies ---")
@@ -1017,7 +998,7 @@ func formatSize(bytes int) string {
 func authenticateAdmin(r *http.Request) bool {
 	adminSecret := os.Getenv("ADMIN_SECRET")
 	if adminSecret == "" {
-		adminSecret = "speekey_admin_secret_123!" // Default secure fallback
+		adminSecret = "speektome_admin_secret_123!" // Default secure fallback
 	}
 	secret := r.Header.Get("X-Admin-Secret")
 	if secret == "" {
@@ -1145,7 +1126,7 @@ func handleMockPayment(w http.ResponseWriter, r *http.Request) {
 	html := `<!DOCTYPE html>
 <html>
 <head>
-	<title>Speekey Subscription Checkout</title>
+	<title>SpeekTo.Me Subscription Checkout</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<style>
 		body {
@@ -1193,13 +1174,13 @@ func handleMockPayment(w http.ResponseWriter, r *http.Request) {
 </head>
 <body>
 	<div class="card">
-		<h2>🎙️ Speekey Checkout</h2>
-		<p class="desc">Simulate subscription payment to activate your Speekey Pro plan.</p>
+		<h2>🎙️ SpeekTo.Me Checkout</h2>
+		<p class="desc">Simulate subscription payment to activate your SpeekTo.Me Pro plan.</p>
 		
 		<div class="plan-details">
 			<div class="plan-row">
 				<span>Subscription Tier:</span>
-				<strong>Speekey Pro</strong>
+				<strong>SpeekTo.Me Pro</strong>
 			</div>
 			<div class="plan-row">
 				<span>Transcription Limit:</span>
@@ -1291,8 +1272,8 @@ func handleMockPaymentComplete(w http.ResponseWriter, r *http.Request) {
 <body>
 	<div class="card">
 		<h2>🎉 Payment Successful!</h2>
-		<p>Your subscription is now active. You have been upgraded to the Speekey Pro plan with a limit of 50 hours per month.</p>
-		<p>You can return to the Speekey desktop application now.</p>
+		<p>Your subscription is now active. You have been upgraded to the SpeekTo.Me Pro plan with a limit of 50 hours per month.</p>
+		<p>You can return to the SpeekTo.Me desktop application now.</p>
 		<button class="btn" onclick="window.close()">Close Window</button>
 	</div>
 </body>
@@ -1574,24 +1555,120 @@ func handleDeleteVocabulary(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
+var (
+	geoCache = make(map[string]string)
+	geoMutex sync.RWMutex
+)
+
+func getGeoIPLocation(ip string) string {
+	if ip == "" {
+		return "Unknown Location"
+	}
+	
+	// Clean port if present
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+
+	// Check cache
+	geoMutex.RLock()
+	loc, exists := geoCache[ip]
+	geoMutex.RUnlock()
+	if exists {
+		return loc
+	}
+
+	// Fetch geolocation synchronously (cached thereafter)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://ip-api.com/json/"+ip, nil)
+	if err != nil {
+		return ip
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ip
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		var geo struct {
+			City        string `json:"city"`
+			RegionName  string `json:"regionName"`
+			CountryCode string `json:"countryCode"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&geo) == nil {
+			var locParts []string
+			if geo.City != "" {
+				locParts = append(locParts, geo.City)
+			}
+			if geo.RegionName != "" {
+				locParts = append(locParts, geo.RegionName)
+			}
+			if geo.CountryCode != "" {
+				locParts = append(locParts, geo.CountryCode)
+			}
+			
+			locStr := ip
+			if len(locParts) > 0 {
+				locStr = fmt.Sprintf("%s (%s)", strings.Join(locParts, ", "), ip)
+			}
+			
+			geoMutex.Lock()
+			geoCache[ip] = locStr
+			geoMutex.Unlock()
+			return locStr
+		}
+	}
+
+	return ip
+}
+
+func getHTTPResponseRouting(resp *http.Response, remoteIP string) string {
+	if resp == nil {
+		return "Unknown Location (No response)"
+	}
+
+	// 1. Check custom provider-specific headers
+	if groqReg := resp.Header.Get("x-groq-region"); groqReg != "" {
+		return fmt.Sprintf("Groq (%s)", groqReg)
+	}
+	
+	if cfRay := resp.Header.Get("Cf-Ray"); cfRay != "" {
+		parts := strings.Split(cfRay, "-")
+		if len(parts) > 1 {
+			return fmt.Sprintf("Cloudflare (%s)", parts[len(parts)-1])
+		}
+		return fmt.Sprintf("Cloudflare (%s)", cfRay)
+	}
+
+	// 2. Geocoding the remote connection IP
+	if remoteIP != "" {
+		return getGeoIPLocation(remoteIP)
+	}
+
+	if server := resp.Header.Get("Server"); server != "" {
+		return fmt.Sprintf("Server (%s)", server)
+	}
+
+	return "Unknown Location (No routing headers)"
+}
+
 type WhisperSegment struct {
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
 	Text  string  `json:"text"`
 }
 
-func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
-	if GROQ_API_KEY == "" {
-		return "", nil, fmt.Errorf("GROQ_API_KEY is not set")
-	}
-
-	groqBody := &bytes.Buffer{}
-	writer := multipart.NewWriter(groqBody)
-	_ = writer.WriteField("model", "whisper-large-v3-turbo")
-	_ = writer.WriteField("response_format", "verbose_json")
-	filePart, err := writer.CreateFormFile("file", "recording.ogg")
+func runDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string) (string, []WhisperSegment, string, error) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	filePart, err := writer.CreateFormFile("audio", "recording.ogg")
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	_, _ = filePart.Write(audioBytes)
 	_ = writer.Close()
@@ -1599,23 +1676,38 @@ func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []Whi
 	ctxTimeout, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
+	var remoteIP string
+	trace := &httptrace.ClientTrace{
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			addr := connInfo.Conn.RemoteAddr().String()
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				remoteIP = host
+			} else {
+				remoteIP = addr
+			}
+		},
+	}
+	ctxTrace := httptrace.WithClientTrace(ctxTimeout, trace)
+
 	client := &http.Client{Timeout: 120 * time.Second}
-	req, err := http.NewRequestWithContext(ctxTimeout, "POST", GROQ_API_URL, groqBody)
+	req, err := http.NewRequestWithContext(ctxTrace, "POST", urlStr, body)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+GROQ_API_KEY)
+	req.Header.Set("Authorization", "Bearer "+DEEPINFRA_API_KEY)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	defer resp.Body.Close()
 
+	routingLoc := getHTTPResponseRouting(resp, remoteIP)
+
 	if resp.StatusCode != http.StatusOK {
 		bodyB, _ := io.ReadAll(resp.Body)
-		return "", nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
+		return "", nil, "", fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
 	}
 
 	var result struct {
@@ -1623,7 +1715,7 @@ func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []Whi
 		Segments []WhisperSegment `json:"segments"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 
 	rawText := strings.TrimSpace(result.Text)
@@ -1640,7 +1732,115 @@ func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []Whi
 		result.Segments = make([]WhisperSegment, 0)
 	}
 
-	return rawText, result.Segments, nil
+	return rawText, result.Segments, routingLoc, nil
+}
+
+func runGroqTranscribe(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, error) {
+	groqBody := &bytes.Buffer{}
+	writer := multipart.NewWriter(groqBody)
+	_ = writer.WriteField("model", model)
+	_ = writer.WriteField("response_format", "verbose_json")
+	filePart, err := writer.CreateFormFile("file", "recording.ogg")
+	if err != nil {
+		return "", nil, "", err
+	}
+	_, _ = filePart.Write(audioBytes)
+	_ = writer.Close()
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	var remoteIP string
+	trace := &httptrace.ClientTrace{
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			addr := connInfo.Conn.RemoteAddr().String()
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				remoteIP = host
+			} else {
+				remoteIP = addr
+			}
+		},
+	}
+	ctxTrace := httptrace.WithClientTrace(ctxTimeout, trace)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	req, err := http.NewRequestWithContext(ctxTrace, "POST", GROQ_API_URL, groqBody)
+	if err != nil {
+		return "", nil, "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+GROQ_API_KEY)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, "", err
+	}
+	defer resp.Body.Close()
+
+	routingLoc := getHTTPResponseRouting(resp, remoteIP)
+
+	if resp.StatusCode != http.StatusOK {
+		bodyB, _ := io.ReadAll(resp.Body)
+		return "", nil, "", fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
+	}
+
+	var result struct {
+		Text     string           `json:"text"`
+		Segments []WhisperSegment `json:"segments"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", nil, "", err
+	}
+
+	rawText := strings.TrimSpace(result.Text)
+	hallucinations := map[string]bool{
+		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
+		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
+	}
+	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
+	if hallucinations[checkText] {
+		rawText = ""
+		result.Segments = nil
+	}
+	if result.Segments == nil {
+		result.Segments = make([]WhisperSegment, 0)
+	}
+
+	return rawText, result.Segments, routingLoc, nil
+}
+
+func runWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, string, error) {
+	if DEEPINFRA_API_KEY != "" {
+		diModel := "openai/whisper-large-v3-turbo"
+		if model == "whisper-large-v3" {
+			diModel = "openai/whisper-large-v3"
+		}
+		diURL := DEEPINFRA_BASE_URL + diModel
+
+		log.Printf("[DI INFRA] Attempting transcription using model %s", diModel)
+		text, segments, loc, err := runDeepInfraTranscribe(ctx, audioBytes, diURL)
+		if err == nil {
+			return text, segments, "deepinfra", loc, nil
+		}
+		log.Printf("[DI INFRA ERROR] Transcription failed: %v. Falling back to Groq.", err)
+	}
+
+	if GROQ_API_KEY != "" {
+		log.Printf("[GROQ] Attempting transcription using model %s", model)
+		text, segments, loc, err := runGroqTranscribe(ctx, audioBytes, model)
+		if err == nil {
+			return text, segments, "groq", loc, nil
+		}
+		log.Printf("[GROQ ERROR] Transcription failed: %v", err)
+		return "", nil, "", "", err
+	}
+
+	return "", nil, "", "", fmt.Errorf("no transcription providers (DeepInfra or Groq) are configured or succeeded")
+}
+
+func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
+	text, segments, _, _, err := runWhisperTranscribeWithModel(ctx, audioBytes, "whisper-large-v3-turbo")
+	return text, segments, err
 }
 
 func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
@@ -1708,9 +1908,11 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Post to Groq Whisper for transcription with verbose_json for timestamps
+	// 1. Post to Whisper for transcription with verbose_json for timestamps
 	var rawText string
 	var segmentsJSON string = "[]"
+	var whisperProvider string
+	var whisperRouting string
 
 	fileMic, _, errMic := r.FormFile("file_mic")
 	fileLoopback, _, errLb := r.FormFile("file_loopback")
@@ -1724,26 +1926,29 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		_, err1 := io.Copy(&micBuf, fileMic)
 		_, err2 := io.Copy(&lbBuf, fileLoopback)
 
-		if err1 == nil && err2 == nil && GROQ_API_KEY != "" {
+		if err1 == nil && err2 == nil && (DEEPINFRA_API_KEY != "" || GROQ_API_KEY != "") {
 			var micSegs, lbSegs []WhisperSegment
 			var errMicTrans, errLbTrans error
+			var micProvider, micRouting string
 
 			var wg sync.WaitGroup
 			wg.Add(2)
 
 			go func() {
 				defer wg.Done()
-				_, micSegs, errMicTrans = runWhisperTranscribe(r.Context(), micBuf.Bytes())
+				_, micSegs, micProvider, micRouting, errMicTrans = runWhisperTranscribeWithModel(r.Context(), micBuf.Bytes(), "whisper-large-v3-turbo")
 			}()
 
 			go func() {
 				defer wg.Done()
-				_, lbSegs, errLbTrans = runWhisperTranscribe(r.Context(), lbBuf.Bytes())
+				_, lbSegs, _, _, errLbTrans = runWhisperTranscribeWithModel(r.Context(), lbBuf.Bytes(), "whisper-large-v3-turbo")
 			}()
 
 			wg.Wait()
 
 			if errMicTrans == nil && errLbTrans == nil {
+				whisperProvider = micProvider
+				whisperRouting = micRouting
 				type Segment struct {
 					Start   float64 `json:"start"`
 					End     float64 `json:"end"`
@@ -1794,11 +1999,14 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fallback to mixed audio if parallel failed or files not present
-	if !parallelSuccess && GROQ_API_KEY != "" {
+	if !parallelSuccess && (DEEPINFRA_API_KEY != "" || GROQ_API_KEY != "") {
 		var errWhisper error
 		var segments []WhisperSegment
-		rawText, segments, errWhisper = runWhisperTranscribe(r.Context(), audioBytes)
+		var mixProvider, mixRouting string
+		rawText, segments, mixProvider, mixRouting, errWhisper = runWhisperTranscribeWithModel(r.Context(), audioBytes, "whisper-large-v3-turbo")
 		if errWhisper == nil {
+			whisperProvider = mixProvider
+			whisperRouting = mixRouting
 			type Segment struct {
 				Start   float64 `json:"start"`
 				End     float64 `json:"end"`
@@ -1853,7 +2061,8 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Log usage to database
-	_ = database.LogUsage(user.ID, duration, 0, 0, 0, false, "meeting-whisper", rawText, polished, "success", audioSizeBytes)
+	log.Printf("[MEETING UPLOAD ROUTING] Transcription routing: %s | LLM routing: %s", whisperRouting, pctx.LLMRouting)
+	_ = database.LogUsage(user.ID, duration, 0, 0, 0, false, "meeting-whisper", rawText, polished, "success", audioSizeBytes, whisperProvider, pctx.LLMProvider)
 
 	// Return updated meeting object
 	updatedMeeting, err := database.GetMeeting(meetingID)
@@ -2011,55 +2220,12 @@ Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" 
 		systemPrompt += "\n\nThe following user-specific vocabulary terms are present in the text and MUST remain unchanged and spelled exactly as shown:\n" + strings.Join(vocabLines, "\n")
 	}
 
-	dsPayload := map[string]interface{}{
-		"model": "deepseek-v4-flash",
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": transcript},
-		},
-		"thinking": map[string]string{"type": "disabled"},
-	}
-
-	jsonPayload, err := json.Marshal(dsPayload)
-	if err != nil {
-		return transcript, "", "", err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", DEEPSEEK_API_URL, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return transcript, "", "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+DEEPSEEK_API_KEY)
-
 	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	content, err := runDeepSeekChatCompletion(ctx, client, "deepseek-v4-flash", systemPrompt, transcript, pctx)
 	if err != nil {
 		return transcript, "", "", err
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return transcript, "", "", fmt.Errorf("DeepSeek API call failed: %d - %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return transcript, "", "", err
-	}
-
-	if len(result.Choices) == 0 {
-		return transcript, "", "", fmt.Errorf("DeepSeek returned empty choices")
-	}
-
-	content := strings.TrimSpace(result.Choices[0].Message.Content)
 	// Remove potential markdown code blocks
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")

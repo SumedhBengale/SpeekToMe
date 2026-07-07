@@ -14,7 +14,7 @@ import (
 func SendVerificationEmail(targetEmail, name, token string) error {
 	senderEmail := os.Getenv("SES_SENDER_EMAIL")
 	if senderEmail == "" {
-		senderEmail = "noreply@speekey.com" // Default placeholder
+		senderEmail = "noreply@speektome.com" // Default placeholder
 	}
 
 	backendURL := os.Getenv("BACKEND_URL")
@@ -23,7 +23,7 @@ func SendVerificationEmail(targetEmail, name, token string) error {
 	}
 
 	verificationLink := fmt.Sprintf("%s/auth/verify?token=%s", backendURL, token)
-	subject := "Verify your Speekey account"
+	subject := "Verify your SpeekTo.Me account"
 
 	// Local development simulation fallback if AWS credentials are not set
 	if os.Getenv("AWS_ACCESS_KEY_ID") == "" || os.Getenv("AWS_SECRET_ACCESS_KEY") == "" {
@@ -66,7 +66,7 @@ func SendVerificationEmail(targetEmail, name, token string) error {
 		</head>
 		<body>
 			<div class="card">
-				<h2>🎙️ Welcome to Speekey, %s!</h2>
+				<h2>🎙️ Welcome to SpeekTo.Me, %s!</h2>
 				<p>Thank you for signing up. Please click the button below to verify your email address and activate your transcription services.</p>
 				<p><a href="%s" class="btn">Verify Email Address</a></p>
 				<p style="margin-top: 30px; font-size: 12px; color: rgba(26,26,26,0.5);">If the button above does not work, copy and paste this link into your browser:<br>%s</p>
@@ -76,7 +76,7 @@ func SendVerificationEmail(targetEmail, name, token string) error {
 	`, name, verificationLink, verificationLink)
 
 	textBody := fmt.Sprintf(
-		"Hello %s,\n\nWelcome to Speekey! Please verify your email by opening the following link in your browser:\n\n%s\n\nThank you,\nThe Speekey Team",
+		"Hello %s,\n\nWelcome to SpeekTo.Me! Please verify your email by opening the following link in your browser:\n\n%s\n\nThank you,\nThe SpeekTo.Me Team",
 		name, verificationLink,
 	)
 

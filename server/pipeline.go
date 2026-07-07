@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"sort"
 	"strings"
 	"sync"
@@ -39,15 +41,17 @@ type Match struct {
 
 // PipelineContext tracks metadata and state through the transforms
 type PipelineContext struct {
-	UserID     int64
-	Vocabulary *UserVocabulary
-	Matches    []Match
-	Metrics    struct {
+	UserID      int64
+	Vocabulary  *UserVocabulary
+	Matches     []Match
+	Metrics     struct {
 		ExactMatches      int
 		NormalizedMatches int
 		FuzzyMatches      int
 	}
-	Debug      bool
+	Debug       bool
+	LLMProvider string // Tracks which LLM provider was used
+	LLMRouting  string // Tracks the routing/location of the LLM request
 }
 
 func NewPipelineContext(userID int64, vocab *UserVocabulary) *PipelineContext {
@@ -446,12 +450,107 @@ func (t *AIEnhancementTransform) Name() string {
 	return "AI Enhancement"
 }
 
+func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, apiKey, model, systemPrompt, text string, includeThinking bool) (string, string, error) {
+	payload := map[string]interface{}{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": text},
+		},
+	}
+	if includeThinking {
+		payload["thinking"] = map[string]string{"type": "disabled"}
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	var remoteIP string
+	trace := &httptrace.ClientTrace{
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			addr := connInfo.Conn.RemoteAddr().String()
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				remoteIP = host
+			} else {
+				remoteIP = addr
+			}
+		},
+	}
+	ctxTrace := httptrace.WithClientTrace(ctx, trace)
+
+	req, err := http.NewRequestWithContext(ctxTrace, "POST", apiURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to make HTTP call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	routingLoc := getHTTPResponseRouting(resp, remoteIP)
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("AI call failed: %d - %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", fmt.Errorf("failed to decode JSON response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "", "", fmt.Errorf("AI returned empty choices")
+	}
+
+	return strings.TrimSpace(result.Choices[0].Message.Content), routingLoc, nil
+}
+
+func runDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, systemPrompt, userPrompt string, pctx *PipelineContext) (string, error) {
+	// Try official DeepSeek first
+	if DEEPSEEK_API_KEY != "" {
+		res, loc, err := callChatCompletionsAPI(ctx, client, DEEPSEEK_API_URL, DEEPSEEK_API_KEY, model, systemPrompt, userPrompt, true)
+		if err == nil {
+			if pctx != nil {
+				pctx.LLMProvider = "deepseek"
+				pctx.LLMRouting = loc
+			}
+			return res, nil
+		}
+	}
+
+	// Fallback to Deep Infra if configured
+	if DEEPINFRA_API_KEY != "" {
+		diURL := "https://api.deepinfra.com/v1/openai/chat/completions"
+		diModel := "deepseek-ai/DeepSeek-V4-Flash"
+		res, loc, err := callChatCompletionsAPI(ctx, client, diURL, DEEPINFRA_API_KEY, diModel, systemPrompt, userPrompt, false)
+		if err == nil {
+			if pctx != nil {
+				pctx.LLMProvider = "deepinfra"
+				pctx.LLMRouting = loc
+			}
+			return res, nil
+		}
+	}
+
+	return "", fmt.Errorf("neither DEEPSEEK_API_KEY nor DEEPINFRA_API_KEY is configured or succeeded")
+}
+
 func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pctx *PipelineContext) (string, error) {
 	if text == "" {
 		return "", nil
-	}
-	if t.apiKey == "" {
-		return "", fmt.Errorf("API key is not set")
 	}
 
 	systemPrompt := "You are an expert transcription editor. Enhance the provided transcription by correcting grammar, punctuation, and typos. Preserve all technical terms, proper names, and original meaning. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text."
@@ -480,54 +579,7 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 		systemPrompt += "\n\nThe following user-specific vocabulary terms are present in the text and MUST remain unchanged and spelled exactly as shown:\n" + strings.Join(vocabLines, "\n")
 	}
 
-	dsPayload := map[string]interface{}{
-		"model": t.model,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": text},
-		},
-		"thinking": map[string]string{"type": "disabled"},
-	}
-
-	jsonPayload, err := json.Marshal(dsPayload)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", t.apiURL, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
-
-	resp, err := t.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to make HTTP call: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("AI call failed: %d - %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode JSON response: %w", err)
-	}
-
-	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("AI returned empty choices")
-	}
-
-	return strings.TrimSpace(result.Choices[0].Message.Content), nil
+	return runDeepSeekChatCompletion(ctx, t.httpClient, t.model, systemPrompt, text, pctx)
 }
 
 // Token wraps individual words and split punctuation bounds
