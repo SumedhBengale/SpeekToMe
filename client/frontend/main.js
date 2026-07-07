@@ -9,6 +9,7 @@ let currentConfig = null;
 let unlistenLoginSuccess = null;
 let unlistenLoginFailed = null;
 let currentStep = 1;
+let API_URL = "http://127.0.0.1:8000";
 
 // DOM Elements - Navigation & Tab Panes
 const tabItems = document.querySelectorAll('.nav-item');
@@ -71,6 +72,12 @@ const onboardThemeSelect = document.getElementById('onboard-theme-select');
 
 async function init() {
   try {
+    try {
+      API_URL = await invoke('get_api_url');
+    } catch (err) {
+      console.error("Failed to load API URL from backend:", err);
+    }
+
     // 1. Tab selection setup (Dashboard)
     tabItems.forEach(item => {
       item.addEventListener('click', (e) => {
@@ -753,7 +760,7 @@ async function loadMeetings() {
   }
 
   try {
-    const res = await fetch('http://127.0.0.1:8000/meetings', {
+    const res = await fetch(`${API_URL}/meetings`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -814,7 +821,7 @@ async function viewMeeting(id) {
   showProcessingView();
   const token = currentConfig ? currentConfig.session_token : null;
   try {
-    const res = await fetch(`http://127.0.0.1:8000/meetings/${id}`, {
+    const res = await fetch(`${API_URL}/meetings/${id}`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -830,7 +837,7 @@ async function viewMeeting(id) {
 
     // Set Audio source using Object URL to authorize playback request
     const player = document.getElementById('meeting-audio-player');
-    const audioRes = await fetch(`http://127.0.0.1:8000/meetings/${id}/audio`, {
+    const audioRes = await fetch(`${API_URL}/meetings/${id}/audio`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const blob = await audioRes.blob();
@@ -1086,7 +1093,7 @@ async function confirmDeleteMeeting() {
   
   const token = currentConfig ? currentConfig.session_token : null;
   try {
-    const res = await fetch(`http://127.0.0.1:8000/meetings/${activeMeetingId}`, {
+    const res = await fetch(`${API_URL}/meetings/${activeMeetingId}`, {
       method: 'DELETE',
       headers: {
         'Authorization': `Bearer ${token}`

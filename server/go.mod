@@ -1,4 +1,4 @@
-module speekey-server
+module speektome-server
 
 go 1.26.1
 

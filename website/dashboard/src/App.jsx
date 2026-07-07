@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
-const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+const API_BASE = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
   ? 'http://localhost:8000' 
-  : 'http://localhost:8000'; // Fallback to local dev API or current host in production
+  : ''); // Fallback to current host root if no variable is provided
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('speektome_token') || '');

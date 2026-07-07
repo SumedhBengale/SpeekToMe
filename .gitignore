@@ -3,7 +3,7 @@ client/src-tauri/target/
 target/
 
 # Go build outputs
-server/speekey-server.exe
+server/speektome-server.exe
 *.exe
 *.exe.local
 *.dll
@@ -11,8 +11,8 @@ server/speekey-server.exe
 *.dylib
 
 # SQLite Database files
-server/speekey.db
-server/speekey.db-journal
+server/speektome.db
+server/speektome.db-journal
 *.db
 *.db-journal
 

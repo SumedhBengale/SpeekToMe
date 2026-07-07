@@ -2,6 +2,7 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AppConfig {
+    pub api_url: Option<String>,
     pub hotkey: String,       // "Right Control", "Left Control", "Caps Lock", "Right Alt", "Left Alt", "Space"
     pub model: String,        // "whisper-large-v3-turbo", "whisper-large-v3"
     pub enhance: bool,        // true/false
@@ -17,6 +18,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            api_url: Some("http://127.0.0.1:8000".to_string()),
             hotkey: "Right Control".to_string(),
             model: "whisper-large-v3-turbo".to_string(),
             enhance: false,
@@ -31,9 +33,36 @@ impl Default for AppConfig {
     }
 }
 
+pub fn get_config_path() -> std::path::PathBuf {
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        let mut path = std::path::PathBuf::from(app_data);
+        path.push("SpeekToMe");
+        let _ = std::fs::create_dir_all(&path);
+        path.push("config.json");
+        path
+    } else if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        let mut path = std::path::PathBuf::from(home);
+        path.push(".config");
+        path.push("SpeekToMe");
+        let _ = std::fs::create_dir_all(&path);
+        path.push("config.json");
+        path
+    } else {
+        std::path::PathBuf::from("speektome_config.json")
+    }
+}
+
 pub fn load_config() -> AppConfig {
+    let path = get_config_path();
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+            return config;
+        }
+    }
+    // Migration fallback (if config exists in current directory, load and move it to AppData)
     if let Ok(data) = std::fs::read_to_string("speektome_config.json") {
         if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+            save_config(&config);
             return config;
         }
     }
@@ -62,7 +91,7 @@ pub fn apply_autostart(enabled: bool) {
 pub fn save_config(config: &AppConfig) {
     apply_autostart(config.autostart);
     if let Ok(data) = serde_json::to_string_pretty(config) {
-        let _ = std::fs::write("speektome_config.json", data);
+        let _ = std::fs::write(get_config_path(), data);
     }
 }
 

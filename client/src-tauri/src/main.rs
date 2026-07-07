@@ -86,13 +86,18 @@ fn start_login(window: tauri::WebviewWindow) {
 }
 
 #[tauri::command]
+fn get_api_url() -> String {
+    api::get_api_url()
+}
+
+#[tauri::command]
 fn logout() {
     let mut active = get_active_config().lock().unwrap();
     if let Some(ref token) = active.session_token {
         let token_clone = token.clone();
         thread::spawn(move || {
             let client = reqwest::blocking::Client::new();
-            let _ = client.post("http://127.0.0.1:8000/auth/logout")
+            let _ = client.post(format!("{}/auth/logout", api::get_api_url()))
                 .header("Authorization", format!("Bearer {}", token_clone))
                 .send();
         });
@@ -196,7 +201,8 @@ fn main() {
             start_meeting,
             stop_meeting,
             get_meeting_levels,
-            upload_meeting
+            upload_meeting,
+            get_api_url
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

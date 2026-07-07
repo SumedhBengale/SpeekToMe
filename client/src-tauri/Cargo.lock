@@ -3594,7 +3594,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "speekey"
+name = "speektome"
 version = "0.1.0"
 dependencies = [
  "arboard",

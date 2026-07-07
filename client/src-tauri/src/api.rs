@@ -8,6 +8,11 @@ struct TranscriptResponse {
     text: String,
 }
 
+pub fn get_api_url() -> String {
+    let cfg = crate::config::load_config();
+    cfg.api_url.unwrap_or_else(|| "http://127.0.0.1:8000".to_string())
+}
+
 // Helper to open the default system browser on Windows using standard shell commands
 pub fn open_browser(url: &str) {
     let _ = std::process::Command::new("cmd")
@@ -28,7 +33,7 @@ pub struct UserInfo {
 // REST Client user profile retrieval helper
 pub fn fetch_user_info(token: &str) -> Option<UserInfo> {
     let client = reqwest::blocking::Client::new();
-    match client.get("http://127.0.0.1:8000/auth/me")
+    match client.get(format!("{}/auth/me", get_api_url()))
         .header("Authorization", format!("Bearer {}", token))
         .send() 
     {
@@ -68,7 +73,7 @@ pub fn listen_for_token() -> Option<String> {
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();
     
-    let auth_url = format!("http://127.0.0.1:8000/auth/login?port={}", port);
+    let auth_url = format!("{}/auth/login?port={}", get_api_url(), port);
     open_browser(&auth_url);
     
     // Accept single connection
@@ -172,7 +177,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
     let compression_ratio = (1.0 - (compressed_size as f64 / raw_bytes_size as f64)) * 100.0;
     
     let request_start = std::time::Instant::now();
-    match client.post("http://127.0.0.1:8000/generate")
+    match client.post(format!("{}/generate", get_api_url()))
         .header("Authorization", format!("Bearer {}", token))
         .multipart(form)
         .send() 
@@ -257,7 +262,7 @@ pub fn login_with_credentials(email: &str, password: &str) -> Result<(String, Us
     map.insert("email", email);
     map.insert("password", password);
     
-    match client.post("http://127.0.0.1:8000/auth/login")
+    match client.post(format!("{}/auth/login", get_api_url()))
         .json(&map)
         .send()
     {
@@ -291,7 +296,7 @@ pub fn signup_with_credentials(email: &str, password: &str, name: &str) -> Resul
     map.insert("password", password);
     map.insert("name", name);
     
-    match client.post("http://127.0.0.1:8000/auth/signup")
+    match client.post(format!("{}/auth/signup", get_api_url()))
         .json(&map)
         .send()
     {
@@ -326,7 +331,7 @@ pub struct ClientVocabularyTerm {
 
 pub fn fetch_vocabulary(token: &str) -> Result<Vec<ClientVocabularyTerm>, String> {
     let client = reqwest::blocking::Client::new();
-    match client.get("http://127.0.0.1:8000/auth/vocabulary")
+    match client.get(format!("{}/auth/vocabulary", get_api_url()))
         .header("Authorization", format!("Bearer {}", token))
         .send()
     {
@@ -350,7 +355,7 @@ pub fn add_vocab_term(token: &str, term: &str) -> Result<(), String> {
     let mut map = std::collections::HashMap::new();
     map.insert("canonical_term", term);
 
-    match client.post("http://127.0.0.1:8000/auth/vocabulary")
+    match client.post(format!("{}/auth/vocabulary", get_api_url()))
         .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()
@@ -372,7 +377,7 @@ pub fn delete_vocab_term(token: &str, term: &str) -> Result<(), String> {
     let mut map = std::collections::HashMap::new();
     map.insert("canonical_term", term);
 
-    match client.delete("http://127.0.0.1:8000/auth/vocabulary")
+    match client.delete(format!("{}/auth/vocabulary", get_api_url()))
         .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()
@@ -430,7 +435,7 @@ pub fn upload_meeting(token: &str, title: &str, filepath: &str) -> Result<String
         }
     }
 
-    match client.post("http://127.0.0.1:8000/meetings")
+    match client.post(format!("{}/meetings", get_api_url()))
         .header("Authorization", format!("Bearer {}", token))
         .multipart(form)
         .send()
