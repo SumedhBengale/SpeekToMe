@@ -1,0 +1,53 @@
+name: Deploy SpeekTo.Me Server to EC2
+
+on:
+  workflow_dispatch: # Allows manual trigger from the GitHub Actions tab UI
+
+jobs:
+  deploy:
+    name: Deploy to AWS EC2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache-dependency-path: server/go.sum
+
+      - name: Build Statically Compiled Go Binary
+        run: |
+          cd server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o speektome-server .
+
+      - name: Connect to Tailscale Network
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:deploy
+
+      - name: Copy Server Files to EC2 via SCP
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "server/speektome-server,server/setup_ec2.sh,server/.env.example"
+          target: "/var/www/speektome"
+          strip_components: 1
+
+      - name: Run setup_ec2.sh and restart speektome service
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/speektome
+            chmod +x setup_ec2.sh
+            ./setup_ec2.sh
+            sudo systemctl restart speektome
+            sudo systemctl status speektome --no-pager

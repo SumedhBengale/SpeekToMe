@@ -48,7 +48,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ═══════════════════════════════════════════
   const navBtn = document.querySelector(".nav-btn");
   if (navBtn) {
-    const token = localStorage.getItem("speekey_token");
+    const token = localStorage.getItem("speektome_token");
     const navActions = document.createElement("div");
     navActions.className = "nav-actions";
 
@@ -62,7 +62,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const logoutBtn = document.getElementById("nav-logout-btn");
       if (logoutBtn) {
         logoutBtn.addEventListener("click", () => {
-          localStorage.removeItem("speekey_token");
+          localStorage.removeItem("speektome_token");
           window.location.reload();
         });
       }

@@ -256,7 +256,7 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
                         unsafe {
                             windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x00000010); // MB_ICONHAND (error chime)
                         }
-                        println!("Please log in from Speekey Settings before dictating!");
+                        println!("Please log in from SpeekTo.Me Settings before dictating!");
                         return 1;
                     }
                     
@@ -341,7 +341,7 @@ pub unsafe fn run_win32_hook_and_tray_thread() {
     let hinstance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
     
     // 1. Register and Create Overlay Window
-    let overlay_class = encode_wide("SpeekeyOverlayClass");
+    let overlay_class = encode_wide("SpeekTo.MeOverlayClass");
     let wnd_class_overlay = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(wnd_proc_overlay),
@@ -365,14 +365,14 @@ pub unsafe fn run_win32_hook_and_tray_thread() {
     let hwnd_overlay = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
         overlay_class.as_ptr(),
-        encode_wide("Speekey Overlay").as_ptr(),
+        encode_wide("SpeekTo.Me Overlay").as_ptr(),
         WS_POPUP,
         x, y, width, height,
         std::ptr::null_mut(), std::ptr::null_mut(), hinstance, ptr::null()
     );
     
     if hwnd_overlay == std::ptr::null_mut() {
-        panic!("Failed to create Speekey overlay window!");
+        panic!("Failed to create SpeekTo.Me overlay window!");
     }
     
     // Set color key (black = 0x00000000) for transparency + global alpha (235)
@@ -380,7 +380,7 @@ pub unsafe fn run_win32_hook_and_tray_thread() {
     crate::OVERLAY_HWND.set(SendHWND(hwnd_overlay)).ok();
     
     // 2. Register and Create Invisible Helper Tray Window
-    let tray_class = encode_wide("SpeekeyTrayClass");
+    let tray_class = encode_wide("SpeekTo.MeTrayClass");
     let wnd_class_tray = WNDCLASSW {
         style: 0,
         lpfnWndProc: Some(wnd_proc_tray),
@@ -398,14 +398,14 @@ pub unsafe fn run_win32_hook_and_tray_thread() {
     let hwnd_tray = CreateWindowExW(
         0,
         tray_class.as_ptr(),
-        encode_wide("Speekey Tray Helper Window").as_ptr(),
+        encode_wide("SpeekTo.Me Tray Helper Window").as_ptr(),
         0,
         0, 0, 0, 0,
         std::ptr::null_mut(), std::ptr::null_mut(), hinstance, ptr::null()
     );
     
     if hwnd_tray == std::ptr::null_mut() {
-        panic!("Failed to create Speekey tray helper window!");
+        panic!("Failed to create SpeekTo.Me tray helper window!");
     }
     
     // 3. Register System Tray Icon
@@ -421,7 +421,7 @@ pub unsafe fn run_win32_hook_and_tray_thread() {
     }
     nid.hIcon = h_icon;
     
-    let tip = encode_wide("Speekey (Hold Shortcut to transcribe)");
+    let tip = encode_wide("SpeekTo.Me (Hold Shortcut to transcribe)");
     for (i, &c) in tip.iter().enumerate() {
         if i < nid.szTip.len() {
             nid.szTip[i] = c;

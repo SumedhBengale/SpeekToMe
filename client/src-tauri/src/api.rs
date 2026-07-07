@@ -106,7 +106,7 @@ pub fn listen_for_token() -> Option<String> {
                         pay_url
                     )
                 } else {
-                    "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>You can close this window now and return to Speekey.</p></body></html>".to_string()
+                    "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>You can close this window now and return to SpeekTo.Me.</p></body></html>".to_string()
                 };
 
                 let response = format!(
@@ -186,7 +186,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                     let mut text = res_json.text.trim().to_string();
                     
                     println!("\n==================================================");
-                    println!("                SPEEKEY CLIENT REST LOG");
+                    println!("                SPEEKTOME CLIENT REST LOG");
                     println!("==================================================");
                     println!("Encode Time:       {:?}", encode_duration);
                     println!("Original PCM Size: {} bytes", raw_bytes_size);
@@ -228,7 +228,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                 };
 
                 println!("\n==================================================");
-                println!("          SPEEKEY CLIENT REST LOG (ERROR)");
+                println!("          SPEEKTOME CLIENT REST LOG (ERROR)");
                 println!("==================================================");
                 println!("Encode Time:       {:?}", encode_duration);
                 println!("Original PCM Size: {} bytes", raw_bytes_size);
@@ -240,7 +240,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
             }
         }
         Err(e) => {
-            eprintln!("Failed to connect to Speekey server: {:?}", e);
+            eprintln!("Failed to connect to SpeekTo.Me server: {:?}", e);
         }
     }
 }

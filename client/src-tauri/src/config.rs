@@ -32,7 +32,7 @@ impl Default for AppConfig {
 }
 
 pub fn load_config() -> AppConfig {
-    if let Ok(data) = std::fs::read_to_string("speekey_config.json") {
+    if let Ok(data) = std::fs::read_to_string("speektome_config.json") {
         if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
             return config;
         }
@@ -51,10 +51,10 @@ pub fn apply_autostart(enabled: bool) {
     ) {
         if enabled {
             if let Ok(exe_path) = std::env::current_exe() {
-                let _ = run_key.set_value("Speekey", &exe_path.to_string_lossy().as_ref());
+                let _ = run_key.set_value("SpeekTo.Me", &exe_path.to_string_lossy().as_ref());
             }
         } else {
-            let _ = run_key.delete_value("Speekey");
+            let _ = run_key.delete_value("SpeekTo.Me");
         }
     }
 }
@@ -62,7 +62,7 @@ pub fn apply_autostart(enabled: bool) {
 pub fn save_config(config: &AppConfig) {
     apply_autostart(config.autostart);
     if let Ok(data) = serde_json::to_string_pretty(config) {
-        let _ = std::fs::write("speekey_config.json", data);
+        let _ = std::fs::write("speektome_config.json", data);
     }
 }
 

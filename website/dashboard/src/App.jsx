@@ -5,7 +5,7 @@ const API_BASE = window.location.hostname === 'localhost' || window.location.hos
   : 'http://localhost:8000'; // Fallback to local dev API or current host in production
 
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem('speekey_token') || '');
+  const [token, setToken] = useState(localStorage.getItem('speektome_token') || '');
   const [user, setUser] = useState(null);
   const [logs, setLogs] = useState([]);
   const [route, setRoute] = useState('loading');
@@ -26,7 +26,7 @@ export default function App() {
     const verifiedEmail = params.get('email');
     
     if (queryToken) {
-      localStorage.setItem('speekey_token', queryToken);
+      localStorage.setItem('speektome_token', queryToken);
       setToken(queryToken);
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (isVerified === 'true') {
@@ -93,7 +93,7 @@ export default function App() {
   };
 
   const handleLogoutLocal = () => {
-    localStorage.removeItem('speekey_token');
+    localStorage.removeItem('speektome_token');
     setToken('');
     setUser(null);
     setLogs([]);
@@ -129,7 +129,7 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        localStorage.setItem('speekey_token', data.token);
+        localStorage.setItem('speektome_token', data.token);
         setToken(data.token);
         setEmail('');
         setPassword('');
@@ -137,7 +137,7 @@ export default function App() {
         setAuthError(data.error || 'Invalid credentials');
       }
     } catch (err) {
-      setAuthError('Cannot connect to Speekey authentication server.');
+      setAuthError('Cannot connect to SpeekTo.Me authentication server.');
     } finally {
       setLoading(false);
     }
@@ -167,7 +167,7 @@ export default function App() {
           setPassword('');
           setName('');
         } else if (data.token) {
-          localStorage.setItem('speekey_token', data.token);
+          localStorage.setItem('speektome_token', data.token);
           setToken(data.token);
           setEmail('');
           setPassword('');
@@ -177,7 +177,7 @@ export default function App() {
         setAuthError(data.error || 'Registration failed.');
       }
     } catch (err) {
-      setAuthError('Cannot connect to Speekey authentication server.');
+      setAuthError('Cannot connect to SpeekTo.Me authentication server.');
     } finally {
       setLoading(false);
     }
@@ -215,8 +215,8 @@ export default function App() {
       const options = {
         key: data.razorpay_key_id,
         subscription_id: data.subscription_id,
-        name: 'Speekey',
-        description: 'Speekey Pro ($2.00/mo)',
+        name: 'SpeekTo.Me',
+        description: 'SpeekTo.Me Pro ($2.00/mo)',
         handler: async function (response) {
           try {
             const verifyRes = await fetch(`${API_BASE}/billing/verify-subscription`, {
@@ -232,7 +232,7 @@ export default function App() {
               })
             });
             if (verifyRes.ok) {
-              setSuccessMessage("Successfully upgraded to Speekey Pro!");
+              setSuccessMessage("Successfully upgraded to SpeekTo.Me Pro!");
               fetchUserProfile();
               setRoute('dashboard');
             } else {
@@ -286,7 +286,7 @@ export default function App() {
       <div className="dashboard-container">
         <div className="loading-container">
           <div className="spinner"></div>
-          <h2>Loading Speekey Dashboard...</h2>
+          <h2>Loading SpeekTo.Me Dashboard...</h2>
         </div>
       </div>
     );
@@ -297,7 +297,7 @@ export default function App() {
       {/* 1. Header */}
       <header class="dashboard-header">
         <a href="/" className="logo">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>Speekey<span className="logo-dot">.</span>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>SpeekTo.Me<span className="logo-dot">.</span>
         </a>
         <nav className="nav-links">
           {user ? (
@@ -330,7 +330,7 @@ export default function App() {
           <div className="auth-box">
             <div className="auth-header">
               <h2>Welcome Back</h2>
-              <p>Sign in to manage your Speekey subscription.</p>
+              <p>Sign in to manage your SpeekTo.Me subscription.</p>
             </div>
 
             {authError && <div className="auth-error">{authError}</div>}
@@ -404,7 +404,7 @@ export default function App() {
           <div className="auth-box">
             <div className="auth-header">
               <h2>Create Account</h2>
-              <p>Get started with Speekey transcription services.</p>
+              <p>Get started with SpeekTo.Me transcription services.</p>
             </div>
 
             {authError && <div className="auth-error">{authError}</div>}
@@ -469,7 +469,7 @@ export default function App() {
         <main className="dashboard-main">
           <div className="welcome-section">
             <h1 className="welcome-title">Hey, {user.name.split(' ')[0]} 👋</h1>
-            <p>Here is your current Speekey usage and transcription analytics.</p>
+            <p>Here is your current SpeekTo.Me usage and transcription analytics.</p>
           </div>
 
           <div className="grid-dashboard">
@@ -479,7 +479,7 @@ export default function App() {
                 <h3 className="card-title">🎙️ Recent Transcriptions</h3>
                 {logs.length === 0 ? (
                   <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
-                    No recent dictations found. Open Speekey on your desktop to make your first transcription!
+                    No recent dictations found. Open SpeekTo.Me on your desktop to make your first transcription!
                   </p>
                 ) : (
                   <div className="logs-table-container">
@@ -537,7 +537,7 @@ export default function App() {
                   
                   <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.5)', marginTop: '8px' }}>
                     {user.plan_tier === 'free' 
-                      ? 'Upgrade to Speekey Pro to get 50 hours of dictation limit per month and access to enhanced LLM formatting.' 
+                      ? 'Upgrade to SpeekTo.Me Pro to get 50 hours of dictation limit per month and access to enhanced LLM formatting.' 
                       : 'Your Pro plan subscription is active and will renew monthly.'}
                   </p>
                 </div>
@@ -581,7 +581,7 @@ export default function App() {
             {/* Free Plan */}
             <div className={`plan-card ${user.plan_tier === 'free' ? 'active' : ''}`}>
               <div className="plan-header">
-                <h3>Speekey Starter</h3>
+                <h3>SpeekTo.Me Starter</h3>
                 <p>Perfect for testing out dictation and speed.</p>
                 <div className="plan-price">$0<span>/forever</span></div>
                 
@@ -629,7 +629,7 @@ export default function App() {
             {/* Pro Plan */}
             <div className={`plan-card ${user.plan_tier === 'pro' ? 'active' : ''}`}>
               <div className="plan-header">
-                <h3>Speekey Pro</h3>
+                <h3>SpeekTo.Me Pro</h3>
                 <p>For power users who dictate essays, logs, and emails.</p>
                 <div className="plan-price">$2.00<span>/month</span></div>
 

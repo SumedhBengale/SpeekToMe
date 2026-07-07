@@ -214,7 +214,7 @@ fn start_meeting(title: String) -> Result<String, String> {
     println!("Starting meeting: {}", title);
     
     let temp_dir = std::env::temp_dir();
-    let filename = format!("speekey_meeting_{}.ogg", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let filename = format!("speektome_meeting_{}.ogg", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
     let path = temp_dir.join(filename);
     
     if let Err(e) = crate::audio::start_meeting_recording(path.clone()) {

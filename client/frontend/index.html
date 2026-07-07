@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Speekey Settings</title>
+  <title>SpeekTo.Me Settings</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <div class="onboarding-card">
       <div class="onboarding-header">
         <span class="logo-icon">🎙️</span>
-        <span class="logo-text">Speekey Setup</span>
+        <span class="logo-text">SpeekTo.Me Setup</span>
         <div class="step-tracker">
           <div class="step-dot active" data-step="1"></div>
           <div class="step-dot" data-step="2"></div>
@@ -24,8 +24,8 @@
       <div class="onboarding-content">
         <!-- Step 1: Login -->
         <div class="onboarding-step active" id="onboard-step-1">
-          <h2>Welcome to Speekey</h2>
-          <p class="step-desc">First, sign in to your Speekey account to activate transcription services.</p>
+          <h2>Welcome to SpeekTo.Me</h2>
+          <p class="step-desc">First, sign in to your SpeekTo.Me account to activate transcription services.</p>
           
           <div id="onboard-auth-logged-out" class="auth-section">
             <button id="onboard-login-btn" class="fluent-button primary large">🔑 Sign in with Google</button>
@@ -95,9 +95,9 @@
             <label class="fluent-checkbox-container">
               <input type="checkbox" id="onboard-autostart-check">
               <span class="checkmark"></span>
-              Start Speekey on system startup
+              Start SpeekTo.Me on system startup
             </label>
-            <span class="setting-hint">Launches Speekey in your system tray automatically.</span>
+            <span class="setting-hint">Launches SpeekTo.Me in your system tray automatically.</span>
           </div>
 
           <div class="setting-group checkbox-group">
@@ -124,15 +124,7 @@
           <h2>AI Settings</h2>
           <p class="step-desc">Select your transcription engine and instructions.</p>
 
-          <div class="setting-group">
-            <label for="onboard-model-select">Transcription Model</label>
-            <div class="select-wrapper">
-              <select id="onboard-model-select" class="fluent-select">
-                <option value="whisper-large-v3-turbo">Whisper V3 Turbo (Fast)</option>
-                <option value="whisper-large-v3">Whisper V3 Original (Accurate)</option>
-              </select>
-            </div>
-          </div>
+          <input type="hidden" id="onboard-model-select" value="whisper-large-v3-turbo">
 
           <div class="setting-group checkbox-group">
             <label class="fluent-checkbox-container">
@@ -153,10 +145,10 @@
         <!-- Step 4: Finish -->
         <div class="onboarding-step" id="onboard-step-4">
           <h2>You're All Set!</h2>
-          <p class="step-desc">Setup is complete. Speekey will now run in the background as a system tray service.</p>
+          <p class="step-desc">Setup is complete. SpeekTo.Me will now run in the background as a system tray service.</p>
           
           <div class="tutorial-card">
-            <p><strong>💡 How to use Speekey:</strong></p>
+            <p><strong>💡 How to use SpeekTo.Me:</strong></p>
             <ul>
               <li><strong>Hold</strong> your hotkey to record audio.</li>
               <li><strong>Speak</strong> normally (whispering works too!).</li>
@@ -164,7 +156,7 @@
             </ul>
           </div>
 
-          <button id="onboard-finish-btn" class="fluent-button accent large">Finish & Launch Speekey</button>
+          <button id="onboard-finish-btn" class="fluent-button accent large">Finish & Launch SpeekTo.Me</button>
         </div>
       </div>
     </div>
@@ -176,7 +168,7 @@
     <div class="sidebar">
       <div class="app-logo">
         <span class="logo-icon">🎙️</span>
-        <span class="logo-text">Speekey</span>
+        <span class="logo-text">SpeekTo.Me</span>
       </div>
       <nav class="nav-links">
         <a href="#" class="nav-item active" data-tab="general">
@@ -240,7 +232,7 @@
           <label class="fluent-checkbox-container">
             <input type="checkbox" id="autostart-check">
             <span class="checkmark"></span>
-            Start Speekey on system startup
+            Start SpeekTo.Me on system startup
           </label>
           <span class="setting-hint">Automatically launches the app in the tray when Windows boots.</span>
         </div>
@@ -278,15 +270,7 @@
         <h2>AI Assistant</h2>
         <p class="section-desc">Manage voice-to-text models and enhancement options.</p>
 
-        <div class="setting-group">
-          <label for="model-select">Transcription Model</label>
-          <div class="select-wrapper">
-            <select id="model-select" class="fluent-select">
-              <option value="whisper-large-v3-turbo">Whisper V3 Turbo (Fast)</option>
-              <option value="whisper-large-v3">Whisper V3 Original (Accurate)</option>
-            </select>
-          </div>
-        </div>
+        <input type="hidden" id="model-select" value="whisper-large-v3-turbo">
 
         <div class="setting-group checkbox-group">
           <label class="fluent-checkbox-container">
@@ -309,7 +293,7 @@
         <p class="section-desc">Add words, names, or abbreviations you want the transcription to match and correct.</p>
 
         <div class="vocab-input-row">
-          <input type="text" id="vocab-input" class="fluent-input" placeholder="e.g. Speekey, DeepSeek">
+          <input type="text" id="vocab-input" class="fluent-input" placeholder="e.g. SpeekTo.Me, DeepSeek">
           <button id="vocab-add-btn" class="fluent-button primary">Add Word</button>
         </div>
 
@@ -331,7 +315,7 @@
       <!-- Account Tab -->
       <div class="tab-pane" id="tab-account">
         <h2>Account</h2>
-        <p class="section-desc" id="account-desc">Sign in to unlock Speekey transcription services.</p>
+        <p class="section-desc" id="account-desc">Sign in to unlock SpeekTo.Me transcription services.</p>
 
         <div id="auth-logged-out" class="auth-section">
           <div class="auth-card">

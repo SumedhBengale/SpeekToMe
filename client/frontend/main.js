@@ -1,4 +1,4 @@
-// Speekey Settings Frontend Controller
+// SpeekTo.Me Settings Frontend Controller
 // Utilizes window.__TAURI__ global APIs for zero-bundler simplicity.
 
 const { invoke } = window.__TAURI__.core;
@@ -221,7 +221,7 @@ async function init() {
     // Initialize Meeting Notes UI event listeners
     setupMeetingsUI();
   } catch (err) {
-    console.error("Failed to initialize Speekey UI:", err);
+    console.error("Failed to initialize SpeekTo.Me UI:", err);
   }
 }
 
@@ -766,7 +766,7 @@ async function loadMeetings() {
   } catch (err) {
     console.error("Failed to load meetings:", err);
     listGrid.innerHTML = '';
-    emptyMsg.textContent = 'Error connecting to Speekey server. Ensure the server is running.';
+    emptyMsg.textContent = 'Error connecting to SpeekTo.Me server. Ensure the server is running.';
     emptyMsg.style.display = 'block';
   }
 }

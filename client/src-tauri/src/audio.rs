@@ -301,7 +301,7 @@ pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) 
 
     let mut tags = Vec::new();
     tags.extend_from_slice(b"OpusTags");
-    let vendor = b"speekey-client";
+    let vendor = b"speektome-client";
     tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
     tags.extend_from_slice(vendor);
     tags.extend_from_slice(&0u32.to_le_bytes());
@@ -637,7 +637,7 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
 
         let mut tags = Vec::new();
         tags.extend_from_slice(b"OpusTags");
-        let vendor = b"speekey-client-meeting";
+        let vendor = b"speektome-client-meeting";
         tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
         tags.extend_from_slice(vendor);
         tags.extend_from_slice(&0u32.to_le_bytes());

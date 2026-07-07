@@ -1,11 +1,11 @@
-/* Windows 11 Fluent UI inspired theme for Speekey */
+/* Windows 11 Fluent UI inspired theme for SpeekTo.Me */
 @import url('https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
 :root {
   --bg-sidebar: rgba(20, 20, 22, 0.4);
   --bg-content: rgba(28, 28, 30, 0.65);
   --border-color: rgba(255, 255, 255, 0.08);
-  --accent-color: #00e676; /* Speekey Neon Green */
+  --accent-color: #00e676; /* SpeekTo.Me Neon Green */
   --accent-hover: #00c853;
   --text-primary: #ffffff;
   --text-secondary: #aaaaac;
