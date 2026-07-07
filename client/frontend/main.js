@@ -259,8 +259,10 @@ function applyConfigToUI(config) {
 }
 
 function gatherConfigFromUI(isOnboarding) {
+  const api_url = currentConfig ? currentConfig.api_url : null;
   if (isOnboarding) {
     return {
+      api_url: api_url,
       hotkey: onboardHotkeySelect.value,
       autostart: onboardAutostartCheck.checked,
       typing_mode: onboardTypingModeCheck.checked,
@@ -274,6 +276,7 @@ function gatherConfigFromUI(isOnboarding) {
     };
   } else {
     return {
+      api_url: api_url,
       hotkey: hotkeySelect.value,
       autostart: autostartCheck.checked,
       typing_mode: typingModeCheck.checked,
