@@ -10,7 +10,7 @@ struct TranscriptResponse {
 
 pub fn get_api_url() -> String {
     let cfg = crate::config::load_config();
-    cfg.api_url.unwrap_or_else(|| "http://127.0.0.1:8000".to_string())
+    cfg.api_url.unwrap_or_else(|| "https://api.speekto.me".to_string())
 }
 
 // Helper to open the default system browser on Windows using standard shell commands

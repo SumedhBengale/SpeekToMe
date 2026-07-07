@@ -18,7 +18,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            api_url: Some("http://127.0.0.1:8000".to_string()),
+            api_url: Some("https://api.speekto.me".to_string()),
             hotkey: "Right Control".to_string(),
             model: "whisper-large-v3-turbo".to_string(),
             enhance: false,

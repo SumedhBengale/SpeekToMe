@@ -9,7 +9,7 @@ let currentConfig = null;
 let unlistenLoginSuccess = null;
 let unlistenLoginFailed = null;
 let currentStep = 1;
-let API_URL = "http://127.0.0.1:8000";
+let API_URL = "https://api.speekto.me";
 
 // DOM Elements - Navigation & Tab Panes
 const tabItems = document.querySelectorAll('.nav-item');
