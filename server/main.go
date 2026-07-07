@@ -1673,7 +1673,7 @@ func runDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	_, _ = filePart.Write(audioBytes)
 	_ = writer.Close()
 
-	ctxTimeout, cancel := context.WithTimeout(ctx, 120*time.Second)
+	ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	var remoteIP string
@@ -1689,7 +1689,7 @@ func runDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	}
 	ctxTrace := httptrace.WithClientTrace(ctxTimeout, trace)
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctxTrace, "POST", urlStr, body)
 	if err != nil {
 		return "", nil, "", err

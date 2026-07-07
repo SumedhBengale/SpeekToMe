@@ -13,6 +13,13 @@ pub fn get_api_url() -> String {
     cfg.api_url.unwrap_or_else(|| "http://127.0.0.1:8000".to_string())
 }
 
+fn create_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new())
+}
+
 // Helper to open the default system browser on Windows using standard shell commands
 pub fn open_browser(url: &str) {
     let _ = std::process::Command::new("cmd")
@@ -32,7 +39,7 @@ pub struct UserInfo {
 
 // REST Client user profile retrieval helper
 pub fn fetch_user_info(token: &str) -> Option<UserInfo> {
-    let client = reqwest::blocking::Client::new();
+    let client = create_client();
     match client.get(format!("{}/auth/me", get_api_url()))
         .header("Authorization", format!("Bearer {}", token))
         .send() 
@@ -161,7 +168,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
         }
     };
     
-    let client = reqwest::blocking::Client::new();
+    let client = create_client();
     let part = reqwest::blocking::multipart::Part::bytes(ogg_opus_bytes.clone())
         .file_name("recording.ogg")
         .mime_str("audio/ogg")
@@ -256,7 +263,7 @@ struct AuthResponse {
 }
 
 pub fn login_with_credentials(email: &str, password: &str) -> Result<(String, UserInfo), String> {
-    let client = reqwest::blocking::Client::new();
+    let client = create_client();
     
     let mut map = std::collections::HashMap::new();
     map.insert("email", email);
@@ -289,7 +296,7 @@ pub fn login_with_credentials(email: &str, password: &str) -> Result<(String, Us
 }
 
 pub fn signup_with_credentials(email: &str, password: &str, name: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = create_client();
     
     let mut map = std::collections::HashMap::new();
     map.insert("email", email);
@@ -330,7 +337,7 @@ pub struct ClientVocabularyTerm {
 }
 
 pub fn fetch_vocabulary(token: &str) -> Result<Vec<ClientVocabularyTerm>, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = create_client();
     match client.get(format!("{}/auth/vocabulary", get_api_url()))
         .header("Authorization", format!("Bearer {}", token))
         .send()
@@ -351,7 +358,7 @@ pub fn fetch_vocabulary(token: &str) -> Result<Vec<ClientVocabularyTerm>, String
 }
 
 pub fn add_vocab_term(token: &str, term: &str) -> Result<(), String> {
-    let client = reqwest::blocking::Client::new();
+    let client = create_client();
     let mut map = std::collections::HashMap::new();
     map.insert("canonical_term", term);
 
@@ -373,7 +380,7 @@ pub fn add_vocab_term(token: &str, term: &str) -> Result<(), String> {
 }
 
 pub fn delete_vocab_term(token: &str, term: &str) -> Result<(), String> {
-    let client = reqwest::blocking::Client::new();
+    let client = create_client();
     let mut map = std::collections::HashMap::new();
     map.insert("canonical_term", term);
 
@@ -403,7 +410,7 @@ pub fn upload_meeting(token: &str, title: &str, filepath: &str) -> Result<String
     let mic_filepath = path.with_extension("mic.ogg");
     let loopback_filepath = path.with_extension("loopback.ogg");
 
-    let client = reqwest::blocking::Client::new();
+    let client = create_client();
     let part = reqwest::blocking::multipart::Part::bytes(bytes)
         .file_name("recording.ogg")
         .mime_str("audio/ogg")
