@@ -43,7 +43,7 @@ jobs:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "server/speektome-server-amd64,server/speektome-server-arm64,server/setup_ec2.sh,server/.env.example,server/benchmark/benchmark-amd64,server/benchmark/benchmark-arm64,server/uploads/meetings/meeting_5_1783327344745226200.ogg"
+          source: "server/speektome-server-amd64,server/speektome-server-arm64,server/setup_ec2.sh,server/.env.example,server/benchmark/*,server/uploads/meetings/*"
           target: "speektome"
           strip_components: 1
 
