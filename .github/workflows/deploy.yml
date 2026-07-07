@@ -20,8 +20,15 @@ jobs:
       - name: Build Statically Compiled Go Binaries (Cross-Platform)
         run: |
           cd server
+          
+          # Build core server
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o speektome-server-amd64 .
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o speektome-server-arm64 .
+          
+          # Build benchmark binaries
+          cd benchmark
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o benchmark-amd64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o benchmark-arm64 .
 
       - name: Connect to Tailscale Network
         uses: tailscale/github-action@v2
@@ -36,7 +43,7 @@ jobs:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "server/speektome-server-amd64,server/speektome-server-arm64,server/setup_ec2.sh,server/.env.example"
+          source: "server/speektome-server-amd64,server/speektome-server-arm64,server/setup_ec2.sh,server/.env.example,server/benchmark/benchmark-amd64,server/benchmark/benchmark-arm64,server/uploads/meetings/meeting_5_1783327344745226200.ogg"
           target: "speektome"
           strip_components: 1
 
@@ -49,21 +56,32 @@ jobs:
           script: |
             cd /home/ec2-user/speektome
             
-            # Detect architecture and rename correct binary
+            # Detect architecture and rename correct binaries
             ARCH=$(uname -m)
             echo "Detected remote architecture: $ARCH"
             if [ "$ARCH" = "x86_64" ]; then
               mv speektome-server-amd64 speektome-server
               rm -f speektome-server-arm64
+              
+              # Rename benchmark
+              mv benchmark/benchmark-amd64 benchmark/benchmark-run
+              rm -f benchmark/benchmark-arm64
             elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
               mv speektome-server-arm64 speektome-server
               rm -f speektome-server-amd64
+              
+              # Rename benchmark
+              mv benchmark/benchmark-arm64 benchmark/benchmark-run
+              rm -f benchmark/benchmark-amd64
             else
               echo "Unsupported architecture: $ARCH"
               exit 1
             fi
             
+            # Set executable permissions
             chmod +x setup_ec2.sh
+            chmod +x benchmark/benchmark-run
+            
             ./setup_ec2.sh
             sudo systemctl restart speektome
             sudo systemctl status speektome --no-pager
