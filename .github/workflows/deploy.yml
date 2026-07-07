@@ -14,7 +14,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: "1.21"
           cache-dependency-path: server/go.sum
 
       - name: Build Statically Compiled Go Binary
@@ -27,7 +27,7 @@ jobs:
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:deploy
+          tags: tag:speektome-server
 
       - name: Copy Server Files to EC2 via SCP
         uses: appleboy/scp-action@master
