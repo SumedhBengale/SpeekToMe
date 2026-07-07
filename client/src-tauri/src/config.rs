@@ -59,11 +59,29 @@ pub fn load_config() -> AppConfig {
             return config;
         }
     }
-    // Migration fallback (if config exists in current directory, load and move it to AppData)
-    if let Ok(data) = std::fs::read_to_string("speektome_config.json") {
-        if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
-            save_config(&config);
-            return config;
+    // Migration fallback (search for the template config in CWD, exe folder, or target parent folders)
+    let mut search_paths = vec![std::path::PathBuf::from("speektome_config.json")];
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            search_paths.push(exe_dir.join("speektome_config.json"));
+            if let Some(p1) = exe_dir.parent() {
+                search_paths.push(p1.join("speektome_config.json"));
+                if let Some(p2) = p1.parent() {
+                    search_paths.push(p2.join("speektome_config.json"));
+                    if let Some(p3) = p2.parent() {
+                        search_paths.push(p3.join("speektome_config.json"));
+                    }
+                }
+            }
+        }
+    }
+
+    for template_path in search_paths {
+        if let Ok(data) = std::fs::read_to_string(&template_path) {
+            if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+                save_config(&config);
+                return config;
+            }
         }
     }
     AppConfig::default()
