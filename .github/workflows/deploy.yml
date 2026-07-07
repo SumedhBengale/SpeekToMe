@@ -36,7 +36,7 @@ jobs:
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: "server/speektome-server,server/setup_ec2.sh,server/.env.example"
-          target: "/var/www/speektome"
+          target: "speektome-deploy"
           strip_components: 1
 
       - name: Run setup_ec2.sh and restart speektome service
@@ -46,6 +46,14 @@ jobs:
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            # Ensure target directory exists and is owned by the user
+            sudo mkdir -p /var/www/speektome
+            sudo chown -R $USER:$USER /var/www/speektome
+            
+            # Copy files from temp directory to production
+            cp -r ~/speektome-deploy/* /var/www/speektome/
+            rm -rf ~/speektome-deploy
+            
             cd /var/www/speektome
             chmod +x setup_ec2.sh
             ./setup_ec2.sh
