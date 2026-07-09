@@ -388,7 +388,7 @@ func (d *Database) GetUserDurationLast24Hours(userID int64) (float64, error) {
 
 // Admin helpers
 func (d *Database) UpdateUserPlan(userID int64, planTier string, planActive int, subID string) error {
-	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP, razorpay_subscription_id = ? WHERE id = ?", planTier, planActive, subID, userID)
+	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP, razorpay_subscription_id = ?, monthly_usage_seconds = 0.0 WHERE id = ?", planTier, planActive, subID, userID)
 	return err
 }
 
@@ -738,7 +738,7 @@ func (d *Database) GetAdminUsersList() ([]AdminUserRow, error) {
 func (d *Database) AdminUpdateUserPlan(userID int64, planTier string, planActive int) error {
 	_, err := d.db.Exec(`
 		UPDATE users 
-		SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP 
+		SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP, monthly_usage_seconds = 0.0 
 		WHERE id = ?
 	`, planTier, planActive, userID)
 	return err
