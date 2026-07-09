@@ -173,6 +173,28 @@ func (rl *SimpleRateLimiter) Allow(userID int64, limit int) bool {
 	return true
 }
 
+func (rl *SimpleRateLimiter) GetCounts() map[int64]int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	copyMap := make(map[int64]int, len(rl.store))
+	for k, v := range rl.store {
+		copyMap[k] = v
+	}
+	return copyMap
+}
+
+func (rl *SimpleRateLimiter) ResetAll() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.store = make(map[int64]int)
+}
+
+func (rl *SimpleRateLimiter) ResetUser(userID int64) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	delete(rl.store, userID)
+}
+
 var globalUserRateLimiter = NewSimpleRateLimiter()
 
 type UserRateLimiterRegistry struct {
@@ -329,6 +351,10 @@ func main() {
 	mux.HandleFunc("GET /admin/config", handleAdminGetConfig)
 	mux.HandleFunc("POST /admin/config", handleAdminUpdateConfig)
 	mux.HandleFunc("GET /admin/webhook-logs", handleAdminGetWebhookLogs)
+	mux.HandleFunc("GET /admin/cache/rate-limits", handleAdminGetRateLimits)
+	mux.HandleFunc("DELETE /admin/cache/rate-limits", handleAdminDeleteRateLimits)
+	mux.HandleFunc("GET /admin/cache/vocabulary", handleAdminGetVocabCache)
+	mux.HandleFunc("DELETE /admin/cache/vocabulary", handleAdminDeleteVocabCache)
 
 	// Wrap in CORS middleware
 	handler := corsMiddleware(mux)
@@ -1480,6 +1506,81 @@ func handleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	syncConfigsFromDB() // Sync updates to memory cache immediately
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+// GET /admin/cache/rate-limits - Retrieve rate limiter counts in memory
+func handleAdminGetRateLimits(w http.ResponseWriter, r *http.Request) {
+	if !authenticateAdmin(r) {
+		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+		return
+	}
+	counts := globalUserRateLimiter.GetCounts()
+	response := make(map[string]int)
+	for k, v := range counts {
+		response[fmt.Sprintf("user_%d", k)] = v
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+// DELETE /admin/cache/rate-limits - Reset rate limits
+func handleAdminDeleteRateLimits(w http.ResponseWriter, r *http.Request) {
+	if !authenticateAdmin(r) {
+		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+		return
+	}
+	userIDStr := r.URL.Query().Get("user_id")
+	if userIDStr != "" {
+		userID, err := strconv.ParseInt(userIDStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid user_id parameter", http.StatusBadRequest)
+			return
+		}
+		globalUserRateLimiter.ResetUser(userID)
+		log.Printf("[ADMIN ACTION] Reset rate limit cache for user %d", userID)
+	} else {
+		globalUserRateLimiter.ResetAll()
+		log.Println("[ADMIN ACTION] Reset all rate limit caches")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
+}
+
+// GET /admin/cache/vocabulary - List user IDs in vocab cache
+func handleAdminGetVocabCache(w http.ResponseWriter, r *http.Request) {
+	if !authenticateAdmin(r) {
+		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+		return
+	}
+	keys := vocabCache.GetKeys()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"cached_user_ids": keys,
+		"total_cached":    len(keys),
+	})
+}
+
+// DELETE /admin/cache/vocabulary - Invalidate vocabulary cache
+func handleAdminDeleteVocabCache(w http.ResponseWriter, r *http.Request) {
+	if !authenticateAdmin(r) {
+		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+		return
+	}
+	userIDStr := r.URL.Query().Get("user_id")
+	if userIDStr != "" {
+		userID, err := strconv.ParseInt(userIDStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid user_id parameter", http.StatusBadRequest)
+			return
+		}
+		vocabCache.Invalidate(userID)
+		log.Printf("[ADMIN ACTION] Invalidated vocabulary cache for user %d", userID)
+	} else {
+		vocabCache.InvalidateAll()
+		log.Println("[ADMIN ACTION] Invalidated vocabulary cache globally")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "invalidated"})
 }
 
 // getOggOpusDuration parses an Ogg/Opus file header and returns its duration in seconds

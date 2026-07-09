@@ -135,6 +135,22 @@ func (vc *VocabularyCache) Invalidate(userID int64) {
 	delete(vc.data, userID)
 }
 
+func (vc *VocabularyCache) GetKeys() []int64 {
+	vc.mu.RLock()
+	defer vc.mu.RUnlock()
+	keys := make([]int64, 0, len(vc.data))
+	for k := range vc.data {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (vc *VocabularyCache) InvalidateAll() {
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	vc.data = make(map[int64]*CachedVocabulary)
+}
+
 func (vc *VocabularyCache) startEvictionWorker(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
