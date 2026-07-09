@@ -656,17 +656,35 @@ func handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	durationSinceActive, _ := database.GetUserDurationSincePlanActivation(user.ID)
+	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
+	var monthlyLimitSeconds float64
+	config := configManager.GetRawAll()
+	if isPaid {
+		monthlyLimitSeconds = 180000.0 // 50 hours default
+		if val, ok := config["paid_monthly_limit_seconds"]; ok {
+			if limit, err := strconv.ParseFloat(val, 64); err == nil {
+				monthlyLimitSeconds = limit
+			}
+		}
+	} else {
+		monthlyLimitSeconds = 3600.0 // 1 hour default
+		if val, ok := config["free_monthly_limit_seconds"]; ok {
+			if limit, err := strconv.ParseFloat(val, 64); err == nil {
+				monthlyLimitSeconds = limit
+			}
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"email":             user.Email,
-		"name":              user.Name,
-		"plan_tier":         user.PlanTier,
-		"plan_active":       user.PlanActive == 1,
-		"plan_activated_at": user.PlanActivatedAt,
-		"duration_seconds":  durationSinceActive,
-		"is_admin":          user.IsAdmin == 1,
+		"email":                 user.Email,
+		"name":                  user.Name,
+		"plan_tier":             user.PlanTier,
+		"plan_active":           user.PlanActive == 1,
+		"plan_activated_at":     user.PlanActivatedAt,
+		"duration_seconds":      user.MonthlyUsageSeconds,
+		"monthly_limit_seconds": monthlyLimitSeconds,
+		"is_admin":              user.IsAdmin == 1,
 	})
 }
 

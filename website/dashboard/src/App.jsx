@@ -968,7 +968,7 @@ export default function App() {
                   <div className="usage-summary">
                     <div className="usage-stats">
                       <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
-                      <span>{formatSecondsToHours(user.duration_seconds)} / {user.plan_tier === 'pro' ? '50.0h' : '1.0h'}</span>
+                      <span>{formatSecondsToHours(user.duration_seconds)} / {formatSecondsToHours(user.monthly_limit_seconds || (user.plan_tier === 'pro' ? 50 * 3600 : 1 * 3600))}</span>
                     </div>
                     
                     <div className="progress-bar-container">
@@ -976,7 +976,7 @@ export default function App() {
                         className="progress-bar-fill" 
                         style={{ 
                           width: `${Math.min(
-                            (user.duration_seconds / (user.plan_tier === 'pro' ? 50 * 3600 : 1 * 3600)) * 100, 
+                            (user.duration_seconds / (user.monthly_limit_seconds || (user.plan_tier === 'pro' ? 50 * 3600 : 1 * 3600))) * 100, 
                             100
                           )}%` 
                         }}

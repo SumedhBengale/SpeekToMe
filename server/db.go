@@ -85,7 +85,7 @@ func NewDatabase(connStr string) (*Database, error) {
 			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
 		);
 		CREATE TABLE IF NOT EXISTS saas_config (
-			key TEXT PRIMARY KEY,
+			"key" TEXT PRIMARY KEY,
 			value TEXT
 		);
 		CREATE TABLE IF NOT EXISTS vocabulary (
@@ -172,7 +172,7 @@ func NewDatabase(connStr string) (*Database, error) {
 		"default_user_rate_limit_rpm":  "10",
 	}
 	for k, v := range configs {
-		_, _ = db.Exec("INSERT OR IGNORE INTO saas_config (key, value) VALUES (?, ?)", k, v)
+		_, _ = db.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
 	}
 
 	return &Database{db: db}, nil
@@ -432,7 +432,7 @@ func (d *Database) GetUserDurationLast30Days(userID int64) (float64, error) {
 }
 
 func (d *Database) GetSaasConfig() (map[string]string, error) {
-	rows, err := d.db.Query("SELECT key, value FROM saas_config")
+	rows, err := d.db.Query("SELECT \"key\", value FROM saas_config")
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +448,7 @@ func (d *Database) GetSaasConfig() (map[string]string, error) {
 }
 
 func (d *Database) UpdateSaasConfig(key, value string) error {
-	_, err := d.db.Exec("INSERT INTO saas_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, value)
+	_, err := d.db.Exec("INSERT INTO saas_config (\"key\", value) VALUES (?, ?) ON CONFLICT(\"key\") DO UPDATE SET value = excluded.value", key, value)
 	return err
 }
 
