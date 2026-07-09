@@ -10,17 +10,13 @@ import (
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 )
 
-// Define your Turso credentials here (you can replace these placeholders)
+// Define your Turso credentials here
 const (
 	TursoURL   = "libsql://YOUR-DATABASE.turso.io"
 	TursoToken = "REDACTED_TURSO_TOKEN"
 )
 
 func main() {
-	if TursoURL == "libsql://your-db-name.turso.io" {
-		log.Println("WARNING: Please edit turso_benchmark.go to put your actual Turso URL and Token first!")
-	}
-
 	connectionString := fmt.Sprintf("%s?authToken=%s", TursoURL, TursoToken)
 	log.Printf("Connecting to Turso: %s", TursoURL)
 
@@ -35,7 +31,7 @@ func main() {
 	}
 	log.Println("Successfully connected and pinged Turso database!")
 
-	// 1. Create tables if they do not exist
+	// Create tables if they do not exist
 	log.Println("Initializing tables if empty...")
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
@@ -74,12 +70,11 @@ func main() {
 		log.Fatalf("Failed to create tables: %v", err)
 	}
 
-	// 2. Insert test data
+	// Insert test data
 	log.Println("Seeding test data...")
 	email := fmt.Sprintf("bench_%d@example.com", rand.Intn(100000))
 	token := fmt.Sprintf("session_token_%d", rand.Intn(100000))
 
-	// Insert User
 	res, err := db.Exec("INSERT INTO users (email, name, google_id, plan_tier, plan_active) VALUES (?, ?, ?, ?, ?)",
 		email, "Benchmark User", "google_"+email, "free", 1)
 	if err != nil {
@@ -87,14 +82,12 @@ func main() {
 	}
 	userID, _ := res.LastInsertId()
 
-	// Insert Session
 	expiresAt := time.Now().Add(30 * 24 * time.Hour).Format(time.RFC3339)
 	_, err = db.Exec("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)", token, userID, expiresAt)
 	if err != nil {
 		log.Fatalf("Failed to insert test session: %v", err)
 	}
 
-	// Insert SaaS Configs
 	configs := map[string]string{
 		"free_rate_limit_rpm":          "3",
 		"paid_rate_limit_rpm":          "15",
@@ -105,7 +98,6 @@ func main() {
 		_, _ = db.Exec("INSERT OR IGNORE INTO saas_config (key, value) VALUES (?, ?)", k, v)
 	}
 
-	// Insert some usage history logs
 	for i := 0; i < 5; i++ {
 		_, _ = db.Exec("INSERT INTO usage_logs (user_id, audio_duration, total_time, status) VALUES (?, ?, ?, ?)",
 			userID, 15.5, 2.3, "success")
@@ -116,7 +108,6 @@ func main() {
 	fmt.Println("             TURSO DATABASE LATENCY BENCHMARK          ")
 	fmt.Println("=======================================================")
 
-	// Benchmark individual queries
 	var totalDuration time.Duration
 
 	// Query 1: Authenticate / Get User By Session
@@ -156,7 +147,7 @@ func main() {
 		fmt.Printf("2. Fetch Configurations (GetSaasConfig):  %7.2f ms\n", float64(q2Dur.Microseconds())/1000.0)
 	}
 
-	// Query 3: Rate Limit Check (Requests last minute)
+	// Query 3: Rate Limit Check
 	q3Start := time.Now()
 	lastMinute := time.Now().UTC().Add(-1 * time.Minute).Format("2006-01-02 15:04:05")
 	var reqCount int
@@ -169,7 +160,7 @@ func main() {
 		fmt.Printf("3. Rate Limit Check (Last Minute Count):  %7.2f ms\n", float64(q3Dur.Microseconds())/1000.0)
 	}
 
-	// Query 4: FUP Limit Check (Daily usage)
+	// Query 4: FUP Limit Check
 	q4Start := time.Now()
 	last24Hours := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
 	var dailyDuration float64
@@ -182,7 +173,7 @@ func main() {
 		fmt.Printf("4. Daily Limit Check (24h Sum Duration):  %7.2f ms\n", float64(q4Dur.Microseconds())/1000.0)
 	}
 
-	// Query 5: Monthly Limit Check (30-day usage)
+	// Query 5: Monthly Limit Check
 	q5Start := time.Now()
 	last30Days := time.Now().UTC().Add(-30 * 24 * time.Hour).Format("2006-01-02 15:04:05")
 	var monthlyDuration float64
@@ -195,7 +186,7 @@ func main() {
 		fmt.Printf("5. Monthly Limit Check (30d Sum Duration):%7.2f ms\n", float64(q5Dur.Microseconds())/1000.0)
 	}
 
-	// Query 6: Log Usage (Write)
+	// Query 6: Log Usage
 	q6Start := time.Now()
 	_, err = db.Exec("INSERT INTO usage_logs (user_id, audio_duration, whisper_time, llm_time, total_time, status) VALUES (?, ?, ?, ?, ?, ?)",
 		uID, 12.0, 1.2, 0.8, 2.0, "success")
