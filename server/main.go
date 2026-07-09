@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -30,14 +31,16 @@ import (
 )
 
 var (
-	GROQ_API_KEY         string
-	DEEPINFRA_API_KEY    string
-	DEEPSEEK_API_KEY     string
-	GOOGLE_CLIENT_ID     string
-	GOOGLE_CLIENT_SECRET string
-	BACKEND_URL          string
-	DATABASE_URL         string
-	MOCK_AUTH            bool
+	GROQ_API_KEY          string
+	DEEPINFRA_API_KEY     string
+	DEEPSEEK_API_KEY      string
+	CLOUDFLARE_API_TOKEN  string
+	CLOUDFLARE_ACCOUNT_ID string
+	GOOGLE_CLIENT_ID      string
+	GOOGLE_CLIENT_SECRET  string
+	BACKEND_URL           string
+	DATABASE_URL          string
+	MOCK_AUTH             bool
 
 	GROQ_API_URL       = "https://api.groq.com/openai/v1/audio/transcriptions"
 	DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/inference/"
@@ -57,6 +60,8 @@ func main() {
 	GROQ_API_KEY = os.Getenv("GROQ_API_KEY")
 	DEEPINFRA_API_KEY = os.Getenv("DEEPINFRA_API_KEY")
 	DEEPSEEK_API_KEY = os.Getenv("DEEPSEEK_API_KEY")
+	CLOUDFLARE_API_TOKEN = os.Getenv("CLOUDFLARE_API_TOKEN")
+	CLOUDFLARE_ACCOUNT_ID = os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 	GOOGLE_CLIENT_ID = os.Getenv("GOOGLE_CLIENT_ID")
 	GOOGLE_CLIENT_SECRET = os.Getenv("GOOGLE_CLIENT_SECRET")
 	BACKEND_URL = os.Getenv("BACKEND_URL")
@@ -1843,6 +1848,89 @@ type WhisperSegment struct {
 	Text  string  `json:"text"`
 }
 
+func runCloudflareTranscribe(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, error) {
+	urlStr := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/run/%s", CLOUDFLARE_ACCOUNT_ID, model)
+	
+	audioBase64 := base64.StdEncoding.EncodeToString(audioBytes)
+	payload := map[string]interface{}{
+		"audio": audioBase64,
+	}
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return "", nil, "", err
+	}
+	body := bytes.NewReader(jsonPayload)
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	var remoteIP string
+	trace := &httptrace.ClientTrace{
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			addr := connInfo.Conn.RemoteAddr().String()
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				remoteIP = host
+			} else {
+				remoteIP = addr
+			}
+		},
+	}
+	ctxTrace := httptrace.WithClientTrace(ctxTimeout, trace)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	req, err := http.NewRequestWithContext(ctxTrace, "POST", urlStr, body)
+	if err != nil {
+		return "", nil, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+CLOUDFLARE_API_TOKEN)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, "", err
+	}
+	defer resp.Body.Close()
+
+	routingLoc := getHTTPResponseRouting(resp, remoteIP)
+
+	if resp.StatusCode != http.StatusOK {
+		bodyB, _ := io.ReadAll(resp.Body)
+		return "", nil, "", fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
+	}
+
+	var response struct {
+		Result struct {
+			Text     string           `json:"text"`
+			Segments []WhisperSegment `json:"segments"`
+		} `json:"result"`
+		Success bool  `json:"success"`
+		Errors  []any `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return "", nil, "", err
+	}
+
+	if !response.Success {
+		return "", nil, "", fmt.Errorf("cloudflare API success false: %v", response.Errors)
+	}
+
+	rawText := strings.TrimSpace(response.Result.Text)
+	hallucinations := map[string]bool{
+		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
+		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
+	}
+	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
+	if hallucinations[checkText] {
+		rawText = ""
+		response.Result.Segments = nil
+	}
+	if response.Result.Segments == nil {
+		response.Result.Segments = make([]WhisperSegment, 0)
+	}
+
+	return rawText, response.Result.Segments, routingLoc, nil
+}
+
 func runDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string) (string, []WhisperSegment, string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -1990,6 +2078,19 @@ func runGroqTranscribe(ctx context.Context, audioBytes []byte, model string) (st
 }
 
 func runWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, string, error) {
+	if CLOUDFLARE_API_TOKEN != "" && CLOUDFLARE_ACCOUNT_ID != "" {
+		cfModel := "@cf/openai/whisper-large-v3-turbo"
+		if model == "whisper-large-v3" {
+			cfModel = "@cf/openai/whisper"
+		}
+		log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s", cfModel)
+		text, segments, loc, err := runCloudflareTranscribe(ctx, audioBytes, cfModel)
+		if err == nil {
+			return text, segments, "cloudflare", loc, nil
+		}
+		log.Printf("[CLOUDFLARE AI ERROR] Transcription failed: %v. Falling back to next provider.", err)
+	}
+
 	if DEEPINFRA_API_KEY != "" {
 		diModel := "openai/whisper-large-v3-turbo"
 		if model == "whisper-large-v3" {
@@ -2015,7 +2116,7 @@ func runWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 		return "", nil, "", "", err
 	}
 
-	return "", nil, "", "", fmt.Errorf("no transcription providers (DeepInfra or Groq) are configured or succeeded")
+	return "", nil, "", "", fmt.Errorf("no transcription providers (Cloudflare, DeepInfra or Groq) are configured or succeeded")
 }
 
 func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
@@ -2106,7 +2207,7 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		_, err1 := io.Copy(&micBuf, fileMic)
 		_, err2 := io.Copy(&lbBuf, fileLoopback)
 
-		if err1 == nil && err2 == nil && (DEEPINFRA_API_KEY != "" || GROQ_API_KEY != "") {
+		if err1 == nil && err2 == nil && ((CLOUDFLARE_API_TOKEN != "" && CLOUDFLARE_ACCOUNT_ID != "") || DEEPINFRA_API_KEY != "" || GROQ_API_KEY != "") {
 			var micSegs, lbSegs []WhisperSegment
 			var errMicTrans, errLbTrans error
 			var micProvider, micRouting string
@@ -2179,7 +2280,7 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fallback to mixed audio if parallel failed or files not present
-	if !parallelSuccess && (DEEPINFRA_API_KEY != "" || GROQ_API_KEY != "") {
+	if !parallelSuccess && ((CLOUDFLARE_API_TOKEN != "" && CLOUDFLARE_ACCOUNT_ID != "") || DEEPINFRA_API_KEY != "" || GROQ_API_KEY != "") {
 		var errWhisper error
 		var segments []WhisperSegment
 		var mixProvider, mixRouting string
