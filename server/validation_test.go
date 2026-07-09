@@ -36,7 +36,7 @@ func TestHandleValidatePrompt(t *testing.T) {
 	}
 
 	token := "test_session_token_" + nonce
-	err = database.CreateSession(token, userID)
+	err = database.CreateSession(token, userID, 0)
 	if err != nil {
 		t.Fatalf("Failed to create test session: %v", err)
 	}

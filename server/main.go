@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
@@ -250,6 +251,7 @@ func main() {
 	mux.HandleFunc("GET /auth/callback", handleAuthCallback)
 	mux.HandleFunc("POST /auth/signup", handleAuthSignup)
 	mux.HandleFunc("POST /auth/login", handleAuthLoginCredentials)
+	mux.HandleFunc("POST /auth/2fa/verify", handleAuth2FAVerify)
 	mux.HandleFunc("GET /auth/verify", handleAuthVerify)
 	mux.HandleFunc("GET /auth/me", handleAuthMe)
 	mux.HandleFunc("GET /usage/history", handleGetUserHistory)
@@ -492,8 +494,19 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	isAdmin, has2FA, err := database.GetUserAdminStatus(userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	token := generateSessionToken()
-	err = database.CreateSession(token, userID)
+	isTemp := 0
+	if isAdmin && has2FA {
+		isTemp = 1
+	}
+
+	err = database.CreateSession(token, userID, isTemp)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Database session error: %v", err), http.StatusInternalServerError)
 		return
@@ -503,44 +516,61 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	planActive, _ := database.IsUserPlanActive(userID)
 
 	var finalURL string
-	if isWeb {
-		if !planActive {
-			frontendURL := os.Getenv("FRONTEND_URL")
-			if frontendURL == "" {
-				frontendURL = "http://localhost:8080"
-			}
-			paymentURL := fmt.Sprintf("%s/dashboard/?token=%s", frontendURL, token)
+	if isTemp == 1 {
+		if isWeb {
 			u, err := url.Parse(redirectTo)
 			if err != nil {
-				finalURL = fmt.Sprintf("%s?token=%s&payment_url=%s", redirectTo, token, url.QueryEscape(paymentURL))
+				finalURL = fmt.Sprintf("%s?temp_token=%s&require_2fa=true", redirectTo, token)
 			} else {
 				q := u.Query()
-				q.Set("token", token)
-				q.Set("payment_url", paymentURL)
+				q.Set("temp_token", token)
+				q.Set("require_2fa", "true")
 				u.RawQuery = q.Encode()
 				finalURL = u.String()
 			}
 		} else {
-			u, err := url.Parse(redirectTo)
-			if err != nil {
-				finalURL = fmt.Sprintf("%s?token=%s", redirectTo, token)
-			} else {
-				q := u.Query()
-				q.Set("token", token)
-				u.RawQuery = q.Encode()
-				finalURL = u.String()
-			}
+			finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?temp_token=%s&require_2fa=true", port, token)
 		}
 	} else {
-		if !planActive {
-			frontendURL := os.Getenv("FRONTEND_URL")
-			if frontendURL == "" {
-				frontendURL = "http://localhost:8080"
+		if isWeb {
+			if !planActive {
+				frontendURL := os.Getenv("FRONTEND_URL")
+				if frontendURL == "" {
+					frontendURL = "http://localhost:8080"
+				}
+				paymentURL := fmt.Sprintf("%s/dashboard/?token=%s", frontendURL, token)
+				u, err := url.Parse(redirectTo)
+				if err != nil {
+					finalURL = fmt.Sprintf("%s?token=%s&payment_url=%s", redirectTo, token, url.QueryEscape(paymentURL))
+				} else {
+					q := u.Query()
+					q.Set("token", token)
+					q.Set("payment_url", paymentURL)
+					u.RawQuery = q.Encode()
+					finalURL = u.String()
+				}
+			} else {
+				u, err := url.Parse(redirectTo)
+				if err != nil {
+					finalURL = fmt.Sprintf("%s?token=%s", redirectTo, token)
+				} else {
+					q := u.Query()
+					q.Set("token", token)
+					u.RawQuery = q.Encode()
+					finalURL = u.String()
+				}
 			}
-			paymentURL := fmt.Sprintf("%s/dashboard/?token=%s", frontendURL, token)
-			finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&payment_url=%s", port, token, url.QueryEscape(paymentURL))
 		} else {
-			finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s", port, token)
+			if !planActive {
+				frontendURL := os.Getenv("FRONTEND_URL")
+				if frontendURL == "" {
+					frontendURL = "http://localhost:8080"
+				}
+				paymentURL := fmt.Sprintf("%s/dashboard/?token=%s", frontendURL, token)
+				finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&payment_url=%s", port, token, url.QueryEscape(paymentURL))
+			} else {
+				finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s", port, token)
+			}
 		}
 	}
 
@@ -698,11 +728,33 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get User Profile details
+	// Check if user is admin and has 2FA enabled (totp_secret configured)
+	isAdmin, has2FA, err := database.GetUserAdminStatus(userID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
 	token := generateSessionToken()
-	err = database.CreateSession(token, userID)
+	isTemp := 0
+	if isAdmin && has2FA {
+		isTemp = 1
+	}
+
+	err = database.CreateSession(token, userID, isTemp)
 	if err != nil {
 		http.Error(w, "Failed to create session", http.StatusInternalServerError)
+		return
+	}
+
+	if isTemp == 1 {
+		// Respond indicating 2FA verification is required
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"require_2fa": true,
+			"temp_token":  token,
+			"email":       req.Email,
+		})
 		return
 	}
 
@@ -722,6 +774,76 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 			"name":        user.Name,
 			"plan_tier":   user.PlanTier,
 			"plan_active": user.PlanActive == 1,
+		},
+	})
+}
+
+func handleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		TempToken string `json:"temp_token"`
+		Code      string `json:"code"`
+	}
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	req.TempToken = strings.TrimSpace(req.TempToken)
+	req.Code = strings.TrimSpace(req.Code)
+
+	if req.TempToken == "" || req.Code == "" {
+		http.Error(w, "temp_token and code are required", http.StatusBadRequest)
+		return
+	}
+
+	_, totpSecret, err := database.GetUserByTempSession(req.TempToken)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "Invalid or expired temporary session token",
+		})
+		return
+	}
+
+	if !verifyTOTP(totpSecret, req.Code) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "Invalid 2FA verification code",
+		})
+		return
+	}
+
+	// Promote session
+	err = database.PromoteSession(req.TempToken)
+	if err != nil {
+		http.Error(w, "Failed to promote session", http.StatusInternalServerError)
+		return
+	}
+
+	// Retrieve full user profile
+	fullProfile, err := database.GetUserBySession(req.TempToken)
+	if err != nil {
+		http.Error(w, "Failed to load user info", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"token": req.TempToken,
+		"user": map[string]interface{}{
+			"id":          fullProfile.ID,
+			"email":       fullProfile.Email,
+			"name":        fullProfile.Name,
+			"plan_tier":   fullProfile.PlanTier,
+			"plan_active": fullProfile.PlanActive == 1,
 		},
 	})
 }
@@ -2728,4 +2850,77 @@ Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" 
 	}
 
 	return analysis.PolishedTranscript, analysis.Summary, analysis.ActionItems, nil
+}
+
+// Simple self-contained base32 decoding logic to avoid external dependencies
+func decodeBase32(s string) ([]byte, error) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+	var charMap [256]byte
+	for i := 0; i < len(alphabet); i++ {
+		charMap[alphabet[i]] = byte(i)
+	}
+
+	s = strings.ToUpper(strings.TrimRight(s, "="))
+	if len(s) == 0 {
+		return []byte{}, nil
+	}
+
+	length := len(s)
+	numBytes := (length * 5) / 8
+	dst := make([]byte, numBytes)
+
+	var buffer uint64
+	var bits uint
+	var count int
+
+	for i := 0; i < length; i++ {
+		val := charMap[s[i]]
+		buffer = (buffer << 5) | uint64(val)
+		bits += 5
+		if bits >= 8 {
+			bits -= 8
+			if count < len(dst) {
+				dst[count] = byte(buffer >> bits)
+				count++
+			}
+		}
+	}
+
+	return dst, nil
+}
+
+func verifyTOTP(secret string, code string) bool {
+	secretBytes, err := decodeBase32(secret)
+	if err != nil || len(secretBytes) == 0 {
+		return false
+	}
+
+	code = strings.TrimSpace(code)
+	if len(code) != 6 {
+		return false
+	}
+
+	currentTime := time.Now().Unix()
+	step := currentTime / 30
+
+	for d := -1; d <= 1; d++ {
+		testStep := step + int64(d)
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, uint64(testStep))
+
+		mac := hmac.New(sha1.New, secretBytes)
+		mac.Write(buf)
+		sum := mac.Sum(nil)
+
+		offset := sum[len(sum)-1] & 0xf
+		binaryVal := binary.BigEndian.Uint32(sum[offset : offset+4]) & 0x7fffffff
+		otp := binaryVal % 1000000
+
+		expectedCode := fmt.Sprintf("%06d", otp)
+		if expectedCode == code {
+			return true
+		}
+	}
+
+	return false
 }

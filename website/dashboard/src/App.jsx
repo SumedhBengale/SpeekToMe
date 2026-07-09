@@ -18,6 +18,10 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
 
+  // 2FA state
+  const [tempToken, setTempToken] = useState('');
+  const [totpCode, setTotpCode] = useState('');
+
   // Dashboard Tab and details states
   const [vocabTerms, setVocabTerms] = useState([]);
   const [meetings, setMeetings] = useState([]);
@@ -32,10 +36,16 @@ export default function App() {
     const queryToken = params.get('token');
     const isVerified = params.get('verified');
     const verifiedEmail = params.get('email');
+    const queryTempToken = params.get('temp_token');
+    const require2fa = params.get('require_2fa');
     
     if (queryToken) {
       localStorage.setItem('speektome_token', queryToken);
       setToken(queryToken);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (queryTempToken && require2fa === 'true') {
+      setTempToken(queryTempToken);
+      setRoute('2fa');
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (isVerified === 'true') {
       setSuccessMessage(`Email verified successfully${verifiedEmail ? ' for ' + verifiedEmail : ''}! You can now sign in.`);
@@ -254,12 +264,49 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        localStorage.setItem('speektome_token', data.token);
-        setToken(data.token);
-        setEmail('');
-        setPassword('');
+        if (data.require_2fa) {
+          setTempToken(data.temp_token);
+          setRoute('2fa');
+        } else {
+          localStorage.setItem('speektome_token', data.token);
+          setToken(data.token);
+          setEmail('');
+          setPassword('');
+        }
       } else {
         setAuthError(data.error || 'Invalid credentials');
+      }
+    } catch (err) {
+      setAuthError('Cannot connect to SpeekTo.Me authentication server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handle2faVerify = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setSuccessMessage('');
+    if (!totpCode || !tempToken) {
+      setAuthError('Verification code is required.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/2fa/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ temp_token: tempToken, code: totpCode })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem('speektome_token', data.token);
+        setToken(data.token);
+        setTempToken('');
+        setTotpCode('');
+        setRoute('dashboard');
+      } else {
+        setAuthError(data.error || 'Invalid 2FA code');
       }
     } catch (err) {
       setAuthError('Cannot connect to SpeekTo.Me authentication server.');
@@ -475,6 +522,44 @@ export default function App() {
           )}
         </nav>
       </header>
+
+      {/* 2FA Verification Page */}
+      {route === '2fa' && (
+        <main className="auth-page">
+          <div className="auth-box">
+            <div className="auth-header">
+              <h2>Two-Factor Authentication</h2>
+              <p>Enter the 6-digit verification code from your authenticator app.</p>
+            </div>
+
+            {authError && <div className="auth-error">{authError}</div>}
+
+            <form onSubmit={handle2faVerify}>
+              <div className="auth-form-control">
+                <label>Verification Code</label>
+                <input 
+                  type="text" 
+                  value={totpCode} 
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))} 
+                  placeholder="000000" 
+                  className="auth-input"
+                  style={{ textAlign: 'center', fontSize: '24px', letterSpacing: '8px' }}
+                  required
+                />
+              </div>
+              <button type="submit" className="btn btn-primary auth-submit-btn" style={{ justifyContent: 'center' }}>
+                {loading ? <div className="spinner"></div> : 'Verify & Sign In'}
+              </button>
+            </form>
+
+            <div className="auth-toggle">
+              <button onClick={() => { setRoute('login'); setTempToken(''); setTotpCode(''); setAuthError(''); }} className="auth-toggle-link">
+                Back to Sign In
+              </button>
+            </div>
+          </div>
+        </main>
+      )}
 
       {/* 2. Login Page */}
       {route === 'login' && (

@@ -44,13 +44,16 @@ func NewDatabase(connStr string) (*Database, error) {
 			is_verified INTEGER DEFAULT 0,
 			verification_token TEXT,
 			razorpay_subscription_id TEXT,
-			rate_limit_rpm INTEGER DEFAULT NULL
+			rate_limit_rpm INTEGER DEFAULT NULL,
+			is_admin INTEGER DEFAULT 0,
+			totp_secret TEXT DEFAULT NULL
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY,
 			user_id INTEGER,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			expires_at TIMESTAMP,
+			is_temp INTEGER DEFAULT 0,
 			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS usage_logs (
@@ -122,6 +125,9 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN rate_limit_rpm INTEGER DEFAULT NULL")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0")
 
 	// Set default configurations
 	configs := map[string]string{
@@ -161,9 +167,9 @@ func (d *Database) GetOrCreateUser(googleID, email, name string) (int64, error) 
 }
 
 // Session operations
-func (d *Database) CreateSession(token string, userID int64) error {
+func (d *Database) CreateSession(token string, userID int64, isTemp int) error {
 	expiresAt := time.Now().AddDate(0, 0, 30).Format(time.RFC3339)
-	_, err := d.db.Exec("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)", token, userID, expiresAt)
+	_, err := d.db.Exec("INSERT INTO sessions (token, user_id, expires_at, is_temp) VALUES (?, ?, ?, ?)", token, userID, expiresAt, isTemp)
 	return err
 }
 
@@ -176,21 +182,57 @@ type UserProfile struct {
 	PlanActivatedAt        string
 	RazorpaySubscriptionID string
 	RateLimitRPM           sql.NullInt64
+	IsAdmin                int
+	IsTempSession          int
 }
 
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession)
 	if err != nil {
 		return nil, err
 	}
+	if u.IsTempSession == 1 {
+		return nil, fmt.Errorf("2FA_REQUIRED")
+	}
 	return &u, nil
+}
+
+func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, error) {
+	now := time.Now().Format(time.RFC3339)
+	var u UserProfile
+	var totpSecret sql.NullString
+	err := d.db.QueryRow(`
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, u.totp_secret
+		FROM sessions s 
+		JOIN users u ON s.user_id = u.id 
+		WHERE s.token = ? AND s.expires_at > ? AND s.is_temp = 1
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &totpSecret)
+	if err != nil {
+		return nil, "", err
+	}
+	return &u, totpSecret.String, nil
+}
+
+func (d *Database) PromoteSession(token string) error {
+	_, err := d.db.Exec("UPDATE sessions SET is_temp = 0 WHERE token = ?", token)
+	return err
+}
+
+func (d *Database) GetUserAdminStatus(userID int64) (bool, bool, error) {
+	var isAdmin int
+	var totpSecret sql.NullString
+	err := d.db.QueryRow("SELECT is_admin, totp_secret FROM users WHERE id = ?", userID).Scan(&isAdmin, &totpSecret)
+	if err != nil {
+		return false, false, err
+	}
+	return isAdmin == 1, totpSecret.String != "", nil
 }
 
 func (d *Database) DeleteSession(token string) error {
