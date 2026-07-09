@@ -2326,10 +2326,13 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce dynamic per-user rate limiting using database config / custom user override
+	// Enforce dynamic per-user rate limiting using database config / custom user override (taking the lower of the two limits)
 	limit := configManager.Get().DefaultUserRateLimitRPM
 	if user.RateLimitRPM.Valid {
-		limit = int(user.RateLimitRPM.Int64)
+		userOverride := int(user.RateLimitRPM.Int64)
+		if userOverride < limit {
+			limit = userOverride
+		}
 	}
 	userLimiter := userRateLimiterRegistry.GetLimiter(user.ID, limit)
 	if !userLimiter.Allow() {
