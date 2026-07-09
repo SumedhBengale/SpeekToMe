@@ -3,10 +3,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	"golang.org/x/crypto/bcrypt"
+	_ "modernc.org/sqlite"
 )
 
 type Database struct {
@@ -14,20 +16,27 @@ type Database struct {
 }
 
 func NewDatabase(connStr string) (*Database, error) {
-	db, err := sql.Open("sqlite", connStr)
+	driver := "sqlite"
+	if strings.HasPrefix(connStr, "libsql://") || strings.HasPrefix(connStr, "http://") || strings.HasPrefix(connStr, "https://") {
+		driver = "libsql"
+	}
+
+	db, err := sql.Open(driver, connStr)
 	if err != nil {
 		return nil, err
 	}
 	
-	// Configure SQLite connection pooling (Group A Optimization)
+	// Configure connection pooling
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(time.Hour)
 
-	// Enable WAL journal mode and busy timeout (Group A Optimization)
-	_, _ = db.Exec("PRAGMA journal_mode=WAL;")
-	_, _ = db.Exec("PRAGMA synchronous=NORMAL;")
-	_, _ = db.Exec("PRAGMA busy_timeout = 5000;")
+	if driver == "sqlite" {
+		// Enable WAL journal mode and busy timeout (Group A Optimization)
+		_, _ = db.Exec("PRAGMA journal_mode=WAL;")
+		_, _ = db.Exec("PRAGMA synchronous=NORMAL;")
+		_, _ = db.Exec("PRAGMA busy_timeout = 5000;")
+	}
 	
 	// Create tables and indices (Group A Optimization)
 	_, err = db.Exec(`
