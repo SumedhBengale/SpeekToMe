@@ -22,6 +22,13 @@ export default function App() {
   const [tempToken, setTempToken] = useState('');
   const [totpCode, setTotpCode] = useState('');
 
+  // Admin Panel states
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [editingUser, setEditingUser] = useState(null);
+  const [editPlanTier, setEditPlanTier] = useState('free');
+  const [editPlanActive, setEditPlanActive] = useState(0);
+  const [editRateLimit, setEditRateLimit] = useState('');
+
   // Dashboard Tab and details states
   const [vocabTerms, setVocabTerms] = useState([]);
   const [meetings, setMeetings] = useState([]);
@@ -315,6 +322,92 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    if (token && route === 'admin') {
+      fetchAdminUsers();
+    }
+  }, [token, route]);
+
+  const fetchAdminUsers = async () => {
+    setLoading(true);
+    setAuthError('');
+    try {
+      const res = await fetch(`${API_BASE}/admin/users`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAdminUsers(data || []);
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || 'Failed to fetch admin users list.');
+      }
+    } catch (err) {
+      setAuthError('Failed to connect to administrative server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenEditUser = (u) => {
+    setEditingUser(u);
+    setEditPlanTier(u.plan_tier || 'free');
+    setEditPlanActive(u.plan_active ? 1 : 0);
+    setEditRateLimit(u.rate_limit_rpm !== null ? String(u.rate_limit_rpm) : '');
+    setAuthError('');
+    setSuccessMessage('');
+  };
+
+  const handleSaveEditUser = async (e) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    setLoading(true);
+    setAuthError('');
+    try {
+      // 1. Save Plan Details
+      const planRes = await fetch(`${API_BASE}/admin/users/${editingUser.id}/plan`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ 
+          plan_tier: editPlanTier, 
+          plan_active: parseInt(editPlanActive) 
+        })
+      });
+      if (!planRes.ok) {
+        const errText = await planRes.text();
+        throw new Error(errText || 'Failed to update plan settings');
+      }
+
+      // 2. Save Rate Limit
+      const rpmVal = editRateLimit.trim() === '' ? null : parseInt(editRateLimit);
+      const limitRes = await fetch(`${API_BASE}/admin/users/${editingUser.id}/rate-limit`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ 
+          rate_limit_rpm: rpmVal 
+        })
+      });
+      if (!limitRes.ok) {
+        const errText = await limitRes.text();
+        throw new Error(errText || 'Failed to update rate limits');
+      }
+
+      setEditingUser(null);
+      fetchAdminUsers();
+      setSuccessMessage('User updated successfully.');
+    } catch (err) {
+      setAuthError(err.message || 'An error occurred during updating.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSignup = async (e) => {
     e.preventDefault();
     setAuthError('');
@@ -502,6 +595,15 @@ export default function App() {
           {user ? (
             <>
               <span className="nav-user"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>{user.name} ({user.email})</span>
+              {user.is_admin && (
+                <button 
+                  onClick={() => setRoute(route === 'admin' ? 'dashboard' : 'admin')} 
+                  className="btn btn-primary btn-sm"
+                  style={{ background: route === 'admin' ? '#034f46' : 'var(--color-primary)' }}
+                >
+                  🛡️ Admin Panel
+                </button>
+              )}
               <button onClick={() => setRoute(route === 'dashboard' ? 'billing' : 'dashboard')} className="btn btn-primary btn-sm">
                 {route === 'dashboard' ? (
                   <>
@@ -723,12 +825,14 @@ export default function App() {
             >
               📖 Custom Vocabulary
             </button>
-            <button 
-              onClick={() => { setActiveSubTab('meetings'); }} 
-              className={`btn ${activeSubTab === 'meetings' ? 'btn-primary' : ''}`}
-            >
-              📝 Meeting Notes
-            </button>
+            {user.plan_active && (
+              <button 
+                onClick={() => { setActiveSubTab('meetings'); }} 
+                className={`btn ${activeSubTab === 'meetings' ? 'btn-primary' : ''}`}
+              >
+                📝 Meeting Notes
+              </button>
+            )}
           </div>
 
           {activeSubTab === 'stats' && (
@@ -1206,6 +1310,158 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {/* 5.5. Admin Panel Page */}
+      {route === 'admin' && user && user.is_admin && (
+        <main className="dashboard-main">
+          <div className="welcome-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+            <div>
+              <h1 className="welcome-title">🛡️ Admin Panel</h1>
+              <p>Manage users, override billing/subscription tiers, and customize rate limits.</p>
+            </div>
+            <button onClick={fetchAdminUsers} className="btn" style={{ background: '#fff' }}>
+              🔄 Refresh List
+            </button>
+          </div>
+
+          {authError && <div className="auth-error" style={{ marginBottom: '20px' }}>{authError}</div>}
+          {successMessage && <div className="auth-success" style={{ marginBottom: '20px', background: '#d1fae5', color: '#1a1a1a', border: '2px solid #1a1a1a', padding: '12px 14px', borderRadius: '12px', fontWeight: '500', boxShadow: '2px 2px 0px #1a1a1a' }}>{successMessage}</div>}
+
+          <div className="card" style={{ padding: '24px' }}>
+            <h3 className="card-title" style={{ marginBottom: '20px' }}>👥 Active Users Directory</h3>
+            <div className="logs-table-container">
+              <table className="logs-table">
+                <thead>
+                  <tr>
+                    <th>User ID</th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Plan Tier</th>
+                    <th>Plan Status</th>
+                    <th>Rate Limit</th>
+                    <th>Total Transcribed</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminUsers.map((u) => (
+                    <tr key={u.id}>
+                      <td>#{u.id}</td>
+                      <td><strong>{u.name}</strong></td>
+                      <td>{u.email}</td>
+                      <td>
+                        <span className={`badge-status ${u.plan_tier === 'pro' ? 'badge-success' : 'badge-failed'}`} style={{ textTransform: 'uppercase', background: u.plan_tier === 'pro' ? '#d1fae5' : '#f3f4f6', color: u.plan_tier === 'pro' ? '#065f46' : '#374151', border: '1px solid rgba(26,26,26,0.15)', padding: '2px 8px' }}>
+                          {u.plan_tier}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`badge-status ${u.plan_active ? 'badge-success' : 'badge-failed'}`}>
+                          {u.plan_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td>
+                        {u.rate_limit_rpm !== null ? `${u.rate_limit_rpm} RPM` : <span style={{ opacity: 0.5 }}>Default (10)</span>}
+                      </td>
+                      <td>
+                        <strong>{formatSeconds(u.total_usage_seconds)}</strong>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button 
+                          onClick={() => handleOpenEditUser(u)} 
+                          className="btn btn-primary btn-sm"
+                          style={{ padding: '6px 12px' }}
+                        >
+                          ✏️ Edit Plan & Limit
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Edit User Modal */}
+          {editingUser && (
+            <div className="modal-overlay" style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              backgroundColor: 'rgba(26, 26, 26, 0.6)', display: 'flex',
+              justifyContent: 'center', alignItems: 'center', zIndex: 1000,
+              backdropFilter: 'blur(4px)'
+            }}>
+              <div className="card" style={{ maxWidth: '480px', width: '90%', margin: '20px', position: 'relative', background: '#fff' }}>
+                <h3 className="card-title" style={{ fontSize: '22px' }}>
+                  ⚙️ Edit User #{editingUser.id}
+                </h3>
+                <p style={{ fontSize: '14px', color: 'rgba(26,26,26,0.6)', marginBottom: '20px' }}>
+                  Modify subscription tier and customize rate limits for <strong>{editingUser.name}</strong> ({editingUser.email}).
+                </p>
+
+                <form onSubmit={handleSaveEditUser}>
+                  <div className="auth-form-control" style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Subscription Tier</label>
+                    <select 
+                      value={editPlanTier} 
+                      onChange={(e) => setEditPlanTier(e.target.value)}
+                      className="auth-input"
+                      style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a', background: '#fff' }}
+                    >
+                      <option value="free">Starter (Free)</option>
+                      <option value="pro">Pro (Paid)</option>
+                    </select>
+                  </div>
+
+                  <div className="auth-form-control" style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Plan Status</label>
+                    <select 
+                      value={editPlanActive} 
+                      onChange={(e) => setEditPlanActive(parseInt(e.target.value))}
+                      className="auth-input"
+                      style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a', background: '#fff' }}
+                    >
+                      <option value="0">Inactive / Not Subscribed</option>
+                      <option value="1">Active / Subscribed</option>
+                    </select>
+                  </div>
+
+                  <div className="auth-form-control" style={{ marginBottom: '24px' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Requests Per Minute (RPM) Rate Limit</label>
+                    <input 
+                      type="number" 
+                      value={editRateLimit} 
+                      onChange={(e) => setEditRateLimit(e.target.value)}
+                      placeholder="e.g. 25 (leave blank to use defaults)"
+                      className="auth-input"
+                      style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a' }}
+                    />
+                    <small style={{ color: 'rgba(26,26,26,0.5)', marginTop: '4px', display: 'block' }}>
+                      Overrides the default user limit (10 RPM). Leave blank to clear override.
+                    </small>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '16px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                    <button 
+                      type="button"
+                      onClick={() => setEditingUser(null)} 
+                      className="btn" 
+                      style={{ background: '#fff' }}
+                      disabled={loading}
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      type="submit" 
+                      className="btn btn-primary"
+                      disabled={loading}
+                    >
+                      {loading ? <div className="spinner"></div> : 'Save Changes'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+        </main>
       )}
     </div>
   );

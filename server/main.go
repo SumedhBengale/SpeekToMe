@@ -274,8 +274,9 @@ func main() {
 	mux.HandleFunc("POST /billing/cancel-subscription", handleCancelSubscription)
 
 	// Admin API routes
-	mux.HandleFunc("GET /admin/users", handleAdminListUsers)
-	mux.HandleFunc("POST /admin/users/plan", handleAdminUpdateUserPlan)
+	mux.HandleFunc("GET /admin/users", handleAdminGetUsers)
+	mux.HandleFunc("POST /admin/users/{id}/plan", handleAdminUpdatePlan)
+	mux.HandleFunc("POST /admin/users/{id}/rate-limit", handleAdminUpdateRateLimit)
 	mux.HandleFunc("GET /admin/config", handleAdminGetConfig)
 	mux.HandleFunc("POST /admin/config", handleAdminUpdateConfig)
 
@@ -594,6 +595,7 @@ func handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		"plan_active":       user.PlanActive == 1,
 		"plan_activated_at": user.PlanActivatedAt,
 		"duration_seconds":  durationSinceActive,
+		"is_admin":          user.IsAdmin == 1,
 	})
 }
 
@@ -774,6 +776,7 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 			"name":        user.Name,
 			"plan_tier":   user.PlanTier,
 			"plan_active": user.PlanActive == 1,
+			"is_admin":    user.IsAdmin == 1,
 		},
 	})
 }
@@ -844,6 +847,7 @@ func handleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 			"name":        fullProfile.Name,
 			"plan_tier":   fullProfile.PlanTier,
 			"plan_active": fullProfile.PlanActive == 1,
+			"is_admin":    fullProfile.IsAdmin == 1,
 		},
 	})
 }
@@ -963,17 +967,6 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	user, authErr := authenticate(r)
 	if authErr != nil {
 		http.Error(w, authErr.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	// 1. Paid plan activation check
-	if user.PlanActive != 1 {
-		log.Printf("[PLAN VERIFICATION] Request from %s denied: Plan is not active (tier: %s)", user.Email, user.PlanTier)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "No active paid plan. Please subscribe or activate your plan to use SpeekTo.Me.",
-		})
 		return
 	}
 
@@ -2448,6 +2441,15 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.PlanActive != 1 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.",
+		})
+		return
+	}
+
 	// Enforce dynamic per-user rate limiting using database config / custom user override (taking the lower of the two limits)
 	limit := configManager.Get().DefaultUserRateLimitRPM
 	if user.RateLimitRPM.Valid {
@@ -2689,6 +2691,11 @@ func handleGetMeetings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.PlanActive != 1 {
+		http.Error(w, "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.", http.StatusForbidden)
+		return
+	}
+
 	meetings, err := database.GetUserMeetings(user.ID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to retrieve meetings: %v", err), http.StatusInternalServerError)
@@ -2703,6 +2710,11 @@ func handleGetMeetingDetail(w http.ResponseWriter, r *http.Request) {
 	user, err := authenticate(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if user.PlanActive != 1 {
+		http.Error(w, "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.", http.StatusForbidden)
 		return
 	}
 
@@ -2732,6 +2744,11 @@ func handleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 	user, err := authenticate(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if user.PlanActive != 1 {
+		http.Error(w, "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.", http.StatusForbidden)
 		return
 	}
 
@@ -2770,6 +2787,11 @@ func handleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 	user, err := authenticate(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if user.PlanActive != 1 {
+		http.Error(w, "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.", http.StatusForbidden)
 		return
 	}
 
@@ -2923,4 +2945,98 @@ func verifyTOTP(secret string, code string) bool {
 	}
 
 	return false
+}
+
+func handleAdminGetUsers(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if user.IsAdmin != 1 {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	users, err := database.GetAdminUsersList()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to load user list: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(users)
+}
+
+func handleAdminUpdatePlan(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if user.IsAdmin != 1 {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	idStr := r.PathValue("id")
+	targetUserID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		PlanTier   string `json:"plan_tier"`
+		PlanActive int    `json:"plan_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	err = database.AdminUpdateUserPlan(targetUserID, req.PlanTier, req.PlanActive)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update plan: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleAdminUpdateRateLimit(w http.ResponseWriter, r *http.Request) {
+	user, err := authenticate(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if user.IsAdmin != 1 {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	idStr := r.PathValue("id")
+	targetUserID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		RateLimitRPM *int `json:"rate_limit_rpm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	err = database.AdminUpdateUserRateLimit(targetUserID, req.RateLimitRPM)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update rate limit: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }

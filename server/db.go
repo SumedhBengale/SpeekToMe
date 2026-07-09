@@ -589,3 +589,62 @@ func (d *Database) DeleteMeeting(meetingID int64) error {
 	return err
 }
 
+type AdminUserRow struct {
+	ID           int64   `json:"id"`
+	Email        string  `json:"email"`
+	Name         string  `json:"name"`
+	PlanTier     string  `json:"plan_tier"`
+	PlanActive   int     `json:"plan_active"`
+	RateLimitRPM *int    `json:"rate_limit_rpm"`
+	TotalUsage   float64 `json:"total_usage_seconds"`
+}
+
+func (d *Database) GetAdminUsersList() ([]AdminUserRow, error) {
+	rows, err := d.db.Query(`
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, u.rate_limit_rpm,
+		       COALESCE((SELECT SUM(audio_duration) FROM usage_logs WHERE user_id = u.id AND status = 'success'), 0)
+		FROM users u
+		ORDER BY u.id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := make([]AdminUserRow, 0)
+	for rows.Next() {
+		var r AdminUserRow
+		var rpm sql.NullInt64
+		err := rows.Scan(&r.ID, &r.Email, &r.Name, &r.PlanTier, &r.PlanActive, &rpm, &r.TotalUsage)
+		if err != nil {
+			return nil, err
+		}
+		if rpm.Valid {
+			val := int(rpm.Int64)
+			r.RateLimitRPM = &val
+		}
+		list = append(list, r)
+	}
+	return list, nil
+}
+
+func (d *Database) AdminUpdateUserPlan(userID int64, planTier string, planActive int) error {
+	_, err := d.db.Exec(`
+		UPDATE users 
+		SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP 
+		WHERE id = ?
+	`, planTier, planActive, userID)
+	return err
+}
+
+func (d *Database) AdminUpdateUserRateLimit(userID int64, rateLimit *int) error {
+	var val interface{}
+	if rateLimit != nil {
+		val = *rateLimit
+	} else {
+		val = nil
+	}
+	_, err := d.db.Exec("UPDATE users SET rate_limit_rpm = ? WHERE id = ?", val, userID)
+	return err
+}
+
