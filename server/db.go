@@ -815,3 +815,12 @@ func (d *Database) GetWebhookLogs(limit int) ([]WebhookLogEntry, error) {
 	return logs, nil
 }
 
+func (d *Database) ResetAllFreeUserQuotas() error {
+	_, err := d.db.Exec(`
+		UPDATE users 
+		SET monthly_usage_seconds = 0.0 
+		WHERE plan_tier = 'free' OR plan_active = 0
+	`)
+	return err
+}
+

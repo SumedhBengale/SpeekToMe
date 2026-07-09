@@ -312,6 +312,28 @@ func main() {
 		}
 	}()
 
+	// Start background monthly quota reset worker for free tier and inactive users
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		var lastResetMonth time.Month = time.Now().Month()
+		for range ticker.C {
+			now := time.Now()
+			if now.Month() != lastResetMonth && now.Day() == 1 {
+				log.Printf("[MONTHLY QUOTA RESET] First day of new month (%s). Resetting free tier and inactive user quotas...", now.Month().String())
+				err := database.ResetAllFreeUserQuotas()
+				if err != nil {
+					log.Printf("[MONTHLY QUOTA RESET ERROR] Failed to reset free quotas: %v", err)
+				} else {
+					log.Printf("[MONTHLY QUOTA RESET SUCCESS] Successfully reset all free/non-active user quotas.")
+					lastResetMonth = now.Month()
+				}
+			} else if now.Month() != lastResetMonth {
+				lastResetMonth = now.Month()
+			}
+		}
+	}()
+
 	// Router using standard library multiplexer routing
 	mux := http.NewServeMux()
 
@@ -3104,6 +3126,20 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 	switch event.Event {
 	case "subscription.activated", "subscription.charged":
 		err = database.UpdateUserPlan(userID, "pro", 1, subID)
+	case "subscription.updated":
+		if status == "cancelled" || status == "completed" {
+			err = database.UpdateUserPlan(userID, "free", 0, "")
+		} else if status == "halted" {
+			err = database.UpdateUserPlan(userID, "pro", 0, subID)
+		} else if status == "active" {
+			err = database.UpdateUserPlan(userID, "pro", 1, subID)
+		} else {
+			// Ignore other intermediate statuses but log it
+			log.Printf("[RAZORPAY WEBHOOK INFO] subscription.updated status: %s ignored", status)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ignored"}`))
+			return
+		}
 	case "subscription.cancelled", "subscription.completed":
 		err = database.UpdateUserPlan(userID, "free", 0, "")
 	case "subscription.halted":
