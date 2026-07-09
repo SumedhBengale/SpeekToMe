@@ -30,6 +30,8 @@ export default function App() {
   const [editRateLimit, setEditRateLimit] = useState('');
   const [webhookLogs, setWebhookLogs] = useState([]);
   const [adminSubTab, setAdminSubTab] = useState('users');
+  const [cacheRateLimits, setCacheRateLimits] = useState({});
+  const [cacheVocabKeys, setCacheVocabKeys] = useState([]);
 
   // Dashboard Tab and details states
   const [vocabTerms, setVocabTerms] = useState([]);
@@ -328,6 +330,7 @@ export default function App() {
     if (token && route === 'admin') {
       fetchAdminUsers();
       fetchWebhookLogs();
+      fetchCacheData();
     }
   }, [token, route]);
 
@@ -363,6 +366,76 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to fetch webhook logs:', err);
+    }
+  };
+
+  const fetchCacheData = async () => {
+    try {
+      const rateRes = await fetch(`${API_BASE}/admin/cache/rate-limits`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (rateRes.ok) {
+        const data = await rateRes.json();
+        setCacheRateLimits(data || {});
+      }
+
+      const vocabRes = await fetch(`${API_BASE}/admin/cache/vocabulary`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (vocabRes.ok) {
+        const data = await vocabRes.json();
+        setCacheVocabKeys(data.cached_user_ids || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch cache management data:', err);
+    }
+  };
+
+  const handleResetRateLimitCache = async (userId = '') => {
+    setLoading(true);
+    setAuthError('');
+    setSuccessMessage('');
+    try {
+      const url = userId ? `${API_BASE}/admin/cache/rate-limits?user_id=${userId}` : `${API_BASE}/admin/cache/rate-limits`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setSuccessMessage(userId ? `Rate limit cache cleared for User ID: ${userId}` : 'All in-memory rate limit caches cleared.');
+        fetchCacheData();
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || 'Failed to clear rate limit cache.');
+      }
+    } catch (err) {
+      setAuthError('Network error clearing rate limit cache.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleInvalidateVocabCache = async (userId = '') => {
+    setLoading(true);
+    setAuthError('');
+    setSuccessMessage('');
+    try {
+      const url = userId ? `${API_BASE}/admin/cache/vocabulary?user_id=${userId}` : `${API_BASE}/admin/cache/vocabulary`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setSuccessMessage(userId ? `Vocabulary cache invalidated for User ID: ${userId}` : 'All in-memory vocabulary caches invalidated.');
+        fetchCacheData();
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || 'Failed to invalidate vocabulary cache.');
+      }
+    } catch (err) {
+      setAuthError('Network error invalidating vocabulary cache.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1336,7 +1409,7 @@ export default function App() {
               <h1 className="welcome-title">🛡️ Admin Panel</h1>
               <p>Manage users, override billing/subscription tiers, and customize rate limits.</p>
             </div>
-            <button onClick={() => { fetchAdminUsers(); fetchWebhookLogs(); }} className="btn" style={{ background: '#fff' }}>
+            <button onClick={() => { fetchAdminUsers(); fetchWebhookLogs(); fetchCacheData(); }} className="btn" style={{ background: '#fff' }}>
               🔄 Refresh
             </button>
           </div>
@@ -1354,6 +1427,12 @@ export default function App() {
               className={`btn ${adminSubTab === 'webhook-logs' ? 'btn-primary' : ''}`}
             >
               📋 Webhook Logs
+            </button>
+            <button
+              onClick={() => setAdminSubTab('cache')}
+              className={`btn ${adminSubTab === 'cache' ? 'btn-primary' : ''}`}
+            >
+              ⚡ Cache Control
             </button>
           </div>
 
@@ -1546,6 +1625,120 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {/* Cache Management Tab */}
+          {adminSubTab === 'cache' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              <div className="card" style={{ padding: '24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
+                  <h3 className="card-title" style={{ margin: 0 }}>⚡ In-Memory Rate Limiting Counts (Fixed-Window 60s)</h3>
+                  <button 
+                    onClick={() => handleResetRateLimitCache()} 
+                    className="btn btn-failed" 
+                    style={{ fontSize: '12px' }}
+                  >
+                    🗑️ Reset All Rate Limits Globally
+                  </button>
+                </div>
+                
+                <div className="logs-table-container">
+                  <table className="logs-table">
+                    <thead>
+                      <tr>
+                        <th>User Identifier</th>
+                        <th>Requests Made (This Minute)</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.keys(cacheRateLimits).length === 0 ? (
+                        <tr>
+                          <td colSpan="3" style={{ textAlign: 'center', opacity: 0.5, padding: '24px' }}>
+                            No active rate limit entries in memory.
+                          </td>
+                        </tr>
+                      ) : Object.keys(cacheRateLimits).map((key) => {
+                        const rawUserId = key.replace('user_', '');
+                        return (
+                          <tr key={key}>
+                            <td>
+                              <strong>{key}</strong>
+                            </td>
+                            <td>
+                              <span style={{ fontWeight: 'bold', color: cacheRateLimits[key] >= 10 ? '#dc2626' : 'inherit' }}>
+                                {cacheRateLimits[key]}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'right' }}>
+                              <button 
+                                onClick={() => handleResetRateLimitCache(rawUserId)} 
+                                className="btn btn-secondary" 
+                                style={{ fontSize: '11px', padding: '6px 10px' }}
+                              >
+                                Reset User Limit
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="card" style={{ padding: '24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
+                  <h3 className="card-title" style={{ margin: 0 }}>📖 Active User Vocabulary Cache</h3>
+                  <button 
+                    onClick={() => handleInvalidateVocabCache()} 
+                    className="btn btn-failed" 
+                    style={{ fontSize: '12px' }}
+                  >
+                    🗑️ Invalidate All Vocabulary Cache
+                  </button>
+                </div>
+                
+                <div className="logs-table-container">
+                  <table className="logs-table">
+                    <thead>
+                      <tr>
+                        <th>User ID</th>
+                        <th>Status</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cacheVocabKeys.length === 0 ? (
+                        <tr>
+                          <td colSpan="3" style={{ textAlign: 'center', opacity: 0.5, padding: '24px' }}>
+                            No vocabularies compiled in memory.
+                          </td>
+                        </tr>
+                      ) : cacheVocabKeys.map((uid) => (
+                        <tr key={uid}>
+                          <td>
+                            <strong>User #{uid}</strong>
+                          </td>
+                          <td>
+                            <span className="badge-status badge-success">Cached in Memory</span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button 
+                              onClick={() => handleInvalidateVocabCache(uid)} 
+                              className="btn btn-secondary" 
+                              style={{ fontSize: '11px', padding: '6px 10px' }}
+                            >
+                              Invalidate Cache
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
