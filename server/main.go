@@ -50,6 +50,45 @@ var (
 	vocabCache *VocabularyCache
 )
 
+type RollingRateLimiter struct {
+	mu         sync.Mutex
+	timestamps []time.Time
+	limit      int
+	window     time.Duration
+}
+
+func NewRollingRateLimiter(limit int, window time.Duration) *RollingRateLimiter {
+	return &RollingRateLimiter{
+		limit:  limit,
+		window: window,
+	}
+}
+
+func (r *RollingRateLimiter) Allow() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-r.window)
+
+	// Filter out old timestamps
+	valid := r.timestamps[:0]
+	for _, t := range r.timestamps {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+	r.timestamps = valid
+
+	if len(r.timestamps) < r.limit {
+		r.timestamps = append(r.timestamps, now)
+		return true
+	}
+	return false
+}
+
+var groqRateLimiter = NewRollingRateLimiter(20, 60*time.Second) // 20 requests per minute
+
 func main() {
 	vocabCache = NewVocabularyCache()
 	_ = godotenv.Load()
@@ -2078,17 +2117,17 @@ func runGroqTranscribe(ctx context.Context, audioBytes []byte, model string) (st
 }
 
 func runWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, string, error) {
-	if CLOUDFLARE_API_TOKEN != "" && CLOUDFLARE_ACCOUNT_ID != "" {
-		cfModel := "@cf/openai/whisper-large-v3-turbo"
-		if model == "whisper-large-v3" {
-			cfModel = "@cf/openai/whisper"
+	if GROQ_API_KEY != "" {
+		if groqRateLimiter.Allow() {
+			log.Printf("[GROQ] Attempting transcription using model %s", model)
+			text, segments, loc, err := runGroqTranscribe(ctx, audioBytes, model)
+			if err == nil {
+				return text, segments, "groq", loc, nil
+			}
+			log.Printf("[GROQ ERROR] Transcription failed: %v. Falling back to DeepInfra.", err)
+		} else {
+			log.Printf("[GROQ LIMIT] Local rate limit reached (20 RPM). Bypassing to DeepInfra.")
 		}
-		log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s", cfModel)
-		text, segments, loc, err := runCloudflareTranscribe(ctx, audioBytes, cfModel)
-		if err == nil {
-			return text, segments, "cloudflare", loc, nil
-		}
-		log.Printf("[CLOUDFLARE AI ERROR] Transcription failed: %v. Falling back to next provider.", err)
 	}
 
 	if DEEPINFRA_API_KEY != "" {
@@ -2103,20 +2142,24 @@ func runWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 		if err == nil {
 			return text, segments, "deepinfra", loc, nil
 		}
-		log.Printf("[DI INFRA ERROR] Transcription failed: %v. Falling back to Groq.", err)
+		log.Printf("[DI INFRA ERROR] Transcription failed: %v. Falling back to Cloudflare.", err)
 	}
 
-	if GROQ_API_KEY != "" {
-		log.Printf("[GROQ] Attempting transcription using model %s", model)
-		text, segments, loc, err := runGroqTranscribe(ctx, audioBytes, model)
-		if err == nil {
-			return text, segments, "groq", loc, nil
+	if CLOUDFLARE_API_TOKEN != "" && CLOUDFLARE_ACCOUNT_ID != "" {
+		cfModel := "@cf/openai/whisper-large-v3-turbo"
+		if model == "whisper-large-v3" {
+			cfModel = "@cf/openai/whisper"
 		}
-		log.Printf("[GROQ ERROR] Transcription failed: %v", err)
+		log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s", cfModel)
+		text, segments, loc, err := runCloudflareTranscribe(ctx, audioBytes, cfModel)
+		if err == nil {
+			return text, segments, "cloudflare", loc, nil
+		}
+		log.Printf("[CLOUDFLARE AI ERROR] Transcription failed: %v", err)
 		return "", nil, "", "", err
 	}
 
-	return "", nil, "", "", fmt.Errorf("no transcription providers (Cloudflare, DeepInfra or Groq) are configured or succeeded")
+	return "", nil, "", "", fmt.Errorf("no transcription providers (Groq, DeepInfra or Cloudflare) are configured or succeeded")
 }
 
 func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
