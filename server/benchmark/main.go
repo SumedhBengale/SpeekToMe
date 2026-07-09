@@ -309,9 +309,9 @@ func main() {
 	}
 
 	audioPaths := []string{
-		"../uploads/jfk.wav",
-		"uploads/jfk.wav",
-		"server/uploads/jfk.wav",
+		"../uploads/meetings/meeting_5_1783327344745226200.ogg",
+		"uploads/meetings/meeting_5_1783327344745226200.ogg",
+		"server/uploads/meetings/meeting_5_1783327344745226200.ogg",
 	}
 	var audioBytes []byte
 	var err error
