@@ -2369,15 +2369,6 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.PlanActive != 1 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.",
-		})
-		return
-	}
-
 	// Enforce dynamic per-user rate limiting using database config / custom user override (taking the lower of the two limits)
 	limit := configManager.Get().DefaultUserRateLimitRPM
 	if user.RateLimitRPM.Valid {
@@ -2422,6 +2413,36 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 
 	// Calculate audio duration
 	duration := getOggOpusDuration(audioBytes)
+
+	// Enforce monthly usage limits in upload meeting
+	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
+	var monthlyLimitSeconds float64
+	config := configManager.GetRawAll()
+	if isPaid {
+		monthlyLimitSeconds = 180000.0 // 50 hours
+		if val, ok := config["paid_monthly_limit_seconds"]; ok {
+			if limit, err := strconv.ParseFloat(val, 64); err == nil {
+				monthlyLimitSeconds = limit
+			}
+		}
+	} else {
+		monthlyLimitSeconds = 3600.0 // 1 hour
+		if val, ok := config["free_monthly_limit_seconds"]; ok {
+			if limit, err := strconv.ParseFloat(val, 64); err == nil {
+				monthlyLimitSeconds = limit
+			}
+		}
+	}
+
+	if user.MonthlyUsageSeconds+duration > monthlyLimitSeconds {
+		log.Printf("[MONTHLY LIMIT] Meeting Upload from %s denied: Exceeded monthly limit (%.1f + %.1f > %.1f seconds)", user.Email, user.MonthlyUsageSeconds, duration, monthlyLimitSeconds)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("Monthly usage limit exceeded. Your plan is limited to %.1f hours of transcription per month. You have already used %.1f hours.", monthlyLimitSeconds/3600.0, user.MonthlyUsageSeconds/3600.0),
+		})
+		return
+	}
 
 	// Ensure uploads directory exists
 	dir := "uploads/meetings"
@@ -2599,7 +2620,7 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 
 	// Log usage to database
 	log.Printf("[MEETING UPLOAD ROUTING] Transcription routing: %s | LLM routing: %s", whisperRouting, pctx.LLMRouting)
-	_ = database.LogUsage(user.ID, duration, 0, 0, 0, false, "meeting-whisper", rawText, polished, "success", audioSizeBytes, whisperProvider, pctx.LLMProvider)
+	_ = database.LogUsageAndUpdateQuota(user.ID, duration, 0, 0, 0, false, "meeting-whisper", rawText, polished, "success", audioSizeBytes, whisperProvider, pctx.LLMProvider)
 
 	// Return updated meeting object
 	updatedMeeting, err := database.GetMeeting(meetingID)
@@ -2619,11 +2640,6 @@ func handleGetMeetings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.PlanActive != 1 {
-		http.Error(w, "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.", http.StatusForbidden)
-		return
-	}
-
 	meetings, err := database.GetUserMeetings(user.ID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to retrieve meetings: %v", err), http.StatusInternalServerError)
@@ -2638,11 +2654,6 @@ func handleGetMeetingDetail(w http.ResponseWriter, r *http.Request) {
 	user, err := authenticate(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	if user.PlanActive != 1 {
-		http.Error(w, "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.", http.StatusForbidden)
 		return
 	}
 
@@ -2672,11 +2683,6 @@ func handleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 	user, err := authenticate(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	if user.PlanActive != 1 {
-		http.Error(w, "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.", http.StatusForbidden)
 		return
 	}
 
@@ -2715,11 +2721,6 @@ func handleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 	user, err := authenticate(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	if user.PlanActive != 1 {
-		http.Error(w, "No active paid plan. SpeekTo.Me Meeting Notes requires a paid subscription.", http.StatusForbidden)
 		return
 	}
 
