@@ -41,7 +41,6 @@ var (
 	GOOGLE_CLIENT_SECRET  string
 	BACKEND_URL           string
 	DATABASE_URL          string
-	MOCK_AUTH             bool
 
 	GROQ_API_URL       = "https://api.groq.com/openai/v1/audio/transcriptions"
 	DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/inference/"
@@ -296,7 +295,6 @@ func main() {
 	if BACKEND_URL == "" {
 		BACKEND_URL = "http://localhost:8000"
 	}
-	MOCK_AUTH = GOOGLE_CLIENT_ID == "" || GOOGLE_CLIENT_ID == "mock"
 
 	var err error
 	database, err = NewDatabase(DATABASE_URL)
@@ -337,8 +335,6 @@ func main() {
 	mux.HandleFunc("GET /meetings/{id}", handleGetMeetingDetail)
 	mux.HandleFunc("DELETE /meetings/{id}", handleDeleteMeeting)
 	mux.HandleFunc("GET /meetings/{id}/audio", handleGetMeetingAudio)
-	mux.HandleFunc("GET /mock-payment", handleMockPayment)
-	mux.HandleFunc("POST /mock-payment/complete", handleMockPaymentComplete)
 	mux.HandleFunc("POST /billing/create-subscription", handleCreateSubscription)
 	mux.HandleFunc("POST /billing/verify-subscription", handleVerifySubscription)
 	mux.HandleFunc("POST /billing/cancel-subscription", handleCancelSubscription)
@@ -360,7 +356,6 @@ func main() {
 	handler := corsMiddleware(mux)
 
 	log.Printf("Starting SpeekTo.Me Go Server on port 8000...")
-	log.Printf("Google Auth Mock Mode: %t", MOCK_AUTH)
 	log.Fatal(http.ListenAndServe(":8000", handler))
 }
 
@@ -464,13 +459,6 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if MOCK_AUTH {
-		// Immediately redirect to callback with the state parameter
-		redirectURL := fmt.Sprintf("%s/auth/callback?code=mock_code&state=%s", BACKEND_URL, state)
-		http.Redirect(w, r, redirectURL, http.StatusFound)
-		return
-	}
-
 	redirectURI := fmt.Sprintf("%s/auth/callback", BACKEND_URL)
 
 	oauthURL := fmt.Sprintf(
@@ -513,69 +501,63 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	var googleID, email, name string
 
-	if MOCK_AUTH {
-		googleID = "mock_google_id_123"
-		email = "mock_user@example.com"
-		name = "Mock User"
-	} else {
-		// Exchange code
-		client := &http.Client{Timeout: 10 * time.Second}
-		tokenURL := "https://oauth2.googleapis.com/token"
+	// Exchange code
+	client := &http.Client{Timeout: 10 * time.Second}
+	tokenURL := "https://oauth2.googleapis.com/token"
 
-		vals := url.Values{}
-		vals.Set("code", code)
-		vals.Set("client_id", GOOGLE_CLIENT_ID)
-		vals.Set("client_secret", GOOGLE_CLIENT_SECRET)
-		vals.Set("redirect_uri", fmt.Sprintf("%s/auth/callback", BACKEND_URL))
-		vals.Set("grant_type", "authorization_code")
+	vals := url.Values{}
+	vals.Set("code", code)
+	vals.Set("client_id", GOOGLE_CLIENT_ID)
+	vals.Set("client_secret", GOOGLE_CLIENT_SECRET)
+	vals.Set("redirect_uri", fmt.Sprintf("%s/auth/callback", BACKEND_URL))
+	vals.Set("grant_type", "authorization_code")
 
-		resp, err := client.PostForm(tokenURL, vals)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Token exchange failed: %v", err), http.StatusInternalServerError)
-			return
-		}
-		defer resp.Body.Close()
+	resp, err := client.PostForm(tokenURL, vals)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Token exchange failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			http.Error(w, fmt.Sprintf("Token exchange failed with status %d: %s", resp.StatusCode, string(body)), http.StatusInternalServerError)
-			return
-		}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		http.Error(w, fmt.Sprintf("Token exchange failed with status %d: %s", resp.StatusCode, string(body)), http.StatusInternalServerError)
+		return
+	}
 
-		var tokens struct {
-			AccessToken string `json:"access_token"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
-			http.Error(w, "Failed to parse token response", http.StatusInternalServerError)
-			return
-		}
+	var tokens struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+		http.Error(w, "Failed to parse token response", http.StatusInternalServerError)
+		return
+	}
 
-		// Get User profile
-		req, _ := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v3/userinfo", nil)
-		req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
-		userResp, err := client.Do(req)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to fetch profile: %v", err), http.StatusInternalServerError)
-			return
-		}
-		defer userResp.Body.Close()
+	// Get User profile
+	req, _ := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v3/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	userResp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to fetch profile: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer userResp.Body.Close()
 
-		var profile struct {
-			Sub   string `json:"sub"`
-			Email string `json:"email"`
-			Name  string `json:"name"`
-		}
-		if err := json.NewDecoder(userResp.Body).Decode(&profile); err != nil {
-			http.Error(w, "Failed to parse profile response", http.StatusInternalServerError)
-			return
-		}
+	var profile struct {
+		Sub   string `json:"sub"`
+		Email string `json:"email"`
+		Name  string `json:"name"`
+	}
+	if err := json.NewDecoder(userResp.Body).Decode(&profile); err != nil {
+		http.Error(w, "Failed to parse profile response", http.StatusInternalServerError)
+		return
+	}
 
-		googleID = profile.Sub
-		email = profile.Email
-		name = profile.Name
-		if name == "" {
-			name = strings.Split(email, "@")[0]
-		}
+	googleID = profile.Sub
+	email = profile.Email
+	name = profile.Name
+	if name == "" {
+		name = strings.Split(email, "@")[0]
 	}
 
 	userID, err := database.GetOrCreateUser(googleID, email, name)
@@ -1031,7 +1013,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"groq_key_configured":      GROQ_API_KEY != "",
 		"deepinfra_key_configured": DEEPINFRA_API_KEY != "",
 		"deepseek_key_configured":  DEEPSEEK_API_KEY != "",
-		"google_auth_mock":         MOCK_AUTH,
+		"google_auth_mock":         false,
 	})
 }
 
@@ -1613,174 +1595,6 @@ func getOggOpusDuration(data []byte) float64 {
 	return float64(lastGranule) / 48000.0
 }
 
-// GET /mock-payment - Mock checkout portal page
-func handleMockPayment(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		http.Error(w, "Bad request: missing session token", http.StatusBadRequest)
-		return
-	}
-
-	html := `<!DOCTYPE html>
-<html>
-<head>
-	<title>SpeekTo.Me Subscription Checkout</title>
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<style>
-		body {
-			margin: 0; padding: 0;
-			font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-			background: linear-gradient(135deg, #121214 0%, #1a1a24 100%);
-			color: #ffffff;
-			display: flex; justify-content: center; align-items: center;
-			min-height: 100vh;
-		}
-		.card {
-			background: rgba(28, 28, 30, 0.75);
-			border: 1px solid rgba(255, 255, 255, 0.08);
-			border-radius: 12px;
-			padding: 30px;
-			width: 400px;
-			box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-			backdrop-filter: blur(20px);
-		}
-		h2 { margin: 0 0 10px 0; color: #00e676; text-align: center; }
-		.desc { color: rgba(255, 255, 255, 0.7); text-align: center; font-size: 14px; margin-bottom: 25px; }
-		.plan-details {
-			background: rgba(255, 255, 255, 0.04);
-			border: 1px solid rgba(255, 255, 255, 0.06);
-			border-radius: 8px;
-			padding: 15px;
-			margin-bottom: 25px;
-		}
-		.plan-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; }
-		.plan-row:last-child { margin-bottom: 0; }
-		.btn {
-			background: #00e676;
-			border: none;
-			border-radius: 6px;
-			color: #121214;
-			padding: 12px;
-			width: 100%;
-			font-size: 15px;
-			font-weight: bold;
-			cursor: pointer;
-			transition: background 0.2s ease;
-		}
-		.btn:hover { background: #00c853; }
-	</style>
-</head>
-<body>
-	<div class="card">
-		<h2>🎙️ SpeekTo.Me Checkout</h2>
-		<p class="desc">Simulate subscription payment to activate your SpeekTo.Me Pro plan.</p>
-		
-		<div class="plan-details">
-			<div class="plan-row">
-				<span>Subscription Tier:</span>
-				<strong>SpeekTo.Me Pro</strong>
-			</div>
-			<div class="plan-row">
-				<span>Transcription Limit:</span>
-				<strong>50 hours / month</strong>
-			</div>
-			<div class="plan-row">
-				<span>Price:</span>
-				<strong>$2.00 / month</strong>
-			</div>
-		</div>
-
-		<form action="/mock-payment/complete" method="POST">
-			<input type="hidden" name="token" value="` + token + `">
-			<button type="submit" class="btn">💳 Simulate Payment ($2.00)</button>
-		</form>
-	</div>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(html))
-}
-
-// POST /mock-payment/complete - Handle mock checkout success
-func handleMockPaymentComplete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	token := r.FormValue("token")
-	if token == "" {
-		http.Error(w, "Bad request: missing session token", http.StatusBadRequest)
-		return
-	}
-
-	user, err := database.GetUserBySession(token)
-	if err != nil {
-		http.Error(w, "Session invalid or expired", http.StatusUnauthorized)
-		return
-	}
-
-	err = database.UpdateUserPlan(user.ID, "pro", 1, "sub_mock_123456789")
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to update plan: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	html := `<!DOCTYPE html>
-<html>
-<head>
-	<title>Subscription Success</title>
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<style>
-		body {
-			margin: 0; padding: 0;
-			font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-			background: linear-gradient(135deg, #121214 0%, #1a1a24 100%);
-			color: #ffffff;
-			display: flex; justify-content: center; align-items: center;
-			min-height: 100vh;
-		}
-		.card {
-			background: rgba(28, 28, 30, 0.75);
-			border: 1px solid rgba(255, 255, 255, 0.08);
-			border-radius: 12px;
-			padding: 35px;
-			width: 400px;
-			text-align: center;
-			box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-			backdrop-filter: blur(20px);
-		}
-		h2 { margin: 0 0 10px 0; color: #00e676; }
-		p { color: rgba(255, 255, 255, 0.7); font-size: 14px; margin-bottom: 25px; }
-		.btn {
-			background: rgba(255, 255, 255, 0.08);
-			border: 1px solid rgba(255, 255, 255, 0.12);
-			border-radius: 6px;
-			color: #ffffff;
-			padding: 10px 20px;
-			text-decoration: none;
-			font-size: 13.5px;
-			font-weight: 500;
-			cursor: pointer;
-			transition: all 0.2s ease;
-		}
-		.btn:hover { background: rgba(255, 255, 255, 0.15); }
-	</style>
-</head>
-<body>
-	<div class="card">
-		<h2>🎉 Payment Successful!</h2>
-		<p>Your subscription is now active. You have been upgraded to the SpeekTo.Me Pro plan with a limit of 50 hours per month.</p>
-		<p>You can return to the SpeekTo.Me desktop application now.</p>
-		<button class="btn" onclick="window.close()">Close Window</button>
-	</div>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(html))
-}
-
 // POST /billing/create-subscription
 func handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
@@ -1805,14 +1619,9 @@ func handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 	razorpayKeySecret := os.Getenv("RAZORPAY_KEY_SECRET")
 	razorpayPlanID := os.Getenv("RAZORPAY_PLAN_ID")
 
-	// 2. If Razorpay is not configured, fall back to mock simulator mode
+	// 2. Verify Razorpay is configured
 	if razorpayKeyID == "" || razorpayKeySecret == "" || razorpayKeyID == "your_razorpay_key_id_here" {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"subscription_id": "sub_mock_123456789",
-			"razorpay_key_id": "",
-			"mock_mode":       true,
-		})
+		http.Error(w, "Billing service not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -1925,19 +1734,9 @@ func handleVerifySubscription(w http.ResponseWriter, r *http.Request) {
 	razorpayKeyID := os.Getenv("RAZORPAY_KEY_ID")
 	razorpayKeySecret := os.Getenv("RAZORPAY_KEY_SECRET")
 
-	// 3. Mock mode verification
+	// 3. Verify Razorpay is configured
 	if razorpayKeyID == "" || razorpayKeySecret == "" || razorpayKeyID == "your_razorpay_key_id_here" {
-		// Instantly activate subscription in simulator
-		err = database.UpdateUserPlan(user.ID, "pro", 1, "sub_mock_123456789")
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to update user plan: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "success",
-		})
+		http.Error(w, "Billing service not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -2010,14 +1809,8 @@ func handleCancelSubscription(w http.ResponseWriter, r *http.Request) {
 	razorpayKeyID := os.Getenv("RAZORPAY_KEY_ID")
 	razorpayKeySecret := os.Getenv("RAZORPAY_KEY_SECRET")
 
-	if razorpayKeyID == "" || razorpayKeySecret == "" || razorpayKeyID == "your_razorpay_key_id_here" || strings.HasPrefix(subID, "sub_mock_") {
-		err = database.UpdateUserPlan(user.ID, "free", 0, "")
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to update user plan: %v", err), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Mock subscription cancelled"})
+	if razorpayKeyID == "" || razorpayKeySecret == "" || razorpayKeyID == "your_razorpay_key_id_here" {
+		http.Error(w, "Billing service not configured", http.StatusServiceUnavailable)
 		return
 	}
 

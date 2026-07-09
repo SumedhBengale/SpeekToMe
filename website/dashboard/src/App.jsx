@@ -559,12 +559,6 @@ export default function App() {
         return;
       }
       const data = await res.json();
-      if (data.mock_mode) {
-        // Fallback: Redirect to neobrutalist simulator page
-        const dashboardURL = window.location.origin + window.location.pathname;
-        window.location.href = `${API_BASE}/mock-payment?token=${token}&redirect_to=${encodeURIComponent(dashboardURL)}`;
-        return;
-      }
 
       // Real Razorpay subscription popup modal
       const options = {
