@@ -98,8 +98,9 @@ type ProviderConfig struct {
 }
 
 type CachedConfigManager struct {
-	mu     sync.RWMutex
-	config ProviderConfig
+	mu         sync.RWMutex
+	config     ProviderConfig
+	rawConfigs map[string]string
 }
 
 func (m *CachedConfigManager) Get() ProviderConfig {
@@ -108,10 +109,21 @@ func (m *CachedConfigManager) Get() ProviderConfig {
 	return m.config
 }
 
-func (m *CachedConfigManager) Set(c ProviderConfig) {
+func (m *CachedConfigManager) GetRawAll() map[string]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	copyMap := make(map[string]string, len(m.rawConfigs))
+	for k, v := range m.rawConfigs {
+		copyMap[k] = v
+	}
+	return copyMap
+}
+
+func (m *CachedConfigManager) Set(c ProviderConfig, raw map[string]string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config = c
+	m.rawConfigs = raw
 }
 
 var configManager = &CachedConfigManager{
@@ -123,9 +135,45 @@ var configManager = &CachedConfigManager{
 		GroqRateLimitRPM:        20,
 		DefaultUserRateLimitRPM: 10,
 	},
+	rawConfigs: make(map[string]string),
 }
 
 var groqRateLimiter = NewRollingRateLimiter(20, 60*time.Second) // Starts at 20 RPM (synchronized from DB)
+
+type SimpleRateLimiter struct {
+	mu    sync.Mutex
+	store map[int64]int
+}
+
+func NewSimpleRateLimiter() *SimpleRateLimiter {
+	limiter := &SimpleRateLimiter{
+		store: make(map[int64]int),
+	}
+	// Background cleanup ticker running every 60 seconds to completely wipe counts
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		for range ticker.C {
+			limiter.mu.Lock()
+			limiter.store = make(map[int64]int)
+			limiter.mu.Unlock()
+		}
+	}()
+	return limiter
+}
+
+func (rl *SimpleRateLimiter) Allow(userID int64, limit int) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	count := rl.store[userID]
+	if count >= limit {
+		return false
+	}
+	rl.store[userID] = count + 1
+	return true
+}
+
+var globalUserRateLimiter = NewSimpleRateLimiter()
 
 type UserRateLimiterRegistry struct {
 	mu       sync.Mutex
@@ -196,7 +244,7 @@ func syncConfigsFromDB() {
 		}
 	}
 
-	configManager.Set(newConfig)
+	configManager.Set(newConfig, dbConfigs)
 
 	// Dynamically adjust the global Groq rate limiter limit
 	groqRateLimiter.mu.Lock()
@@ -353,6 +401,19 @@ func authenticate(r *http.Request) (*UserProfile, error) {
 		return nil, fmt.Errorf("invalid or expired session token")
 	}
 	return user, nil
+}
+
+func authenticateWithVocab(r *http.Request) (*UserProfile, []VocabularyTerm, error) {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return nil, nil, fmt.Errorf("missing bearer token")
+	}
+	token := strings.TrimPrefix(auth, "Bearer ")
+	user, vocabTerms, err := database.GetUserAndVocabularyBySession(token)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid or expired session token")
+	}
+	return user, vocabTerms, nil
 }
 
 // ----------------- HTTP HANDLERS -----------------
@@ -965,8 +1026,8 @@ func getOrCompileUserVocabulary(userID int64) (*UserVocabulary, error) {
 }
 
 func handleGenerate(w http.ResponseWriter, r *http.Request) {
-	// Authenticate the request
-	user, authErr := authenticate(r)
+	// Authenticate the request and retrieve vocabulary in a single database roundtrip
+	user, vocabTerms, authErr := authenticateWithVocab(r)
 	if authErr != nil {
 		http.Error(w, authErr.Error(), http.StatusUnauthorized)
 		return
@@ -1000,63 +1061,47 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	audioBytes := wavBuf.Bytes()
 	audioSizeBytes := len(audioBytes)
 
-	// Fetch dynamic configurations based on user plan active tier
+	// Fetch dynamic configurations from global in-memory cache
 	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
 
 	var rpmLimit int
-	var fupLimitSeconds float64
 	var monthlyLimitSeconds float64
 
-	config, err := database.GetSaasConfig()
+	config := configManager.GetRawAll()
 	if isPaid {
 		rpmLimit = 15
-		fupLimitSeconds = 3600.0
 		monthlyLimitSeconds = 180000.0
-		if err == nil {
-			if val, ok := config["paid_rate_limit_rpm"]; ok {
-				if limit, err := strconv.Atoi(val); err == nil {
-					rpmLimit = limit
-				}
+		if val, ok := config["paid_rate_limit_rpm"]; ok {
+			if limit, err := strconv.Atoi(val); err == nil {
+				rpmLimit = limit
 			}
-			if val, ok := config["paid_fup_limit_seconds_daily"]; ok {
-				if limit, err := strconv.ParseFloat(val, 64); err == nil {
-					fupLimitSeconds = limit
-				}
-			}
-			if val, ok := config["paid_monthly_limit_seconds"]; ok {
-				if limit, err := strconv.ParseFloat(val, 64); err == nil {
-					monthlyLimitSeconds = limit
-				}
+		}
+		if val, ok := config["paid_monthly_limit_seconds"]; ok {
+			if limit, err := strconv.ParseFloat(val, 64); err == nil {
+				monthlyLimitSeconds = limit
 			}
 		}
 	} else {
 		rpmLimit = 3
-		fupLimitSeconds = 300.0
 		monthlyLimitSeconds = 3600.0
-		if err == nil {
-			if val, ok := config["free_rate_limit_rpm"]; ok {
-				if limit, err := strconv.Atoi(val); err == nil {
-					rpmLimit = limit
-				}
+		if val, ok := config["free_rate_limit_rpm"]; ok {
+			if limit, err := strconv.Atoi(val); err == nil {
+				rpmLimit = limit
 			}
-			if val, ok := config["free_fup_limit_seconds_daily"]; ok {
-				if limit, err := strconv.ParseFloat(val, 64); err == nil {
-					fupLimitSeconds = limit
-				}
-			}
-			if val, ok := config["free_monthly_limit_seconds"]; ok {
-				if limit, err := strconv.ParseFloat(val, 64); err == nil {
-					monthlyLimitSeconds = limit
-				}
+		}
+		if val, ok := config["free_monthly_limit_seconds"]; ok {
+			if limit, err := strconv.ParseFloat(val, 64); err == nil {
+				monthlyLimitSeconds = limit
 			}
 		}
 	}
 
-	// 2. Rate Limit Check (Requests Per Minute)
-	reqCount, err := database.GetUserRequestCountLastMinute(user.ID)
-	if err == nil && reqCount >= rpmLimit {
-		log.Printf("[RATE LIMIT] Request from %s denied: Exceeded limit (%d/%d requests in the last minute)", user.Email, reqCount, rpmLimit)
-		_ = database.LogUsage(user.ID, 0, 0, 0, 0, false, "", "", "", "failed_rate_limit", audioSizeBytes, "", "")
+	// 2. In-Memory Rate Limit Check (O(1) Memory Check)
+	if !globalUserRateLimiter.Allow(user.ID, rpmLimit) {
+		log.Printf("[RATE LIMIT] Request from %s denied: Exceeded limit (%d requests per minute allowed)", user.Email, rpmLimit)
+		go func() {
+			_ = database.LogUsageAndUpdateQuota(user.ID, 0, 0, 0, 0, false, "", "", "", "failed_rate_limit", audioSizeBytes, "", "")
+		}()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -1069,28 +1114,16 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	audioDuration := getOggOpusDuration(audioBytes)
 	oggParseDuration := time.Since(oggStart)
 
-	// 3. FUP Limit Check (Daily audio duration in seconds)
-	dailyDuration, err := database.GetUserDurationLast24Hours(user.ID)
-	if err == nil && dailyDuration+audioDuration > fupLimitSeconds {
-		log.Printf("[FUP LIMIT] Request from %s denied: Exceeded limit (%.1f + %.1f > %.1f daily seconds)", user.Email, dailyDuration, audioDuration, fupLimitSeconds)
-		_ = database.LogUsage(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_fup_limit", audioSizeBytes, "", "")
+	// 3. Monthly Usage Limit Check (O(1) in-memory check using pre-aggregated total from Auth Query)
+	if user.MonthlyUsageSeconds+audioDuration > monthlyLimitSeconds {
+		log.Printf("[MONTHLY LIMIT] Request from %s denied: Exceeded monthly limit (%.1f + %.1f > %.1f seconds)", user.Email, user.MonthlyUsageSeconds, audioDuration, monthlyLimitSeconds)
+		go func() {
+			_ = database.LogUsageAndUpdateQuota(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_monthly_limit", audioSizeBytes, "", "")
+		}()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": fmt.Sprintf("Fair Usage Policy (FUP) limit exceeded. Maximum daily audio duration allowed is %.0f seconds. You have already used %.1f seconds in the last 24 hours.", fupLimitSeconds, dailyDuration),
-		})
-		return
-	}
-
-	// 4. Monthly Usage Limit Check
-	monthlyDuration, err := database.GetUserDurationLast30Days(user.ID)
-	if err == nil && monthlyDuration+audioDuration > monthlyLimitSeconds {
-		log.Printf("[MONTHLY LIMIT] Request from %s denied: Exceeded monthly limit (%.1f + %.1f > %.1f seconds)", user.Email, monthlyDuration, audioDuration, monthlyLimitSeconds)
-		_ = database.LogUsage(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_monthly_limit", audioSizeBytes, "", "")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": fmt.Sprintf("Monthly usage limit exceeded. Your plan is limited to %.1f hours of transcription per month. You have already used %.1f hours in the last 30 days.", monthlyLimitSeconds/3600.0, monthlyDuration/3600.0),
+			"error": fmt.Sprintf("Monthly usage limit exceeded. Your plan is limited to %.1f hours of transcription per month. You have already used %.1f hours.", monthlyLimitSeconds/3600.0, user.MonthlyUsageSeconds/3600.0),
 		})
 		return
 	}
@@ -1122,15 +1155,8 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[TRANSCRIBE ERROR] Transcription failed: %v", whisperErr)
 	}
 
-	// 2. Fetch or Compile Vocabulary Cache
-	vocab, err := getOrCompileUserVocabulary(user.ID)
-	if err != nil {
-		log.Printf("[VOCABULARY CACHE ERROR] Failed to load/compile vocabulary for user %d: %v", user.ID, err)
-		vocab = &UserVocabulary{
-			NormalizedLookup: make(map[string]string),
-			TermsByCount:     make(map[int][]CompiledTerm),
-		}
-	}
+	// 2. Compile Vocabulary Cache directly in-memory from query results
+	vocab := CompileUserVocabulary(vocabTerms)
 
 	// 3. Assemble and run the modular TextTransform pipeline
 	var pipeline []TextTransform
@@ -1207,8 +1233,13 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	if enhance {
 		loggedModel = "deepseek-v4-flash"
 	}
-	// Log usage to database
-	_ = database.LogUsage(user.ID, audioDuration, groqLatency, dsLatency, totalLatency, enhance, loggedModel, rawText, finalOutput, status, audioSizeBytes, whisperProvider, pctx.LLMProvider)
+	// Log usage and update quota in database asynchronously in background
+	go func() {
+		err := database.LogUsageAndUpdateQuota(user.ID, audioDuration, groqLatency, dsLatency, totalLatency, enhance, loggedModel, rawText, finalOutput, status, audioSizeBytes, whisperProvider, pctx.LLMProvider)
+		if err != nil {
+			log.Printf("[ASYNC LOG ERROR] Failed to update usage log/quota: %v", err)
+		}
+	}()
 
 	// Output beautiful analytics block to the console
 	fmt.Println("\n" + strings.Repeat("=", 55))
@@ -1424,11 +1455,7 @@ func handleAdminGetConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
 		return
 	}
-	config, err := database.GetSaasConfig()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get config: %v", err), http.StatusInternalServerError)
-		return
-	}
+	config := configManager.GetRawAll()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(config)
 }
@@ -1450,6 +1477,7 @@ func handleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	syncConfigsFromDB() // Sync updates to memory cache immediately
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 }

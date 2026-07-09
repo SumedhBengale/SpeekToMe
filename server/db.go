@@ -46,7 +46,8 @@ func NewDatabase(connStr string) (*Database, error) {
 			razorpay_subscription_id TEXT,
 			rate_limit_rpm INTEGER DEFAULT NULL,
 			is_admin INTEGER DEFAULT 0,
-			totp_secret TEXT DEFAULT NULL
+			totp_secret TEXT DEFAULT NULL,
+			monthly_usage_seconds REAL DEFAULT 0.0
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY,
@@ -141,6 +142,7 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN monthly_usage_seconds REAL DEFAULT 0.0")
 	_, _ = db.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
 	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type)")
 	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id)")
@@ -200,17 +202,18 @@ type UserProfile struct {
 	RateLimitRPM           sql.NullInt64
 	IsAdmin                int
 	IsTempSession          int
+	MonthlyUsageSeconds    float64
 }
 
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0)
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +222,94 @@ func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	}
 	return &u, nil
 }
+
+func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []VocabularyTerm, error) {
+	now := time.Now().Format(time.RFC3339)
+	rows, err := d.db.Query(`
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, 
+		       COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), 
+		       u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0),
+		       v.canonical_term, v.normalized_term
+		FROM sessions s 
+		JOIN users u ON s.user_id = u.id 
+		LEFT JOIN vocabulary v ON u.id = v.user_id
+		WHERE s.token = ? AND s.expires_at > ?
+	`, token, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	var u UserProfile
+	var terms []VocabularyTerm
+	userParsed := false
+
+	for rows.Next() {
+		var canonical, normalized sql.NullString
+		err := rows.Scan(
+			&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, 
+			&u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, 
+			&u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds,
+			&canonical, &normalized,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		userParsed = true
+		if canonical.Valid {
+			terms = append(terms, VocabularyTerm{
+				Canonical:  canonical.String,
+				Normalized: normalized.String,
+			})
+		}
+	}
+
+	if !userParsed {
+		return nil, nil, fmt.Errorf("invalid or expired session token")
+	}
+
+	if u.IsTempSession == 1 {
+		return nil, nil, fmt.Errorf("2FA_REQUIRED")
+	}
+
+	return &u, terms, nil
+}
+
+func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int, transcriptionProvider, llmProvider string) error {
+	enhanceVal := 0
+	if enhanceEnabled {
+		enhanceVal = 1
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
+		INSERT INTO usage_logs (
+			user_id, audio_duration, whisper_time, llm_time, total_time, 
+			enhance_enabled, enhance_model, input_transcript, final_output, status, audio_size_bytes,
+			transcription_provider, llm_provider
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, userID, duration, whisperTime, llmTime, totalTime, enhanceVal, model, input, output, status, audioSizeBytes, transcriptionProvider, llmProvider)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`
+		UPDATE users 
+		SET monthly_usage_seconds = COALESCE(monthly_usage_seconds, 0.0) + ? 
+		WHERE id = ?
+	`, duration, userID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 
 func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, error) {
 	now := time.Now().Format(time.RFC3339)
