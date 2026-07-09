@@ -311,7 +311,7 @@ func main() {
 	audioPaths := []string{
 		"../uploads/jfk.wav",
 		"uploads/jfk.wav",
-		"server/jfk.wav",
+		"server/uploads/jfk.wav",
 	}
 	var audioBytes []byte
 	var err error
