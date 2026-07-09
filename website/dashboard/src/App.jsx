@@ -28,6 +28,8 @@ export default function App() {
   const [editPlanTier, setEditPlanTier] = useState('free');
   const [editPlanActive, setEditPlanActive] = useState(0);
   const [editRateLimit, setEditRateLimit] = useState('');
+  const [webhookLogs, setWebhookLogs] = useState([]);
+  const [adminSubTab, setAdminSubTab] = useState('users');
 
   // Dashboard Tab and details states
   const [vocabTerms, setVocabTerms] = useState([]);
@@ -325,6 +327,7 @@ export default function App() {
   useEffect(() => {
     if (token && route === 'admin') {
       fetchAdminUsers();
+      fetchWebhookLogs();
     }
   }, [token, route]);
 
@@ -346,6 +349,20 @@ export default function App() {
       setAuthError('Failed to connect to administrative server.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchWebhookLogs = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/admin/webhook-logs?limit=200`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookLogs(data || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch webhook logs:', err);
     }
   };
 
@@ -1319,14 +1336,33 @@ export default function App() {
               <h1 className="welcome-title">🛡️ Admin Panel</h1>
               <p>Manage users, override billing/subscription tiers, and customize rate limits.</p>
             </div>
-            <button onClick={fetchAdminUsers} className="btn" style={{ background: '#fff' }}>
-              🔄 Refresh List
+            <button onClick={() => { fetchAdminUsers(); fetchWebhookLogs(); }} className="btn" style={{ background: '#fff' }}>
+              🔄 Refresh
+            </button>
+          </div>
+
+          {/* Admin Sub-tabs */}
+          <div className="tab-navigation" style={{ marginBottom: '24px' }}>
+            <button
+              onClick={() => setAdminSubTab('users')}
+              className={`btn ${adminSubTab === 'users' ? 'btn-primary' : ''}`}
+            >
+              👥 Users
+            </button>
+            <button
+              onClick={() => setAdminSubTab('webhook-logs')}
+              className={`btn ${adminSubTab === 'webhook-logs' ? 'btn-primary' : ''}`}
+            >
+              📋 Webhook Logs
             </button>
           </div>
 
           {authError && <div className="auth-error" style={{ marginBottom: '20px' }}>{authError}</div>}
           {successMessage && <div className="auth-success" style={{ marginBottom: '20px', background: '#d1fae5', color: '#1a1a1a', border: '2px solid #1a1a1a', padding: '12px 14px', borderRadius: '12px', fontWeight: '500', boxShadow: '2px 2px 0px #1a1a1a' }}>{successMessage}</div>}
 
+          {/* Users Tab */}
+          {adminSubTab === 'users' && (
+            <>
           <div className="card" style={{ padding: '24px' }}>
             <h3 className="card-title" style={{ marginBottom: '20px' }}>👥 Active Users Directory</h3>
             <div className="logs-table-container">
@@ -1458,6 +1494,58 @@ export default function App() {
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+          )}
+            </>
+          )}
+
+          {/* Webhook Logs Tab */}
+          {adminSubTab === 'webhook-logs' && (
+            <div className="card" style={{ padding: '24px' }}>
+              <h3 className="card-title" style={{ marginBottom: '20px' }}>📋 Razorpay Webhook Event Log</h3>
+              <div className="logs-table-container">
+                <table className="logs-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Received At</th>
+                      <th>Event Type</th>
+                      <th>Subscription ID</th>
+                      <th>User ID</th>
+                      <th>Sub Status</th>
+                      <th>Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {webhookLogs.length === 0 ? (
+                      <tr>
+                        <td colSpan="7" style={{ textAlign: 'center', opacity: 0.5, padding: '24px' }}>No webhook events received yet.</td>
+                      </tr>
+                    ) : webhookLogs.map((log) => (
+                      <tr key={log.id}>
+                        <td>#{log.id}</td>
+                        <td style={{ fontSize: '12px', whiteSpace: 'nowrap' }}>{new Date(log.received_at).toLocaleString()}</td>
+                        <td>
+                          <code style={{ fontSize: '12px', background: '#f3f4f6', padding: '2px 6px', borderRadius: '4px' }}>
+                            {log.event_type}
+                          </code>
+                        </td>
+                        <td style={{ fontSize: '11px', opacity: 0.7 }}>{log.subscription_id || '—'}</td>
+                        <td>{log.user_id ? `#${log.user_id}` : '—'}</td>
+                        <td style={{ fontSize: '12px' }}>{log.status || '—'}</td>
+                        <td>
+                          <span
+                            className={`badge-status ${log.result === 'success' ? 'badge-success' : 'badge-failed'}`}
+                            title={log.result}
+                          >
+                            {log.result === 'success' ? '✅ success' : log.result.length > 24 ? log.result.slice(0, 24) + '…' : log.result}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

@@ -106,6 +106,19 @@ func NewDatabase(connStr string) (*Database, error) {
 			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 		);
 		CREATE INDEX IF NOT EXISTS idx_meetings_user ON meetings(user_id);
+
+		CREATE TABLE IF NOT EXISTS webhook_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			event_type TEXT NOT NULL,
+			subscription_id TEXT,
+			user_id INTEGER,
+			status TEXT,
+			result TEXT,
+			raw_payload TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type);
+		CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id);
 	`)
 	if err != nil {
 		db.Close()
@@ -128,6 +141,9 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0")
+	_, _ = db.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type)")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id)")
 
 	// Set default configurations
 	configs := map[string]string{
@@ -655,5 +671,47 @@ func (d *Database) GetUserBySubscriptionID(subID string) (int64, error) {
 		return 0, err
 	}
 	return userID, nil
+}
+
+type WebhookLogEntry struct {
+	ID             int64   `json:"id"`
+	ReceivedAt     string  `json:"received_at"`
+	EventType      string  `json:"event_type"`
+	SubscriptionID string  `json:"subscription_id"`
+	UserID         *int64  `json:"user_id"`
+	Status         string  `json:"status"`
+	Result         string  `json:"result"`
+	RawPayload     string  `json:"raw_payload"`
+}
+
+func (d *Database) InsertWebhookLog(eventType, subscriptionID string, userID *int64, status, result, rawPayload string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO webhook_logs (event_type, subscription_id, user_id, status, result, raw_payload)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, eventType, subscriptionID, userID, status, result, rawPayload)
+	return err
+}
+
+func (d *Database) GetWebhookLogs(limit int) ([]WebhookLogEntry, error) {
+	rows, err := d.db.Query(`
+		SELECT id, received_at, event_type, subscription_id, user_id, status, result, raw_payload
+		FROM webhook_logs
+		ORDER BY received_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []WebhookLogEntry
+	for rows.Next() {
+		var entry WebhookLogEntry
+		if err := rows.Scan(&entry.ID, &entry.ReceivedAt, &entry.EventType, &entry.SubscriptionID, &entry.UserID, &entry.Status, &entry.Result, &entry.RawPayload); err != nil {
+			return nil, err
+		}
+		logs = append(logs, entry)
+	}
+	return logs, nil
 }
 
