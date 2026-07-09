@@ -43,7 +43,8 @@ func NewDatabase(connStr string) (*Database, error) {
 			password_hash TEXT,
 			is_verified INTEGER DEFAULT 0,
 			verification_token TEXT,
-			razorpay_subscription_id TEXT
+			razorpay_subscription_id TEXT,
+			rate_limit_rpm INTEGER DEFAULT NULL
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY,
@@ -120,6 +121,7 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN transcription_provider TEXT DEFAULT ''")
 	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN rate_limit_rpm INTEGER DEFAULT NULL")
 
 	// Set default configurations
 	configs := map[string]string{
@@ -129,6 +131,12 @@ func NewDatabase(connStr string) (*Database, error) {
 		"paid_fup_limit_seconds_daily": "3600",
 		"free_monthly_limit_seconds":   "3600",
 		"paid_monthly_limit_seconds":   "180000",
+		"whisper_default_provider":     "groq",
+		"groq_enabled":                 "true",
+		"deepinfra_enabled":            "true",
+		"cloudflare_enabled":           "true",
+		"groq_rate_limit_rpm":          "20",
+		"default_user_rate_limit_rpm":  "10",
 	}
 	for k, v := range configs {
 		_, _ = db.Exec("INSERT OR IGNORE INTO saas_config (key, value) VALUES (?, ?)", k, v)
@@ -167,17 +175,18 @@ type UserProfile struct {
 	PlanActive             int
 	PlanActivatedAt        string
 	RazorpaySubscriptionID string
+	RateLimitRPM           sql.NullInt64
 }
 
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, '') 
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM)
 	if err != nil {
 		return nil, err
 	}

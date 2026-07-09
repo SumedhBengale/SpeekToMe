@@ -87,7 +87,121 @@ func (r *RollingRateLimiter) Allow() bool {
 	return false
 }
 
-var groqRateLimiter = NewRollingRateLimiter(20, 60*time.Second) // 20 requests per minute
+type ProviderConfig struct {
+	DefaultProvider         string
+	GroqEnabled             bool
+	DeepInfraEnabled        bool
+	CloudflareEnabled       bool
+	GroqRateLimitRPM        int
+	DefaultUserRateLimitRPM int
+}
+
+type CachedConfigManager struct {
+	mu     sync.RWMutex
+	config ProviderConfig
+}
+
+func (m *CachedConfigManager) Get() ProviderConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config
+}
+
+func (m *CachedConfigManager) Set(c ProviderConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config = c
+}
+
+var configManager = &CachedConfigManager{
+	config: ProviderConfig{
+		DefaultProvider:         "groq",
+		GroqEnabled:             true,
+		DeepInfraEnabled:        true,
+		CloudflareEnabled:       true,
+		GroqRateLimitRPM:        20,
+		DefaultUserRateLimitRPM: 10,
+	},
+}
+
+var groqRateLimiter = NewRollingRateLimiter(20, 60*time.Second) // Starts at 20 RPM (synchronized from DB)
+
+type UserRateLimiterRegistry struct {
+	mu       sync.Mutex
+	limiters map[int64]*RollingRateLimiter
+}
+
+func (r *UserRateLimiterRegistry) GetLimiter(userID int64, limit int) *RollingRateLimiter {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	limiter, exists := r.limiters[userID]
+	if !exists {
+		limiter = NewRollingRateLimiter(limit, 60*time.Second)
+		r.limiters[userID] = limiter
+		return limiter
+	}
+
+	limiter.mu.Lock()
+	limiter.limit = limit
+	limiter.mu.Unlock()
+
+	return limiter
+}
+
+var userRateLimiterRegistry = &UserRateLimiterRegistry{
+	limiters: make(map[int64]*RollingRateLimiter),
+}
+
+func syncConfigsFromDB() {
+	if database == nil {
+		return
+	}
+	dbConfigs, err := database.GetSaasConfig()
+	if err != nil {
+		log.Printf("[CONFIG SYNC ERROR] Failed to query saas_config: %v", err)
+		return
+	}
+
+	newConfig := ProviderConfig{
+		DefaultProvider:         "groq",
+		GroqEnabled:             true,
+		DeepInfraEnabled:        true,
+		CloudflareEnabled:       true,
+		GroqRateLimitRPM:        20,
+		DefaultUserRateLimitRPM: 10,
+	}
+
+	if val, ok := dbConfigs["whisper_default_provider"]; ok && val != "" {
+		newConfig.DefaultProvider = val
+	}
+	if val, ok := dbConfigs["groq_enabled"]; ok {
+		newConfig.GroqEnabled = val == "true"
+	}
+	if val, ok := dbConfigs["deepinfra_enabled"]; ok {
+		newConfig.DeepInfraEnabled = val == "true"
+	}
+	if val, ok := dbConfigs["cloudflare_enabled"]; ok {
+		newConfig.CloudflareEnabled = val == "true"
+	}
+	if val, ok := dbConfigs["groq_rate_limit_rpm"]; ok {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			newConfig.GroqRateLimitRPM = limit
+		}
+	}
+	if val, ok := dbConfigs["default_user_rate_limit_rpm"]; ok {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			newConfig.DefaultUserRateLimitRPM = limit
+		}
+	}
+
+	configManager.Set(newConfig)
+
+	// Dynamically adjust the global Groq rate limiter limit
+	groqRateLimiter.mu.Lock()
+	groqRateLimiter.limit = newConfig.GroqRateLimitRPM
+	groqRateLimiter.mu.Unlock()
+}
 
 func main() {
 	vocabCache = NewVocabularyCache()
@@ -118,6 +232,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
+
+	// Initialize configs from DB and start background synchronization loop
+	syncConfigsFromDB()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			syncConfigsFromDB()
+		}
+	}()
 
 	// Router using standard library multiplexer routing
 	mux := http.NewServeMux()
@@ -2117,49 +2241,72 @@ func runGroqTranscribe(ctx context.Context, audioBytes []byte, model string) (st
 }
 
 func runWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, string, error) {
-	if GROQ_API_KEY != "" {
-		if groqRateLimiter.Allow() {
-			log.Printf("[GROQ] Attempting transcription using model %s", model)
-			text, segments, loc, err := runGroqTranscribe(ctx, audioBytes, model)
-			if err == nil {
-				return text, segments, "groq", loc, nil
+	cfg := configManager.Get()
+
+	// Determine the order of providers to try based on dynamic DefaultProvider configuration
+	providers := []string{cfg.DefaultProvider}
+	allProviders := []string{"groq", "deepinfra", "cloudflare"}
+	for _, p := range allProviders {
+		if p != cfg.DefaultProvider {
+			providers = append(providers, p)
+		}
+	}
+
+	var lastErr error
+	for _, provider := range providers {
+		switch provider {
+		case "groq":
+			if cfg.GroqEnabled && GROQ_API_KEY != "" {
+				if groqRateLimiter.Allow() {
+					log.Printf("[GROQ] Attempting transcription using model %s", model)
+					text, segments, loc, err := runGroqTranscribe(ctx, audioBytes, model)
+					if err == nil {
+						return text, segments, "groq", loc, nil
+					}
+					log.Printf("[GROQ ERROR] Transcription failed: %v. Trying fallback.", err)
+					lastErr = err
+				} else {
+					log.Printf("[GROQ LIMIT] Global rate limit reached (limit: %d RPM). Trying fallback.", cfg.GroqRateLimitRPM)
+					lastErr = fmt.Errorf("groq rate limit reached")
+				}
 			}
-			log.Printf("[GROQ ERROR] Transcription failed: %v. Falling back to DeepInfra.", err)
-		} else {
-			log.Printf("[GROQ LIMIT] Local rate limit reached (20 RPM). Bypassing to DeepInfra.")
+		case "deepinfra":
+			if cfg.DeepInfraEnabled && DEEPINFRA_API_KEY != "" {
+				diModel := "openai/whisper-large-v3-turbo"
+				if model == "whisper-large-v3" {
+					diModel = "openai/whisper-large-v3"
+				}
+				diURL := DEEPINFRA_BASE_URL + diModel
+
+				log.Printf("[DI INFRA] Attempting transcription using model %s", diModel)
+				text, segments, loc, err := runDeepInfraTranscribe(ctx, audioBytes, diURL)
+				if err == nil {
+					return text, segments, "deepinfra", loc, nil
+				}
+				log.Printf("[DI INFRA ERROR] Transcription failed: %v. Trying fallback.", err)
+				lastErr = err
+			}
+		case "cloudflare":
+			if cfg.CloudflareEnabled && CLOUDFLARE_API_TOKEN != "" && CLOUDFLARE_ACCOUNT_ID != "" {
+				cfModel := "@cf/openai/whisper-large-v3-turbo"
+				if model == "whisper-large-v3" {
+					cfModel = "@cf/openai/whisper"
+				}
+				log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s", cfModel)
+				text, segments, loc, err := runCloudflareTranscribe(ctx, audioBytes, cfModel)
+				if err == nil {
+					return text, segments, "cloudflare", loc, nil
+				}
+				log.Printf("[CLOUDFLARE AI ERROR] Transcription failed: %v. Trying fallback.", err)
+				lastErr = err
+			}
 		}
 	}
 
-	if DEEPINFRA_API_KEY != "" {
-		diModel := "openai/whisper-large-v3-turbo"
-		if model == "whisper-large-v3" {
-			diModel = "openai/whisper-large-v3"
-		}
-		diURL := DEEPINFRA_BASE_URL + diModel
-
-		log.Printf("[DI INFRA] Attempting transcription using model %s", diModel)
-		text, segments, loc, err := runDeepInfraTranscribe(ctx, audioBytes, diURL)
-		if err == nil {
-			return text, segments, "deepinfra", loc, nil
-		}
-		log.Printf("[DI INFRA ERROR] Transcription failed: %v. Falling back to Cloudflare.", err)
+	if lastErr != nil {
+		return "", nil, "", "", fmt.Errorf("all enabled transcription providers failed. Last error: %v", lastErr)
 	}
-
-	if CLOUDFLARE_API_TOKEN != "" && CLOUDFLARE_ACCOUNT_ID != "" {
-		cfModel := "@cf/openai/whisper-large-v3-turbo"
-		if model == "whisper-large-v3" {
-			cfModel = "@cf/openai/whisper"
-		}
-		log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s", cfModel)
-		text, segments, loc, err := runCloudflareTranscribe(ctx, audioBytes, cfModel)
-		if err == nil {
-			return text, segments, "cloudflare", loc, nil
-		}
-		log.Printf("[CLOUDFLARE AI ERROR] Transcription failed: %v", err)
-		return "", nil, "", "", err
-	}
-
-	return "", nil, "", "", fmt.Errorf("no transcription providers (Groq, DeepInfra or Cloudflare) are configured or succeeded")
+	return "", nil, "", "", fmt.Errorf("no transcription providers are enabled or configured")
 }
 
 func runWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
@@ -2176,6 +2323,17 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	user, err := authenticate(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Enforce dynamic per-user rate limiting using database config / custom user override
+	limit := configManager.Get().DefaultUserRateLimitRPM
+	if user.RateLimitRPM.Valid {
+		limit = int(user.RateLimitRPM.Int64)
+	}
+	userLimiter := userRateLimiterRegistry.GetLimiter(user.ID, limit)
+	if !userLimiter.Allow() {
+		http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
 		return
 	}
 
