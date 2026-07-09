@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -326,7 +327,12 @@ func main() {
 		log.Fatalf("Could not load test audio file. Error: %v", err)
 	}
 
-	const totalRequests = 1
+	totalRequests := 1
+	if len(os.Args) > 1 {
+		if val, err := strconv.Atoi(os.Args[1]); err == nil && val > 0 {
+			totalRequests = val
+		}
+	}
 	var activeProviders int
 	if runCF {
 		activeProviders++
