@@ -1,6 +1,8 @@
 # 1. Build React dashboard
 Push-Location dashboard
+$env:VITE_API_URL="https://api.speekto.me"
 npm run build
+Remove-Item Env:\VITE_API_URL
 Pop-Location
 
 # 2. Copy root marketing pages & static files to dist/
