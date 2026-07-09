@@ -162,7 +162,7 @@ h2 {
 }
 
 .setting-group label.accent-label {
-  color: var(--accent-color);
+  color: var(--text-primary);
   font-weight: 600;
 }
 
@@ -738,46 +738,46 @@ h2 {
 
 /* Forest Theme (Default / Brand Matching / Pale Cream & Lavender Layout) */
 body[data-theme="forest"] {
-  --bg-sidebar: #ffffee;           /* Warm/Pale Cream */
-  --bg-content: #fffdf9;           /* Near White */
-  --border-color: #1a1a1a;         /* Dark Charcoal borders */
-  --accent-color: #f0d7ff;         /* Pastel Lavender active highlights */
-  --accent-hover: #e5cdff;
-  --text-primary: #1a1a1a;         /* Dark Charcoal text */
-  --text-secondary: #4a4a4d;       /* Muted Charcoal text */
+  --bg-sidebar: #fff0f2;           /* Light Pinkish Cream */
+  --bg-content: #fff9fa;           /* Pinkish White brand canvas */
+  --border-color: #240a12;         /* Dark Burgundy borders */
+  --accent-color: #ffd1dc;         /* Soft Pink active highlights */
+  --accent-hover: #ffb7c5;
+  --text-primary: #240a12;         /* Dark Burgundy text */
+  --text-secondary: #573f46;       /* Muted Burgundy text */
   --input-bg: #ffffff;
-  --input-border: #1a1a1a;
-  --input-focus-border: #1a1a1a;
-  --onboard-bg: #fffdf9;
-  --card-bg: #ffffee;
-  --avatar-bg: #f0d7ff;
-  --progress-bg: rgba(26, 26, 26, 0.08);
-  --scroll-thumb: rgba(26, 26, 26, 0.15);
+  --input-border: #240a12;
+  --input-focus-border: #ffd1dc;
+  --onboard-bg: #fff9fa;
+  --card-bg: #fff0f2;
+  --avatar-bg: #ffd1dc;
+  --progress-bg: rgba(36, 10, 18, 0.08);
+  --scroll-thumb: rgba(36, 10, 18, 0.15);
   
   /* Sidebar Navigation Active states */
-  --nav-active-bg: #f0d7ff;        /* Lavender active tab */
-  --nav-active-text: #1a1a1a;      /* Charcoal active text */
+  --nav-active-bg: #ffd1dc;        /* Pink active tab */
+  --nav-active-text: #240a12;      /* Burgundy active text */
   
-  /* Card Header elements (Lavender or Forest Green highlights) */
-  --card-header-color: #034f46;    /* Deep Forest Green headings */
+  /* Card Header elements (Burgundy highlights) */
+  --card-header-color: #40101d;    /* Deep Burgundy headings */
   
   /* Active status badges on light canvas */
-  --badge-active-color: #034f46;
-  --badge-active-bg: #d1fae5;
-  --badge-inactive-color: #b43232;
-  --badge-inactive-bg: #fee2e2;
+  --badge-active-color: #ffffff;
+  --badge-active-bg: #40101d;
+  --badge-inactive-color: #8f2030;
+  --badge-inactive-bg: #ffe1e5;
   
   /* Buttons and checkmarks overrides */
-  --btn-primary-bg: #f0d7ff;
-  --btn-primary-border: #1a1a1a;
-  --btn-primary-text: #1a1a1a;
-  --btn-primary-hover-bg: #e5cdff;
+  --btn-primary-bg: #ffd1dc;
+  --btn-primary-border: #240a12;
+  --btn-primary-text: #240a12;
+  --btn-primary-hover-bg: #ffb7c5;
   
-  --checkmark-color: #1a1a1a;
+  --checkmark-color: #240a12;
 }
 body[data-theme="forest"] #app {
-  background: #fffdf9;
-  border: 2px solid #1a1a1a;
+  background: #fff9fa;
+  border: 2px solid #240a12;
 }
 
 /* Lavender Theme (Sleek Pastel Lavender) */
@@ -1182,5 +1182,68 @@ body[data-theme="forest"] .meeting-speaker-time {
 
 body[data-theme="forest"] .meeting-speaker-text {
   color: #1a1a1a;
+}
+
+/* AI Prompt Safety Validation Banners */
+.validation-banner {
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-top: 10px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  line-height: 1.4;
+  backdrop-filter: blur(10px);
+  animation: fadeIn 0.25s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.validation-banner.hidden {
+  display: none !important;
+}
+
+.validation-banner.error {
+  background: rgba(255, 82, 82, 0.12);
+  border: 1px solid rgba(255, 82, 82, 0.25);
+  color: #ff5252;
+}
+
+.validation-banner.success {
+  background: rgba(0, 230, 118, 0.12);
+  border: 1px solid rgba(0, 230, 118, 0.25);
+  color: #00e676;
+}
+
+.validation-banner.info {
+  background: rgba(33, 150, 243, 0.12);
+  border: 1px solid rgba(33, 150, 243, 0.25);
+  color: #2196f3;
+}
+
+/* Light Theme (Forest Theme) overrides for validation banners */
+body[data-theme="forest"] .validation-banner.error {
+  background: #fdf2f2;
+  border: 1px solid #fecaca;
+  color: #9b1c1c;
+}
+
+body[data-theme="forest"] .validation-banner.success {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #15803d;
+}
+
+body[data-theme="forest"] .validation-banner.info {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  color: #0369a1;
+}
+
+/* Spinner adjustment inside banners */
+.validation-banner .spinner {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
 }
 

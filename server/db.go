@@ -42,7 +42,8 @@ func NewDatabase(connStr string) (*Database, error) {
 			plan_activated_at TIMESTAMP,
 			password_hash TEXT,
 			is_verified INTEGER DEFAULT 0,
-			verification_token TEXT
+			verification_token TEXT,
+			razorpay_subscription_id TEXT
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY,
@@ -118,6 +119,7 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN verification_token TEXT")
 	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN transcription_provider TEXT DEFAULT ''")
 	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
 
 	// Set default configurations
 	configs := map[string]string{
@@ -158,23 +160,24 @@ func (d *Database) CreateSession(token string, userID int64) error {
 }
 
 type UserProfile struct {
-	ID              int64
-	Email           string
-	Name            string
-	PlanTier        string
-	PlanActive      int
-	PlanActivatedAt string
+	ID                     int64
+	Email                  string
+	Name                   string
+	PlanTier               string
+	PlanActive             int
+	PlanActivatedAt        string
+	RazorpaySubscriptionID string
 }
 
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at) 
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, '') 
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +229,8 @@ func (d *Database) GetUserDurationLast24Hours(userID int64) (float64, error) {
 }
 
 // Admin helpers
-func (d *Database) UpdateUserPlan(userID int64, planTier string, planActive int) error {
-	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP WHERE id = ?", planTier, planActive, userID)
+func (d *Database) UpdateUserPlan(userID int64, planTier string, planActive int, subID string) error {
+	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP, razorpay_subscription_id = ? WHERE id = ?", planTier, planActive, subID, userID)
 	return err
 }
 

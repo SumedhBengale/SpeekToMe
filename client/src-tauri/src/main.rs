@@ -202,7 +202,8 @@ fn main() {
             stop_meeting,
             get_meeting_levels,
             upload_meeting,
-            get_api_url
+            get_api_url,
+            validate_prompt
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -259,6 +260,13 @@ fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
     let config = get_active_config().lock().unwrap();
     let token = config.session_token.as_ref().ok_or("Not logged in")?;
     crate::api::upload_meeting(token, &title, &filepath)
+}
+
+#[tauri::command]
+fn validate_prompt(prompt: String) -> Result<api::PromptValidationResult, String> {
+    let config = get_active_config().lock().unwrap();
+    let token = config.session_token.as_ref().ok_or("Not logged in")?;
+    api::validate_custom_prompt(token, &prompt)
 }
 
 

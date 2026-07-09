@@ -79,7 +79,7 @@ pub unsafe extern "system" fn wnd_proc_overlay(hwnd: HWND, msg: u32, wparam: WPA
             let (bg_color, border_color, wave_color) = {
                 let config = crate::get_active_config().lock().unwrap();
                 match config.theme.as_str() {
-                    "forest" => (0xEEFFFF, 0x1A1A1A, 0xFFD7F0),   // Cream BG, Charcoal border, Lavender waveform
+                    "forest" => (0xFAF9FF, 0x120A24, 0xDCD1FF),   // Pinkish Cream BG, Burgundy border, Rose waveform
                     "lavender" => (0x2F101A, 0xFFD7F0, 0xFFD7F0), // Dark Purple BG, Lavender border & waveform
                     "mint" => (0x1C220A, 0xD0F3A7, 0xD0F3A7),     // Dark Mint BG, Mint border & waveform
                     _ => (0x1E1C1C, 0x76E600, 0x76E600),          // Classic Dark BG, Neon green border & waveform

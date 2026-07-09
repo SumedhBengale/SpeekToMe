@@ -24,6 +24,7 @@ const smartSpacingCheck = document.getElementById('smart-spacing-check');
 const modelSelect = document.getElementById('model-select');
 const enhanceCheck = document.getElementById('enhance-check');
 const customPromptText = document.getElementById('custom-prompt-text');
+const promptValidationBanner = document.getElementById('prompt-validation-banner');
 const themeSelect = document.getElementById('theme-select');
 
 // Dashboard Account Elements
@@ -64,6 +65,7 @@ const onboardSoundFeedbackCheck = document.getElementById('onboard-sound-feedbac
 const onboardModelSelect = document.getElementById('onboard-model-select');
 const onboardEnhanceCheck = document.getElementById('onboard-enhance-check');
 const onboardCustomPromptText = document.getElementById('onboard-custom-prompt-text');
+const onboardPromptValidationBanner = document.getElementById('onboard-prompt-validation-banner');
 const onboardThemeSelect = document.getElementById('onboard-theme-select');
 
 // ==========================================
@@ -169,7 +171,7 @@ async function init() {
     onboardCancelLoginBtn.addEventListener('click', () => triggerCancelLogin(true));
     onboardNext1Btn.addEventListener('click', () => goToStep(2));
     onboardNext2Btn.addEventListener('click', () => goToStep(3));
-    onboardNext3Btn.addEventListener('click', () => goToStep(4));
+    onboardNext3Btn.addEventListener('click', validateOnboardingPrompt);
     onboardFinishBtn.addEventListener('click', finishOnboarding);
 
     // 7. Setup OAuth event listeners
@@ -292,13 +294,145 @@ function gatherConfigFromUI(isOnboarding) {
 }
 
 async function saveAndApply() {
+  const banner = promptValidationBanner;
+  const prompt = customPromptText.value.trim();
+  const originalText = saveBtn.innerHTML;
+
+  if (banner) {
+    banner.classList.add('hidden');
+    banner.className = 'validation-banner hidden';
+    banner.innerHTML = '';
+  }
+
+  // If enhance is enabled and prompt is not empty, validate it first
+  if (enhanceCheck.checked && prompt !== '') {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<span>⏳</span> Validating...';
+
+    if (banner) {
+      banner.classList.remove('hidden');
+      banner.className = 'validation-banner info';
+      banner.innerHTML = '<div class="spinner"></div> Checking instruction safety...';
+    }
+
+    try {
+      const result = await invoke('validate_prompt', { prompt: prompt });
+      if (!result.safe) {
+        if (banner) {
+          banner.className = 'validation-banner error';
+          banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${result.explanation || 'Not eligible to be a system prompt.'}`;
+        }
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = originalText;
+        return; // Block saving
+      }
+      
+      if (banner) {
+        banner.className = 'validation-banner success';
+        banner.innerHTML = '<span>✅</span> Instructions validated!';
+      }
+      // Brief delay to let the user see validation success state
+      await new Promise(resolve => setTimeout(resolve, 800));
+    } catch (err) {
+      console.error("Failed to validate custom prompt:", err);
+      if (banner) {
+        banner.className = 'validation-banner error';
+        banner.innerHTML = `<span>❌</span> Validation error: ${formatAuthError(err)}`;
+      }
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = originalText;
+      return; // Block saving on validation error
+    }
+  }
+
   try {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<span>⏳</span> Saving...';
     const updated = gatherConfigFromUI(false);
     await invoke('save_config', { config: updated });
     currentConfig = updated;
-    hideWindow();
+    
+    saveBtn.innerHTML = '<span>✅</span> Saved Successfully!';
+    if (banner) {
+      banner.className = 'validation-banner success';
+      banner.innerHTML = '<span>✅</span> Settings saved and applied!';
+      banner.classList.remove('hidden');
+    }
+    
+    // Reset save button after a brief delay
+    setTimeout(() => {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = originalText;
+      if (banner) {
+        banner.classList.add('hidden');
+      }
+    }, 2000);
   } catch (err) {
     console.error("Failed to save config:", err);
+    saveBtn.disabled = false;
+    saveBtn.innerHTML = originalText;
+    if (banner) {
+      banner.className = 'validation-banner error';
+      banner.innerHTML = `<span>❌</span> Save failed: ${formatAuthError(err)}`;
+      banner.classList.remove('hidden');
+    }
+  }
+}
+
+async function validateOnboardingPrompt() {
+  const prompt = onboardCustomPromptText.value.trim();
+  const banner = onboardPromptValidationBanner;
+  
+  if (!banner) {
+    goToStep(4);
+    return;
+  }
+  
+  // Hide any previous validation state
+  banner.classList.add('hidden');
+  banner.className = 'validation-banner hidden';
+  banner.innerHTML = '';
+
+  // If prompt is empty or AI enhancement is disabled, proceed immediately
+  if (!onboardEnhanceCheck.checked || prompt === '') {
+    goToStep(4);
+    return;
+  }
+
+  // Validate the prompt
+  onboardNext3Btn.disabled = true;
+  const originalText = onboardNext3Btn.innerHTML;
+  onboardNext3Btn.innerHTML = '<span>⏳</span> Validating instructions...';
+  
+  banner.classList.remove('hidden');
+  banner.className = 'validation-banner info';
+  banner.innerHTML = '<div class="spinner"></div> Checking instruction safety...';
+
+  try {
+    const result = await invoke('validate_prompt', { prompt: prompt });
+    if (result.safe) {
+      banner.className = 'validation-banner success';
+      banner.innerHTML = '<span>✅</span> Instructions are safe and ready!';
+      
+      // Delay slightly so the user sees the success state, then transition
+      setTimeout(() => {
+        banner.classList.add('hidden');
+        onboardNext3Btn.disabled = false;
+        onboardNext3Btn.innerHTML = originalText;
+        goToStep(4);
+      }, 1000);
+    } else {
+      banner.className = 'validation-banner error';
+      banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${result.explanation || 'Not eligible to be a system prompt.'}`;
+      onboardNext3Btn.disabled = false;
+      onboardNext3Btn.innerHTML = originalText;
+    }
+  } catch (err) {
+    console.error("Failed to validate onboarding prompt:", err);
+    banner.className = 'validation-banner error';
+    banner.innerHTML = `<span>❌</span> Validation error: ${formatAuthError(err)}`;
+    onboardNext3Btn.disabled = false;
+    onboardNext3Btn.innerHTML = originalText;
   }
 }
 

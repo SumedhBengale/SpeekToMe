@@ -465,3 +465,34 @@ pub fn upload_meeting(token: &str, title: &str, filepath: &str) -> Result<String
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PromptValidationResult {
+    pub safe: bool,
+    pub explanation: Option<String>,
+}
+
+pub fn validate_custom_prompt(token: &str, prompt: &str) -> Result<PromptValidationResult, String> {
+    let client = create_client();
+    let mut map = std::collections::HashMap::new();
+    map.insert("prompt", prompt);
+
+    match client.post(format!("{}/validate-prompt", get_api_url()))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&map)
+        .send()
+    {
+        Ok(res) => {
+            let status = res.status();
+            let body_text = res.text().unwrap_or_default();
+            if status.is_success() {
+                if let Ok(val_res) = serde_json::from_str::<PromptValidationResult>(&body_text) {
+                    return Ok(val_res);
+                }
+                return Err("Failed to parse prompt validation response".to_string());
+            }
+            Err(format!("Prompt validation failed: {}", body_text))
+        }
+        Err(e) => Err(format!("Failed to connect to server: {}", e)),
+    }
+}
+

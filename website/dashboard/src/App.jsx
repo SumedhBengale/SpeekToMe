@@ -18,6 +18,14 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
 
+  // Dashboard Tab and details states
+  const [vocabTerms, setVocabTerms] = useState([]);
+  const [meetings, setMeetings] = useState([]);
+  const [activeMeeting, setActiveMeeting] = useState(null);
+  const [newVocabTerm, setNewVocabTerm] = useState('');
+  const [activeSubTab, setActiveSubTab] = useState('stats');
+  const [showCancelModal, setShowCancelModal] = useState(false);
+
   // 1. Initial Authentication & Redirect check
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -66,6 +74,8 @@ export default function App() {
         setUser(data);
         setRoute('dashboard');
         fetchUsageLogs();
+        fetchVocabulary();
+        fetchMeetings();
       } else {
         // Token invalid or expired
         handleLogoutLocal();
@@ -92,12 +102,127 @@ export default function App() {
     }
   };
 
+  const fetchVocabulary = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/auth/vocabulary`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setVocabTerms(data || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch vocabulary:", err);
+    }
+  };
+
+  const handleAddVocab = async (e) => {
+    e.preventDefault();
+    if (!newVocabTerm.trim() || !token) return;
+    setAuthError('');
+    setSuccessMessage('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/vocabulary`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ canonical_term: newVocabTerm.trim() })
+      });
+      if (res.ok) {
+        setNewVocabTerm('');
+        fetchVocabulary();
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || "Failed to add vocabulary term.");
+      }
+    } catch (err) {
+      setAuthError("Could not connect to server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteVocab = async (term) => {
+    if (!token) return;
+    setAuthError('');
+    setSuccessMessage('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/vocabulary`, {
+        method: 'DELETE',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ canonical_term: term })
+      });
+      if (res.ok) {
+        fetchVocabulary();
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || "Failed to delete vocabulary term.");
+      }
+    } catch (err) {
+      setAuthError("Could not connect to server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchMeetings = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/meetings`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMeetings(data || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch meetings:", err);
+    }
+  };
+
+  const handleDeleteMeeting = async (id) => {
+    if (!token) return;
+    if (!window.confirm("Are you sure you want to delete this meeting notes record? This will permanently delete the audio and summaries.")) return;
+    setAuthError('');
+    setSuccessMessage('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/meetings/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setActiveMeeting(null);
+        fetchMeetings();
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || "Failed to delete meeting.");
+      }
+    } catch (err) {
+      setAuthError("Could not connect to server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogoutLocal = () => {
     localStorage.removeItem('speektome_token');
     setToken('');
     setUser(null);
     setLogs([]);
+    setVocabTerms([]);
+    setMeetings([]);
+    setActiveMeeting(null);
     setRoute('login');
+    setActiveSubTab('stats');
   };
 
   const handleLogout = async () => {
@@ -257,6 +382,33 @@ export default function App() {
     } catch (err) {
       console.error("Upgrade error:", err);
       setAuthError("Could not connect to billing server.");
+    }
+  };
+  const handleConfirmCancelSubscription = async () => {
+    if (!token) return;
+    setAuthError('');
+    setSuccessMessage('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/billing/cancel-subscription`, {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${token}` 
+        }
+      });
+      if (res.ok) {
+        setSuccessMessage("Your subscription was successfully cancelled. You have been returned to the Starter plan.");
+        setShowCancelModal(false);
+        fetchUserProfile();
+        setRoute('dashboard');
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || "Failed to cancel subscription.");
+      }
+    } catch (err) {
+      setAuthError("Could not connect to billing server.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -472,100 +624,328 @@ export default function App() {
             <p>Here is your current SpeekTo.Me usage and transcription analytics.</p>
           </div>
 
-          <div className="grid-dashboard">
-            {/* Left Column: Logs */}
-            <div className="dashboard-col">
-              <div className="card">
-                <h3 className="card-title">🎙️ Recent Transcriptions</h3>
-                {logs.length === 0 ? (
-                  <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
-                    No recent dictations found. Open SpeekTo.Me on your desktop to make your first transcription!
-                  </p>
-                ) : (
-                  <div className="logs-table-container">
-                    <table className="logs-table">
-                      <thead>
-                        <tr>
-                          <th>Date</th>
-                          <th>Duration</th>
-                          <th>Speed</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {logs.map((log, idx) => (
-                          <tr key={idx}>
-                            <td>{formatDate(log.timestamp)}</td>
-                            <td>{formatSeconds(log.audio_duration)}</td>
-                            <td>{log.total_time ? `${log.total_time.toFixed(1)}s` : 'N/A'}</td>
-                            <td>
-                              <span className={`badge-status ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
-                                {log.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </div>
+          {/* Sub-tab Navigation */}
+          <div className="tab-navigation">
+            <button 
+              onClick={() => { setActiveSubTab('stats'); setActiveMeeting(null); }} 
+              className={`btn ${activeSubTab === 'stats' ? 'btn-primary' : ''}`}
+            >
+              📊 Stats & Logs
+            </button>
+            <button 
+              onClick={() => { setActiveSubTab('vocab'); setActiveMeeting(null); }} 
+              className={`btn ${activeSubTab === 'vocab' ? 'btn-primary' : ''}`}
+            >
+              📖 Custom Vocabulary
+            </button>
+            <button 
+              onClick={() => { setActiveSubTab('meetings'); }} 
+              className={`btn ${activeSubTab === 'meetings' ? 'btn-primary' : ''}`}
+            >
+              📝 Meeting Notes
+            </button>
+          </div>
 
-            {/* Right Column: Usage Limits & Subscription */}
-            <div className="dashboard-col">
-              <div className="card">
-                <h3 className="card-title">📊 Usage Analytics</h3>
-                
-                <div className="usage-summary">
-                  <div className="usage-stats">
-                    <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
-                    <span>{formatSecondsToHours(user.duration_seconds)} / {user.plan_tier === 'pro' ? '50.0h' : '1.0h'}</span>
-                  </div>
-                  
-                  <div className="progress-bar-container">
-                    <div 
-                      className="progress-bar-fill" 
-                      style={{ 
-                        width: `${Math.min(
-                          (user.duration_seconds / (user.plan_tier === 'pro' ? 50 * 3600 : 1 * 3600)) * 100, 
-                          100
-                        )}%` 
-                      }}
-                    ></div>
-                  </div>
-                  
-                  <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.5)', marginTop: '8px' }}>
-                    {user.plan_tier === 'free' 
-                      ? 'Upgrade to SpeekTo.Me Pro to get 50 hours of dictation limit per month and access to enhanced LLM formatting.' 
-                      : 'Your Pro plan subscription is active and will renew monthly.'}
-                  </p>
+          {activeSubTab === 'stats' && (
+            <div className="grid-dashboard">
+              {/* Left Column: Logs */}
+              <div className="dashboard-col">
+                <div className="card">
+                  <h3 className="card-title">🎙️ Recent Transcriptions</h3>
+                  {logs.length === 0 ? (
+                    <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
+                      No recent dictations found. Open SpeekTo.Me on your desktop to make your first transcription!
+                    </p>
+                  ) : (
+                    <div className="logs-table-container">
+                      <table className="logs-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Duration</th>
+                            <th>Speed</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {logs.map((log, idx) => (
+                            <tr key={idx}>
+                              <td>{formatDate(log.timestamp)}</td>
+                              <td>{formatSeconds(log.audio_duration)}</td>
+                              <td>{log.total_time ? `${log.total_time.toFixed(1)}s` : 'N/A'}</td>
+                              <td>
+                                <span className={`badge-status ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
+                                  {log.status}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="card" style={{ background: 'var(--color-btn-accent)' }}>
-                <h3 className="card-title" style={{ borderBottomColor: 'var(--border-color)', display: 'flex', alignItems: 'center' }}>
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{marginRight: '6px'}}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                  Plan Tier: {user.plan_tier.toUpperCase()}
-                </h3>
-                <p style={{ fontSize: '14px', marginBottom: '16px', fontWeight: '500' }}>
-                  {user.plan_active 
-                    ? `Active since ${formatDate(user.plan_activated_at)}` 
-                    : 'No active paid subscription.'}
-                </p>
-                {!user.plan_active ? (
-                  <button onClick={() => setRoute('billing')} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><path d="M4.5 16.5c-1.5 1.25-2.5 3.5-2.5 3.5s2.25-1 3.5-2.5M12 2C8 2 5 5 5 9c0 1.66.84 3.5 1.5 4.5L12 22l5.5-8.5c.66-1 1.5-2.84 1.5-4.5 0-4-3-7-7-7z"/><path d="M12 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
-                    Upgrade to Pro ($2.00/mo)
-                  </button>
+              {/* Right Column: Usage Limits & Subscription */}
+              <div className="dashboard-col">
+                <div className="card">
+                  <h3 className="card-title">📊 Usage Analytics</h3>
+                  
+                  <div className="usage-summary">
+                    <div className="usage-stats">
+                      <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
+                      <span>{formatSecondsToHours(user.duration_seconds)} / {user.plan_tier === 'pro' ? '50.0h' : '1.0h'}</span>
+                    </div>
+                    
+                    <div className="progress-bar-container">
+                      <div 
+                        className="progress-bar-fill" 
+                        style={{ 
+                          width: `${Math.min(
+                            (user.duration_seconds / (user.plan_tier === 'pro' ? 50 * 3600 : 1 * 3600)) * 100, 
+                            100
+                          )}%` 
+                        }}
+                      ></div>
+                    </div>
+                    
+                    <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.5)', marginTop: '8px' }}>
+                      {user.plan_tier === 'free' 
+                        ? 'Upgrade to SpeekTo.Me Pro to get 50 hours of dictation limit per month and access to enhanced AI formatting.' 
+                        : 'Your Pro plan subscription is active and will renew monthly.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="card" style={{ background: 'var(--color-btn-accent)' }}>
+                  <h3 className="card-title" style={{ borderBottomColor: 'var(--border-color)', display: 'flex', alignItems: 'center' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{marginRight: '6px'}}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                    Plan Tier: {user.plan_tier.toUpperCase()}
+                  </h3>
+                  <p style={{ fontSize: '14px', marginBottom: '16px', fontWeight: '500' }}>
+                    {user.plan_active 
+                      ? `Active since ${formatDate(user.plan_activated_at)}` 
+                      : 'No active paid subscription.'}
+                  </p>
+                  {!user.plan_active ? (
+                    <button onClick={() => setRoute('billing')} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><path d="M4.5 16.5c-1.5 1.25-2.5 3.5-2.5 3.5s2.25-1 3.5-2.5M12 2C8 2 5 5 5 9c0 1.66.84 3.5 1.5 4.5L12 22l5.5-8.5c.66-1 1.5-2.84 1.5-4.5 0-4-3-7-7-7z"/><path d="M12 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+                      Upgrade to Pro ($2.00/mo)
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <button onClick={() => setRoute('billing')} className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff' }}>
+                        Manage Billing Details
+                      </button>
+                      <button 
+                        onClick={() => setShowCancelModal(true)} 
+                        className="btn btn-danger" 
+                        style={{ width: '100%', justifyContent: 'center' }}
+                        disabled={loading}
+                      >
+                        ❌ Cancel Subscription
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeSubTab === 'vocab' && (
+            <div className="card">
+              <h3 className="card-title">📖 Custom Vocabulary Terms</h3>
+              <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '20px' }}>
+                Add specialized terms, abbreviations, acronyms, or names that you want the dictation pipeline to recognize and spell correctly.
+              </p>
+              
+              {authError && <div className="auth-error" style={{ marginBottom: '20px' }}>{authError}</div>}
+              
+              <form onSubmit={handleAddVocab} className="vocab-form">
+                <input 
+                  type="text" 
+                  value={newVocabTerm} 
+                  onChange={(e) => setNewVocabTerm(e.target.value)} 
+                  placeholder="e.g. Synaptican, SpeekTo.Me, ChatGPT" 
+                  className="auth-input"
+                  required
+                />
+                <button type="submit" className="btn btn-primary">
+                  {loading ? <div className="spinner"></div> : 'Add Term'}
+                </button>
+              </form>
+
+              <div className="vocab-table-container">
+                {vocabTerms.length === 0 ? (
+                  <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
+                    No custom vocabulary terms added yet.
+                  </p>
                 ) : (
-                  <button onClick={() => setRoute('billing')} className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff' }}>
-                    Manage Billing Details
-                  </button>
+                  <table className="logs-table">
+                    <thead>
+                      <tr>
+                        <th>Canonical Term</th>
+                        <th>Normalized Representation</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vocabTerms.map((term, idx) => (
+                        <tr key={idx}>
+                          <td><strong>{term.canonical_term}</strong></td>
+                          <td><code style={{ background: 'var(--bg-canvas)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(26,26,26,0.1)' }}>{term.normalized_term}</code></td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button 
+                              onClick={() => handleDeleteVocab(term.canonical_term)} 
+                              className="btn btn-danger btn-sm"
+                              style={{ padding: '4px 8px' }}
+                              disabled={loading}
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </div>
             </div>
-          </div>
+          )}
+
+          {activeSubTab === 'meetings' && (
+            <>
+              {activeMeeting ? (
+                <div className="card">
+                  <div className="meeting-detail-header">
+                    <div>
+                      <button 
+                        onClick={() => setActiveMeeting(null)} 
+                        className="btn btn-sm" 
+                        style={{ marginBottom: '12px' }}
+                      >
+                        ⬅ Back to Meetings List
+                      </button>
+                      <h2 className="meeting-detail-title">{activeMeeting.title}</h2>
+                      <span className="meeting-card-date">Recorded on {formatDate(activeMeeting.timestamp)}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                      <span className="meeting-meta-badge">⏱ {formatSeconds(activeMeeting.duration)}</span>
+                      <button 
+                        onClick={() => handleDeleteMeeting(activeMeeting.id)} 
+                        className="btn btn-danger btn-sm"
+                        disabled={loading}
+                      >
+                        Delete Meeting
+                      </button>
+                    </div>
+                  </div>
+
+                  {authError && <div className="auth-error" style={{ marginBottom: '20px' }}>{authError}</div>}
+
+                  <div className="meeting-detail-grid">
+                    {/* Left Column: Summary & Actions */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                      <div>
+                        <h3 className="meeting-section-title">💡 Meeting Summary</h3>
+                        <div className="meeting-text-box">
+                          {activeMeeting.summary || "No summary generated for this meeting."}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h3 className="meeting-section-title">☑ Action Items</h3>
+                        <div className="meeting-text-box">
+                          {activeMeeting.action_items ? (
+                            <ul className="action-items-list">
+                              {activeMeeting.action_items.split('\n').filter(item => item.trim() !== '').map((item, idx) => (
+                                <li key={idx}>{item.replace(/^-\s*\[\s*[x ]\s*\]\s*/, '').replace(/^-\s*/, '')}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            "No action items found."
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column: Full Transcript & Segments */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                      <div>
+                        <h3 className="meeting-section-title">🎙 Full Transcript</h3>
+                        <div className="meeting-text-box">
+                          {activeMeeting.transcript || "No transcript found."}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h3 className="meeting-section-title">📊 Audio Segments</h3>
+                        <div className="meeting-text-box" style={{ maxHeight: '350px' }}>
+                          {(() => {
+                            let segments = [];
+                            try {
+                              segments = JSON.parse(activeMeeting.segments_json);
+                            } catch (e) {}
+                            
+                            if (!segments || segments.length === 0) {
+                              return <p style={{ color: 'rgba(26,26,26,0.5)' }}>No individual segment metadata available.</p>;
+                            }
+                            
+                            return (
+                              <div className="segments-list">
+                                {segments.map((seg, idx) => (
+                                  <div key={idx} className="segment-item">
+                                    <span className="segment-time">
+                                      {formatSeconds(seg.start || 0)} - {formatSeconds(seg.end || 0)}
+                                    </span>
+                                    <span className="segment-text">{seg.text}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="card">
+                  <h3 className="card-title">📝 Recorded Meetings</h3>
+                  <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '24px' }}>
+                    View details, transcripts, action items, and summaries of meetings recorded via your SpeekTo.Me desktop client.
+                  </p>
+
+                  {meetings.length === 0 ? (
+                    <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '40px 0', textAlign: 'center' }}>
+                      No recorded meetings found. Open your desktop client to record and process meeting notes!
+                    </p>
+                  ) : (
+                    <div className="meetings-grid">
+                      {meetings.map((meeting) => (
+                        <div 
+                          key={meeting.id} 
+                          onClick={() => setActiveMeeting(meeting)}
+                          className="card meeting-card"
+                          style={{ padding: '24px', margin: 0 }}
+                        >
+                          <span className="meeting-card-date">{formatDate(meeting.timestamp)}</span>
+                          <h4 style={{ fontSize: '18px', marginBottom: '8px' }}>{meeting.title}</h4>
+                          <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.6)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', height: '38px', lineHeight: '19px' }}>
+                            {meeting.summary || "Click to view full transcript and summaries."}
+                          </p>
+                          <div className="meeting-card-duration">
+                            ⏱ Duration: {formatSeconds(meeting.duration)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </main>
       )}
 
@@ -619,8 +999,13 @@ export default function App() {
                     Current Active Plan
                   </button>
                 ) : (
-                  <button className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff', cursor: 'default' }} disabled>
-                    Downgrades require contacting support
+                  <button 
+                    onClick={() => setShowCancelModal(true)} 
+                    className="btn btn-danger" 
+                    style={{ width: '100%', justifyContent: 'center' }}
+                    disabled={loading}
+                  >
+                    Downgrade to Starter Plan
                   </button>
                 )}
               </div>
@@ -663,9 +1048,19 @@ export default function App() {
 
               <div>
                 {user.plan_tier === 'pro' ? (
-                  <button className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff', cursor: 'default' }} disabled>
-                    Current Active Plan (Subscribed)
-                  </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+                    <button className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff', cursor: 'default' }} disabled>
+                      Current Active Plan (Subscribed)
+                    </button>
+                    <button 
+                      onClick={() => setShowCancelModal(true)} 
+                      className="btn btn-danger btn-sm" 
+                      style={{ width: '100%', justifyContent: 'center' }}
+                      disabled={loading}
+                    >
+                      ❌ Cancel Subscription
+                    </button>
+                  </div>
                 ) : (
                   <button onClick={handleUpgrade} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
                     💳 Upgrade to Pro ($2.00/mo)
@@ -675,6 +1070,57 @@ export default function App() {
             </div>
           </div>
         </main>
+      )}
+
+      {/* 6. Custom Confirmation Modal */}
+      {showCancelModal && (
+        <div className="modal-overlay" style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(36, 10, 18, 0.6)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div className="card" style={{
+            maxWidth: '450px',
+            width: '90%',
+            margin: '20px',
+            position: 'relative',
+            background: 'var(--bg-canvas)',
+            animation: 'modalSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+            boxShadow: 'var(--box-shadow-neo)'
+          }}>
+            <h3 className="card-title" style={{ borderBottomColor: 'var(--border-color)', fontSize: '22px' }}>
+              ⚠️ Cancel Subscription?
+            </h3>
+            <p style={{ fontSize: '15px', lineHeight: '1.6', marginBottom: '24px', color: 'var(--color-text-dark)' }}>
+              Are you sure you want to cancel your SpeekTo.Me Pro subscription? Your account will be immediately downgraded to the Starter tier, and you will not be billed further.
+            </p>
+            <div style={{ display: 'flex', gap: '16px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button 
+                onClick={() => setShowCancelModal(false)} 
+                className="btn" 
+                style={{ background: '#fff' }}
+                disabled={loading}
+              >
+                Keep Subscription
+              </button>
+              <button 
+                onClick={handleConfirmCancelSubscription} 
+                className="btn btn-danger"
+                disabled={loading}
+              >
+                {loading ? <div className="spinner"></div> : 'Yes, Cancel Subscription'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
