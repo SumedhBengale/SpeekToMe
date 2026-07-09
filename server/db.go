@@ -648,3 +648,12 @@ func (d *Database) AdminUpdateUserRateLimit(userID int64, rateLimit *int) error 
 	return err
 }
 
+func (d *Database) GetUserBySubscriptionID(subID string) (int64, error) {
+	var userID int64
+	err := d.db.QueryRow("SELECT id FROM users WHERE razorpay_subscription_id = ?", subID).Scan(&userID)
+	if err != nil {
+		return 0, err
+	}
+	return userID, nil
+}
+

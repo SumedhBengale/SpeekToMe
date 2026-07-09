@@ -272,6 +272,7 @@ func main() {
 	mux.HandleFunc("POST /billing/create-subscription", handleCreateSubscription)
 	mux.HandleFunc("POST /billing/verify-subscription", handleVerifySubscription)
 	mux.HandleFunc("POST /billing/cancel-subscription", handleCancelSubscription)
+	mux.HandleFunc("POST /webhooks/razorpay", handleRazorpayWebhook)
 
 	// Admin API routes
 	mux.HandleFunc("GET /admin/users", handleAdminGetUsers)
@@ -1664,7 +1665,7 @@ func handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.TrimPrefix(auth, "Bearer ")
-	_, err := database.GetUserBySession(token)
+	user, err := database.GetUserBySession(token)
 	if err != nil {
 		http.Error(w, "Unauthorized: invalid or expired session", http.StatusUnauthorized)
 		return
@@ -1688,10 +1689,11 @@ func handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 	// 3. Make request to Razorpay Subscriptions API
 	// POST https://api.razorpay.com/v1/subscriptions
 	type RazorpaySubReq struct {
-		PlanID         string `json:"plan_id"`
-		TotalCount     int    `json:"total_count"`
-		Quantity       int    `json:"quantity"`
-		CustomerNotify int    `json:"customer_notify"`
+		PlanID         string            `json:"plan_id"`
+		TotalCount     int               `json:"total_count"`
+		Quantity       int               `json:"quantity"`
+		CustomerNotify int               `json:"customer_notify"`
+		Notes          map[string]string `json:"notes"`
 	}
 
 	subReqBody := RazorpaySubReq{
@@ -1699,6 +1701,9 @@ func handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 		TotalCount:     120, // 10 years of monthly billing
 		Quantity:       1,
 		CustomerNotify: 1,
+		Notes: map[string]string{
+			"user_id": strconv.FormatInt(user.ID, 10),
+		},
 	}
 
 	jsonBytes, err := json.Marshal(subReqBody)
@@ -3039,4 +3044,103 @@ func handleAdminUpdateRateLimit(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	// 1. Signature Verification
+	razorpayWebhookSecret := os.Getenv("RAZORPAY_WEBHOOK_SECRET")
+	if razorpayWebhookSecret != "" {
+		signature := r.Header.Get("X-Razorpay-Signature")
+		mac := hmac.New(sha256.New, []byte(razorpayWebhookSecret))
+		mac.Write(bodyBytes)
+		expectedSignature := hex.EncodeToString(mac.Sum(nil))
+		if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(signature)) != 1 {
+			http.Error(w, "Unauthorized: Invalid webhook signature", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// 2. Parse Event JSON Payload
+	type WebhookEvent struct {
+		Event   string `json:"event"`
+		Payload struct {
+			Subscription struct {
+				Entity struct {
+					ID     string            `json:"id"`
+					Status string            `json:"status"`
+					Notes  map[string]string `json:"notes"`
+				} `json:"entity"`
+			} `json:"subscription"`
+		} `json:"payload"`
+	}
+
+	var event WebhookEvent
+	if err := json.Unmarshal(bodyBytes, &event); err != nil {
+		http.Error(w, "Bad request: invalid event JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	subID := event.Payload.Subscription.Entity.ID
+	status := event.Payload.Subscription.Entity.Status
+	userIDStr := event.Payload.Subscription.Entity.Notes["user_id"]
+
+	if subID == "" {
+		http.Error(w, "Bad request: missing subscription details", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Resolve target User ID
+	var userID int64
+	if userIDStr != "" {
+		if id, err := strconv.ParseInt(userIDStr, 10, 64); err == nil {
+			userID = id
+		}
+	}
+	if userID == 0 {
+		// Fallback to looking up the user ID by subscription ID linked in the DB
+		userID, err = database.GetUserBySubscriptionID(subID)
+		if err != nil {
+			log.Printf("[RAZORPAY WEBHOOK WARNING] Could not resolve user for subscription %s: %v", subID, err)
+			http.Error(w, "User not found for subscription ID", http.StatusNotFound)
+			return
+		}
+	}
+
+	// 4. Update user plan tier in DB based on Razorpay Event status
+	log.Printf("[RAZORPAY WEBHOOK EVENT] Processing %s for user ID %d (status: %s, sub: %s)", event.Event, userID, status, subID)
+
+	switch event.Event {
+	case "subscription.activated", "subscription.charged":
+		err = database.UpdateUserPlan(userID, "pro", 1, subID)
+	case "subscription.cancelled", "subscription.completed":
+		err = database.UpdateUserPlan(userID, "free", 0, "")
+	case "subscription.halted":
+		err = database.UpdateUserPlan(userID, "pro", 0, subID)
+	default:
+		log.Printf("[RAZORPAY WEBHOOK WARNING] Unhandled event type: %s", event.Event)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ignored"}`))
+		return
+	}
+
+	if err != nil {
+		log.Printf("[RAZORPAY WEBHOOK ERROR] Failed to update user plan: %v", err)
+		http.Error(w, "Failed to update user plan", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
