@@ -1,5 +1,24 @@
 use serde::{Serialize, Deserialize};
 
+fn default_pill_position_mode() -> String {
+    "predefined".to_string()
+}
+fn default_pill_predefined_position() -> String {
+    "Top Center".to_string()
+}
+fn default_pill_custom_x() -> i32 {
+    0
+}
+fn default_pill_custom_y() -> i32 {
+    60
+}
+fn default_pill_bg_color() -> u32 {
+    0xFAF9FF // default to pale cream (forest theme)
+}
+fn default_pill_wave_color() -> u32 {
+    0x120A24 // default to burgundy (forest theme)
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub api_url: Option<String>,
@@ -13,6 +32,24 @@ pub struct AppConfig {
     pub session_token: Option<String>,
     pub autostart: bool,      // true/false
     pub theme: String,        // "forest", "lavender", "mint", "classic_dark"
+    
+    #[serde(default = "default_pill_position_mode")]
+    pub pill_position_mode: String,
+    
+    #[serde(default = "default_pill_predefined_position")]
+    pub pill_predefined_position: String,
+    
+    #[serde(default = "default_pill_custom_x")]
+    pub pill_custom_x: i32,
+    
+    #[serde(default = "default_pill_custom_y")]
+    pub pill_custom_y: i32,
+    
+    #[serde(default = "default_pill_bg_color")]
+    pub pill_bg_color: u32,
+    
+    #[serde(default = "default_pill_wave_color")]
+    pub pill_wave_color: u32,
 }
 
 impl Default for AppConfig {
@@ -29,6 +66,12 @@ impl Default for AppConfig {
             session_token: None,
             autostart: false,
             theme: "forest".to_string(),
+            pill_position_mode: default_pill_position_mode(),
+            pill_predefined_position: default_pill_predefined_position(),
+            pill_custom_x: default_pill_custom_x(),
+            pill_custom_y: default_pill_custom_y(),
+            pill_bg_color: default_pill_bg_color(),
+            pill_wave_color: default_pill_wave_color(),
         }
     }
 }
@@ -54,9 +97,21 @@ pub fn get_config_path() -> std::path::PathBuf {
 
 pub fn load_config() -> AppConfig {
     let path = get_config_path();
-    if let Ok(data) = std::fs::read_to_string(&path) {
-        if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
-            return config;
+    println!("[CONFIG] Loading config from path: {:?}", path);
+    match std::fs::read_to_string(&path) {
+        Ok(data) => {
+            match serde_json::from_str::<AppConfig>(&data) {
+                Ok(config) => {
+                    println!("[CONFIG] Successfully loaded config from {:?}", path);
+                    return config;
+                }
+                Err(e) => {
+                    eprintln!("[CONFIG] Failed to parse config JSON from {:?}: {:?}", path, e);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[CONFIG] Failed to read config file from {:?}: {:?}", path, e);
         }
     }
     // Migration fallback (search for the template config in CWD, exe folder, or target parent folders)
@@ -79,11 +134,13 @@ pub fn load_config() -> AppConfig {
     for template_path in search_paths {
         if let Ok(data) = std::fs::read_to_string(&template_path) {
             if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+                println!("[CONFIG] Found fallback template config at {:?}, saving to APPDATA", template_path);
                 save_config(&config);
                 return config;
             }
         }
     }
+    println!("[CONFIG] No config found anywhere, returning AppConfig::default()");
     AppConfig::default()
 }
 
@@ -108,8 +165,14 @@ pub fn apply_autostart(enabled: bool) {
 
 pub fn save_config(config: &AppConfig) {
     apply_autostart(config.autostart);
+    let path = get_config_path();
+    println!("[CONFIG] Saving config to path: {:?}", path);
     if let Ok(data) = serde_json::to_string_pretty(config) {
-        let _ = std::fs::write(get_config_path(), data);
+        if let Err(e) = std::fs::write(&path, &data) {
+            eprintln!("[CONFIG] Failed to write config file to {:?}: {:?}", path, e);
+        } else {
+            println!("[CONFIG] Successfully saved config to {:?}", path);
+        }
     }
 }
 

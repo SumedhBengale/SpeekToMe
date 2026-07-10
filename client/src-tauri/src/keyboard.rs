@@ -68,6 +68,43 @@ pub fn simulate_single_key(vk: u32) {
     }
 }
 
+// Simulate a key down event natively
+pub fn simulate_key_down(vk: u32) {
+    unsafe {
+        let mut input = mem::zeroed::<INPUT>();
+        input.r#type = INPUT_KEYBOARD;
+        let mut ki: KEYBDINPUT = mem::zeroed();
+        ki.wVk = vk as u16;
+        input.Anonymous.ki = ki;
+
+        let inputs = [input];
+        windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
+            1,
+            inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
+            mem::size_of::<INPUT>() as i32
+        );
+    }
+}
+
+// Simulate a key up event natively
+pub fn simulate_key_up(vk: u32) {
+    unsafe {
+        let mut input = mem::zeroed::<INPUT>();
+        input.r#type = INPUT_KEYBOARD;
+        let mut ki: KEYBDINPUT = mem::zeroed();
+        ki.wVk = vk as u16;
+        ki.dwFlags = KEYEVENTF_KEYUP;
+        input.Anonymous.ki = ki;
+
+        let inputs = [input];
+        windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
+            1,
+            inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
+            mem::size_of::<INPUT>() as i32
+        );
+    }
+}
+
 pub const KEYEVENTF_UNICODE: u32 = 0x0004;
 
 // Simulate typing an entire string character by character using Unicode key inputs

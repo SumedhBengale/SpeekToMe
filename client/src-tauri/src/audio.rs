@@ -75,7 +75,11 @@ pub fn is_speech(samples: &[i16], sample_rate: u32, channels: u16) -> bool {
 }
 
 // Background recording thread routine (manages non-Send WASAPI stream)
-pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
+pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
+    // Introduce a short delay so the start chime has time to play before CPAL starts input recording.
+    // This prevents audio driver profile/channel switching conflicts.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
     let host = cpal::default_host();
     let device = match host.default_input_device() {
         Some(d) => d,
@@ -191,25 +195,29 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
             }
             println!("Recording started...");
             
-            // Wait for key release signal
-            let _ = rx.recv();
-            
-            // Drop stream to stop recording
-            drop(s);
-            CURRENT_VOLUME.store(0, Ordering::Relaxed);
-            println!("Recording stopped.");
-            
-            let samples = samples_buf.lock().unwrap().clone();
-            if !samples.is_empty() {
-                // Calculate if there is active speech (VAD Filter)
-                let has_speech = is_speech(&samples, sample_rate, channels);
-                println!("Recording finished. Samples: {}, Speech detected: {}", samples.len(), has_speech);
+            // Wait for key release/abort signal
+            if let Ok(true) = rx.recv() {
+                // Drop stream to stop recording
+                drop(s);
+                CURRENT_VOLUME.store(0, Ordering::Relaxed);
+                println!("Recording stopped.");
                 
-                if has_speech {
-                    crate::api::process_and_paste(samples, sample_rate, channels);
-                } else {
-                    println!("Silence or keyboard click detected. Transcription request skipped.");
+                let samples = samples_buf.lock().unwrap().clone();
+                if !samples.is_empty() {
+                    // Calculate if there is active speech (VAD Filter)
+                    let has_speech = is_speech(&samples, sample_rate, channels);
+                    println!("Recording finished. Samples: {}, Speech detected: {}", samples.len(), has_speech);
+                    
+                    if has_speech {
+                        crate::api::process_and_paste(samples, sample_rate, channels);
+                    } else {
+                        println!("Silence or keyboard click detected. Transcription request skipped.");
+                    }
                 }
+            } else {
+                drop(s);
+                CURRENT_VOLUME.store(0, Ordering::Relaxed);
+                println!("Recording aborted and discarded.");
             }
         }
         Err(e) => {

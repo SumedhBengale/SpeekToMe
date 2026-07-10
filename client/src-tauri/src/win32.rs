@@ -13,14 +13,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_PAINT, WM_DESTROY,
     CS_HREDRAW, CS_VREDRAW, SW_HIDE, SW_SHOWNA, WS_POPUP,
     WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_NOACTIVATE,
-    WNDCLASSW, SetLayeredWindowAttributes, LWA_ALPHA, LWA_COLORKEY,
-    SetTimer, KillTimer, WM_CREATE, WM_TIMER,
+    WNDCLASSW, SetTimer, KillTimer, WM_CREATE, WM_TIMER,
+    SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE, UpdateLayeredWindow,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, CreateSolidBrush, RoundRect, SelectObject, DeleteObject,
-    CreatePen, PAINTSTRUCT, PS_SOLID, UpdateWindow, InvalidateRect, FillRect,
-    CreateCompatibleDC, CreateCompatibleBitmap, StretchBlt, SetStretchBltMode,
-    SetBrushOrgEx, DeleteDC, SRCCOPY, HALFTONE,
+    BeginPaint, EndPaint, SelectObject, DeleteObject,
+    PAINTSTRUCT, CreateCompatibleDC, DeleteDC,
+    CreateDIBSection, GetDC, ReleaseDC,
 };
 use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NOTIFYICONDATAW, NIM_ADD, NIM_DELETE, NIF_ICON, NIF_MESSAGE, NIF_TIP,
@@ -28,6 +27,76 @@ use windows_sys::Win32::UI::Shell::{
 
 // GDI and Windows Constants
 const SM_CXSCREEN: i32 = 0;
+const SM_CYSCREEN: i32 = 1;
+
+pub fn calculate_pill_position(config: &crate::config::AppConfig, width: i32, height: i32) -> (i32, i32) {
+    if config.pill_position_mode == "custom" {
+        (config.pill_custom_x, config.pill_custom_y)
+    } else {
+        unsafe {
+            let screen_width = GetSystemMetrics(SM_CXSCREEN);
+            let screen_height = GetSystemMetrics(SM_CYSCREEN);
+            
+            match config.pill_predefined_position.as_str() {
+                "Top Left" => (60, 60),
+                "Top Right" => (screen_width - width - 60, 60),
+                "Bottom Center" => ((screen_width - width) / 2, screen_height - height - 100),
+                "Bottom Left" => (60, screen_height - height - 100),
+                "Bottom Right" => (screen_width - width - 60, screen_height - height - 100),
+                _ => ((screen_width - width) / 2, 60), // Top Center
+            }
+        }
+    }
+}
+
+pub fn update_overlay_position() {
+    if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+        let hwnd = send_hwnd.0;
+        let (x, y) = {
+            let config = crate::get_active_config().lock().unwrap();
+            calculate_pill_position(&config, 76, 32)
+        };
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                76,
+                32,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            update_layered_overlay(hwnd);
+        }
+    }
+}
+
+#[link(name = "winmm")]
+extern "system" {
+    fn PlaySoundW(pszsound: *const u8, hmod: *mut std::ffi::c_void, fdwsound: u32) -> i32;
+}
+
+const SND_ASYNC: u32 = 0x0001;
+const SND_MEMORY: u32 = 0x0004;
+const SND_NODEFAULT: u32 = 0x0002;
+
+pub fn play_chime(start: bool) {
+    let play_enabled = {
+        let config = crate::get_active_config().lock().unwrap();
+        config.sound_feedback
+    };
+    if !play_enabled {
+        return;
+    }
+
+    static START_CHIME: &[u8] = include_bytes!("chimes/start.wav");
+    static END_CHIME: &[u8] = include_bytes!("chimes/end.wav");
+
+    let bytes = if start { START_CHIME } else { END_CHIME };
+    unsafe {
+        PlaySoundW(bytes.as_ptr(), std::ptr::null_mut(), SND_ASYNC | SND_MEMORY | SND_NODEFAULT);
+    }
+}
 
 // Win32 Tray Message Identifier
 const WM_TRAYICON: u32 = 0x8000 + 1; // WM_USER + 1
@@ -50,111 +119,13 @@ pub unsafe extern "system" fn wnd_proc_overlay(hwnd: HWND, msg: u32, wparam: WPA
             0
         }
         WM_TIMER => {
-            InvalidateRect(hwnd, ptr::null(), 0);
+            update_layered_overlay(hwnd);
             0
         }
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = mem::zeroed();
-            let hdc = BeginPaint(hwnd, &mut ps);
-            
-            let width = 60;
-            let height = 28;
-            let scale = 4;
-            
-            let s_width = width * scale;
-            let s_height = height * scale;
-            
-            // Create double-buffer memory DC for super-sampled anti-aliasing (SSAA)
-            let mem_hdc = CreateCompatibleDC(hdc);
-            let mem_bitmap = CreateCompatibleBitmap(hdc, s_width, s_height);
-            let old_bitmap = SelectObject(mem_hdc, mem_bitmap);
-            
-            // Fill background of memory DC with black (color key for transparency)
-            let black_brush = CreateSolidBrush(0x00000000);
-            let mut r = RECT { left: 0, top: 0, right: s_width, bottom: s_height };
-            FillRect(mem_hdc, &mut r as *mut RECT, black_brush);
-            DeleteObject(black_brush);
-            
-            // Resolve theme colors dynamically (BGR format for GDI)
-            let (bg_color, border_color, wave_color) = {
-                let config = crate::get_active_config().lock().unwrap();
-                match config.theme.as_str() {
-                    "forest" => (0xFAF9FF, 0x120A24, 0xDCD1FF),   // Pinkish Cream BG, Burgundy border, Rose waveform
-                    "lavender" => (0x2F101A, 0xFFD7F0, 0xFFD7F0), // Dark Purple BG, Lavender border & waveform
-                    "mint" => (0x1C220A, 0xD0F3A7, 0xD0F3A7),     // Dark Mint BG, Mint border & waveform
-                    _ => (0x1E1C1C, 0x76E600, 0x76E600),          // Classic Dark BG, Neon green border & waveform
-                }
-            };
-            
-            // 1. Draw rounded rectangle background (capsule shape) at 4x scale
-            let bg_brush = CreateSolidBrush(bg_color);
-            let old_brush = SelectObject(mem_hdc, bg_brush);
-            
-            // 2. Premium border at 4x scale (thickness 2 * 4 = 8)
-            let border_pen = CreatePen(PS_SOLID, 8, border_color);
-            let old_pen = SelectObject(mem_hdc, border_pen);
-            
-            RoundRect(mem_hdc, 0, 0, s_width, s_height, s_height, s_height);
-            
-            SelectObject(mem_hdc, old_pen);
-            DeleteObject(border_pen);
-            SelectObject(mem_hdc, old_brush);
-            DeleteObject(bg_brush);
-            
-            // 3. Draw 5 vertical bars at 4x scale
-            static SMOOTHED_VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let raw_vol = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed);
-            let mut smoothed = SMOOTHED_VOLUME.load(Ordering::Relaxed);
-            
-            smoothed = ((smoothed as f32 * 0.8) + (raw_vol as f32 * 0.2)) as u32;
-            SMOOTHED_VOLUME.store(smoothed, Ordering::Relaxed);
-            
-            let baseline = if smoothed > 2 { 6.5 * scale as f32 } else { 3.0 * scale as f32 };
-            let dynamic_gain = (smoothed as f32 / 4.0).min(3.0) * scale as f32;
-            let scaled_vol = baseline + dynamic_gain;
-            
-            static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed) as f32;
-            
-            let bar_brush = CreateSolidBrush(wave_color);
-            let old_bar_brush = SelectObject(mem_hdc, bar_brush);
-            let bar_pen = CreatePen(PS_SOLID, 1, wave_color);
-            let old_bar_pen = SelectObject(mem_hdc, bar_pen);
-            
-            let center_y = s_height / 2; // 56
-            let bar_width = 3 * scale;  // 12
-            let gap = 2 * scale;        // 8
-            let total_width = 5 * bar_width + 4 * gap; // 92
-            let start_x = (s_width - total_width) / 2; // 74
-            
-            for i in 0..5 {
-                let phase = frame * 0.1 + (i as f32) * 0.7;
-                let multiplier = 0.35 + 0.65 * (phase.sin().abs());
-                let bar_height = (scaled_vol * multiplier).clamp(2.0 * scale as f32, 11.0 * scale as f32) as i32;
-                
-                let x1 = start_x + i * (bar_width + gap);
-                let x2 = x1 + bar_width;
-                let y1 = center_y - bar_height;
-                let y2 = center_y + bar_height;
-                
-                RoundRect(mem_hdc, x1, y1, x2, y2, 8, 8);
-            }
-            
-            SelectObject(mem_hdc, old_bar_pen);
-            DeleteObject(bar_pen);
-            SelectObject(mem_hdc, old_bar_brush);
-            DeleteObject(bar_brush);
-            
-            // 4. StretchBlt with HALFTONE mode down to screen DC (bilinear anti-aliasing)
-            SetStretchBltMode(hdc, HALFTONE);
-            SetBrushOrgEx(hdc, 0, 0, ptr::null_mut());
-            StretchBlt(hdc, 0, 0, width, height, mem_hdc, 0, 0, s_width, s_height, SRCCOPY);
-            
-            // Cleanup memory DC resources
-            SelectObject(mem_hdc, old_bitmap);
-            DeleteObject(mem_bitmap);
-            DeleteDC(mem_hdc);
-            
+            let _hdc = BeginPaint(hwnd, &mut ps);
+            // Paint is handled dynamically via UpdateLayeredWindow in WM_TIMER
             EndPaint(hwnd, &ps as *const PAINTSTRUCT);
             0
         }
@@ -167,6 +138,212 @@ pub unsafe extern "system" fn wnd_proc_overlay(hwnd: HWND, msg: u32, wparam: WPA
     }
 }
 
+// Renders the overlay using a custom pixel-perfect anti-aliased software rasterizer
+// and updates the layered window via UpdateLayeredWindow (ULW_ALPHA) for smooth edges.
+pub unsafe fn update_layered_overlay(hwnd: HWND) {
+    let mut rect: RECT = mem::zeroed();
+    windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rect as *mut RECT);
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+
+    let hdc_screen = GetDC(std::ptr::null_mut());
+    let hdc_mem = CreateCompatibleDC(hdc_screen);
+
+    // Create 32-bit DIB section
+    let mut bmi: windows_sys::Win32::Graphics::Gdi::BITMAPINFO = mem::zeroed();
+    bmi.bmiHeader.biSize = mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height; // Top-down bitmap representation
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = 0; // BI_RGB
+
+    let mut bits: *mut std::ffi::c_void = ptr::null_mut();
+    let dib = CreateDIBSection(
+        hdc_mem,
+        &bmi as *const _,
+        0, // DIB_RGB_COLORS
+        &mut bits,
+        ptr::null_mut(),
+        0,
+    );
+
+    if !dib.is_null() && !bits.is_null() {
+        let old_bitmap = SelectObject(hdc_mem, dib);
+
+        // Clear DIB bits to fully transparent (0 alpha, 0 color)
+        let pixel_count = (width * height) as usize;
+        let pixel_slice = std::slice::from_raw_parts_mut(bits as *mut u32, pixel_count);
+        for pixel in pixel_slice.iter_mut() {
+            *pixel = 0;
+        }
+
+        // Fetch colors from configuration
+        let (bg_color, wave_color) = {
+            let config = crate::get_active_config().lock().unwrap();
+            (config.pill_bg_color, config.pill_wave_color)
+        };
+
+        // Draw anti-aliased capsule shape
+        let r = height as f32 / 2.0;
+        let c1_x = r;
+        let c1_y = r;
+        let c2_x = width as f32 - r;
+        let c2_y = r;
+
+        let bg_r = bg_color & 0xFF;
+        let bg_g = (bg_color >> 8) & 0xFF;
+        let bg_b = (bg_color >> 16) & 0xFF;
+
+        for y in 0..height {
+            for x in 0..width {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+
+                let d = if px < c1_x {
+                    ((px - c1_x).powi(2) + (py - c1_y).powi(2)).sqrt()
+                } else if px > c2_x {
+                    ((px - c2_x).powi(2) + (py - c2_y).powi(2)).sqrt()
+                } else {
+                    (py - c1_y).abs()
+                };
+
+                let alpha = if d <= r - 0.5 {
+                    235 // Max transparency for background capsule
+                } else if d >= r + 0.5 {
+                    0
+                } else {
+                    let factor = (r + 0.5 - d).clamp(0.0, 1.0);
+                    (235.0 * factor) as u32
+                };
+
+                if alpha > 0 {
+                    let pr = (bg_r * alpha) / 255;
+                    let pg = (bg_g * alpha) / 255;
+                    let pb = (bg_b * alpha) / 255;
+                    pixel_slice[(y * width + x) as usize] = (alpha << 24) | (pr << 16) | (pg << 8) | pb;
+                }
+            }
+        }
+
+        // Draw 5 vertical anti-aliased bars
+        static SMOOTHED_VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let raw_vol = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed);
+        let mut smoothed = SMOOTHED_VOLUME.load(Ordering::Relaxed);
+        smoothed = ((smoothed as f32 * 0.8) + (raw_vol as f32 * 0.2)) as u32;
+        SMOOTHED_VOLUME.store(smoothed, Ordering::Relaxed);
+
+        let baseline = if smoothed > 2 { 6.5 } else { 3.0 };
+        let dynamic_gain = (smoothed as f32 / 4.0).min(3.0);
+        let scaled_vol = baseline + dynamic_gain;
+
+        static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed) as f32;
+
+        let bar_r = wave_color & 0xFF;
+        let bar_g = (wave_color >> 8) & 0xFF;
+        let bar_b = (wave_color >> 16) & 0xFF;
+
+        let center_y = height as f32 / 2.0;
+        let bar_width = 3.0;
+        let gap = 2.0;
+        let total_width = 5.0 * bar_width + 4.0 * gap;
+        let start_x = (width as f32 - total_width) / 2.0;
+
+        for i in 0..5 {
+            let phase = frame * 0.1 + (i as f32) * 0.7;
+            let multiplier = 0.35 + 0.65 * (phase.sin().abs());
+            let bar_height = (scaled_vol * multiplier).clamp(2.0, 11.0);
+
+            let x_center = start_x + (i as f32) * (bar_width + gap) + bar_width / 2.0;
+            let y_start = center_y - bar_height + 1.0;
+            let y_end = center_y + bar_height - 1.0;
+
+            for y in 0..height {
+                for x in 0..width {
+                    let px = x as f32 + 0.5;
+                    let py = y as f32 + 0.5;
+
+                    if (px - x_center).abs() > 2.0 {
+                        continue;
+                    }
+
+                    let d = if py < y_start {
+                        ((px - x_center).powi(2) + (py - y_start).powi(2)).sqrt()
+                    } else if py > y_end {
+                        ((px - x_center).powi(2) + (py - y_end).powi(2)).sqrt()
+                    } else {
+                        (px - x_center).abs()
+                    };
+
+                    let bar_alpha = if d <= 1.0 {
+                        255
+                    } else if d >= 2.0 {
+                        0
+                    } else {
+                        ((2.0 - d) * 255.0) as u32
+                    };
+
+                    if bar_alpha > 0 {
+                        // Blend bar color over the capsule background pixel
+                        let idx = (y * width + x) as usize;
+                        let dst = pixel_slice[idx];
+                        let dst_a = dst >> 24;
+
+                        // Pre-multiply source (bar) colors
+                        let src_r = (bar_r * bar_alpha) / 255;
+                        let src_g = (bar_g * bar_alpha) / 255;
+                        let src_b = (bar_b * bar_alpha) / 255;
+
+                        if dst_a == 0 {
+                            pixel_slice[idx] = (bar_alpha << 24) | (src_r << 16) | (src_g << 8) | src_b;
+                        } else {
+                            // Pre-multiplied alpha blend formula:
+                            // dst_color_premult = src_color_premult + dst_color_premult * (1 - src_alpha)
+                            let out_r = src_r + (dst >> 16 & 0xFF) * (255 - bar_alpha) / 255;
+                            let out_g = src_g + (dst >> 8 & 0xFF) * (255 - bar_alpha) / 255;
+                            let out_b = src_b + (dst & 0xFF) * (255 - bar_alpha) / 255;
+                            let out_a = bar_alpha + dst_a * (255 - bar_alpha) / 255;
+                            pixel_slice[idx] = (out_a << 24) | (out_r.min(255) << 16) | (out_g.min(255) << 8) | out_b.min(255);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Call UpdateLayeredWindow
+        let psize = windows_sys::Win32::Foundation::SIZE { cx: width, cy: height };
+        let ppt_src = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+        
+        let mut blend: windows_sys::Win32::Graphics::Gdi::BLENDFUNCTION = mem::zeroed();
+        blend.BlendOp = 0; // AC_SRC_OVER
+        blend.BlendFlags = 0;
+        blend.SourceConstantAlpha = 255;
+        blend.AlphaFormat = 1; // AC_SRC_ALPHA (Per-pixel alpha)
+
+        UpdateLayeredWindow(
+            hwnd,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &psize as *const _,
+            hdc_mem,
+            &ppt_src as *const _,
+            0,
+            &blend as *const _,
+            2, // ULW_ALPHA
+        );
+
+        SelectObject(hdc_mem, old_bitmap);
+        DeleteObject(dib);
+    }
+
+    DeleteDC(hdc_mem);
+    ReleaseDC(std::ptr::null_mut(), hdc_screen);
+}
+
 // Win32 window callback procedure for the invisible tray message handler
 pub unsafe extern "system" fn wnd_proc_tray(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
@@ -174,11 +351,7 @@ pub unsafe extern "system" fn wnd_proc_tray(hwnd: HWND, msg: u32, wparam: WPARAM
             let event = lparam as u32;
             if event == windows_sys::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK {
                 if let Some(app) = crate::TAURI_APP.get() {
-                    use tauri::Manager;
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    crate::show_or_create_settings_window(app);
                 }
             } else if event == windows_sys::Win32::UI::WindowsAndMessaging::WM_RBUTTONUP {
                 // Render standard context menu at mouse cursor coordinates
@@ -205,11 +378,7 @@ pub unsafe extern "system" fn wnd_proc_tray(hwnd: HWND, msg: u32, wparam: WPARAM
                 
                 if cmd == 1 {
                     if let Some(app) = crate::TAURI_APP.get() {
-                        use tauri::Manager;
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        crate::show_or_create_settings_window(app);
                     }
                 } else if cmd == 2 {
                     if let Some(app) = crate::TAURI_APP.get() {
@@ -265,8 +434,8 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
                     
                     // Show indicator bar
                     if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+                        update_layered_overlay(send_hwnd.0);
                         ShowWindow(send_hwnd.0, SW_SHOWNA);
-                        UpdateWindow(send_hwnd.0);
                     }
                     
                     // Check if consecutive holding (less than 5 seconds since last release)
@@ -278,13 +447,7 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
                     crate::IS_CONSECUTIVE.store(consecutive, Ordering::SeqCst);
                     
                     // Audio feedback chime
-                    let play_chime = {
-                        let config = crate::get_active_config().lock().unwrap();
-                        config.sound_feedback
-                    };
-                    if play_chime {
-                        windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x00000040); // MB_ICONASTERISK (pleasant info chime)
-                    }
+                    play_chime(true);
                     
                     // Setup channel and spawn audio recording
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -308,6 +471,9 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
                         ShowWindow(send_hwnd.0, SW_HIDE);
                     }
                     
+                    // Audio feedback chime (release)
+                    play_chime(false);
+                    
                     let is_short_tap = if let Some(press_time) = state.press_time.take() {
                         press_time.elapsed() < Duration::from_millis(350)
                     } else {
@@ -316,7 +482,7 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
                     
                     // Stop audio stream and trigger transcription
                     if let Some(tx) = state.stop_tx.take() {
-                        let _ = tx.send(());
+                        let _ = tx.send(true);
                     }
                     
                     if is_short_tap {
@@ -328,8 +494,29 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
                             crate::SIMULATING_KEY.store(false, Ordering::SeqCst);
                         });
                     }
+                    return 1; // Swallow key-up event
                 }
-                return 1; // Swallow key-up event
+            }
+        } else {
+            let wparam_usize = wparam as usize;
+            if wparam_usize == WM_KEYDOWN as usize || wparam_usize == WM_SYSKEYDOWN as usize {
+                let mut state = crate::get_state().lock().unwrap();
+                if state.is_key_held {
+                    state.is_key_held = false;
+                    state.press_time = None;
+                    if let Some(tx) = state.stop_tx.take() {
+                        let _ = tx.send(false);
+                    }
+                    if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+                        ShowWindow(send_hwnd.0, SW_HIDE);
+                    }
+                    play_chime(false);
+                    
+                    // Simulate hotkey down event so other applications know it's pressed
+                    crate::SIMULATING_KEY.store(true, Ordering::SeqCst);
+                    crate::keyboard::simulate_key_down(hotkey_vk);
+                    crate::SIMULATING_KEY.store(false, Ordering::SeqCst);
+                }
             }
         }
     }
@@ -338,6 +525,9 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
 
 // Win32 Background Worker Thread (Hook + Tray message pump)
 pub unsafe fn run_win32_hook_and_tray_thread() {
+    // Warm up the Win32 sound playback subsystem to prevent first-use audio delays/skips
+    PlaySoundW(std::ptr::null(), std::ptr::null_mut(), 0);
+
     let hinstance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
     
     // 1. Register and Create Overlay Window
@@ -356,11 +546,12 @@ pub unsafe fn run_win32_hook_and_tray_thread() {
     };
     RegisterClassW(&wnd_class_overlay);
     
-    let width = 60;
-    let height = 28;
-    let screen_width = GetSystemMetrics(SM_CXSCREEN);
-    let x = (screen_width - width) / 2;
-    let y = 60;
+    let width = 76;
+    let height = 32;
+    let (x, y) = {
+        let config = crate::get_active_config().lock().unwrap();
+        calculate_pill_position(&config, width, height)
+    };
     
     let hwnd_overlay = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
@@ -375,8 +566,8 @@ pub unsafe fn run_win32_hook_and_tray_thread() {
         panic!("Failed to create SpeekTo.Me overlay window!");
     }
     
-    // Set color key (black = 0x00000000) for transparency + global alpha (235)
-    SetLayeredWindowAttributes(hwnd_overlay, 0x00000000, 235, LWA_ALPHA | LWA_COLORKEY);
+    // Render overlay immediately using UpdateLayeredWindow
+    update_layered_overlay(hwnd_overlay);
     crate::OVERLAY_HWND.set(SendHWND(hwnd_overlay)).ok();
     
     // 2. Register and Create Invisible Helper Tray Window

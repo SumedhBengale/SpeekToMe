@@ -38,6 +38,7 @@ pub struct UserInfo {
     pub plan_active: bool,
     pub plan_activated_at: String,
     pub duration_seconds: f64,
+    pub monthly_limit_seconds: f64,
 }
 
 // REST Client user profile retrieval helper

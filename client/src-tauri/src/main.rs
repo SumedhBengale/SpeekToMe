@@ -10,7 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::AtomicBool;
 use std::thread;
 
-use tauri::{Manager, Emitter};
+use tauri::{Manager, Emitter, PhysicalPosition, PhysicalSize};
 use crate::config::AppConfig;
 use crate::win32::SendHWND;
 
@@ -24,11 +24,13 @@ pub static ACTIVE_CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
 pub static SIMULATING_KEY: AtomicBool = AtomicBool::new(false);
 pub static LAST_RELEASE_TIME: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
 pub static IS_CONSECUTIVE: AtomicBool = AtomicBool::new(false);
+pub static LAST_WINDOW_POSITION: OnceLock<Mutex<Option<PhysicalPosition<i32>>>> = OnceLock::new();
+pub static LAST_WINDOW_SIZE: OnceLock<Mutex<Option<PhysicalSize<u32>>>> = OnceLock::new();
 
 pub struct RecordingState {
     pub is_key_held: bool,
     pub press_time: Option<std::time::Instant>,
-    pub stop_tx: Option<std::sync::mpsc::Sender<()>>,
+    pub stop_tx: Option<std::sync::mpsc::Sender<bool>>,
 }
 
 pub fn get_state() -> &'static Mutex<RecordingState> {
@@ -56,14 +58,17 @@ fn get_config() -> AppConfig {
 
 #[tauri::command]
 fn save_config(config: AppConfig) {
-    let mut active = get_active_config().lock().unwrap();
-    *active = config.clone();
+    {
+        let mut active = get_active_config().lock().unwrap();
+        *active = config.clone();
+    }
     config::save_config(&config);
+    crate::win32::update_overlay_position();
 }
 
 #[tauri::command]
 fn hide_window(window: tauri::WebviewWindow) {
-    let _ = window.hide();
+    let _ = window.close();
 }
 
 #[tauri::command]
@@ -155,6 +160,42 @@ fn delete_vocabulary_term(term: String) -> Result<(), String> {
     api::delete_vocab_term(token, &term)
 }
 
+pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+            .title("SpeekTo.Me Settings")
+            .resizable(true)
+            .transparent(true)
+            .decorations(true)
+            .skip_taskbar(false);
+
+        let pos_opt = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap().clone();
+        let size_opt = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap().clone();
+
+        if let Some(pos) = pos_opt {
+            builder = builder.position(pos.x as f64, pos.y as f64);
+        }
+        if let Some(size) = size_opt {
+            builder = builder.inner_size(size.width as f64, size.height as f64);
+        } else {
+            builder = builder.inner_size(800.0, 600.0);
+        }
+
+        if let Ok(window) = builder.build() {
+            #[cfg(target_os = "windows")]
+            {
+                use window_vibrancy::apply_mica;
+                let _ = apply_mica(&window, None);
+            }
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+}
+
 fn main() {
     // 1. Initialize global loaded config
     let _ = get_active_config();
@@ -180,10 +221,15 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Intercept close button and hide the window instead
-                api.prevent_close();
-                let _ = window.hide();
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Ok(pos) = window.outer_position() {
+                    let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap();
+                    *pos_lock = Some(pos);
+                }
+                if let Ok(size) = window.inner_size() {
+                    let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap();
+                    *size_lock = Some(size);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -208,8 +254,14 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::Ready = event {
-                let _ = TAURI_APP.set(app_handle.clone());
+            match event {
+                tauri::RunEvent::Ready => {
+                    let _ = TAURI_APP.set(app_handle.clone());
+                }
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    api.prevent_exit();
+                }
+                _ => {}
             }
         });
 }
