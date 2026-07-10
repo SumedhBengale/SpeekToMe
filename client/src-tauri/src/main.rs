@@ -220,8 +220,16 @@ pub static CURRENT_MEETING_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(
 fn start_meeting(title: String) -> Result<String, String> {
     println!("Starting meeting: {}", title);
     
-    let temp_dir = std::env::temp_dir();
-    let filename = format!("speektome_meeting_{}.ogg", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let temp_dir = crate::config::get_config_path()
+        .parent()
+        .ok_or("Unable to determine SpeekTo.Me data directory")?
+        .join("recordings");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "System clock is before the Unix epoch")?
+        .as_nanos();
+    let filename = format!("meeting-{}-{}.ogg", std::process::id(), nonce);
     let path = temp_dir.join(filename);
     
     if let Err(e) = crate::audio::start_meeting_recording(path.clone()) {
@@ -259,7 +267,12 @@ fn get_meeting_levels() -> (u32, u32) {
 fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
     let config = get_active_config().lock().unwrap();
     let token = config.session_token.as_ref().ok_or("Not logged in")?;
-    crate::api::upload_meeting(token, &title, &filepath)
+    let expected_path = CURRENT_MEETING_PATH.lock().unwrap().clone()
+        .ok_or("No active meeting recording found")?;
+    if std::path::Path::new(&filepath) != expected_path {
+        return Err("Refusing to upload a file that was not created by SpeekTo.Me".to_string());
+    }
+    crate::api::upload_meeting(token, &title, &expected_path)
 }
 
 #[tauri::command]

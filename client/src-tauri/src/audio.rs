@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 pub static CURRENT_VOLUME: AtomicU32 = AtomicU32::new(0);
+const MAX_DICTATION_SAMPLES: usize = 12_000_000;
 
 // Encode samples to WAV in memory
 pub fn write_wav_to_memory(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
@@ -116,7 +117,8 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
                         CURRENT_VOLUME.store(vol, Ordering::Relaxed);
                     }
                     if let Ok(mut buf) = samples_buf_clone.lock() {
-                        for &sample in data {
+                        let remaining = MAX_DICTATION_SAMPLES.saturating_sub(buf.len());
+                        for &sample in data.iter().take(remaining) {
                             let i16_val = (sample * i16::MAX as f32) as i16;
                             buf.push(i16_val);
                         }
@@ -141,7 +143,8 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
                         CURRENT_VOLUME.store(vol, Ordering::Relaxed);
                     }
                     if let Ok(mut buf) = samples_buf_clone.lock() {
-                        buf.extend_from_slice(data);
+                        let remaining = MAX_DICTATION_SAMPLES.saturating_sub(buf.len());
+                        buf.extend_from_slice(&data[..data.len().min(remaining)]);
                     }
                 },
                 err_fn,
@@ -163,7 +166,8 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<()>) {
                         CURRENT_VOLUME.store(vol, Ordering::Relaxed);
                     }
                     if let Ok(mut buf) = samples_buf_clone.lock() {
-                        for &sample in data {
+                        let remaining = MAX_DICTATION_SAMPLES.saturating_sub(buf.len());
+                        for &sample in data.iter().take(remaining) {
                             let i16_val = (sample as i32 - 32768) as i16;
                             buf.push(i16_val);
                         }

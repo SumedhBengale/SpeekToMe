@@ -9,8 +9,10 @@ struct TranscriptResponse {
 }
 
 pub fn get_api_url() -> String {
-    let cfg = crate::config::load_config();
-    cfg.api_url.unwrap_or_else(|| "http://127.0.0.1:8000".to_string())
+    // The API origin is a security boundary: requests contain bearer tokens and
+    // private audio. Do not let a tampered user configuration redirect either.
+    const API_ORIGIN: &str = "https://api.speekto.me";
+    API_ORIGIN.to_string()
 }
 
 fn create_client() -> reqwest::blocking::Client {
@@ -20,10 +22,11 @@ fn create_client() -> reqwest::blocking::Client {
         .unwrap_or_else(|_| reqwest::blocking::Client::new())
 }
 
-// Helper to open the default system browser on Windows using standard shell commands
+// Opening through Explorer avoids feeding a configurable URL to cmd.exe, whose
+// command parser would interpret shell metacharacters in the URL.
 pub fn open_browser(url: &str) {
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", url])
+    let _ = std::process::Command::new("explorer.exe")
+        .arg(url)
         .spawn();
 }
 
@@ -57,25 +60,6 @@ pub fn fetch_user_info(token: &str) -> Option<UserInfo> {
 }
 
 // Temporary loopback listener to capture Google OAuth token
-fn url_decode(s: &str) -> String {
-    let mut res = String::new();
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hex: String = chars.by_ref().take(2).collect();
-            if let Ok(val) = u8::from_str_radix(&hex, 16) {
-                res.push(val as char);
-            }
-        } else if c == '+' {
-            res.push(' ');
-        } else {
-            res.push(c);
-        }
-    }
-    res
-}
-
-// Temporary loopback listener to capture Google OAuth token
 pub fn listen_for_token() -> Option<String> {
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();
@@ -91,8 +75,6 @@ pub fn listen_for_token() -> Option<String> {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
             
             let mut captured_token = None;
-            let mut payment_url = None;
-
             if let Some(path_start) = request.find("GET /callback?") {
                 let query_slice = &request[path_start + 14..];
                 if let Some(space_pos) = query_slice.find(' ') {
@@ -102,8 +84,6 @@ pub fn listen_for_token() -> Option<String> {
                         if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
                             if k == "token" {
                                 captured_token = Some(v.to_string());
-                            } else if k == "payment_url" {
-                                payment_url = Some(url_decode(v));
                             }
                         }
                     }
@@ -111,15 +91,9 @@ pub fn listen_for_token() -> Option<String> {
             }
 
             if let Some(token) = captured_token {
-                // Respond with script redirect if a payment URL is provided, otherwise normal success HTML
-                let body = if let Some(ref pay_url) = payment_url {
-                    format!(
-                        "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>Redirecting you to subscription payment...</p><script>window.location.href = '{}';</script></body></html>",
-                        pay_url
-                    )
-                } else {
-                    "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>You can close this window now and return to SpeekTo.Me.</p></body></html>".to_string()
-                };
+                // Keep the loopback response static. In particular, never place
+                // callback parameters in an HTML or JavaScript context.
+                let body = "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>You can close this window now and return to SpeekTo.Me.</p></body></html>";
 
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{}",
@@ -205,7 +179,6 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                     println!("Opus Ogg Size:     {} bytes (Saved {:.1}%)", compressed_size, compression_ratio);
                     println!("HTTP Status:       {}", status);
                     println!("Request Latency:   {:?}", request_duration);
-                    println!("Transcript:        \"{}\"", text);
                     println!("==================================================\n");
 
                     if !text.is_empty() {
@@ -216,7 +189,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                             }
                         }
 
-                        println!("Transcription output (typing: {}): {}", typing_mode, text);
+                        println!("Transcription received (typing: {}).", typing_mode);
                         if typing_mode {
                             crate::keyboard::simulate_typing(&text);
                         } else {
@@ -401,14 +374,14 @@ pub fn delete_vocab_term(token: &str, term: &str) -> Result<(), String> {
     }
 }
 
-pub fn upload_meeting(token: &str, title: &str, filepath: &str) -> Result<String, String> {
+pub fn upload_meeting(token: &str, title: &str, filepath: &std::path::Path) -> Result<String, String> {
     let mut file = std::fs::File::open(filepath).map_err(|e| format!("Failed to open meeting audio file: {}", e))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).map_err(|e| format!("Failed to read meeting audio file: {}", e))?;
 
-    let path = std::path::Path::new(filepath);
-    let mic_filepath = path.with_extension("mic.ogg");
-    let loopback_filepath = path.with_extension("loopback.ogg");
+    drop(file);
+    let mic_filepath = filepath.with_extension("mic.ogg");
+    let loopback_filepath = filepath.with_extension("loopback.ogg");
 
     let client = create_client();
     let part = reqwest::blocking::multipart::Part::bytes(bytes)
@@ -451,11 +424,12 @@ pub fn upload_meeting(token: &str, title: &str, filepath: &str) -> Result<String
             let status = res.status();
             let body = res.text().unwrap_or_default();
             
-            // Clean up temporary files since they are uploaded successfully
-            let _ = std::fs::remove_file(mic_filepath);
-            let _ = std::fs::remove_file(loopback_filepath);
-            
             if status.is_success() {
+                // Keep recordings on a failed upload for a possible retry, but do
+                // not retain private audio after a confirmed successful upload.
+                let _ = std::fs::remove_file(filepath);
+                let _ = std::fs::remove_file(mic_filepath);
+                let _ = std::fs::remove_file(loopback_filepath);
                 Ok(body)
             } else {
                 Err(format!("Upload failed with status {}: {}", status, body))

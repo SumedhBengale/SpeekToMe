@@ -320,7 +320,7 @@ async function saveAndApply() {
       if (!result.safe) {
         if (banner) {
           banner.className = 'validation-banner error';
-          banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${result.explanation || 'Not eligible to be a system prompt.'}`;
+          banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${escapeHtml(result.explanation || 'Not eligible to be a system prompt.')}`;
         }
         saveBtn.disabled = false;
         saveBtn.innerHTML = originalText;
@@ -337,7 +337,7 @@ async function saveAndApply() {
       console.error("Failed to validate custom prompt:", err);
       if (banner) {
         banner.className = 'validation-banner error';
-        banner.innerHTML = `<span>❌</span> Validation error: ${formatAuthError(err)}`;
+        banner.innerHTML = `<span>❌</span> Validation error: ${escapeHtml(formatAuthError(err))}`;
       }
       saveBtn.disabled = false;
       saveBtn.innerHTML = originalText;
@@ -373,7 +373,7 @@ async function saveAndApply() {
     saveBtn.innerHTML = originalText;
     if (banner) {
       banner.className = 'validation-banner error';
-      banner.innerHTML = `<span>❌</span> Save failed: ${formatAuthError(err)}`;
+      banner.innerHTML = `<span>❌</span> Save failed: ${escapeHtml(formatAuthError(err))}`;
       banner.classList.remove('hidden');
     }
   }
@@ -423,14 +423,14 @@ async function validateOnboardingPrompt() {
       }, 1000);
     } else {
       banner.className = 'validation-banner error';
-      banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${result.explanation || 'Not eligible to be a system prompt.'}`;
+      banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${escapeHtml(result.explanation || 'Not eligible to be a system prompt.')}`;
       onboardNext3Btn.disabled = false;
       onboardNext3Btn.innerHTML = originalText;
     }
   } catch (err) {
     console.error("Failed to validate onboarding prompt:", err);
     banner.className = 'validation-banner error';
-    banner.innerHTML = `<span>❌</span> Validation error: ${formatAuthError(err)}`;
+    banner.innerHTML = `<span>❌</span> Validation error: ${escapeHtml(formatAuthError(err))}`;
     onboardNext3Btn.disabled = false;
     onboardNext3Btn.innerHTML = originalText;
   }
@@ -803,7 +803,7 @@ async function loadVocabulary() {
     });
   } catch (err) {
     console.error("Failed to load vocabulary:", err);
-    vocabList.innerHTML = `<li class="vocab-empty" style="color: #ff5252;">Error loading vocabulary: ${err}</li>`;
+    vocabList.innerHTML = `<li class="vocab-empty" style="color: #ff5252;">Error loading vocabulary: ${escapeHtml(String(err))}</li>`;
     vocabEmpty.style.display = 'none';
   }
 }
@@ -1248,7 +1248,9 @@ async function confirmDeleteMeeting() {
 
 function parseMarkdownToHTML(md) {
   if (!md) return '';
-  let html = md;
+  // Escape untrusted server/model output before adding the small markdown subset
+  // supported by this view. This prevents stored XSS in meeting summaries.
+  let html = escapeHtml(String(md));
   // Convert headers
   html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
   html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
@@ -1283,6 +1285,15 @@ function parseMarkdownToHTML(md) {
     parsedLines.push('</ul>');
   }
   return parsedLines.join('\n');
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 
