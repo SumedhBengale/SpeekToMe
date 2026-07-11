@@ -202,7 +202,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                 CURRENT_VOLUME.store(0, Ordering::Relaxed);
                 println!("Recording stopped.");
                 
-                let samples = samples_buf.lock().unwrap().clone();
+                let samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 if !samples.is_empty() {
                     // Calculate if there is active speech (VAD Filter)
                     let has_speech = is_speech(&samples, sample_rate, channels);
@@ -373,13 +373,13 @@ pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) 
 pub static MIC_VOLUME: AtomicU32 = AtomicU32::new(0);
 pub static LOOPBACK_VOLUME: AtomicU32 = AtomicU32::new(0);
 
-pub struct SendSyncWrapper<T>(pub T);
-unsafe impl<T> Send for SendSyncWrapper<T> {}
-unsafe impl<T> Sync for SendSyncWrapper<T> {}
+pub struct SendStream(pub cpal::Stream);
+unsafe impl Send for SendStream {}
+unsafe impl Sync for SendStream {}
 
 pub struct MeetingRecordingState {
-    pub mic_stream: Option<SendSyncWrapper<cpal::Stream>>,
-    pub loopback_stream: Option<SendSyncWrapper<cpal::Stream>>,
+    pub mic_stream: Option<SendStream>,
+    pub loopback_stream: Option<SendStream>,
     pub shutdown_tx: Option<std::sync::mpsc::Sender<()>>,
 }
 
@@ -856,16 +856,16 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
         }
     });
 
-    let mut state = get_meeting_state().lock().unwrap();
-    state.mic_stream = Some(SendSyncWrapper(mic_stream));
-    state.loopback_stream = Some(SendSyncWrapper(loopback_stream));
+    let mut state = get_meeting_state().lock().unwrap_or_else(|e| e.into_inner());
+    state.mic_stream = Some(SendStream(mic_stream));
+    state.loopback_stream = Some(SendStream(loopback_stream));
     state.shutdown_tx = Some(shutdown_tx);
 
     Ok(())
 }
 
 pub fn stop_meeting_recording() {
-    let mut state = get_meeting_state().lock().unwrap();
+    let mut state = get_meeting_state().lock().unwrap_or_else(|e| e.into_inner());
 
     if let Some(tx) = state.shutdown_tx.take() {
         let _ = tx.send(());

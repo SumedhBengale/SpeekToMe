@@ -229,6 +229,44 @@
           </div>
         </div>
 
+        <div class="setting-group">
+          <label for="pill-pos-mode-select">Pill Position Mode</label>
+          <div class="select-wrapper">
+            <select id="pill-pos-mode-select" class="fluent-select">
+              <option value="predefined">Predefined Locations</option>
+              <option value="custom">Custom (Pixel Coordinates)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="setting-group" id="predefined-pos-group">
+          <label for="pill-predefined-select">Pill Location</label>
+          <div class="select-wrapper">
+            <select id="pill-predefined-select" class="fluent-select">
+              <option value="Top Center">Top Center</option>
+              <option value="Top Left">Top Left</option>
+              <option value="Top Right">Top Right</option>
+              <option value="Bottom Center">Bottom Center</option>
+              <option value="Bottom Left">Bottom Left</option>
+              <option value="Bottom Right">Bottom Right</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="setting-group" id="custom-pos-group" style="display: none;">
+          <label>Custom Position (X, Y in Pixels)</label>
+          <div style="display: flex; gap: 10px; margin-top: 5px;">
+            <div style="flex: 1;">
+              <span class="setting-hint" style="margin-bottom: 2px; display: block;">X Coordinate</span>
+              <input type="number" id="pill-custom-x" class="fluent-input" style="width: 100%; box-sizing: border-box;" value="0">
+            </div>
+            <div style="flex: 1;">
+              <span class="setting-hint" style="margin-bottom: 2px; display: block;">Y Coordinate</span>
+              <input type="number" id="pill-custom-y" class="fluent-input" style="width: 100%; box-sizing: border-box;" value="60">
+            </div>
+          </div>
+        </div>
+
         <div class="setting-group checkbox-group">
           <label class="fluent-checkbox-container">
             <input type="checkbox" id="autostart-check">

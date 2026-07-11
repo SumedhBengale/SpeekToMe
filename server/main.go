@@ -13,12 +13,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/mail"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -378,7 +380,7 @@ func main() {
 	handler := corsMiddleware(mux)
 
 	log.Printf("Starting SpeekTo.Me Go Server on port 8000...")
-	log.Fatal(http.ListenAndServe(":8000", handler))
+	log.Fatal(http.ListenAndServe("127.0.0.1:8000", handler))
 }
 
 // CORS middleware wrapper
@@ -459,11 +461,158 @@ func authenticateWithVocab(r *http.Request) (*UserProfile, []VocabularyTerm, err
 	return user, vocabTerms, nil
 }
 
+func getClientIP(r *http.Request) string {
+	if ip := r.Header.Get("CF-Connecting-IP"); ip != "" {
+		return ip
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+type AuthRateLimiter struct {
+	mu    sync.Mutex
+	store map[string][]time.Time
+}
+
+func NewAuthRateLimiter() *AuthRateLimiter {
+	arl := &AuthRateLimiter{
+		store: make(map[string][]time.Time),
+	}
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			arl.mu.Lock()
+			now := time.Now()
+			cutoff := now.Add(-15 * time.Minute)
+			for k, times := range arl.store {
+				var valid []time.Time
+				for _, t := range times {
+					if t.After(cutoff) {
+						valid = append(valid, t)
+					}
+				}
+				if len(valid) == 0 {
+					delete(arl.store, k)
+				} else {
+					arl.store[k] = valid
+				}
+			}
+			arl.mu.Unlock()
+		}
+	}()
+	return arl
+}
+
+func (arl *AuthRateLimiter) Allow(key string, limit int, window time.Duration) bool {
+	arl.mu.Lock()
+	defer arl.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-window)
+
+	times := arl.store[key]
+	var valid []time.Time
+	for _, t := range times {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+
+	if len(valid) >= limit {
+		arl.store[key] = valid
+		return false
+	}
+
+	valid = append(valid, now)
+	arl.store[key] = valid
+	return true
+}
+
+var authRateLimiter = NewAuthRateLimiter()
+
+func isValidRedirect(redirectURL string) bool {
+	if redirectURL == "" {
+		return false
+	}
+	u, err := url.Parse(redirectURL)
+	if err != nil {
+		return false
+	}
+	if u.Scheme == "" && u.Host == "" {
+		return strings.HasPrefix(redirectURL, "/") && !strings.HasPrefix(redirectURL, "//") && !strings.Contains(redirectURL, "\\")
+	}
+	frontend := os.Getenv("FRONTEND_URL")
+	backend := os.Getenv("BACKEND_URL")
+
+	var allowedHosts []string
+	if frontend != "" {
+		if fu, err := url.Parse(frontend); err == nil {
+			allowedHosts = append(allowedHosts, fu.Hostname())
+		}
+	} else {
+		allowedHosts = append(allowedHosts, "localhost", "127.0.0.1")
+	}
+	if backend != "" {
+		if bu, err := url.Parse(backend); err == nil {
+			allowedHosts = append(allowedHosts, bu.Hostname())
+		}
+	}
+
+	redirectHost := u.Hostname()
+	for _, allowed := range allowedHosts {
+		if strings.EqualFold(redirectHost, allowed) {
+			return true
+		}
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "" {
+		for _, r := range u.Scheme {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '+' || r == '-' || r == '.') {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
+}
+
+func validatePasswordStrength(password string) error {
+	if len(password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters long")
+	}
+	if len(password) > 72 {
+		return fmt.Errorf("password must not be longer than 72 characters")
+	}
+	var hasDigit, hasLetter bool
+	for _, c := range password {
+		if c >= '0' && c <= '9' {
+			hasDigit = true
+		} else if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			hasLetter = true
+		}
+	}
+	if !hasDigit || !hasLetter {
+		return fmt.Errorf("password must contain both letters and digits")
+	}
+	return nil
+}
+
 // ----------------- HTTP HANDLERS -----------------
 
 func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	portStr := r.URL.Query().Get("port")
 	redirectTo := r.URL.Query().Get("redirect_to")
+	clientState := r.URL.Query().Get("client_state")
 
 	var state string
 
@@ -473,9 +622,21 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad request: invalid local redirect port", http.StatusBadRequest)
 			return
 		}
-		state = fmt.Sprintf("%d_%s", port, generateNonce())
+		if clientState != "" {
+			state = fmt.Sprintf("%d_%s_%s", port, generateNonce(), clientState)
+		} else {
+			state = fmt.Sprintf("%d_%s", port, generateNonce())
+		}
 	} else if redirectTo != "" {
-		state = fmt.Sprintf("web_%x_%s", []byte(redirectTo), generateNonce())
+		if !isValidRedirect(redirectTo) {
+			http.Error(w, "Bad request: invalid redirect_to parameter", http.StatusBadRequest)
+			return
+		}
+		if clientState != "" {
+			state = fmt.Sprintf("web_%x_%s_%s", []byte(redirectTo), generateNonce(), clientState)
+		} else {
+			state = fmt.Sprintf("web_%x_%s", []byte(redirectTo), generateNonce())
+		}
 	} else {
 		http.Error(w, "Bad request: missing port or redirect_to parameters", http.StatusBadRequest)
 		return
@@ -503,6 +664,7 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	var isWeb bool
 	var port int
 	var redirectTo string
+	var clientState string
 
 	if parts[0] == "web" {
 		isWeb = true
@@ -512,12 +674,22 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		redirectTo = string(decodedBytes)
+		if !isValidRedirect(redirectTo) {
+			http.Error(w, "Bad request: invalid redirect_to parameter", http.StatusBadRequest)
+			return
+		}
+		if len(parts) >= 3 {
+			clientState = parts[2]
+		}
 	} else {
 		var err error
 		port, err = strconv.Atoi(parts[0])
 		if err != nil || port <= 0 {
 			http.Error(w, "Bad request: invalid state port value", http.StatusBadRequest)
 			return
+		}
+		if len(parts) >= 3 {
+			clientState = parts[2]
 		}
 	}
 
@@ -585,6 +757,27 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	userID, err := database.GetOrCreateUser(googleID, email, name)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	locked, err := database.IsUserLocked(userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if locked {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head><title>Account Locked</title></head>
+<body style="font-family: sans-serif; background-color: #ffffee; padding: 40px; text-align: center;">
+<div style="background: white; border: 2px solid black; border-radius: 12px; padding: 30px; max-width: 500px; margin: 0 auto; box-shadow: 4px 4px 0px black;">
+<h2 style="color: #c0392b;">🔒 Account Locked</h2>
+<p>Your account has been locked. Please contact support for assistance.</p>
+</div>
+</body>
+</html>`))
 		return
 	}
 
@@ -665,6 +858,9 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 			} else {
 				finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s", port, token)
 			}
+			if clientState != "" {
+				finalURL = fmt.Sprintf("%s&client_state=%s", finalURL, url.QueryEscape(clientState))
+			}
 		}
 	}
 
@@ -672,6 +868,7 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAuthMe(w http.ResponseWriter, r *http.Request) {
+	syncConfigsFromDB()
 	user, err := authenticate(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -751,6 +948,7 @@ func handleAuthSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req SignupRequest
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
@@ -763,6 +961,25 @@ func handleAuthSignup(w http.ResponseWriter, r *http.Request) {
 
 	if req.Email == "" || req.Password == "" || req.Name == "" {
 		http.Error(w, "Email, password, and name are required", http.StatusBadRequest)
+		return
+	}
+
+	addr, err := mail.ParseAddress(req.Email)
+	if err != nil || addr.Address != req.Email {
+		http.Error(w, "Invalid email address format", http.StatusBadRequest)
+		return
+	}
+
+	if err := validatePasswordStrength(req.Password); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ip := getClientIP(r)
+	if !authRateLimiter.Allow("signup_ip:"+ip, 10, 1*time.Minute) || !authRateLimiter.Allow("signup_email:"+req.Email, 5, 1*time.Minute) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Too many signup requests. Please try again later."})
 		return
 	}
 
@@ -809,6 +1026,7 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req LoginRequest
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
@@ -823,11 +1041,24 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ip := getClientIP(r)
+	if !authRateLimiter.Allow("login_ip:"+ip, 10, 1*time.Minute) || !authRateLimiter.Allow("login_email:"+req.Email, 5, 1*time.Minute) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Too many login attempts. Please try again later."})
+		return
+	}
+
 	// Authenticate
 	userID, err := database.AuthenticateEmailUser(req.Email, req.Password)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		if err.Error() == "EMAIL_UNVERIFIED" {
+		if err.Error() == "ACCOUNT_LOCKED" {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "Account is locked. Please contact support.",
+			})
+		} else if err.Error() == "EMAIL_UNVERIFIED" {
 			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "Email is not verified. Please check your email for the verification link.",
@@ -898,6 +1129,7 @@ func handleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req struct {
 		TempToken string `json:"temp_token"`
 		Code      string `json:"code"`
@@ -916,13 +1148,28 @@ func handleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ip := getClientIP(r)
+	if !authRateLimiter.Allow("2fa_ip:"+ip, 5, 1*time.Minute) || !authRateLimiter.Allow("2fa_token:"+req.TempToken, 5, 1*time.Minute) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Too many 2FA attempts. Please try again later."})
+		return
+	}
+
 	_, totpSecret, err := database.GetUserByTempSession(req.TempToken)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "Invalid or expired temporary session token",
-		})
+		if err.Error() == "ACCOUNT_LOCKED" {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "Account is locked. Please contact support.",
+			})
+		} else {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "Invalid or expired temporary session token",
+			})
+		}
 		return
 	}
 
@@ -984,9 +1231,12 @@ func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 
 	redirectURL := fmt.Sprintf("%s/dashboard?verified=true&email=%s", frontendURL, url.QueryEscape(email))
 
+	escapedEmail := html.EscapeString(email)
+	escapedRedirectURL := html.EscapeString(redirectURL)
+
 	// Return a beautiful visual confirmation page that redirects after 3 seconds, or immediate redirect.
 	// A visual confirmation page is extremely premium!
-	html := fmt.Sprintf(`<!DOCTYPE html>
+	htmlContent := fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
 	<title>Account Verified</title>
@@ -1026,11 +1276,7 @@ func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		.btn:hover { background: #e2c1fb; transform: translate(-1px, -1px); box-shadow: 3px 3px 0px #1a1a1a; }
 	</style>
-	<script>
-		setTimeout(function() {
-			window.location.href = "%s";
-		}, 3000);
-	</script>
+	<meta http-equiv="refresh" content="3;url=%s">
 </head>
 <body>
 	<div class="card">
@@ -1040,10 +1286,10 @@ func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		<a class="btn" href="%s">Go to Dashboard</a>
 	</div>
 </body>
-</html>`, redirectURL, email, redirectURL)
+</html>`, escapedRedirectURL, escapedEmail, escapedRedirectURL)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(html))
+	_, _ = w.Write([]byte(htmlContent))
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -1359,6 +1605,7 @@ func handleValidatePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req struct {
 		Prompt string `json:"prompt"`
 	}
@@ -1442,65 +1689,27 @@ func formatSize(bytes int) string {
 	return fmt.Sprintf("%d Bytes", bytes)
 }
 
-// authenticateAdmin checks if request contains the valid admin secret
-func authenticateAdmin(r *http.Request) bool {
-	adminSecret := os.Getenv("ADMIN_SECRET")
-	if adminSecret == "" {
-		adminSecret = "speektome_admin_secret_123!" // Default secure fallback
-	}
-	secret := r.Header.Get("X-Admin-Secret")
-	if secret == "" {
-		auth := r.Header.Get("Authorization")
-		if strings.HasPrefix(auth, "Bearer ") {
-			secret = strings.TrimPrefix(auth, "Bearer ")
-		}
-	}
-	return secret == adminSecret
-}
-
-// GET /admin/users - List users with usage stats
-func handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
-	if !authenticateAdmin(r) {
-		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
-		return
-	}
-	users, err := database.ListUsersWithStats()
+// authenticateAdmin checks if request contains a valid admin session
+func authenticateAdmin(r *http.Request) (*UserProfile, error) {
+	user, err := authenticate(r)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to list users: %v", err), http.StatusInternalServerError)
-		return
+		return nil, err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(users)
-}
-
-// POST /admin/users/plan - Update a user's plan tier and active state
-func handleAdminUpdateUserPlan(w http.ResponseWriter, r *http.Request) {
-	if !authenticateAdmin(r) {
-		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
-		return
+	if user.IsAdmin != 1 {
+		return nil, fmt.Errorf("Forbidden: Admin access required")
 	}
-	var req struct {
-		UserID     int64  `json:"user_id"`
-		PlanTier   string `json:"plan_tier"`
-		PlanActive int    `json:"plan_active"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	err := database.UpdateUserPlan(req.UserID, req.PlanTier, req.PlanActive, "")
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to update user plan: %v", err), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+	return user, nil
 }
 
 // GET /admin/config - Get SaaS configurations
 func handleAdminGetConfig(w http.ResponseWriter, r *http.Request) {
-	if !authenticateAdmin(r) {
-		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+	_, err := authenticateAdmin(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 	config := configManager.GetRawAll()
@@ -1510,10 +1719,16 @@ func handleAdminGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // POST /admin/config - Update SaaS configurations
 func handleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
-	if !authenticateAdmin(r) {
-		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+	_, err := authenticateAdmin(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1532,8 +1747,13 @@ func handleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 // GET /admin/cache/rate-limits - Retrieve rate limiter counts in memory
 func handleAdminGetRateLimits(w http.ResponseWriter, r *http.Request) {
-	if !authenticateAdmin(r) {
-		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+	_, err := authenticateAdmin(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 	counts := globalUserRateLimiter.GetCounts()
@@ -1547,8 +1767,13 @@ func handleAdminGetRateLimits(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /admin/cache/rate-limits - Reset rate limits
 func handleAdminDeleteRateLimits(w http.ResponseWriter, r *http.Request) {
-	if !authenticateAdmin(r) {
-		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+	_, err := authenticateAdmin(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 	userIDStr := r.URL.Query().Get("user_id")
@@ -1570,8 +1795,13 @@ func handleAdminDeleteRateLimits(w http.ResponseWriter, r *http.Request) {
 
 // GET /admin/cache/vocabulary - List user IDs in vocab cache
 func handleAdminGetVocabCache(w http.ResponseWriter, r *http.Request) {
-	if !authenticateAdmin(r) {
-		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+	_, err := authenticateAdmin(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 	keys := vocabCache.GetKeys()
@@ -1584,8 +1814,13 @@ func handleAdminGetVocabCache(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /admin/cache/vocabulary - Invalidate vocabulary cache
 func handleAdminDeleteVocabCache(w http.ResponseWriter, r *http.Request) {
-	if !authenticateAdmin(r) {
-		http.Error(w, "Unauthorized: invalid admin secret", http.StatusUnauthorized)
+	_, err := authenticateAdmin(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 	userIDStr := r.URL.Query().Get("user_id")
@@ -1760,6 +1995,7 @@ func handleVerifySubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Parse request payload
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req struct {
 		PaymentID      string `json:"razorpay_payment_id"`
 		SubscriptionID string `json:"razorpay_subscription_id"`
@@ -1925,6 +2161,7 @@ func handleAddVocabulary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req struct {
 		Canonical string `json:"canonical_term"`
 	}
@@ -1960,6 +2197,7 @@ func handleDeleteVocabulary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req struct {
 		Canonical string `json:"canonical_term"`
 	}
@@ -2744,6 +2982,13 @@ func handleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cleanedPath := filepath.Clean(meeting.AudioPath)
+	normalizedPath := filepath.ToSlash(cleanedPath)
+	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") {
+		http.Error(w, "Forbidden: Invalid audio file path", http.StatusForbidden)
+		return
+	}
+
 	// Delete file from disk
 	_ = os.Remove(meeting.AudioPath)
 
@@ -2779,6 +3024,13 @@ func handleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 
 	if meeting.UserID != user.ID {
 		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	cleanedPath := filepath.Clean(meeting.AudioPath)
+	normalizedPath := filepath.ToSlash(cleanedPath)
+	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") {
+		http.Error(w, "Forbidden: Invalid audio file path", http.StatusForbidden)
 		return
 	}
 
@@ -2917,13 +3169,13 @@ func verifyTOTP(secret string, code string) bool {
 }
 
 func handleAdminGetUsers(w http.ResponseWriter, r *http.Request) {
-	user, err := authenticate(r)
+	_, err := authenticateAdmin(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-	if user.IsAdmin != 1 {
-		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 
@@ -2938,13 +3190,13 @@ func handleAdminGetUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAdminUpdatePlan(w http.ResponseWriter, r *http.Request) {
-	user, err := authenticate(r)
+	_, err := authenticateAdmin(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-	if user.IsAdmin != 1 {
-		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 
@@ -2955,6 +3207,7 @@ func handleAdminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req struct {
 		PlanTier   string `json:"plan_tier"`
 		PlanActive int    `json:"plan_active"`
@@ -2975,13 +3228,13 @@ func handleAdminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAdminUpdateRateLimit(w http.ResponseWriter, r *http.Request) {
-	user, err := authenticate(r)
+	_, err := authenticateAdmin(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-	if user.IsAdmin != 1 {
-		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 
@@ -2992,6 +3245,7 @@ func handleAdminUpdateRateLimit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req struct {
 		RateLimitRPM *int `json:"rate_limit_rpm"`
 	}
@@ -3011,13 +3265,13 @@ func handleAdminUpdateRateLimit(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAdminGetWebhookLogs(w http.ResponseWriter, r *http.Request) {
-	user, err := authenticate(r)
+	_, err := authenticateAdmin(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-	if user.IsAdmin != 1 {
-		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 
@@ -3048,6 +3302,7 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 5*1024*1024)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -3055,19 +3310,23 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	rawPayload := string(bodyBytes)
 
-	// 1. Signature Verification
+	// 1. Signature Verification (Compulsory)
 	razorpayWebhookSecret := os.Getenv("RAZORPAY_WEBHOOK_SECRET")
-	if razorpayWebhookSecret != "" {
-		signature := r.Header.Get("X-Razorpay-Signature")
-		mac := hmac.New(sha256.New, []byte(razorpayWebhookSecret))
-		mac.Write(bodyBytes)
-		expectedSignature := hex.EncodeToString(mac.Sum(nil))
-		if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(signature)) != 1 {
-			log.Printf("[RAZORPAY WEBHOOK] Signature verification FAILED for incoming payload")
-			_ = database.InsertWebhookLog("unknown", "", nil, "signature_failed", "Invalid HMAC-SHA256 signature", rawPayload)
-			http.Error(w, "Unauthorized: Invalid webhook signature", http.StatusBadRequest)
-			return
-		}
+	if razorpayWebhookSecret == "" {
+		log.Printf("[RAZORPAY WEBHOOK ERROR] Webhook secret not configured")
+		http.Error(w, "Internal Server Error: Webhook configuration missing", http.StatusInternalServerError)
+		return
+	}
+
+	signature := r.Header.Get("X-Razorpay-Signature")
+	mac := hmac.New(sha256.New, []byte(razorpayWebhookSecret))
+	mac.Write(bodyBytes)
+	expectedSignature := hex.EncodeToString(mac.Sum(nil))
+	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(signature)) != 1 {
+		log.Printf("[RAZORPAY WEBHOOK] Signature verification FAILED for incoming payload")
+		_ = database.InsertWebhookLog("unknown", "", nil, "signature_failed", "Invalid HMAC-SHA256 signature", rawPayload)
+		http.Error(w, "Unauthorized: Invalid webhook signature", http.StatusBadRequest)
+		return
 	}
 
 	// 2. Parse Event JSON Payload

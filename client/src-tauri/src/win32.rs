@@ -53,7 +53,7 @@ pub fn update_overlay_position() {
     if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
         let hwnd = send_hwnd.0;
         let (x, y) = {
-            let config = crate::get_active_config().lock().unwrap();
+            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
             calculate_pill_position(&config, 76, 32)
         };
         unsafe {
@@ -82,7 +82,7 @@ const SND_NODEFAULT: u32 = 0x0002;
 
 pub fn play_chime(start: bool) {
     let play_enabled = {
-        let config = crate::get_active_config().lock().unwrap();
+        let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.sound_feedback
     };
     if !play_enabled {
@@ -183,7 +183,7 @@ pub unsafe fn update_layered_overlay(hwnd: HWND) {
 
         // Fetch colors from configuration
         let (bg_color, wave_color) = {
-            let config = crate::get_active_config().lock().unwrap();
+            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
             (config.pill_bg_color, config.pill_wave_color)
         };
 
@@ -407,18 +407,18 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
         let vk_code = kb_struct.vkCode;
         
         let hotkey_vk = {
-            let config = crate::get_active_config().lock().unwrap();
+            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
             crate::config::hotkey_name_to_vk(&config.hotkey)
         };
         
         if vk_code == hotkey_vk {
             let wparam_usize = wparam as usize;
             if wparam_usize == WM_KEYDOWN as usize || wparam_usize == WM_SYSKEYDOWN as usize {
-                let mut state = crate::get_state().lock().unwrap();
+                let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
                 if !state.is_key_held {
                     // Enforce authentication check before starting dictation
                     let has_token = {
-                        let config = crate::get_active_config().lock().unwrap();
+                        let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                         config.session_token.is_some()
                     };
                     if !has_token {
@@ -439,7 +439,7 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
                     }
                     
                     // Check if consecutive holding (less than 5 seconds since last release)
-                    let consecutive = if let Some(last) = *crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap() {
+                    let consecutive = if let Some(last) = *crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()) {
                         std::time::Instant::now().duration_since(last) < std::time::Duration::from_secs(5)
                     } else {
                         false
@@ -458,12 +458,12 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
                 }
                 return 1; // Swallow key-down event
             } else if wparam_usize == WM_KEYUP as usize || wparam_usize == WM_SYSKEYUP as usize {
-                let mut state = crate::get_state().lock().unwrap();
+                let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
                 if state.is_key_held {
                     state.is_key_held = false;
                     
                     // Save key-release timestamp for smart spacing duration measurement
-                    let mut last_release = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap();
+                    let mut last_release = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *last_release = Some(std::time::Instant::now());
                     
                     // Hide indicator bar
@@ -500,7 +500,7 @@ pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lpar
         } else {
             let wparam_usize = wparam as usize;
             if wparam_usize == WM_KEYDOWN as usize || wparam_usize == WM_SYSKEYDOWN as usize {
-                let mut state = crate::get_state().lock().unwrap();
+                let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
                 if state.is_key_held {
                     state.is_key_held = false;
                     state.press_time = None;
@@ -549,7 +549,7 @@ pub unsafe fn run_win32_hook_and_tray_thread() {
     let width = 76;
     let height = 32;
     let (x, y) = {
-        let config = crate::get_active_config().lock().unwrap();
+        let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         calculate_pill_position(&config, width, height)
     };
     

@@ -9,10 +9,8 @@ struct TranscriptResponse {
 }
 
 pub fn get_api_url() -> String {
-    // The API origin is a security boundary: requests contain bearer tokens and
-    // private audio. Do not let a tampered user configuration redirect either.
-    const API_ORIGIN: &str = "https://api.speekto.me";
-    API_ORIGIN.to_string()
+    let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+    config.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string())
 }
 
 fn create_client() -> reqwest::blocking::Client {
@@ -65,7 +63,10 @@ pub fn listen_for_token() -> Option<String> {
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();
     
-    let auth_url = format!("{}/auth/login?port={}", get_api_url(), port);
+    // Generate a random client_state (hex string of 16 random bytes)
+    let client_state: String = (0..16).map(|_| format!("{:02x}", rand::random::<u8>())).collect();
+    
+    let auth_url = format!("{}/auth/login?port={}&client_state={}", get_api_url(), port, client_state);
     open_browser(&auth_url);
     
     // Accept single connection
@@ -76,6 +77,7 @@ pub fn listen_for_token() -> Option<String> {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
             
             let mut captured_token = None;
+            let mut captured_state = None;
             if let Some(path_start) = request.find("GET /callback?") {
                 let query_slice = &request[path_start + 14..];
                 if let Some(space_pos) = query_slice.find(' ') {
@@ -85,25 +87,29 @@ pub fn listen_for_token() -> Option<String> {
                         if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
                             if k == "token" {
                                 captured_token = Some(v.to_string());
+                            } else if k == "client_state" {
+                                captured_state = Some(v.to_string());
                             }
                         }
                     }
                 }
             }
 
-            if let Some(token) = captured_token {
-                // Keep the loopback response static. In particular, never place
-                // callback parameters in an HTML or JavaScript context.
-                let body = "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>You can close this window now and return to SpeekTo.Me.</p></body></html>";
+            if let (Some(token), Some(state)) = (captured_token, captured_state) {
+                if state == client_state {
+                    // Keep the loopback response static. In particular, never place
+                    // callback parameters in an HTML or JavaScript context.
+                    let body = "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>You can close this window now and return to SpeekTo.Me.</p></body></html>";
 
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.flush();
-                return Some(token);
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                    return Some(token);
+                }
             }
         }
     }
@@ -124,7 +130,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
     
     // Read model, enhance choice, typing mode, smart spacing, custom prompt, and session token from config
     let (model, enhance, typing_mode, smart_spacing, custom_prompt, session_token) = {
-        let config = crate::get_active_config().lock().unwrap();
+        let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         (
             config.model.clone(),
             config.enhance,

@@ -182,6 +182,9 @@ pub fn paste_text(text: &str) {
             return;
         }
     };
+
+    // Safely backup user's original clipboard content if it is text
+    let original_text = ctx.get_text().ok();
     
     if let Err(e) = ctx.set_text(text.to_owned()) {
         eprintln!("Failed to set clipboard text: {:?}", e);
@@ -192,4 +195,14 @@ pub fn paste_text(text: &str) {
     thread::sleep(Duration::from_millis(80));
     
     simulate_paste();
+
+    // Restore original clipboard text after a brief delay to allow target application to paste it first
+    if let Some(orig) = original_text {
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            if let Ok(mut ctx) = Clipboard::new() {
+                let _ = ctx.set_text(orig);
+            }
+        });
+    }
 }

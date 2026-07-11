@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"log"
 	"os"
 
@@ -51,6 +52,9 @@ func SendVerificationEmail(targetEmail, name, token string) error {
 
 	svc := ses.New(sess)
 
+	escapedName := html.EscapeString(name)
+	escapedLink := html.EscapeString(verificationLink)
+
 	htmlBody := fmt.Sprintf(`
 		<!DOCTYPE html>
 		<html>
@@ -73,7 +77,7 @@ func SendVerificationEmail(targetEmail, name, token string) error {
 			</div>
 		</body>
 		</html>
-	`, name, verificationLink, verificationLink)
+	`, escapedName, escapedLink, escapedLink)
 
 	textBody := fmt.Sprintf(
 		"Hello %s,\n\nWelcome to SpeekTo.Me! Please verify your email by opening the following link in your browser:\n\n%s\n\nThank you,\nThe SpeekTo.Me Team",

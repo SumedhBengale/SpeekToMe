@@ -1,4 +1,4 @@
-// #![windows_subsystem = "windows"]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 pub mod config;
 pub mod audio;
@@ -9,6 +9,7 @@ pub mod win32;
 use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::AtomicBool;
 use std::thread;
+use zeroize::Zeroize;
 
 use tauri::{Manager, Emitter, PhysicalPosition, PhysicalSize};
 use crate::config::AppConfig;
@@ -53,13 +54,13 @@ pub fn get_active_config() -> &'static Mutex<AppConfig> {
 
 #[tauri::command]
 fn get_config() -> AppConfig {
-    get_active_config().lock().unwrap().clone()
+    get_active_config().lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[tauri::command]
 fn save_config(config: AppConfig) {
     {
-        let mut active = get_active_config().lock().unwrap();
+        let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         *active = config.clone();
     }
     config::save_config(&config);
@@ -75,9 +76,11 @@ fn hide_window(window: tauri::WebviewWindow) {
 fn start_login(window: tauri::WebviewWindow) {
     thread::spawn(move || {
         if let Some(token) = api::listen_for_token() {
-            let mut active = get_active_config().lock().unwrap();
-            active.session_token = Some(token.clone());
-            config::save_config(&active);
+            {
+                let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                active.session_token = Some(token.clone());
+                config::save_config(&active);
+            }
             
             if let Some(user_info) = api::fetch_user_info(&token) {
                 let _ = window.emit("login-success", user_info);
@@ -97,35 +100,43 @@ fn get_api_url() -> String {
 
 #[tauri::command]
 fn logout() {
-    let mut active = get_active_config().lock().unwrap();
-    if let Some(ref token) = active.session_token {
-        let token_clone = token.clone();
+    let token_opt = {
+        let active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        active.session_token.clone()
+    };
+    if let Some(token) = token_opt {
         thread::spawn(move || {
             let client = reqwest::blocking::Client::new();
             let _ = client.post(format!("{}/auth/logout", api::get_api_url()))
-                .header("Authorization", format!("Bearer {}", token_clone))
+                .header("Authorization", format!("Bearer {}", token))
                 .send();
         });
     }
+    let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
     active.session_token = None;
     config::save_config(&active);
 }
 
 #[tauri::command]
 fn get_user_info() -> Option<api::UserInfo> {
-    let config = get_active_config().lock().unwrap();
-    if let Some(ref token) = config.session_token {
-        api::fetch_user_info(token)
+    let token = {
+        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        config.session_token.clone()
+    };
+    if let Some(ref t) = token {
+        api::fetch_user_info(t)
     } else {
         None
     }
 }
 
 #[tauri::command]
-fn login_with_credentials(email: String, password: String) -> Result<api::UserInfo, String> {
-    match api::login_with_credentials(&email, &password) {
+fn login_with_credentials(email: String, mut password: String) -> Result<api::UserInfo, String> {
+    let res = api::login_with_credentials(&email, &password);
+    password.zeroize();
+    match res {
         Ok((token, user_info)) => {
-            let mut active = get_active_config().lock().unwrap();
+            let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
             active.session_token = Some(token);
             config::save_config(&active);
             Ok(user_info)
@@ -135,29 +146,37 @@ fn login_with_credentials(email: String, password: String) -> Result<api::UserIn
 }
 
 #[tauri::command]
-fn signup_with_credentials(email: String, password: String, name: String) -> Result<String, String> {
-    api::signup_with_credentials(&email, &password, &name)
+fn signup_with_credentials(email: String, mut password: String, name: String) -> Result<String, String> {
+    let res = api::signup_with_credentials(&email, &password, &name);
+    password.zeroize();
+    res
 }
 
 #[tauri::command]
 fn get_vocabulary() -> Result<Vec<api::ClientVocabularyTerm>, String> {
-    let config = get_active_config().lock().unwrap();
-    let token = config.session_token.as_ref().ok_or("Not logged in")?;
-    api::fetch_vocabulary(token)
+    let token = {
+        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        config.session_token.clone().ok_or("Not logged in")?
+    };
+    api::fetch_vocabulary(&token)
 }
 
 #[tauri::command]
 fn add_vocabulary_term(term: String) -> Result<(), String> {
-    let config = get_active_config().lock().unwrap();
-    let token = config.session_token.as_ref().ok_or("Not logged in")?;
-    api::add_vocab_term(token, &term)
+    let token = {
+        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        config.session_token.clone().ok_or("Not logged in")?
+    };
+    api::add_vocab_term(&token, &term)
 }
 
 #[tauri::command]
 fn delete_vocabulary_term(term: String) -> Result<(), String> {
-    let config = get_active_config().lock().unwrap();
-    let token = config.session_token.as_ref().ok_or("Not logged in")?;
-    api::delete_vocab_term(token, &term)
+    let token = {
+        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        config.session_token.clone().ok_or("Not logged in")?
+    };
+    api::delete_vocab_term(&token, &term)
 }
 
 pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
@@ -172,8 +191,8 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
             .decorations(true)
             .skip_taskbar(false);
 
-        let pos_opt = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap().clone();
-        let size_opt = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap().clone();
+        let pos_opt = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let size_opt = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         if let Some(pos) = pos_opt {
             builder = builder.position(pos.x as f64, pos.y as f64);
@@ -196,18 +215,42 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
     }
 }
 
+fn cleanup_old_recordings() {
+    let config_path = config::get_config_path();
+    if let Some(parent) = config_path.parent() {
+        let rec_dir = parent.join("recordings");
+        if let Ok(entries) = std::fs::read_dir(rec_dir) {
+            let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
+            for entry in entries.flatten() {
+                if let Ok(metadata) = entry.metadata() {
+                    if metadata.is_file() {
+                        if let Ok(modified) = metadata.modified() {
+                            if modified < cutoff {
+                                let _ = std::fs::remove_file(entry.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     // 1. Initialize global loaded config
     let _ = get_active_config();
+
+    // 2. Cleanup old meeting recordings from previous runs (if older than 24 hours)
+    cleanup_old_recordings();
     
-    // 2. Spawn Keyboard Hook & System Tray Worker Thread
+    // 3. Spawn Keyboard Hook & System Tray Worker Thread
     thread::spawn(|| {
         unsafe {
             win32::run_win32_hook_and_tray_thread();
         }
     });
     
-    // 3. Launch Tauri app
+    // 4. Launch Tauri app
     tauri::Builder::default()
         .setup(|app| {
             // Apply Mica vibrancy effect in Windows 11
@@ -223,11 +266,11 @@ fn main() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Ok(pos) = window.outer_position() {
-                    let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap();
+                    let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *pos_lock = Some(pos);
                 }
                 if let Ok(size) = window.inner_size() {
-                    let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap();
+                    let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *size_lock = Some(size);
                 }
             }
@@ -246,6 +289,7 @@ fn main() {
             delete_vocabulary_term,
             start_meeting,
             stop_meeting,
+            cancel_meeting,
             get_meeting_levels,
             upload_meeting,
             get_api_url,
@@ -288,7 +332,7 @@ fn start_meeting(title: String) -> Result<String, String> {
         return Err(format!("Failed to start recording: {}", e));
     }
     
-    let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap();
+    let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
     *path_lock = Some(path.clone());
     
     Ok(path.to_string_lossy().to_string())
@@ -299,12 +343,26 @@ fn stop_meeting() -> Result<String, String> {
     println!("Stopping meeting...");
     crate::audio::stop_meeting_recording();
     
-    let path_lock = CURRENT_MEETING_PATH.lock().unwrap();
+    let path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref path) = *path_lock {
         Ok(path.to_string_lossy().to_string())
     } else {
         Err("No active meeting recording found".to_string())
     }
+}
+
+#[tauri::command]
+fn cancel_meeting() -> Result<(), String> {
+    println!("Cancelling meeting...");
+    crate::audio::stop_meeting_recording();
+    
+    let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(path) = path_lock.take() {
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("mic.ogg"));
+        let _ = std::fs::remove_file(path.with_extension("loopback.ogg"));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -317,21 +375,25 @@ fn get_meeting_levels() -> (u32, u32) {
 
 #[tauri::command]
 fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
-    let config = get_active_config().lock().unwrap();
-    let token = config.session_token.as_ref().ok_or("Not logged in")?;
-    let expected_path = CURRENT_MEETING_PATH.lock().unwrap().clone()
+    let token = {
+        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        config.session_token.clone().ok_or("Not logged in")?
+    };
+    let expected_path = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone()
         .ok_or("No active meeting recording found")?;
     if std::path::Path::new(&filepath) != expected_path {
         return Err("Refusing to upload a file that was not created by SpeekTo.Me".to_string());
     }
-    crate::api::upload_meeting(token, &title, &expected_path)
+    crate::api::upload_meeting(&token, &title, &expected_path)
 }
 
 #[tauri::command]
 fn validate_prompt(prompt: String) -> Result<api::PromptValidationResult, String> {
-    let config = get_active_config().lock().unwrap();
-    let token = config.session_token.as_ref().ok_or("Not logged in")?;
-    api::validate_custom_prompt(token, &prompt)
+    let token = {
+        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        config.session_token.clone().ok_or("Not logged in")?
+    };
+    api::validate_custom_prompt(&token, &prompt)
 }
 
 

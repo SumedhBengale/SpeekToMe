@@ -29,7 +29,7 @@ pub struct AppConfig {
     pub sound_feedback: bool, // true/false
     pub smart_spacing: bool,  // true/false
     pub custom_prompt: String,// String prompt instructions
-    pub session_token: Option<String>,
+    pub : Option<String>,
     pub autostart: bool,      // true/false
     pub theme: String,        // "forest", "lavender", "mint", "classic_dark"
     
@@ -98,50 +98,59 @@ pub fn get_config_path() -> std::path::PathBuf {
 pub fn load_config() -> AppConfig {
     let path = get_config_path();
     println!("[CONFIG] Loading config from path: {:?}", path);
-    match std::fs::read_to_string(&path) {
+    let mut config = match std::fs::read_to_string(&path) {
         Ok(data) => {
             match serde_json::from_str::<AppConfig>(&data) {
                 Ok(config) => {
                     println!("[CONFIG] Successfully loaded config from {:?}", path);
-                    return config;
+                    config
                 }
                 Err(e) => {
                     eprintln!("[CONFIG] Failed to parse config JSON from {:?}: {:?}", path, e);
+                    AppConfig::default()
                 }
             }
         }
         Err(e) => {
             eprintln!("[CONFIG] Failed to read config file from {:?}: {:?}", path, e);
-        }
-    }
-    // Migration fallback (search for the template config in CWD, exe folder, or target parent folders)
-    let mut search_paths = vec![std::path::PathBuf::from("speektome_config.json")];
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            search_paths.push(exe_dir.join("speektome_config.json"));
-            if let Some(p1) = exe_dir.parent() {
-                search_paths.push(p1.join("speektome_config.json"));
-                if let Some(p2) = p1.parent() {
-                    search_paths.push(p2.join("speektome_config.json"));
-                    if let Some(p3) = p2.parent() {
-                        search_paths.push(p3.join("speektome_config.json"));
+            // Migration fallback (search for the template config in CWD, exe folder, or target parent folders)
+            let mut search_paths = vec![std::path::PathBuf::from("speektome_config.json")];
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    search_paths.push(exe_dir.join("speektome_config.json"));
+                    if let Some(p1) = exe_dir.parent() {
+                        search_paths.push(p1.join("speektome_config.json"));
+                        if let Some(p2) = p1.parent() {
+                            search_paths.push(p2.join("speektome_config.json"));
+                            if let Some(p3) = p2.parent() {
+                                search_paths.push(p3.join("speektome_config.json"));
+                            }
+                        }
                     }
                 }
             }
-        }
-    }
 
-    for template_path in search_paths {
-        if let Ok(data) = std::fs::read_to_string(&template_path) {
-            if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
-                println!("[CONFIG] Found fallback template config at {:?}, saving to APPDATA", template_path);
-                save_config(&config);
-                return config;
+            let mut found_config = None;
+            for template_path in search_paths {
+                if let Ok(data) = std::fs::read_to_string(&template_path) {
+                    if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+                        println!("[CONFIG] Found fallback template config at {:?}, saving to APPDATA", template_path);
+                        found_config = Some(config);
+                        break;
+                    }
+                }
             }
+            found_config.unwrap_or_else(AppConfig::default)
+        }
+    };
+
+    // Load session_token from secure keyring
+    if let Ok(entry) = keyring::Entry::new("SpeekToMe", "session_token") {
+        if let Ok(token) = entry.get_password() {
+            config.session_token = Some(token);
         }
     }
-    println!("[CONFIG] No config found anywhere, returning AppConfig::default()");
-    AppConfig::default()
+    config
 }
 
 pub fn apply_autostart(enabled: bool) {
@@ -165,9 +174,24 @@ pub fn apply_autostart(enabled: bool) {
 
 pub fn save_config(config: &AppConfig) {
     apply_autostart(config.autostart);
+
+    // Save session_token to secure keyring
+    if let Ok(entry) = keyring::Entry::new("SpeekToMe", "session_token") {
+        if let Some(ref token) = config.session_token {
+            let _ = entry.set_password(token);
+        } else {
+            let _ = entry.delete_password();
+        }
+    }
+
     let path = get_config_path();
     println!("[CONFIG] Saving config to path: {:?}", path);
-    if let Ok(data) = serde_json::to_string_pretty(config) {
+    
+    // Create copy without the token to serialize as plain JSON on disk
+    let mut config_to_save = config.clone();
+    config_to_save.session_token = None;
+
+    if let Ok(data) = serde_json::to_string_pretty(&config_to_save) {
         if let Err(e) = std::fs::write(&path, &data) {
             eprintln!("[CONFIG] Failed to write config file to {:?}: {:?}", path, e);
         } else {

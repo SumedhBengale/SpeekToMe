@@ -1,8 +1,14 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -56,7 +62,8 @@ func NewDatabase(connStr string) (*Database, error) {
 			rate_limit_rpm INTEGER DEFAULT NULL,
 			is_admin INTEGER DEFAULT 0,
 			totp_secret TEXT DEFAULT NULL,
-			monthly_usage_seconds REAL DEFAULT 0.0
+			monthly_usage_seconds REAL DEFAULT 0.0,
+			is_locked INTEGER DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY,
@@ -152,6 +159,7 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN monthly_usage_seconds REAL DEFAULT 0.0")
+	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_locked INTEGER DEFAULT 0")
 	_, _ = db.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
 	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type)")
 	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id)")
@@ -212,19 +220,23 @@ type UserProfile struct {
 	IsAdmin                int
 	IsTempSession          int
 	MonthlyUsageSeconds    float64
+	IsLocked               int
 }
 
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0)
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked)
 	if err != nil {
 		return nil, err
+	}
+	if u.IsLocked == 1 {
+		return nil, fmt.Errorf("ACCOUNT_LOCKED")
 	}
 	if u.IsTempSession == 1 {
 		return nil, fmt.Errorf("2FA_REQUIRED")
@@ -237,7 +249,7 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 	rows, err := d.db.Query(`
 		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, 
 		       COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), 
-		       u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0),
+		       u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked,
 		       v.canonical_term, v.normalized_term
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
@@ -258,7 +270,7 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 		err := rows.Scan(
 			&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, 
 			&u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, 
-			&u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds,
+			&u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked,
 			&canonical, &normalized,
 		)
 		if err != nil {
@@ -273,8 +285,16 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 		}
 	}
 
+	if err = rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
 	if !userParsed {
 		return nil, nil, fmt.Errorf("invalid or expired session token")
+	}
+
+	if u.IsLocked == 1 {
+		return nil, nil, fmt.Errorf("ACCOUNT_LOCKED")
 	}
 
 	if u.IsTempSession == 1 {
@@ -325,15 +345,22 @@ func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, err
 	var u UserProfile
 	var totpSecret sql.NullString
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, u.totp_secret
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, u.totp_secret, u.is_locked
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ? AND s.is_temp = 1
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &totpSecret)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &totpSecret, &u.IsLocked)
 	if err != nil {
 		return nil, "", err
 	}
-	return &u, totpSecret.String, nil
+	if u.IsLocked == 1 {
+		return nil, "", fmt.Errorf("ACCOUNT_LOCKED")
+	}
+	decryptedSecret, err := decrypt(totpSecret.String)
+	if err != nil {
+		decryptedSecret = totpSecret.String
+	}
+	return &u, decryptedSecret, nil
 }
 
 func (d *Database) PromoteSession(token string) error {
@@ -444,6 +471,9 @@ func (d *Database) GetSaasConfig() (map[string]string, error) {
 			config[k] = v
 		}
 	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
 	return config, nil
 }
 
@@ -490,6 +520,9 @@ func (d *Database) ListUsersWithStats() ([]map[string]interface{}, error) {
 			})
 		}
 	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -514,8 +547,9 @@ func (d *Database) AuthenticateEmailUser(email, password string) (int64, error) 
 	var id int64
 	var hashedPassword string
 	var isVerified int
+	var isLocked int
 
-	err := d.db.QueryRow("SELECT id, password_hash, is_verified FROM users WHERE email = ? AND password_hash IS NOT NULL", email).Scan(&id, &hashedPassword, &isVerified)
+	err := d.db.QueryRow("SELECT id, password_hash, is_verified, is_locked FROM users WHERE email = ? AND password_hash IS NOT NULL", email).Scan(&id, &hashedPassword, &isVerified, &isLocked)
 	if err != nil {
 		return 0, fmt.Errorf("user not found or invalid login method")
 	}
@@ -523,6 +557,10 @@ func (d *Database) AuthenticateEmailUser(email, password string) (int64, error) 
 	err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 	if err != nil {
 		return 0, fmt.Errorf("invalid password")
+	}
+
+	if isLocked == 1 {
+		return 0, fmt.Errorf("ACCOUNT_LOCKED")
 	}
 
 	if isVerified == 0 {
@@ -579,6 +617,9 @@ func (d *Database) GetUserUsageLogs(userID int64) ([]UsageLog, error) {
 			logs = append(logs, l)
 		}
 	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
 	return logs, nil
 }
 
@@ -619,6 +660,9 @@ func (d *Database) GetVocabularyTerms(userID int64) ([]VocabularyTerm, error) {
 		if err := rows.Scan(&vt.Canonical, &vt.Normalized); err == nil {
 			terms = append(terms, vt)
 		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
 	}
 	return terms, nil
 }
@@ -684,6 +728,9 @@ func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 			meetings = append(meetings, m)
 		}
 	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
 	return meetings, nil
 }
 
@@ -740,6 +787,9 @@ func (d *Database) GetAdminUsersList() ([]AdminUserRow, error) {
 			r.RateLimitRPM = &val
 		}
 		list = append(list, r)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
 	}
 	return list, nil
 }
@@ -812,6 +862,9 @@ func (d *Database) GetWebhookLogs(limit int) ([]WebhookLogEntry, error) {
 		}
 		logs = append(logs, entry)
 	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
 	return logs, nil
 }
 
@@ -822,5 +875,75 @@ func (d *Database) ResetAllFreeUserQuotas() error {
 		WHERE plan_tier = 'free' OR plan_active = 0
 	`)
 	return err
+}
+
+func (d *Database) IsUserLocked(userID int64) (bool, error) {
+	var isLocked int
+	err := d.db.QueryRow("SELECT is_locked FROM users WHERE id = ?", userID).Scan(&isLocked)
+	if err != nil {
+		return false, err
+	}
+	return isLocked == 1, nil
+}
+
+func getEncryptionKey() []byte {
+	keyStr := os.Getenv("ENCRYPTION_KEY")
+	if keyStr == "" {
+		keyStr = "speektome_default_fallback_encryption_key_32bytes"
+	}
+	hash := sha256.Sum256([]byte(keyStr))
+	return hash[:]
+}
+
+func encrypt(plaintext string) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
+	key := getEncryptionKey()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aesgcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	ciphertext := aesgcm.Seal(nil, nonce, []byte(plaintext), nil)
+	combined := append(nonce, ciphertext...)
+	return hex.EncodeToString(combined), nil
+}
+
+func decrypt(ciphertextHex string) (string, error) {
+	if ciphertextHex == "" {
+		return "", nil
+	}
+	combined, err := hex.DecodeString(ciphertextHex)
+	if err != nil {
+		return ciphertextHex, nil
+	}
+	key := getEncryptionKey()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonceSize := aesgcm.NonceSize()
+	if len(combined) < nonceSize {
+		return ciphertextHex, nil
+	}
+	nonce := combined[:nonceSize]
+	ciphertext := combined[nonceSize:]
+	plaintext, err := aesgcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
 }
 

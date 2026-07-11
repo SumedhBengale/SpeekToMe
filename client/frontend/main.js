@@ -9,7 +9,7 @@ let currentConfig = null;
 let unlistenLoginSuccess = null;
 let unlistenLoginFailed = null;
 let currentStep = 1;
-let API_URL = "http://127.0.0.1:8000";
+let API_URL = "https://api.speekto.me";
 
 // DOM Elements - Navigation & Tab Panes
 const tabItems = document.querySelectorAll('.nav-item');
@@ -26,6 +26,14 @@ const enhanceCheck = document.getElementById('enhance-check');
 const customPromptText = document.getElementById('custom-prompt-text');
 const promptValidationBanner = document.getElementById('prompt-validation-banner');
 const themeSelect = document.getElementById('theme-select');
+
+// Pill Position Elements
+const pillPosModeSelect = document.getElementById('pill-pos-mode-select');
+const predefinedPosGroup = document.getElementById('predefined-pos-group');
+const pillPredefinedSelect = document.getElementById('pill-predefined-select');
+const customPosGroup = document.getElementById('custom-pos-group');
+const pillCustomX = document.getElementById('pill-custom-x');
+const pillCustomY = document.getElementById('pill-custom-y');
 
 // Dashboard Account Elements
 const authLoggedOut = document.getElementById('auth-logged-out');
@@ -143,6 +151,18 @@ async function init() {
         document.body.setAttribute('data-theme', e.target.value);
       });
     }
+
+    if (pillPosModeSelect) {
+      pillPosModeSelect.addEventListener('change', (e) => {
+        if (e.target.value === 'custom') {
+          if (customPosGroup) customPosGroup.style.display = 'block';
+          if (predefinedPosGroup) predefinedPosGroup.style.display = 'none';
+        } else {
+          if (customPosGroup) customPosGroup.style.display = 'none';
+          if (predefinedPosGroup) predefinedPosGroup.style.display = 'block';
+        }
+      });
+    }
     if (onboardThemeSelect) {
       onboardThemeSelect.addEventListener('change', (e) => {
         document.body.setAttribute('data-theme', e.target.value);
@@ -246,6 +266,27 @@ function applyConfigToUI(config) {
   customPromptText.value = config.custom_prompt;
   if (themeSelect) themeSelect.value = config.theme || 'forest';
 
+  // Apply new pill positioning settings
+  if (pillPosModeSelect) {
+    pillPosModeSelect.value = config.pill_position_mode || 'predefined';
+    if (config.pill_position_mode === 'custom') {
+      if (customPosGroup) customPosGroup.style.display = 'block';
+      if (predefinedPosGroup) predefinedPosGroup.style.display = 'none';
+    } else {
+      if (customPosGroup) customPosGroup.style.display = 'none';
+      if (predefinedPosGroup) predefinedPosGroup.style.display = 'block';
+    }
+  }
+  if (pillPredefinedSelect) {
+    pillPredefinedSelect.value = config.pill_predefined_position || 'Top Center';
+  }
+  if (pillCustomX) {
+    pillCustomX.value = config.pill_custom_x !== undefined ? config.pill_custom_x : 0;
+  }
+  if (pillCustomY) {
+    pillCustomY.value = config.pill_custom_y !== undefined ? config.pill_custom_y : 60;
+  }
+
   // Onboarding inputs
   onboardHotkeySelect.value = config.hotkey;
   onboardAutostartCheck.checked = config.autostart;
@@ -260,9 +301,58 @@ function applyConfigToUI(config) {
   document.body.setAttribute('data-theme', config.theme || 'forest');
 }
 
+function cssColorToBgr(colorStr) {
+  if (!colorStr) return 0;
+  colorStr = colorStr.trim();
+  
+  // Handle hex format (e.g., #fff9fa or #fff)
+  if (colorStr.startsWith('#')) {
+    let hex = colorStr.substring(1);
+    if (hex.length === 3) {
+      hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+    }
+    if (hex.length === 6) {
+      const r = parseInt(hex.substring(0, 2), 16);
+      const g = parseInt(hex.substring(2, 4), 16);
+      const b = parseInt(hex.substring(4, 6), 16);
+      return (b << 16) | (g << 8) | r;
+    }
+  }
+  
+  // Handle rgb format (e.g., rgb(26, 16, 47) or rgba(26, 16, 47, 0.5))
+  const rgbMatch = colorStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (rgbMatch) {
+    const r = parseInt(rgbMatch[1], 10);
+    const g = parseInt(rgbMatch[2], 10);
+    const b = parseInt(rgbMatch[3], 10);
+    return (b << 16) | (g << 8) | r;
+  }
+  
+  return 0;
+}
+
+function getPillColorsForTheme(themeName) {
+  const bodyStyle = getComputedStyle(document.body);
+  let bg, wave;
+  
+  if (themeName === 'forest') {
+    // For light theme, we use light pink background (bg-content) and dark burgundy waves (border-color)
+    bg = cssColorToBgr(bodyStyle.getPropertyValue('--bg-content')) || 0xFAF9FF;
+    wave = cssColorToBgr(bodyStyle.getPropertyValue('--border-color')) || 0x120A24;
+  } else {
+    // For dark themes, we use the content background and accent color
+    bg = cssColorToBgr(bodyStyle.getPropertyValue('--bg-content')) || 0x1A102F;
+    wave = cssColorToBgr(bodyStyle.getPropertyValue('--accent-color')) || 0xF0D7FF;
+  }
+  
+  return { bg, wave };
+}
+
 function gatherConfigFromUI(isOnboarding) {
   const api_url = currentConfig ? currentConfig.api_url : null;
   if (isOnboarding) {
+    const themeName = onboardThemeSelect ? onboardThemeSelect.value : 'forest';
+    const colors = getPillColorsForTheme(themeName);
     return {
       api_url: api_url,
       hotkey: onboardHotkeySelect.value,
@@ -274,9 +364,17 @@ function gatherConfigFromUI(isOnboarding) {
       enhance: onboardEnhanceCheck.checked,
       custom_prompt: onboardCustomPromptText.value,
       session_token: currentConfig ? currentConfig.session_token : null,
-      theme: onboardThemeSelect ? onboardThemeSelect.value : 'forest'
+      theme: themeName,
+      pill_position_mode: currentConfig ? currentConfig.pill_position_mode : 'predefined',
+      pill_predefined_position: currentConfig ? currentConfig.pill_predefined_position : 'Top Center',
+      pill_custom_x: currentConfig ? currentConfig.pill_custom_x : 0,
+      pill_custom_y: currentConfig ? currentConfig.pill_custom_y : 60,
+      pill_bg_color: colors.bg,
+      pill_wave_color: colors.wave
     };
   } else {
+    const themeName = themeSelect ? themeSelect.value : 'forest';
+    const colors = getPillColorsForTheme(themeName);
     return {
       api_url: api_url,
       hotkey: hotkeySelect.value,
@@ -288,7 +386,13 @@ function gatherConfigFromUI(isOnboarding) {
       enhance: enhanceCheck.checked,
       custom_prompt: customPromptText.value,
       session_token: currentConfig ? currentConfig.session_token : null,
-      theme: themeSelect ? themeSelect.value : 'forest'
+      theme: themeName,
+      pill_position_mode: pillPosModeSelect ? pillPosModeSelect.value : 'predefined',
+      pill_predefined_position: pillPredefinedSelect ? pillPredefinedSelect.value : 'Top Center',
+      pill_custom_x: pillCustomX ? parseInt(pillCustomX.value, 10) || 0 : 0,
+      pill_custom_y: pillCustomY ? parseInt(pillCustomY.value, 10) || 0 : 60,
+      pill_bg_color: colors.bg,
+      pill_wave_color: colors.wave
     };
   }
 }
@@ -1218,7 +1322,7 @@ async function cancelMeetingRecording() {
   clearInterval(timerInterval);
   clearInterval(recordingInterval);
   try {
-    await invoke('stop_meeting');
+    await invoke('cancel_meeting');
   } catch (e) {}
   showDashboardView();
   loadMeetings();
