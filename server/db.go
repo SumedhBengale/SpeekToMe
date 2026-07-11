@@ -917,12 +917,16 @@ func encrypt(plaintext string) (string, error) {
 	return hex.EncodeToString(combined), nil
 }
 
+// decrypt decrypts an AES-256-GCM encrypted hex string produced by encrypt().
+// If the value is not a valid encrypted blob (e.g. a legacy plaintext TOTP secret),
+// it returns the raw value unchanged so that old plaintext secrets still work.
 func decrypt(ciphertextHex string) (string, error) {
 	if ciphertextHex == "" {
 		return "", nil
 	}
 	combined, err := hex.DecodeString(ciphertextHex)
 	if err != nil {
+		// Not a hex string at all — treat as raw plaintext (e.g. legacy TOTP secret)
 		return ciphertextHex, nil
 	}
 	key := getEncryptionKey()
@@ -936,14 +940,23 @@ func decrypt(ciphertextHex string) (string, error) {
 	}
 	nonceSize := aesgcm.NonceSize()
 	if len(combined) < nonceSize {
+		// Too short to be a valid AES-GCM ciphertext — treat as raw plaintext
 		return ciphertextHex, nil
 	}
 	nonce := combined[:nonceSize]
 	ciphertext := combined[nonceSize:]
 	plaintext, err := aesgcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return "", err
+		// Decryption failed — this hex was not encrypted with our key.
+		// Fall back to the raw value so legacy plaintext secrets remain functional.
+		return ciphertextHex, nil
 	}
 	return string(plaintext), nil
+}
+
+// EncryptTOTPSecret encrypts a plaintext TOTP secret using the current ENCRYPTION_KEY.
+// Use this to migrate a manually-pasted plaintext secret to encrypted form.
+func EncryptTOTPSecret(plaintext string) (string, error) {
+	return encrypt(plaintext)
 }
 

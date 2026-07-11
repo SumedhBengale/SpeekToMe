@@ -368,6 +368,7 @@ func main() {
 	mux.HandleFunc("GET /admin/users", handleAdminGetUsers)
 	mux.HandleFunc("POST /admin/users/{id}/plan", handleAdminUpdatePlan)
 	mux.HandleFunc("POST /admin/users/{id}/rate-limit", handleAdminUpdateRateLimit)
+	mux.HandleFunc("POST /admin/users/{id}/totp-secret", handleAdminSetTOTPSecret)
 	mux.HandleFunc("GET /admin/config", handleAdminGetConfig)
 	mux.HandleFunc("POST /admin/config", handleAdminUpdateConfig)
 	mux.HandleFunc("GET /admin/webhook-logs", handleAdminGetWebhookLogs)
@@ -3260,6 +3261,58 @@ func handleAdminUpdateRateLimit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+// POST /admin/users/{id}/totp-secret - Encrypt and store a TOTP secret for a user
+// Body: {"totp_secret": "JBSWY3DPEHPK3PXP"}
+// This replaces the old workflow of manually pasting a plaintext secret into the DB.
+func handleAdminSetTOTPSecret(w http.ResponseWriter, r *http.Request) {
+	_, err := authenticateAdmin(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "Forbidden") {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
+		return
+	}
+
+	idStr := r.PathValue("id")
+	targetUserID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var req struct {
+		TOTPSecret string `json:"totp_secret"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	secret := strings.TrimSpace(req.TOTPSecret)
+	if secret == "" {
+		http.Error(w, "totp_secret is required", http.StatusBadRequest)
+		return
+	}
+
+	encrypted, err := EncryptTOTPSecret(secret)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encrypt TOTP secret: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	_, err = database.db.Exec("UPDATE users SET totp_secret = ? WHERE id = ?", encrypted, targetUserID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update TOTP secret: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[ADMIN ACTION] Updated encrypted TOTP secret for user ID %d", targetUserID)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
