@@ -20,12 +20,37 @@ fn create_client() -> reqwest::blocking::Client {
         .unwrap_or_else(|_| reqwest::blocking::Client::new())
 }
 
-// Opening through Explorer avoids feeding a configurable URL to cmd.exe, whose
-// command parser would interpret shell metacharacters in the URL.
+// Use the native Windows ShellExecuteW API to open URLs directly in the default browser.
+// This prevents opening Windows Explorer windows.
 pub fn open_browser(url: &str) {
-    let _ = std::process::Command::new("explorer.exe")
-        .arg(url)
-        .spawn();
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let url_wide: Vec<u16> = std::ffi::OsStr::new(url)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let open_wide: Vec<u16> = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            windows_sys::Win32::UI::Shell::ShellExecuteW(
+                std::ptr::null_mut(),
+                open_wide.as_ptr(),
+                url_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // SW_SHOWNORMAL
+            );
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("open")
+            .arg(url)
+            .spawn();
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

@@ -29,7 +29,7 @@ pub struct AppConfig {
     pub sound_feedback: bool, // true/false
     pub smart_spacing: bool,  // true/false
     pub custom_prompt: String,// String prompt instructions
-    pub : Option<String>,
+    pub session_token: Option<String>,
     pub autostart: bool,      // true/false
     pub theme: String,        // "forest", "lavender", "mint", "classic_dark"
     
