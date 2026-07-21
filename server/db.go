@@ -25,6 +25,14 @@ func NewDatabase(connStr string) (*Database, error) {
 	driver := "sqlite"
 	if strings.HasPrefix(connStr, "libsql://") || strings.HasPrefix(connStr, "http://") || strings.HasPrefix(connStr, "https://") {
 		driver = "libsql"
+		token := os.Getenv("DATABASE_TOKEN")
+		if token != "" {
+			if strings.Contains(connStr, "?") {
+				connStr = connStr + "&authToken=" + token
+			} else {
+				connStr = connStr + "?authToken=" + token
+			}
+		}
 	}
 
 	db, err := sql.Open(driver, connStr)
