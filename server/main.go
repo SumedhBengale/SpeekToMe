@@ -792,11 +792,11 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`<!DOCTYPE html>
 <html>
-<head><title>Admin 2FA Required</title></head>
+<head><title>Access Denied</title></head>
 <body style="font-family: sans-serif; background-color: #ffffee; padding: 40px; text-align: center;">
 <div style="background: white; border: 2px solid black; border-radius: 12px; padding: 30px; max-width: 500px; margin: 0 auto; box-shadow: 4px 4px 0px black;">
-<h2 style="color: #c0392b;">🔒 2FA Not Configured</h2>
-<p>Admin accounts require a TOTP secret configured in the database before signing in.</p>
+<h2 style="color: #c0392b;">🔒 Access Denied</h2>
+<p>This account is not allowed to login.</p>
 </div>
 </body>
 </html>`))
@@ -1099,7 +1099,7 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "Admin account requires TOTP secret to be configured in database.",
+			"error": "This account is not allowed to login.",
 		})
 		return
 	}
@@ -1202,7 +1202,7 @@ func handleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "Admin account requires a TOTP secret configured in database",
+			"error": "This account is not allowed to login.",
 		})
 		return
 	}

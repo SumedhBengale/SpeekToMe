@@ -79,8 +79,11 @@ export default function App() {
   useEffect(() => {
     if (token) {
       fetchUserProfile();
-    } else {
-      setRoute('login');
+    } else if (route !== '2fa' && route !== 'signup') {
+      const params = new URLSearchParams(window.location.search);
+      if (!params.get('temp_token')) {
+        setRoute('login');
+      }
     }
   }, [token]);
 

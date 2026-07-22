@@ -127,7 +127,7 @@ async function handleCredentialsLogin(email, password) {
   if (res.ok) {
     const data = await res.json();
     if (data.require_2fa) {
-      throw new Error("Admin accounts are not permitted to sign in via Browser Extension. Please use the Web Dashboard.");
+      throw new Error("This account is not allowed to login.");
     }
     config.session_token = data.token;
     await saveConfig(config);

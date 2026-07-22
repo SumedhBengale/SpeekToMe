@@ -11,6 +11,52 @@ let unlistenLoginFailed = null;
 let currentStep = 1;
 let API_URL = "https://api.speekto.me";
 
+function showToast(message, title = "Notification", type = "error") {
+  let container = document.querySelector('.custom-toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.className = 'custom-toast-container';
+    document.body.appendChild(container);
+  }
+
+  const icon = type === 'error' ? '🔒' : type === 'warning' ? '⚠️' : 'ℹ️';
+  
+  const toast = document.createElement('div');
+  toast.className = `custom-toast ${type}`;
+  toast.innerHTML = `
+    <div class="custom-toast-icon">${icon}</div>
+    <div class="custom-toast-body">
+      <div class="custom-toast-title">${escapeHtml(title)}</div>
+      <div class="custom-toast-msg">${escapeHtml(message)}</div>
+    </div>
+    <button class="custom-toast-close" title="Close">&times;</button>
+  `;
+
+  const closeBtn = toast.querySelector('.custom-toast-close');
+  const removeToast = () => {
+    toast.style.animation = 'toastFadeOut 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.parentNode.removeChild(toast);
+      }
+    }, 300);
+  };
+
+  closeBtn.addEventListener('click', removeToast);
+  container.appendChild(toast);
+
+  setTimeout(removeToast, 6000);
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 // DOM Elements - Navigation & Tab Panes
 const tabItems = document.querySelectorAll('.nav-item');
 const tabPanes = document.querySelectorAll('.tab-pane');
@@ -729,7 +775,7 @@ async function setupOAuthListeners() {
     console.error("Login failed:", event.payload);
     triggerCancelLogin(true);
     triggerCancelLogin(false);
-    alert("Authentication failed: " + event.payload);
+    showToast(event.payload, "Authentication Notice", "error");
   });
 }
 
