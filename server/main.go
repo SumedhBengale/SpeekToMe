@@ -344,6 +344,8 @@ func main() {
 	mux.HandleFunc("POST /auth/signup", handleAuthSignup)
 	mux.HandleFunc("POST /auth/login", handleAuthLoginCredentials)
 	mux.HandleFunc("POST /auth/2fa/verify", handleAuth2FAVerify)
+	mux.HandleFunc("POST /auth/2fa/setup", handleAuth2FASetup)
+	mux.HandleFunc("POST /auth/2fa/confirm-setup", handleAuth2FAConfirmSetup)
 	mux.HandleFunc("GET /auth/verify", handleAuthVerify)
 	mux.HandleFunc("GET /auth/me", handleAuthMe)
 	mux.HandleFunc("GET /usage/history", handleGetUserHistory)
@@ -790,7 +792,7 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	token := generateSessionToken()
 	isTemp := 0
-	if isAdmin && has2FA {
+	if isAdmin {
 		isTemp = 1
 	}
 
@@ -808,16 +810,28 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		if isWeb {
 			u, err := url.Parse(redirectTo)
 			if err != nil {
-				finalURL = fmt.Sprintf("%s?temp_token=%s&require_2fa=true", redirectTo, token)
+				if has2FA {
+					finalURL = fmt.Sprintf("%s?temp_token=%s&require_2fa=true", redirectTo, token)
+				} else {
+					finalURL = fmt.Sprintf("%s?temp_token=%s&require_2fa_setup=true", redirectTo, token)
+				}
 			} else {
 				q := u.Query()
 				q.Set("temp_token", token)
-				q.Set("require_2fa", "true")
+				if has2FA {
+					q.Set("require_2fa", "true")
+				} else {
+					q.Set("require_2fa_setup", "true")
+				}
 				u.RawQuery = q.Encode()
 				finalURL = u.String()
 			}
 		} else {
-			finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?temp_token=%s&require_2fa=true", port, token)
+			if has2FA {
+				finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?temp_token=%s&require_2fa=true", port, token)
+			} else {
+				finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?temp_token=%s&require_2fa_setup=true", port, token)
+			}
 		}
 	} else {
 		if isWeb {
@@ -1073,7 +1087,7 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user is admin and has 2FA enabled (totp_secret configured)
+	// Check if user is admin and enforce 2FA verification/setup for admins
 	isAdmin, has2FA, err := database.GetUserAdminStatus(userID)
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -1082,7 +1096,7 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 
 	token := generateSessionToken()
 	isTemp := 0
-	if isAdmin && has2FA {
+	if isAdmin {
 		isTemp = 1
 	}
 
@@ -1093,12 +1107,13 @@ func handleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isTemp == 1 {
-		// Respond indicating 2FA verification is required
+		// Respond indicating 2FA verification or setup is required for admin
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"require_2fa": true,
-			"temp_token":  token,
-			"email":       req.Email,
+			"require_2fa":       has2FA,
+			"require_2fa_setup": !has2FA,
+			"temp_token":        token,
+			"email":             req.Email,
 		})
 		return
 	}
@@ -1174,6 +1189,16 @@ func handleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if totpSecret == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":             "TOTP setup is required for this admin account",
+			"require_2fa_setup": true,
+		})
+		return
+	}
+
 	if !verifyTOTP(totpSecret, req.Code) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -1191,6 +1216,161 @@ func handleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Retrieve full user profile
+	fullProfile, err := database.GetUserBySession(req.TempToken)
+	if err != nil {
+		http.Error(w, "Failed to load user info", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"token": req.TempToken,
+		"user": map[string]interface{}{
+			"id":          fullProfile.ID,
+			"email":       fullProfile.Email,
+			"name":        fullProfile.Name,
+			"plan_tier":   fullProfile.PlanTier,
+			"plan_active": fullProfile.PlanActive == 1,
+			"is_admin":    fullProfile.IsAdmin == 1,
+		},
+	})
+}
+
+func generateBase32Secret(length int) (string, error) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+	bytes := make([]byte, length)
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return "", err
+	}
+	for i := 0; i < length; i++ {
+		bytes[i] = alphabet[int(bytes[i])%len(alphabet)]
+	}
+	return string(bytes), nil
+}
+
+func handleAuth2FASetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var req struct {
+		TempToken string `json:"temp_token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	var user *UserProfile
+	var err error
+
+	if req.TempToken != "" {
+		user, _, err = database.GetUserByTempSession(req.TempToken)
+	} else {
+		user, err = authenticateAdmin(r)
+	}
+
+	if err != nil || user == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid or expired session"})
+		return
+	}
+
+	if user.IsAdmin != 1 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "TOTP 2FA setup is required for admin users only"})
+		return
+	}
+
+	secret, err := generateBase32Secret(16)
+	if err != nil {
+		http.Error(w, "Failed to generate TOTP secret", http.StatusInternalServerError)
+		return
+	}
+
+	label := url.PathEscape(fmt.Sprintf("SpeekToMe:%s", user.Email))
+	otpauthURL := fmt.Sprintf("otpauth://totp/%s?secret=%s&issuer=SpeekToMe", label, secret)
+	qrCodeURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=%s", url.QueryEscape(otpauthURL))
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"secret":      secret,
+		"otpauth_url": otpauthURL,
+		"qr_code_url": qrCodeURL,
+		"email":       user.Email,
+	})
+}
+
+func handleAuth2FAConfirmSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var req struct {
+		TempToken string `json:"temp_token"`
+		Secret    string `json:"secret"`
+		Code      string `json:"code"`
+	}
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	req.TempToken = strings.TrimSpace(req.TempToken)
+	req.Secret = strings.TrimSpace(req.Secret)
+	req.Code = strings.TrimSpace(req.Code)
+
+	if req.TempToken == "" || req.Secret == "" || req.Code == "" {
+		http.Error(w, "temp_token, secret, and code are required", http.StatusBadRequest)
+		return
+	}
+
+	ip := getClientIP(r)
+	if !authRateLimiter.Allow("2fa_ip:"+ip, 5, 1*time.Minute) || !authRateLimiter.Allow("2fa_token:"+req.TempToken, 5, 1*time.Minute) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Too many 2FA setup attempts. Please try again later."})
+		return
+	}
+
+	user, _, err := database.GetUserByTempSession(req.TempToken)
+	if err != nil || user == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid or expired temporary session token"})
+		return
+	}
+
+	if !verifyTOTP(req.Secret, req.Code) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid 2FA verification code. Please check your authenticator app code."})
+		return
+	}
+
+	encryptedSecret, err := EncryptTOTPSecret(req.Secret)
+	if err != nil {
+		http.Error(w, "Failed to encrypt TOTP secret", http.StatusInternalServerError)
+		return
+	}
+
+	err = database.SetUserTOTPSecret(user.ID, encryptedSecret)
+	if err != nil {
+		http.Error(w, "Failed to save TOTP secret", http.StatusInternalServerError)
+		return
+	}
+
+	err = database.PromoteSession(req.TempToken)
+	if err != nil {
+		http.Error(w, "Failed to promote session", http.StatusInternalServerError)
+		return
+	}
+
 	fullProfile, err := database.GetUserBySession(req.TempToken)
 	if err != nil {
 		http.Error(w, "Failed to load user info", http.StatusInternalServerError)

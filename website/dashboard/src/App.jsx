@@ -21,6 +21,7 @@ export default function App() {
   // 2FA state
   const [tempToken, setTempToken] = useState('');
   const [totpCode, setTotpCode] = useState('');
+  const [totpSetupData, setTotpSetupData] = useState(null);
 
   // Admin Panel states
   const [adminUsers, setAdminUsers] = useState([]);
@@ -49,6 +50,7 @@ export default function App() {
     const verifiedEmail = params.get('email');
     const queryTempToken = params.get('temp_token');
     const require2fa = params.get('require_2fa');
+    const require2faSetup = params.get('require_2fa_setup');
     
     if (queryToken) {
       localStorage.setItem('speektome_token', queryToken);
@@ -57,6 +59,10 @@ export default function App() {
     } else if (queryTempToken && require2fa === 'true') {
       setTempToken(queryTempToken);
       setRoute('2fa');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (queryTempToken && require2faSetup === 'true') {
+      setTempToken(queryTempToken);
+      start2faSetup(queryTempToken);
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (isVerified === 'true') {
       setSuccessMessage(`Email verified successfully${verifiedEmail ? ' for ' + verifiedEmail : ''}! You can now sign in.`);
@@ -278,6 +284,9 @@ export default function App() {
         if (data.require_2fa) {
           setTempToken(data.temp_token);
           setRoute('2fa');
+        } else if (data.require_2fa_setup) {
+          setTempToken(data.temp_token);
+          start2faSetup(data.temp_token);
         } else {
           localStorage.setItem('speektome_token', data.token);
           setToken(data.token);
@@ -317,7 +326,71 @@ export default function App() {
         setTotpCode('');
         setRoute('dashboard');
       } else {
-        setAuthError(data.error || 'Invalid 2FA code');
+        if (data.require_2fa_setup) {
+          start2faSetup(tempToken);
+        } else {
+          setAuthError(data.error || 'Invalid 2FA code');
+        }
+      }
+    } catch (err) {
+      setAuthError('Cannot connect to SpeekTo.Me authentication server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const start2faSetup = async (tokenToUse) => {
+    setLoading(true);
+    setAuthError('');
+    try {
+      const res = await fetch(`${API_BASE}/auth/2fa/setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ temp_token: tokenToUse || tempToken })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTotpSetupData(data);
+        setRoute('2fa_setup');
+      } else {
+        setAuthError(data.error || 'Failed to initiate 2FA setup.');
+      }
+    } catch (err) {
+      setAuthError('Cannot connect to SpeekTo.Me authentication server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handle2faConfirmSetup = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setSuccessMessage('');
+    if (!totpCode || !tempToken || !totpSetupData?.secret) {
+      setAuthError('Verification code is required.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/2fa/confirm-setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          temp_token: tempToken,
+          secret: totpSetupData.secret,
+          code: totpCode
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem('speektome_token', data.token);
+        setToken(data.token);
+        setTempToken('');
+        setTotpCode('');
+        setTotpSetupData(null);
+        setRoute('dashboard');
+      } else {
+        setAuthError(data.error || 'Invalid 2FA verification code');
       }
     } catch (err) {
       setAuthError('Cannot connect to SpeekTo.Me authentication server.');
@@ -740,6 +813,55 @@ export default function App() {
 
             <div className="auth-toggle">
               <button onClick={() => { setRoute('login'); setTempToken(''); setTotpCode(''); setAuthError(''); }} className="auth-toggle-link">
+                Back to Sign In
+              </button>
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* 2FA Setup Page */}
+      {route === '2fa_setup' && totpSetupData && (
+        <main className="auth-page">
+          <div className="auth-box" style={{ maxWidth: '480px' }}>
+            <div className="auth-header">
+              <h2>Set Up Two-Factor Authentication</h2>
+              <p>Admin accounts require 2FA. Scan the QR code using Google Authenticator, Authy, or 1Password.</p>
+            </div>
+
+            {authError && <div className="auth-error">{authError}</div>}
+
+            <div style={{ textAlign: 'center', margin: '20px 0' }}>
+              <img 
+                src={totpSetupData.qr_code_url} 
+                alt="2FA QR Code" 
+                style={{ width: '180px', height: '180px', border: '2px solid #1a1a1a', borderRadius: '8px', padding: '8px', background: '#fff' }} 
+              />
+              <div style={{ marginTop: '12px', fontSize: '13px', color: '#666' }}>
+                Or enter key manually: <strong style={{ letterSpacing: '1px', fontFamily: 'monospace', color: '#1a1a1a', background: '#f3f4f6', padding: '2px 6px', borderRadius: '4px' }}>{totpSetupData.secret}</strong>
+              </div>
+            </div>
+
+            <form onSubmit={handle2faConfirmSetup}>
+              <div className="auth-form-control">
+                <label>Enter 6-Digit Code from Authenticator App</label>
+                <input 
+                  type="text" 
+                  value={totpCode} 
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))} 
+                  placeholder="000000" 
+                  className="auth-input"
+                  style={{ textAlign: 'center', fontSize: '24px', letterSpacing: '8px' }}
+                  required
+                />
+              </div>
+              <button type="submit" className="btn btn-primary auth-submit-btn" style={{ justifyContent: 'center' }}>
+                {loading ? <div className="spinner"></div> : 'Confirm 2FA & Complete Login'}
+              </button>
+            </form>
+
+            <div className="auth-toggle">
+              <button onClick={() => { setRoute('login'); setTempToken(''); setTotpCode(''); setTotpSetupData(null); setAuthError(''); }} className="auth-toggle-link">
                 Back to Sign In
               </button>
             </div>

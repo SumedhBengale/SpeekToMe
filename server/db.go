@@ -386,6 +386,12 @@ func (d *Database) GetUserAdminStatus(userID int64) (bool, bool, error) {
 	return isAdmin == 1, totpSecret.String != "", nil
 }
 
+func (d *Database) SetUserTOTPSecret(userID int64, encryptedSecret string) error {
+	_, err := d.db.Exec("UPDATE users SET totp_secret = ? WHERE id = ?", encryptedSecret, userID)
+	return err
+}
+
+
 func (d *Database) DeleteSession(token string) error {
 	_, err := d.db.Exec("DELETE FROM sessions WHERE token = ?", token)
 	return err
