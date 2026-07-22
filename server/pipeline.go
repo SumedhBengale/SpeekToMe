@@ -382,6 +382,31 @@ func doubleMetaphone(s string) string {
 	return sb.String()
 }
 
+// isSafeAutoExpandSubWord checks if an extracted sub-word is safe to auto-expand into an independent single-word vocabulary entry
+func isSafeAutoExpandSubWord(word string) bool {
+	norm := NormalizeString(word)
+	if len(norm) < 3 {
+		return false // Ignore tiny 1-2 char words like "to", "in", "of", "a", "is", "it", "me"
+	}
+
+	// Closed set of high-frequency English grammatical functional connectors
+	connectors := map[string]bool{
+		"the": true, "and": true, "for": true, "with": true,
+		"from": true, "that": true, "this": true, "have": true,
+		"are": true, "was": true, "were": true, "been": true,
+		"you": true, "your": true, "their": true, "there": true,
+		"they": true, "what": true, "when": true, "where": true,
+		"who": true, "how": true, "why": true, "which": true,
+		"will": true, "would": true, "could": true, "should": true,
+		"not": true, "but": true, "can": true, "all": true,
+	}
+	if connectors[norm] {
+		return false
+	}
+
+	return true
+}
+
 // CompileUserVocabulary compiles database terms into lookup maps
 func CompileUserVocabulary(dbTerms []VocabularyTerm) *UserVocabulary {
 	normalizedLookup := make(map[string]string)
@@ -451,6 +476,50 @@ func CompileUserVocabulary(dbTerms []VocabularyTerm) *UserVocabulary {
 		// Register term by phonetic key
 		if phoneticKey != "" {
 			termsByPhonetic[phoneticKey] = append(termsByPhonetic[phoneticKey], ct)
+		}
+
+		// Approach 3: Smart Sub-Word Auto-Expansion for Multi-Word Entries (space-separated)
+		if len(normalizedTokens) > 1 {
+			// Extract constituent space tokens
+			var candidateWords []string
+			for _, tok := range tokens {
+				if tok.Clean != "" {
+					candidateWords = append(candidateWords, tok.Clean)
+				}
+			}
+
+			for _, word := range candidateWords {
+				if isSafeAutoExpandSubWord(word) {
+					subNorm := NormalizeString(word)
+					if subNorm != "" {
+						if _, exists := normalizedLookup[subNorm]; !exists {
+							runes := []rune(word)
+							if len(runes) > 0 && runes[0] >= 'a' && runes[0] <= 'z' {
+								runes[0] = runes[0] - 'a' + 'A'
+							}
+							subCanonical := string(runes)
+							normalizedLookup[subNorm] = subCanonical
+
+							subPhonetic := doubleMetaphone(subNorm)
+							subCt := CompiledTerm{
+								Canonical:     subCanonical,
+								Normalized:    subNorm,
+								TokenCount:    1,
+								MinTokenCount: 1,
+								MaxTokenCount: 1,
+								SubTokens:     []string{subNorm},
+								PhoneticKey:   subPhonetic,
+							}
+							compiledTerms = append(compiledTerms, subCt)
+							termsByCount[1] = append(termsByCount[1], subCt)
+							termsByLength[len(subNorm)] = append(termsByLength[len(subNorm)], subCt)
+							if subPhonetic != "" {
+								termsByPhonetic[subPhonetic] = append(termsByPhonetic[subPhonetic], subCt)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -659,6 +728,9 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 								continue
 							}
 							for _, term := range pctx.Vocabulary.TermsByLength[targetLen] {
+								if k > term.MaxTokenCount {
+									continue
+								}
 								lenDiff := len(joinedNorm) - len(term.Normalized)
 								if lenDiff < 0 {
 									lenDiff = -lenDiff
@@ -713,6 +785,9 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 						if windowPhonetic != "" {
 							if phonCandidates, ok := pctx.Vocabulary.TermsByPhonetic[windowPhonetic]; ok {
 								for _, term := range phonCandidates {
+									if k > term.MaxTokenCount {
+										continue
+									}
 									lenDiff := len(joinedNorm) - len(term.Normalized)
 									if lenDiff < 0 {
 										lenDiff = -lenDiff

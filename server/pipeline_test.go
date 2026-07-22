@@ -383,4 +383,58 @@ func TestPartialPhraseNoMatch(t *testing.T) {
 	}
 }
 
+func TestSmartSubWordAutoExpansion(t *testing.T) {
+	dbTerms := []VocabularyTerm{
+		{"Sumedh Bengale", "sumedhbengale"},
+		{"The Wall Street Journal", "thewallstreetjournal"},
+	}
+
+	vocab := CompileUserVocabulary(dbTerms)
+	pctx := NewPipelineContext(1, vocab)
+	pctx.Debug = true
+
+	p := NewVocabNormalizerTransform("Hybrid Normalizer", true, 0.88)
+
+	// Test 1: Full name "Sumed Bengli" -> "Sumedh Bengale"
+	input1 := "my name is Sumed Bengli"
+	got1, err := p.Transform(context.Background(), input1, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got1 != "my name is Sumedh Bengale" {
+		t.Errorf("Full name match got %q; want %q", got1, "my name is Sumedh Bengale")
+	}
+
+	// Test 2: First name alone "Sumed" -> auto-expanded "Sumedh"
+	input2 := "hello Sumed how are you"
+	got2, err := p.Transform(context.Background(), input2, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2 != "hello Sumedh how are you" {
+		t.Errorf("Auto-expanded first name got %q; want %q", got2, "hello Sumedh how are you")
+	}
+
+	// Test 3: Last name alone "Bengli" -> auto-expanded "Bengale"
+	input3 := "mr Bengli welcome"
+	got3, err := p.Transform(context.Background(), input3, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got3 != "mr Bengale welcome" {
+		t.Errorf("Auto-expanded last name got %q; want %q", got3, "mr Bengale welcome")
+	}
+
+	// Test 4: Common connector "the" should NOT be auto-expanded into capitalized "The"
+	input4 := "reading the newspaper"
+	got4, err := p.Transform(context.Background(), input4, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got4 != "reading the newspaper" {
+		t.Errorf("Grammatical connector 'the' inappropriately auto-expanded: got %q; want %q", got4, "reading the newspaper")
+	}
+}
+
+
 
