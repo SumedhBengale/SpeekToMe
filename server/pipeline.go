@@ -69,16 +69,22 @@ type TextTransform interface {
 
 // CompiledTerm holds pre-tokenized target terms for greedy n-gram lookups
 type CompiledTerm struct {
-	Canonical  string
-	Normalized string
-	TokenCount int
+	Canonical     string
+	Normalized    string
+	TokenCount    int
+	MinTokenCount int
+	MaxTokenCount int
+	SubTokens     []string
+	PhoneticKey   string
 }
 
 // UserVocabulary contains pre-compiled lookup mappings
 type UserVocabulary struct {
-	NormalizedLookup map[string]string      // normalized exact -> canonical
-	TermsByCount     map[int][]CompiledTerm // group by TokenCount
-	Terms            []CompiledTerm         // sorted by TokenCount descending
+	NormalizedLookup map[string]string         // normalized exact -> canonical
+	TermsByCount     map[int][]CompiledTerm    // group by TokenCount (including expanded sub-tokens)
+	TermsByLength    map[int][]CompiledTerm    // group by normalized character length
+	TermsByPhonetic  map[string][]CompiledTerm // group by Double Metaphone phonetic key
+	Terms            []CompiledTerm            // sorted by TokenCount descending
 	MaxTokenCount    int
 }
 
@@ -172,11 +178,217 @@ func (vc *VocabularyCache) startEvictionWorker(interval time.Duration) {
 	}
 }
 
+// ExtractSubTokens splits terms on punctuation and CamelCase / PascalCase transitions
+func ExtractSubTokens(s string) []string {
+	var subTokens []string
+	var current strings.Builder
+
+	runes := []rune(s)
+	n := len(runes)
+
+	isSymbol := func(r rune) bool {
+		return r == '.' || r == '-' || r == '_' || r == '/' || r == '@' || r == ':' || r == ';'
+	}
+
+	for i := 0; i < n; i++ {
+		r := runes[i]
+		if isSymbol(r) || r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			if current.Len() > 0 {
+				subTokens = append(subTokens, current.String())
+				current.Reset()
+			}
+			continue
+		}
+
+		if i > 0 && current.Len() > 0 {
+			prev := runes[i-1]
+			// Check lowercase -> uppercase (e.g. 'k' -> 'T' in SpeekTo)
+			if (prev >= 'a' && prev <= 'z') && (r >= 'A' && r <= 'Z') {
+				subTokens = append(subTokens, current.String())
+				current.Reset()
+			} else if (prev >= 'A' && prev <= 'Z') && (r >= 'A' && r <= 'Z') && i+1 < n && (runes[i+1] >= 'a' && runes[i+1] <= 'z') {
+				// Check acronym -> word transition (e.g. 'CMS' -> 'Enterprise')
+				subTokens = append(subTokens, current.String())
+				current.Reset()
+			}
+		}
+
+		current.WriteRune(r)
+	}
+
+	if current.Len() > 0 {
+		subTokens = append(subTokens, current.String())
+	}
+
+	var result []string
+	for _, st := range subTokens {
+		norm := NormalizeString(st)
+		if norm != "" {
+			result = append(result, norm)
+		}
+	}
+	return result
+}
+
+// doubleMetaphone computes a simplified phonetic representation of a normalized string
+func doubleMetaphone(s string) string {
+	s = NormalizeString(s)
+	if s == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	runes := []rune(s)
+	n := len(runes)
+
+	isVowel := func(r rune) bool {
+		return r == 'a' || r == 'e' || r == 'i' || r == 'o' || r == 'u' || r == 'y'
+	}
+
+	for i := 0; i < n; i++ {
+		r := runes[i]
+		if i == 0 && isVowel(r) {
+			sb.WriteRune('A')
+			continue
+		}
+
+		switch r {
+		case 'b':
+			sb.WriteRune('P')
+			if i+1 < n && runes[i+1] == 'b' {
+				i++
+			}
+		case 'c':
+			if i+1 < n && (runes[i+1] == 'e' || runes[i+1] == 'i' || runes[i+1] == 'y') {
+				sb.WriteRune('S')
+			} else if i+1 < n && runes[i+1] == 'h' {
+				sb.WriteRune('X')
+				i++
+			} else {
+				sb.WriteRune('K')
+			}
+			if i+1 < n && (runes[i+1] == 'c' || runes[i+1] == 'k') {
+				i++
+			}
+		case 'd':
+			if i+1 < n && runes[i+1] == 'g' {
+				sb.WriteRune('J')
+				i++
+			} else {
+				sb.WriteRune('T')
+			}
+			if i+1 < n && runes[i+1] == 'd' {
+				i++
+			}
+		case 'f':
+			sb.WriteRune('F')
+			if i+1 < n && runes[i+1] == 'f' {
+				i++
+			}
+		case 'g':
+			if i+1 < n && (runes[i+1] == 'e' || runes[i+1] == 'i' || runes[i+1] == 'y') {
+				sb.WriteRune('J')
+			} else {
+				sb.WriteRune('K')
+			}
+			if i+1 < n && (runes[i+1] == 'g' || runes[i+1] == 'h') {
+				i++
+			}
+		case 'h':
+			if i > 0 && !isVowel(runes[i-1]) {
+				// silent h after consonant
+			} else if i+1 < n && isVowel(runes[i+1]) {
+				sb.WriteRune('H')
+			}
+		case 'j':
+			sb.WriteRune('J')
+		case 'k':
+			sb.WriteRune('K')
+			if i+1 < n && runes[i+1] == 'k' {
+				i++
+			}
+		case 'l':
+			sb.WriteRune('L')
+			if i+1 < n && runes[i+1] == 'l' {
+				i++
+			}
+		case 'm':
+			sb.WriteRune('M')
+			if i+1 < n && runes[i+1] == 'm' {
+				i++
+			}
+		case 'n':
+			sb.WriteRune('N')
+			if i+1 < n && runes[i+1] == 'n' {
+				i++
+			}
+		case 'p':
+			if i+1 < n && runes[i+1] == 'h' {
+				sb.WriteRune('F')
+				i++
+			} else {
+				sb.WriteRune('P')
+			}
+			if i+1 < n && runes[i+1] == 'p' {
+				i++
+			}
+		case 'q':
+			sb.WriteRune('K')
+		case 'r':
+			sb.WriteRune('R')
+			if i+1 < n && runes[i+1] == 'r' {
+				i++
+			}
+		case 's':
+			if i+1 < n && runes[i+1] == 'h' {
+				sb.WriteRune('X')
+				i++
+			} else {
+				sb.WriteRune('S')
+			}
+			if i+1 < n && runes[i+1] == 's' {
+				i++
+			}
+		case 't':
+			if i+1 < n && runes[i+1] == 'h' {
+				sb.WriteRune('0')
+				i++
+			} else if i+1 < n && runes[i+1] == 'c' && i+2 < n && runes[i+2] == 'h' {
+				sb.WriteRune('X')
+				i += 2
+			} else {
+				sb.WriteRune('T')
+			}
+			if i+1 < n && runes[i+1] == 't' {
+				i++
+			}
+		case 'v':
+			sb.WriteRune('F')
+		case 'w':
+			if i+1 < n && isVowel(runes[i+1]) {
+				sb.WriteRune('W')
+			}
+		case 'x':
+			sb.WriteString("KS")
+		case 'y':
+			if i+1 < n && isVowel(runes[i+1]) {
+				sb.WriteRune('Y')
+			}
+		case 'z':
+			sb.WriteRune('S')
+		}
+	}
+
+	return sb.String()
+}
+
 // CompileUserVocabulary compiles database terms into lookup maps
 func CompileUserVocabulary(dbTerms []VocabularyTerm) *UserVocabulary {
 	normalizedLookup := make(map[string]string)
 	compiledTerms := make([]CompiledTerm, 0, len(dbTerms))
 	termsByCount := make(map[int][]CompiledTerm)
+	termsByLength := make(map[int][]CompiledTerm)
+	termsByPhonetic := make(map[string][]CompiledTerm)
 
 	for _, vt := range dbTerms {
 		tokens := Tokenize(vt.Canonical)
@@ -185,28 +397,75 @@ func CompileUserVocabulary(dbTerms []VocabularyTerm) *UserVocabulary {
 			normalizedTokens[i] = tok.Normalized
 		}
 		computedNormalized := strings.Join(normalizedTokens, "")
-		
+
+		// Sub-token decomposition for CamelCase and symbols
+		subTokens := ExtractSubTokens(vt.Canonical)
+		joinedSubTokens := strings.Join(subTokens, "")
+
 		normalizedLookup[computedNormalized] = vt.Canonical
-		
+		if joinedSubTokens != "" && joinedSubTokens != computedNormalized {
+			normalizedLookup[joinedSubTokens] = vt.Canonical
+		}
+
+		minCount := len(normalizedTokens)
+		maxCount := len(normalizedTokens)
+		if len(subTokens) > maxCount {
+			maxCount = len(subTokens)
+		}
+		if len(subTokens) < minCount && len(subTokens) > 0 {
+			minCount = len(subTokens)
+		}
+
+		phoneticKey := doubleMetaphone(computedNormalized)
+
 		ct := CompiledTerm{
-			Canonical:  vt.Canonical,
-			Normalized: computedNormalized,
-			TokenCount: len(normalizedTokens),
+			Canonical:     vt.Canonical,
+			Normalized:    computedNormalized,
+			TokenCount:    len(normalizedTokens),
+			MinTokenCount: minCount,
+			MaxTokenCount: maxCount,
+			SubTokens:     subTokens,
+			PhoneticKey:   phoneticKey,
 		}
 		compiledTerms = append(compiledTerms, ct)
-		termsByCount[ct.TokenCount] = append(termsByCount[ct.TokenCount], ct)
+
+		// Register term in termsByCount ONLY for exact valid token counts (space tokens & sub-tokens)
+		countsToRegister := map[int]bool{
+			len(normalizedTokens): true,
+		}
+		if len(subTokens) > 0 {
+			countsToRegister[len(subTokens)] = true
+		}
+
+		for c := range countsToRegister {
+			termsByCount[c] = append(termsByCount[c], ct)
+		}
+
+		// Register term by normalized length
+		termLen := len(computedNormalized)
+		termsByLength[termLen] = append(termsByLength[termLen], ct)
+		if len(joinedSubTokens) > 0 && len(joinedSubTokens) != termLen {
+			termsByLength[len(joinedSubTokens)] = append(termsByLength[len(joinedSubTokens)], ct)
+		}
+
+		// Register term by phonetic key
+		if phoneticKey != "" {
+			termsByPhonetic[phoneticKey] = append(termsByPhonetic[phoneticKey], ct)
+		}
 	}
 
 	maxTokenCount := 0
 	for _, term := range compiledTerms {
-		if term.TokenCount > maxTokenCount {
-			maxTokenCount = term.TokenCount
+		if term.MaxTokenCount > maxTokenCount {
+			maxTokenCount = term.MaxTokenCount
 		}
 	}
 
 	return &UserVocabulary{
 		NormalizedLookup: normalizedLookup,
 		TermsByCount:     termsByCount,
+		TermsByLength:    termsByLength,
+		TermsByPhonetic:  termsByPhonetic,
 		Terms:            compiledTerms,
 		MaxTokenCount:    maxTokenCount,
 	}
@@ -316,12 +575,12 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 			continue
 		}
 		
-		// 2. Try fuzzy matching on phrases/single words if enabled
+		// 2. Multi-Stage Fuzzy & Phonetic Matching
 		if t.fuzzyEnabled {
 			bestSim := 0.0
 			var bestCanonical string
 			bestK := 0
-			
+
 			for k := maxK; k >= 1; k-- {
 				if i+k <= n {
 					var sb strings.Builder
@@ -335,36 +594,51 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 					if joinedNorm == "" {
 						continue
 					}
-					
-					for _, term := range pctx.Vocabulary.TermsByCount[k] {
+
+					threshold := SingleWordThreshold
+					if k == 2 {
+						threshold = TwoWordThreshold
+					} else if k == 3 {
+						threshold = ThreeWordThreshold
+					} else if k >= 4 {
+						threshold = MultiWordThreshold
+					}
+
+					// Stage 2: Token-Count Bucket Candidates (Sub-token & CamelCase expanded)
+					candidates := pctx.Vocabulary.TermsByCount[k]
+					for _, term := range candidates {
 						lenDiff := len(joinedNorm) - len(term.Normalized)
 						if lenDiff < 0 {
 							lenDiff = -lenDiff
 						}
-						
-						// Optimized pre-filter: check length difference AND up to the first 2 normalized characters
+
 						matchPrefix := false
 						if len(joinedNorm) >= 2 && len(term.Normalized) >= 2 {
 							matchPrefix = joinedNorm[0] == term.Normalized[0] && joinedNorm[1] == term.Normalized[1]
 						} else if len(joinedNorm) >= 1 && len(term.Normalized) >= 1 {
 							matchPrefix = joinedNorm[0] == term.Normalized[0]
 						}
-						
-						if lenDiff <= 2*k && matchPrefix {
-							threshold := SingleWordThreshold
-							if k == 2 {
-								threshold = TwoWordThreshold
-							} else if k == 3 {
-								threshold = ThreeWordThreshold
-							} else if k >= 4 {
-								threshold = MultiWordThreshold
+
+						subTokenMatch := true
+						if k >= 2 && len(term.SubTokens) == k {
+							for j := 0; j < k; j++ {
+								tokSim := jaroWinkler(tokens[i+j].Normalized, term.SubTokens[j])
+								minTokSim := 0.65
+								if len(term.SubTokens[j]) <= 2 {
+									minTokSim = 0.85
+								}
+								if tokSim < minTokSim {
+									subTokenMatch = false
+									break
+								}
 							}
-							
+						}
+
+						if lenDiff <= 2*k && matchPrefix && subTokenMatch {
 							sim := jaroWinkler(joinedNorm, term.Normalized)
-							
 							if sim >= threshold {
 								if pctx.Debug {
-									fmt.Printf("    - Fuzzy Candidate (k=%d): %q vs %q -> JW Sim: %.4f (Passed threshold: %.2f, Diff: %d)\n",
+									fmt.Printf("    - Fuzzy Stage 2 Hit (k=%d): %q vs %q -> JW Sim: %.4f (Passed threshold: %.2f, Diff: %d)\n",
 										k, joinedClean, term.Canonical, sim, threshold, lenDiff)
 								}
 								if sim > bestSim {
@@ -375,7 +649,119 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 							}
 						}
 					}
-					
+
+					// Stage 3: Character-Length Decoupled Candidates Fallback
+					if bestCanonical == "" && pctx.Vocabulary.TermsByLength != nil {
+						normLen := len(joinedNorm)
+						for delta := -2; delta <= 2; delta++ {
+							targetLen := normLen + delta
+							if targetLen <= 0 {
+								continue
+							}
+							for _, term := range pctx.Vocabulary.TermsByLength[targetLen] {
+								lenDiff := len(joinedNorm) - len(term.Normalized)
+								if lenDiff < 0 {
+									lenDiff = -lenDiff
+								}
+								maxLen := len(joinedNorm)
+								if len(term.Normalized) > maxLen {
+									maxLen = len(term.Normalized)
+								}
+								lenDiffRatio := float64(lenDiff) / float64(maxLen)
+
+								matchPrefix := false
+								if len(joinedNorm) >= 1 && len(term.Normalized) >= 1 {
+									matchPrefix = joinedNorm[0] == term.Normalized[0]
+								}
+
+								subTokenMatch := true
+								if k >= 2 && len(term.SubTokens) == k {
+									for j := 0; j < k; j++ {
+										tokSim := jaroWinkler(tokens[i+j].Normalized, term.SubTokens[j])
+										minTokSim := 0.65
+										if len(term.SubTokens[j]) <= 2 {
+											minTokSim = 0.85
+										}
+										if tokSim < minTokSim {
+											subTokenMatch = false
+											break
+										}
+									}
+								}
+
+								if matchPrefix && lenDiffRatio <= 0.15 && subTokenMatch {
+									sim := jaroWinkler(joinedNorm, term.Normalized)
+									if sim >= threshold {
+										if pctx.Debug {
+											fmt.Printf("    - Fuzzy Stage 3 Length Hit (k=%d): %q vs %q -> JW Sim: %.4f\n",
+												k, joinedClean, term.Canonical, sim)
+										}
+										if sim > bestSim {
+											bestSim = sim
+											bestCanonical = term.Canonical
+											bestK = k
+										}
+									}
+								}
+							}
+						}
+					}
+
+					// Stage 4: Phonetic Double Metaphone Matching Fallback
+					if bestCanonical == "" && pctx.Vocabulary.TermsByPhonetic != nil {
+						windowPhonetic := doubleMetaphone(joinedNorm)
+						if windowPhonetic != "" {
+							if phonCandidates, ok := pctx.Vocabulary.TermsByPhonetic[windowPhonetic]; ok {
+								for _, term := range phonCandidates {
+									lenDiff := len(joinedNorm) - len(term.Normalized)
+									if lenDiff < 0 {
+										lenDiff = -lenDiff
+									}
+									maxLen := len(joinedNorm)
+									if len(term.Normalized) > maxLen {
+										maxLen = len(term.Normalized)
+									}
+									lenDiffRatio := float64(lenDiff) / float64(maxLen)
+
+									matchPrefix := false
+									if len(joinedNorm) >= 1 && len(term.Normalized) >= 1 {
+										matchPrefix = joinedNorm[0] == term.Normalized[0]
+									}
+
+									subTokenMatch := true
+									if k >= 2 && len(term.SubTokens) == k {
+										for j := 0; j < k; j++ {
+											tokSim := jaroWinkler(tokens[i+j].Normalized, term.SubTokens[j])
+											minTokSim := 0.65
+											if len(term.SubTokens[j]) <= 2 {
+												minTokSim = 0.85
+											}
+											if tokSim < minTokSim {
+												subTokenMatch = false
+												break
+											}
+										}
+									}
+
+									if matchPrefix && lenDiffRatio <= 0.15 && subTokenMatch {
+										sim := jaroWinkler(joinedNorm, term.Normalized)
+										if sim >= 0.75 || sim >= threshold-0.05 {
+											if pctx.Debug {
+												fmt.Printf("    - Fuzzy Stage 4 Phonetic Hit (k=%d): %q vs %q -> JW Sim: %.4f (Phonetic: %s)\n",
+													k, joinedClean, term.Canonical, sim, windowPhonetic)
+											}
+											if sim > bestSim {
+												bestSim = sim
+												bestCanonical = term.Canonical
+												bestK = k
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+
 					// Greedy decision: if we matched any terms of length `k`, stop searching shorter lengths
 					if bestCanonical != "" {
 						break

@@ -272,3 +272,115 @@ func TestVocabularyCacheLifecycle(t *testing.T) {
 		t.Fatal("Expected cached vocabulary to be invalidated")
 	}
 }
+
+func TestExtractSubTokens(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []string
+	}{
+		{"SpeekTo.Me", []string{"speek", "to", "me"}},
+		{"Node.js", []string{"node", "js"}},
+		{"PostgreSQL", []string{"postgre", "sql"}},
+		{"Payload CMS Enterprise", []string{"payload", "cms", "enterprise"}},
+	}
+
+	for _, tc := range tests {
+		got := ExtractSubTokens(tc.input)
+		if len(got) != len(tc.expected) {
+			t.Fatalf("ExtractSubTokens(%q) returned %d sub-tokens; want %d", tc.input, len(got), len(tc.expected))
+		}
+		for i, tok := range got {
+			if tok != tc.expected[i] {
+				t.Errorf("ExtractSubTokens(%q)[%d] = %q; want %q", tc.input, i, tok, tc.expected[i])
+			}
+		}
+	}
+}
+
+func TestSpeekToMeSubTokenMatching(t *testing.T) {
+	dbTerms := []VocabularyTerm{
+		{"SpeekTo.Me", "speektome"},
+		{"Node.js", "nodejs"},
+		{"PostgreSQL", "postgresql"},
+	}
+
+	vocab := CompileUserVocabulary(dbTerms)
+	pctx := NewPipelineContext(1, vocab)
+	pctx.Debug = true
+
+	p := NewVocabNormalizerTransform("Hybrid Normalizer", true, 0.88)
+	
+	// Test 1: "speak to me" -> "SpeekTo.Me"
+	input1 := "Welcome and speak to me please"
+	got1, err := p.Transform(context.Background(), input1, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected1 := "Welcome and SpeekTo.Me please"
+	if got1 != expected1 {
+		t.Errorf("Sub-token SpeekTo.Me output = %q; want %q", got1, expected1)
+	}
+
+	// Test 2: "node js" -> "Node.js"
+	input2 := "we build our backend using node js"
+	got2, err := p.Transform(context.Background(), input2, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected2 := "we build our backend using Node.js"
+	if got2 != expected2 {
+		t.Errorf("Sub-token Node.js output = %q; want %q", got2, expected2)
+	}
+
+	// Test 3: "postgre sql" -> "PostgreSQL"
+	input3 := "connecting to postgre sql database"
+	got3, err := p.Transform(context.Background(), input3, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected3 := "connecting to PostgreSQL database"
+	if got3 != expected3 {
+		t.Errorf("Sub-token PostgreSQL output = %q; want %q", got3, expected3)
+	}
+}
+
+func TestPartialPhraseNoMatch(t *testing.T) {
+	dbTerms := []VocabularyTerm{
+		{"SpeekTo.Me", "speektome"},
+	}
+
+	vocab := CompileUserVocabulary(dbTerms)
+	pctx := NewPipelineContext(1, vocab)
+	pctx.Debug = true
+
+	p := NewVocabNormalizerTransform("Hybrid Normalizer", true, 0.88)
+
+	// Partial phrase "speak to" (missing "me") should NOT match SpeekTo.Me
+	input := "he went and decided to speak to the principal"
+	got, err := p.Transform(context.Background(), input, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "he went and decided to speak to the principal"
+	if got != expected {
+		t.Errorf("Partial phrase 'speak to' inappropriately replaced: got %q; want %q", got, expected)
+	}
+
+	// Full phrase "speak to me" SHOULD match SpeekTo.Me
+	inputFull := "he went and decided to speak to me the principal"
+	gotFull, err := p.Transform(context.Background(), inputFull, pctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedFull := "he went and decided to SpeekTo.Me the principal"
+	if gotFull != expectedFull {
+		t.Errorf("Full phrase 'speak to me' failed to replace: got %q; want %q", gotFull, expectedFull)
+	}
+}
+
+
