@@ -75,6 +75,11 @@ pub async fn login_with_credentials(api_url: &str, email: &str, password: &str) 
     let status = res.status();
     let body_text = res.text().await.unwrap_or_default();
     if status.is_success() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_text) {
+            if v.get("require_2fa").and_then(|b| b.as_bool()).unwrap_or(false) {
+                return Err("Admin accounts are not permitted to sign in via Desktop or Extension clients. Please use the Web Dashboard.".to_string());
+            }
+        }
         let auth_res: AuthResponse = serde_json::from_str(&body_text)
             .map_err(|e| format!("Failed to parse login response: {}", e))?;
         let user_info = fetch_user_info(api_url, &auth_res.token).await?;
