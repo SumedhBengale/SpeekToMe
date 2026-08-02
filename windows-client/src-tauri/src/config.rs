@@ -75,3 +75,50 @@ impl Default for AppConfig {
         }
     }
 }
+
+pub fn get_config_path() -> std::path::PathBuf {
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        let mut path = std::path::PathBuf::from(app_data);
+        path.push("SpeekToMe");
+        let _ = std::fs::create_dir_all(&path);
+        path.push("config.json");
+        path
+    } else if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        let mut path = std::path::PathBuf::from(home);
+        path.push(".config");
+        path.push("SpeekToMe");
+        let _ = std::fs::create_dir_all(&path);
+        path.push("config.json");
+        path
+    } else {
+        std::path::PathBuf::from("speektome_config.json")
+    }
+}
+
+pub fn load_config() -> AppConfig {
+    let path = get_config_path();
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+            return config;
+        }
+    }
+    AppConfig::default()
+}
+
+pub fn save_config(config: &AppConfig) {
+    let path = get_config_path();
+    if let Ok(data) = serde_json::to_string_pretty(config) {
+        let _ = std::fs::write(path, data);
+    }
+}
+
+pub fn hotkey_name_to_vk(name: &str) -> u32 {
+    match name {
+        "Left Control" => 0xA2,
+        "Caps Lock" => 0x14,
+        "Right Alt" => 0xA5,
+        "Left Alt" => 0xA4,
+        "Space" => 0x20,
+        _ => 0xA3, // Right Control
+    }
+}

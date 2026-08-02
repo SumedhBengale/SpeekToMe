@@ -369,13 +369,13 @@ mod win32_impl {
                         if let Some(app) = crate::TAURI_APP.get() {
                             app.exit(0);
                         }
-                        windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
+                        windows_sys::Win32::System::Threading::ExitProcess(0);
                     }
                 }
                 0
             }
             WM_DESTROY => {
-                0
+                windows_sys::Win32::System::Threading::ExitProcess(0);
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
@@ -613,11 +613,26 @@ mod win32_impl {
         
         UnhookWindowsHookEx(hook_id);
         Shell_NotifyIconW(NIM_DELETE, &nid);
+        windows_sys::Win32::System::Threading::ExitProcess(0);
+    }
+    pub fn ensure_single_instance() {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Foundation::ERROR_ALREADY_EXISTS;
+        use windows_sys::Win32::System::Threading::CreateMutexW;
+
+        let mutex_name = encode_wide("Global\\SpeekToMeSingleInstanceMutex");
+        unsafe {
+            let h_mutex = CreateMutexW(std::ptr::null(), 1, mutex_name.as_ptr());
+            if h_mutex.is_null() || GetLastError() == ERROR_ALREADY_EXISTS {
+                // Another instance is already running! Exit immediately.
+                windows_sys::Win32::System::Threading::ExitProcess(0);
+            }
+        }
     }
 }
 
 #[cfg(target_os = "windows")]
-pub use win32_impl::{SendHWND, calculate_pill_position, update_overlay_position, play_chime, run_win32_hook_and_tray_thread};
+pub use win32_impl::{SendHWND, calculate_pill_position, update_overlay_position, play_chime, run_win32_hook_and_tray_thread, ensure_single_instance};
 
 // ==========================================
 // Non-Windows Implementation Stubs
@@ -636,6 +651,8 @@ mod win32_stub {
 
     pub fn play_chime(_start: bool) {}
 
+    pub fn ensure_single_instance() {}
+
     pub unsafe fn run_win32_hook_and_tray_thread() {
         // Simple sleep loop to keep helper thread alive without consuming CPU resources
         loop {
@@ -645,4 +662,4 @@ mod win32_stub {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub use win32_stub::{SendHWND, calculate_pill_position, update_overlay_position, play_chime, run_win32_hook_and_tray_thread};
+pub use win32_stub::{SendHWND, calculate_pill_position, update_overlay_position, play_chime, run_win32_hook_and_tray_thread, ensure_single_instance};

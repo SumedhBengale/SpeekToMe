@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod audio;
+pub mod audio_processing;
 pub mod api;
 pub mod keyboard;
 pub mod win32;
@@ -82,7 +83,7 @@ fn start_login(window: tauri::WebviewWindow) {
                 config::save_config(&active);
             }
             
-            if let Some(user_info) = api::fetch_user_info(&token) {
+            if let Ok(user_info) = tauri::async_runtime::block_on(api::fetch_user_info(&api::get_api_url(), &token)) {
                 let _ = window.emit("login-success", user_info);
             } else {
                 let _ = window.emit("login-failed", "Failed to retrieve user info.");
@@ -118,21 +119,21 @@ fn logout() {
 }
 
 #[tauri::command]
-fn get_user_info() -> Option<api::UserInfo> {
+async fn get_user_info() -> Option<api::UserInfo> {
     let token = {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone()
     };
     if let Some(ref t) = token {
-        api::fetch_user_info(t)
+        api::fetch_user_info(&api::get_api_url(), t).await.ok()
     } else {
         None
     }
 }
 
 #[tauri::command]
-fn login_with_credentials(email: String, mut password: String) -> Result<api::UserInfo, String> {
-    let res = api::login_with_credentials(&email, &password);
+async fn login_with_credentials(email: String, mut password: String) -> Result<api::UserInfo, String> {
+    let res = api::login_with_credentials(&api::get_api_url(), &email, &password).await;
     password.zeroize();
     match res {
         Ok((token, user_info)) => {
@@ -146,37 +147,37 @@ fn login_with_credentials(email: String, mut password: String) -> Result<api::Us
 }
 
 #[tauri::command]
-fn signup_with_credentials(email: String, mut password: String, name: String) -> Result<String, String> {
-    let res = api::signup_with_credentials(&email, &password, &name);
+async fn signup_with_credentials(email: String, mut password: String, name: String) -> Result<String, String> {
+    let res = api::signup_with_credentials(&api::get_api_url(), &email, &password, &name).await;
     password.zeroize();
     res
 }
 
 #[tauri::command]
-fn get_vocabulary() -> Result<Vec<api::ClientVocabularyTerm>, String> {
+async fn get_vocabulary() -> Result<Vec<api::ClientVocabularyTerm>, String> {
     let token = {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    api::fetch_vocabulary(&token)
+    api::fetch_vocabulary(&api::get_api_url(), &token).await
 }
 
 #[tauri::command]
-fn add_vocabulary_term(term: String) -> Result<(), String> {
+async fn add_vocabulary_term(term: String) -> Result<(), String> {
     let token = {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    api::add_vocab_term(&token, &term)
+    api::add_vocab_term(&api::get_api_url(), &token, &term).await
 }
 
 #[tauri::command]
-fn delete_vocabulary_term(term: String) -> Result<(), String> {
+async fn delete_vocabulary_term(term: String) -> Result<(), String> {
     let token = {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    api::delete_vocab_term(&token, &term)
+    api::delete_vocab_term(&api::get_api_url(), &token, &term).await
 }
 
 pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
@@ -237,6 +238,9 @@ fn cleanup_old_recordings() {
 }
 
 fn main() {
+    // 0. Ensure only one instance of the app is running
+    win32::ensure_single_instance();
+
     // 1. Initialize global loaded config
     let _ = get_active_config();
 
@@ -374,7 +378,7 @@ fn get_meeting_levels() -> (u32, u32) {
 }
 
 #[tauri::command]
-fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
+async fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
     let token = {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
@@ -384,16 +388,22 @@ fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
     if std::path::Path::new(&filepath) != expected_path {
         return Err("Refusing to upload a file that was not created by SpeekTo.Me".to_string());
     }
-    crate::api::upload_meeting(&token, &title, &expected_path)
+
+    let mixed_bytes = std::fs::read(&expected_path)
+        .map_err(|e| format!("Failed to read meeting audio: {}", e))?;
+    let mic_bytes = std::fs::read(expected_path.with_extension("mic.ogg")).ok();
+    let loopback_bytes = std::fs::read(expected_path.with_extension("loopback.ogg")).ok();
+
+    crate::api::upload_meeting(&api::get_api_url(), &token, &title, mixed_bytes, mic_bytes, loopback_bytes).await
 }
 
 #[tauri::command]
-fn validate_prompt(prompt: String) -> Result<api::PromptValidationResult, String> {
+async fn validate_prompt(prompt: String) -> Result<api::PromptValidationResult, String> {
     let token = {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    api::validate_custom_prompt(&token, &prompt)
+    api::validate_custom_prompt(&api::get_api_url(), &token, &prompt).await
 }
 
 

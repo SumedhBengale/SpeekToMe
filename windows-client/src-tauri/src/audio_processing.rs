@@ -105,7 +105,6 @@ pub fn resample_to_16k_mono(samples: &[i16], source_rate: u32, source_channels: 
     resampled
 }
 
-#[cfg(feature = "native")]
 pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let resampled = resample_to_16k_mono(samples, source_rate, source_channels);
     let mut encoder = opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip)?;

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-pub use speektome_core::audio_processing::{is_speech, resample_to_16k_mono, encode_opus_ogg};
+pub use crate::audio_processing::{is_speech, resample_to_16k_mono, encode_opus_ogg};
 
 pub static CURRENT_VOLUME: AtomicU32 = AtomicU32::new(0);
 const MAX_DICTATION_SAMPLES: usize = 12_000_000;
