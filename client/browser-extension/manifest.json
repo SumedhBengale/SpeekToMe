@@ -23,7 +23,13 @@
   },
   "action": {
     "default_popup": "index.html",
-    "default_title": "SpeekTo.Me Settings"
+    "default_title": "SpeekTo.Me Settings",
+    "default_icon": "assets/icons/logo.png"
+  },
+  "icons": {
+    "16": "assets/icons/logo.png",
+    "48": "assets/icons/logo.png",
+    "128": "assets/icons/logo.png"
   },
   "content_scripts": [
     {

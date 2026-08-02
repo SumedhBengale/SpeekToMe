@@ -27,8 +27,9 @@ mod win32_impl {
         CreateDIBSection, GetDC, ReleaseDC,
     };
     use windows_sys::Win32::UI::Shell::{
-        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_ADD, NIM_DELETE, NIF_ICON, NIF_MESSAGE, NIF_TIP,
+        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_ADD, NIM_DELETE, NIF_ICON, NIF_MESSAGE, NIF_TIP, ExtractIconW,
     };
+    use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
 
     const SM_CXSCREEN: i32 = 0;
     const SM_CYSCREEN: i32 = 1;
@@ -571,8 +572,16 @@ mod win32_impl {
         nid.uID = 1;
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
-        let mut h_icon = windows_sys::Win32::UI::WindowsAndMessaging::LoadIconW(hinstance, 32512 as *const u16);
-        if h_icon == std::ptr::null_mut() {
+        let mut exe_path = [0u16; 260];
+        let len = GetModuleFileNameW(hinstance, exe_path.as_mut_ptr(), 260);
+        let mut h_icon = std::ptr::null_mut();
+        if len > 0 {
+            let extracted = ExtractIconW(hinstance, exe_path.as_ptr(), 0);
+            if !extracted.is_null() && (extracted as usize) != 1 {
+                h_icon = extracted as *mut std::ffi::c_void;
+            }
+        }
+        if h_icon.is_null() {
             h_icon = windows_sys::Win32::UI::WindowsAndMessaging::LoadIconW(std::ptr::null_mut(), 32512 as *const u16);
         }
         nid.hIcon = h_icon;
