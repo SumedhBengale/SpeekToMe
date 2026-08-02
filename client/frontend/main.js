@@ -662,7 +662,7 @@ function updateAuthUI(userInfo) {
     const subActivated = document.getElementById('sub-activated');
     const subUsage = document.getElementById('sub-usage');
     
-    if (subPlan) subPlan.textContent = userInfo.plan_tier.toUpperCase();
+    if (subPlan) subPlan.textContent = (userInfo.plan_tier || 'Free').toUpperCase();
     if (subStatus) {
       if (userInfo.plan_active) {
         subStatus.textContent = "Active";

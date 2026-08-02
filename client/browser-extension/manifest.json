@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SpeekTo.Me Client",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Voice dictation, translation and meeting summary client.",
   "permissions": [
     "activeTab",
@@ -9,7 +9,8 @@
     "offscreen",
     "storage",
     "identity",
-    "tabCapture"
+    "tabCapture",
+    "notifications"
   ],
   "host_permissions": [
     "https://api.speekto.me/*"
@@ -25,6 +26,15 @@
     "default_popup": "index.html",
     "default_title": "SpeekTo.Me Settings",
     "default_icon": "assets/icons/logo.png"
+  },
+  "commands": {
+    "toggle-dictation": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Start or stop SpeekTo.Me dictation"
+    }
   },
   "icons": {
     "16": "assets/icons/logo.png",

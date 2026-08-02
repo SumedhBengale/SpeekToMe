@@ -1,8 +1,8 @@
 // SpeekTo.Me Settings Frontend Controller
-// Utilizes window.__TAURI__ global APIs for zero-bundler simplicity.
+// Browser-extension settings UI. All persistence and commands use the
+// extension service worker, never the desktop client runtime.
 
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
+const { invoke, listen } = window.SpeekToMeExtension;
 
 // State variables
 let currentConfig = null;
@@ -62,9 +62,11 @@ const tabItems = document.querySelectorAll('.nav-item');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
 // Dashboard Input Elements
-const hotkeySelect = document.getElementById('hotkey-select');
-const autostartCheck = document.getElementById('autostart-check');
-const typingModeCheck = document.getElementById('typing-mode-check');
+const shortcutDisplay = document.getElementById('shortcut-display');
+const shortcutsSettingsBtn = document.getElementById('shortcuts-settings-btn');
+const microphonePermissionBtn = document.getElementById('microphone-permission-btn');
+const microphonePermissionStatus = document.getElementById('microphone-permission-status');
+const microphoneSettingsBtn = document.getElementById('microphone-settings-btn');
 const soundFeedbackCheck = document.getElementById('sound-feedback-check');
 const smartSpacingCheck = document.getElementById('smart-spacing-check');
 const modelSelect = document.getElementById('model-select');
@@ -72,14 +74,6 @@ const enhanceCheck = document.getElementById('enhance-check');
 const customPromptText = document.getElementById('custom-prompt-text');
 const promptValidationBanner = document.getElementById('prompt-validation-banner');
 const themeSelect = document.getElementById('theme-select');
-
-// Pill Position Elements
-const pillPosModeSelect = document.getElementById('pill-pos-mode-select');
-const predefinedPosGroup = document.getElementById('predefined-pos-group');
-const pillPredefinedSelect = document.getElementById('pill-predefined-select');
-const customPosGroup = document.getElementById('custom-pos-group');
-const pillCustomX = document.getElementById('pill-custom-x');
-const pillCustomY = document.getElementById('pill-custom-y');
 
 // Dashboard Account Elements
 const authLoggedOut = document.getElementById('auth-logged-out');
@@ -110,17 +104,23 @@ const onboardAuthLoggingIn = document.getElementById('onboard-auth-logging-in');
 const onboardAuthLoggedIn = document.getElementById('onboard-auth-logged-in');
 const onboardUserNameEl = document.getElementById('onboard-user-name');
 const onboardUserEmailEl = document.getElementById('onboard-user-email');
+const onboardMicrophonePermissionBtn = document.getElementById('onboard-microphone-permission-btn');
+const onboardMicrophonePermissionStatus = document.getElementById('onboard-microphone-permission-status');
+const onboardMicrophoneSettingsBtn = document.getElementById('onboard-microphone-settings-btn');
 
 // Onboarding Inputs
-const onboardHotkeySelect = document.getElementById('onboard-hotkey-select');
-const onboardAutostartCheck = document.getElementById('onboard-autostart-check');
-const onboardTypingModeCheck = document.getElementById('onboard-typing-mode-check');
+const onboardShortcutDisplay = document.getElementById('onboard-shortcut-display');
+const onboardShortcutsSettingsBtn = document.getElementById('onboard-shortcuts-settings-btn');
 const onboardSoundFeedbackCheck = document.getElementById('onboard-sound-feedback-check');
 const onboardModelSelect = document.getElementById('onboard-model-select');
 const onboardEnhanceCheck = document.getElementById('onboard-enhance-check');
 const onboardCustomPromptText = document.getElementById('onboard-custom-prompt-text');
 const onboardPromptValidationBanner = document.getElementById('onboard-prompt-validation-banner');
 const onboardThemeSelect = document.getElementById('onboard-theme-select');
+const pendingTranscriptionGroup = document.getElementById('pending-transcription-group');
+const pendingTranscription = document.getElementById('pending-transcription');
+const copyPendingTranscriptionBtn = document.getElementById('copy-pending-transcription-btn');
+const dismissPendingTranscriptionBtn = document.getElementById('dismiss-pending-transcription-btn');
 
 // ==========================================
 // Initialization & Config Binding
@@ -128,6 +128,23 @@ const onboardThemeSelect = document.getElementById('onboard-theme-select');
 
 async function init() {
   try {
+    microphonePermissionBtn?.addEventListener('click', () => requestMicrophonePermission(
+      microphonePermissionBtn,
+      microphonePermissionStatus,
+      microphoneSettingsBtn
+    ));
+    microphoneSettingsBtn?.addEventListener('click', openMicrophoneSettings);
+    onboardMicrophonePermissionBtn?.addEventListener('click', () => requestMicrophonePermission(
+      onboardMicrophonePermissionBtn,
+      onboardMicrophonePermissionStatus,
+      onboardMicrophoneSettingsBtn
+    ));
+    onboardMicrophoneSettingsBtn?.addEventListener('click', openMicrophoneSettings);
+    shortcutsSettingsBtn?.addEventListener('click', openShortcutSettings);
+    onboardShortcutsSettingsBtn?.addEventListener('click', openShortcutSettings);
+    copyPendingTranscriptionBtn?.addEventListener('click', copyPendingTranscription);
+    dismissPendingTranscriptionBtn?.addEventListener('click', dismissPendingTranscription);
+
     try {
       API_URL = await invoke('get_api_url');
     } catch (err) {
@@ -162,8 +179,12 @@ async function init() {
     // 2. Fetch and apply configuration
     currentConfig = await invoke('get_config');
     applyConfigToUI(currentConfig);
+    await Promise.all([refreshShortcutDisplay(), loadPendingTranscription()]);
 
-    // 3. Fetch user information status & update dashboard UI
+    // 3. Register auth listeners before any login UI can be used.
+    await setupOAuthListeners();
+
+    // 4. Fetch user information status & update dashboard UI
     const userInfo = await invoke('get_user_info');
     updateAuthUI(userInfo);
     updateOnboardAuthUI(userInfo);
@@ -198,24 +219,13 @@ async function init() {
       });
     }
 
-    if (pillPosModeSelect) {
-      pillPosModeSelect.addEventListener('change', (e) => {
-        if (e.target.value === 'custom') {
-          if (customPosGroup) customPosGroup.style.display = 'block';
-          if (predefinedPosGroup) predefinedPosGroup.style.display = 'none';
-        } else {
-          if (customPosGroup) customPosGroup.style.display = 'none';
-          if (predefinedPosGroup) predefinedPosGroup.style.display = 'block';
-        }
-      });
-    }
     if (onboardThemeSelect) {
       onboardThemeSelect.addEventListener('change', (e) => {
         document.body.setAttribute('data-theme', e.target.value);
       });
     }
 
-    // 4. Setup Onboarding flow state
+    // 5. Setup Onboarding flow state
     if (!currentConfig.session_token) {
       // User is logged out / first run: Show Onboarding Flow
       onboardingWrapper.classList.remove('hidden');
@@ -225,23 +235,20 @@ async function init() {
       onboardingWrapper.classList.add('hidden');
     }
 
-    // 5. Button listeners (Dashboard)
+    // 6. Button listeners (Dashboard)
     saveBtn.addEventListener('click', saveAndApply);
     hideBtn.addEventListener('click', hideWindow);
     loginBtn.addEventListener('click', () => triggerLogin(false));
     cancelLoginBtn.addEventListener('click', () => triggerCancelLogin(false));
     logoutBtn.addEventListener('click', triggerLogout);
 
-    // 6. Button listeners (Onboarding)
+    // 7. Button listeners (Onboarding)
     onboardLoginBtn.addEventListener('click', () => triggerLogin(true));
     onboardCancelLoginBtn.addEventListener('click', () => triggerCancelLogin(true));
     onboardNext1Btn.addEventListener('click', () => goToStep(2));
     onboardNext2Btn.addEventListener('click', () => goToStep(3));
     onboardNext3Btn.addEventListener('click', validateOnboardingPrompt);
     onboardFinishBtn.addEventListener('click', finishOnboarding);
-
-    // 7. Setup OAuth event listeners
-    setupOAuthListeners();
 
     // 8. Setup Credential Forms (Onboarding & Dashboard)
     setupCredentialForm(
@@ -302,9 +309,6 @@ async function init() {
 
 function applyConfigToUI(config) {
   // Dashboard inputs
-  hotkeySelect.value = config.hotkey;
-  autostartCheck.checked = config.autostart;
-  typingModeCheck.checked = config.typing_mode;
   soundFeedbackCheck.checked = config.sound_feedback;
   smartSpacingCheck.checked = config.smart_spacing;
   modelSelect.value = config.model;
@@ -312,31 +316,7 @@ function applyConfigToUI(config) {
   customPromptText.value = config.custom_prompt;
   if (themeSelect) themeSelect.value = config.theme || 'forest';
 
-  // Apply new pill positioning settings
-  if (pillPosModeSelect) {
-    pillPosModeSelect.value = config.pill_position_mode || 'predefined';
-    if (config.pill_position_mode === 'custom') {
-      if (customPosGroup) customPosGroup.style.display = 'block';
-      if (predefinedPosGroup) predefinedPosGroup.style.display = 'none';
-    } else {
-      if (customPosGroup) customPosGroup.style.display = 'none';
-      if (predefinedPosGroup) predefinedPosGroup.style.display = 'block';
-    }
-  }
-  if (pillPredefinedSelect) {
-    pillPredefinedSelect.value = config.pill_predefined_position || 'Top Center';
-  }
-  if (pillCustomX) {
-    pillCustomX.value = config.pill_custom_x !== undefined ? config.pill_custom_x : 0;
-  }
-  if (pillCustomY) {
-    pillCustomY.value = config.pill_custom_y !== undefined ? config.pill_custom_y : 60;
-  }
-
   // Onboarding inputs
-  onboardHotkeySelect.value = config.hotkey;
-  onboardAutostartCheck.checked = config.autostart;
-  onboardTypingModeCheck.checked = config.typing_mode;
   onboardSoundFeedbackCheck.checked = config.sound_feedback;
   onboardModelSelect.value = config.model;
   onboardEnhanceCheck.checked = config.enhance;
@@ -347,98 +327,123 @@ function applyConfigToUI(config) {
   document.body.setAttribute('data-theme', config.theme || 'forest');
 }
 
-function cssColorToBgr(colorStr) {
-  if (!colorStr) return 0;
-  colorStr = colorStr.trim();
-  
-  // Handle hex format (e.g., #fff9fa or #fff)
-  if (colorStr.startsWith('#')) {
-    let hex = colorStr.substring(1);
-    if (hex.length === 3) {
-      hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-    }
-    if (hex.length === 6) {
-      const r = parseInt(hex.substring(0, 2), 16);
-      const g = parseInt(hex.substring(2, 4), 16);
-      const b = parseInt(hex.substring(4, 6), 16);
-      return (b << 16) | (g << 8) | r;
-    }
-  }
-  
-  // Handle rgb format (e.g., rgb(26, 16, 47) or rgba(26, 16, 47, 0.5))
-  const rgbMatch = colorStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (rgbMatch) {
-    const r = parseInt(rgbMatch[1], 10);
-    const g = parseInt(rgbMatch[2], 10);
-    const b = parseInt(rgbMatch[3], 10);
-    return (b << 16) | (g << 8) | r;
-  }
-  
-  return 0;
+function openMicrophoneSettings() {
+  const extensionOrigin = encodeURIComponent(`chrome-extension://${chrome.runtime.id}`);
+  chrome.tabs.create({
+    url: `chrome://settings/content/siteDetails?site=${extensionOrigin}`
+  });
 }
 
-function getPillColorsForTheme(themeName) {
-  const bodyStyle = getComputedStyle(document.body);
-  let bg, wave;
-  
-  if (themeName === 'forest') {
-    // For light theme, we use light pink background (bg-content) and dark burgundy waves (border-color)
-    bg = cssColorToBgr(bodyStyle.getPropertyValue('--bg-content')) || 0xFAF9FF;
-    wave = cssColorToBgr(bodyStyle.getPropertyValue('--border-color')) || 0x120A24;
-  } else {
-    // For dark themes, we use the content background and accent color
-    bg = cssColorToBgr(bodyStyle.getPropertyValue('--bg-content')) || 0x1A102F;
-    wave = cssColorToBgr(bodyStyle.getPropertyValue('--accent-color')) || 0xF0D7FF;
+function openShortcutSettings() {
+  chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+}
+
+async function refreshShortcutDisplay() {
+  const defaultLabel = 'Ctrl + Shift + Y';
+  try {
+    const { shortcut, configured } = await invoke('get_dictation_shortcut');
+    const label = configured
+      ? `${shortcut.replaceAll('+', ' + ')} — press once to start, again to stop.`
+      : 'No shortcut is assigned. Choose one in Chrome keyboard shortcuts.';
+    if (shortcutDisplay) shortcutDisplay.textContent = label;
+    if (onboardShortcutDisplay) onboardShortcutDisplay.textContent = label;
+  } catch (err) {
+    console.warn('Could not read the Chrome shortcut:', err);
+    if (shortcutDisplay) shortcutDisplay.textContent = `${defaultLabel} — press once to start, again to stop.`;
+    if (onboardShortcutDisplay) onboardShortcutDisplay.textContent = `${defaultLabel} — press once to start, again to stop.`;
   }
-  
-  return { bg, wave };
+}
+
+async function loadPendingTranscription() {
+  if (!pendingTranscriptionGroup || !pendingTranscription) return;
+  try {
+    const text = await invoke('get_pending_transcription');
+    pendingTranscription.value = text || '';
+    pendingTranscriptionGroup.style.display = text ? 'block' : 'none';
+  } catch (err) {
+    console.warn('Could not load pending transcription:', err);
+  }
+}
+
+async function copyPendingTranscription() {
+  if (!pendingTranscription?.value) return;
+  try {
+    await navigator.clipboard.writeText(pendingTranscription.value);
+    await invoke('clear_pending_transcription');
+    pendingTranscriptionGroup.style.display = 'none';
+    showToast('The transcription was copied to your clipboard.', 'Copied', 'info');
+  } catch (err) {
+    showToast(`Could not copy transcription: ${err.message || err}`, 'Copy failed', 'warning');
+  }
+}
+
+async function dismissPendingTranscription() {
+  try {
+    await invoke('clear_pending_transcription');
+    pendingTranscription.value = '';
+    pendingTranscriptionGroup.style.display = 'none';
+  } catch (err) {
+    showToast(`Could not dismiss transcription: ${err.message || err}`, 'Dismiss failed', 'warning');
+  }
+}
+
+async function requestMicrophonePermission(button, statusEl, settingsBtn) {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    statusEl.textContent = 'Microphone capture is unavailable in this browser.';
+    return;
+  }
+
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Requesting...';
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+    statusEl.textContent = 'Microphone access granted.';
+    showToast('Microphone access is ready. Try the dictation shortcut again.', 'Microphone ready', 'info');
+  } catch (err) {
+    const message = err?.name === 'NotAllowedError'
+      ? 'Chrome has blocked or dismissed access. Open Chrome settings, remove the blocked entry for this extension, then try again.'
+      : `Microphone access failed: ${err?.message || err}`;
+    statusEl.textContent = message;
+    if (err?.name === 'NotAllowedError' && settingsBtn) {
+      settingsBtn.style.display = 'inline-flex';
+    }
+    showToast(message, 'Microphone permission required', 'warning');
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
 }
 
 function gatherConfigFromUI(isOnboarding) {
   const api_url = currentConfig ? currentConfig.api_url : null;
   if (isOnboarding) {
     const themeName = onboardThemeSelect ? onboardThemeSelect.value : 'forest';
-    const colors = getPillColorsForTheme(themeName);
     return {
       api_url: api_url,
-      hotkey: onboardHotkeySelect.value,
-      autostart: onboardAutostartCheck.checked,
-      typing_mode: onboardTypingModeCheck.checked,
+      hotkey: 'Ctrl+Shift+Y',
       sound_feedback: onboardSoundFeedbackCheck.checked,
       smart_spacing: smartSpacingCheck.checked, // Kept same as current
       model: onboardModelSelect.value,
       enhance: onboardEnhanceCheck.checked,
       custom_prompt: onboardCustomPromptText.value,
       session_token: currentConfig ? currentConfig.session_token : null,
-      theme: themeName,
-      pill_position_mode: currentConfig ? currentConfig.pill_position_mode : 'predefined',
-      pill_predefined_position: currentConfig ? currentConfig.pill_predefined_position : 'Top Center',
-      pill_custom_x: currentConfig ? currentConfig.pill_custom_x : 0,
-      pill_custom_y: currentConfig ? currentConfig.pill_custom_y : 60,
-      pill_bg_color: colors.bg,
-      pill_wave_color: colors.wave
+      theme: themeName
     };
   } else {
     const themeName = themeSelect ? themeSelect.value : 'forest';
-    const colors = getPillColorsForTheme(themeName);
     return {
       api_url: api_url,
-      hotkey: hotkeySelect.value,
-      autostart: autostartCheck.checked,
-      typing_mode: typingModeCheck.checked,
+      hotkey: 'Ctrl+Shift+Y',
       sound_feedback: soundFeedbackCheck.checked,
       smart_spacing: smartSpacingCheck.checked,
       model: modelSelect.value,
       enhance: enhanceCheck.checked,
       custom_prompt: customPromptText.value,
       session_token: currentConfig ? currentConfig.session_token : null,
-      theme: themeName,
-      pill_position_mode: pillPosModeSelect ? pillPosModeSelect.value : 'predefined',
-      pill_predefined_position: pillPredefinedSelect ? pillPredefinedSelect.value : 'Top Center',
-      pill_custom_x: pillCustomX ? parseInt(pillCustomX.value, 10) || 0 : 0,
-      pill_custom_y: pillCustomY ? parseInt(pillCustomY.value, 10) || 0 : 60,
-      pill_bg_color: colors.bg,
-      pill_wave_color: colors.wave
+      theme: themeName
     };
   }
 }
@@ -587,11 +592,7 @@ async function validateOnboardingPrompt() {
 }
 
 async function hideWindow() {
-  try {
-    await invoke('hide_window');
-  } catch (err) {
-    console.error("Failed to hide window:", err);
-  }
+  window.close();
 }
 
 // ==========================================
@@ -662,7 +663,7 @@ function updateAuthUI(userInfo) {
     const subActivated = document.getElementById('sub-activated');
     const subUsage = document.getElementById('sub-usage');
     
-    if (subPlan) subPlan.textContent = userInfo.plan_tier.toUpperCase();
+    if (subPlan) subPlan.textContent = (userInfo.plan_tier || 'Free').toUpperCase();
     if (subStatus) {
       if (userInfo.plan_active) {
         subStatus.textContent = "Active";
@@ -762,12 +763,14 @@ async function setupOAuthListeners() {
     const userInfo = event.payload;
     
     // Automatically retrieve session token locally
-    invoke('get_config').then(cfg => {
-      currentConfig = cfg;
-    });
-
-    updateAuthUI(userInfo);
-    updateOnboardAuthUI(userInfo);
+    invoke('get_config')
+      .then(async (cfg) => {
+        currentConfig = cfg;
+        const freshUserInfo = await invoke('get_user_info');
+        updateAuthUI(freshUserInfo || userInfo);
+        updateOnboardAuthUI(freshUserInfo || userInfo);
+      })
+      .catch((err) => console.error('Failed to refresh post-login state:', err));
   });
 
   // Listen for login-failed emitted by Rust thread

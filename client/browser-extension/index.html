@@ -65,20 +65,12 @@
         <!-- Step 2: General settings -->
         <div class="onboarding-step" id="onboard-step-2">
           <h2>Core Preferences</h2>
-          <p class="step-desc">Configure your trigger hotkey and system behavior.</p>
+          <p class="step-desc">Set up your Chrome shortcut and system behavior.</p>
 
           <div class="setting-group">
-            <label for="onboard-hotkey-select">Trigger Hotkey</label>
-            <div class="select-wrapper">
-              <select id="onboard-hotkey-select" class="fluent-select">
-                <option value="Right Control">Right Control</option>
-                <option value="Left Control">Left Control</option>
-                <option value="Caps Lock">Caps Lock</option>
-                <option value="Right Alt">Right Alt</option>
-                <option value="Left Alt">Left Alt</option>
-                <option value="Space">Space</option>
-              </select>
-            </div>
+            <label>Dictation shortcut</label>
+            <p id="onboard-shortcut-display" class="setting-hint">Loading Chrome shortcut…</p>
+            <button id="onboard-shortcuts-settings-btn" type="button" class="fluent-button secondary small">Customize shortcut</button>
           </div>
 
           <div class="setting-group">
@@ -93,21 +85,17 @@
             </div>
           </div>
 
-          <div class="setting-group checkbox-group">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="onboard-autostart-check">
-              <span class="checkmark"></span>
-              Start SpeekTo.Me on system startup
-            </label>
-            <span class="setting-hint">Launches SpeekTo.Me in your system tray automatically.</span>
-          </div>
-
-          <div class="setting-group checkbox-group">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="onboard-typing-mode-check">
-              <span class="checkmark"></span>
-              Use keystroke simulation (typing)
-            </label>
+          <div class="setting-group">
+            <label>Microphone Access</label>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <button id="onboard-microphone-permission-btn" type="button" class="fluent-button secondary small">
+                Allow microphone
+              </button>
+              <button id="onboard-microphone-settings-btn" type="button" class="fluent-button secondary small" style="display: none;">
+                Open Chrome settings
+              </button>
+              <span id="onboard-microphone-permission-status" class="setting-hint">Required for voice dictation.</span>
+            </div>
           </div>
 
           <div class="setting-group checkbox-group">
@@ -149,15 +137,15 @@
         <!-- Step 4: Finish -->
         <div class="onboarding-step" id="onboard-step-4">
           <h2>You're All Set!</h2>
-          <p class="step-desc">Setup is complete. SpeekTo.Me will now run in the background as a system tray service.
+          <p class="step-desc">Setup is complete. SpeekTo.Me is ready in Chrome.
           </p>
 
           <div class="tutorial-card">
             <p><strong>💡 How to use SpeekTo.Me:</strong></p>
             <ul>
-              <li><strong>Hold</strong> your hotkey to record audio.</li>
+              <li>Press and release your <strong>Chrome shortcut</strong> once to start recording; do not hold it.</li>
               <li><strong>Speak</strong> normally (whispering works too!).</li>
-              <li><strong>Release</strong> the hotkey to automatically type/paste the text.</li>
+              <li>Press the shortcut again to stop and insert the transcription.</li>
             </ul>
           </div>
 
@@ -208,20 +196,12 @@
       <!-- General Tab -->
       <div class="tab-pane active" id="tab-general">
         <h2>General Settings</h2>
-        <p class="section-desc">Configure core keyboard and feedback behavior.</p>
+        <p class="section-desc">Configure Chrome shortcut and feedback behavior.</p>
 
         <div class="setting-group">
-          <label for="hotkey-select">Trigger Hotkey</label>
-          <div class="select-wrapper">
-            <select id="hotkey-select" class="fluent-select">
-              <option value="Right Control">Right Control</option>
-              <option value="Left Control">Left Control</option>
-              <option value="Caps Lock">Caps Lock</option>
-              <option value="Right Alt">Right Alt</option>
-              <option value="Left Alt">Left Alt</option>
-              <option value="Space">Space</option>
-            </select>
-          </div>
+          <label>Dictation shortcut</label>
+          <p id="shortcut-display" class="setting-hint">Loading Chrome shortcut…</p>
+          <button id="shortcuts-settings-btn" type="button" class="fluent-button secondary small">Customize shortcut</button>
         </div>
 
         <div class="setting-group">
@@ -237,61 +217,26 @@
         </div>
 
         <div class="setting-group">
-          <label for="pill-pos-mode-select">Pill Position Mode</label>
-          <div class="select-wrapper">
-            <select id="pill-pos-mode-select" class="fluent-select">
-              <option value="predefined">Predefined Locations</option>
-              <option value="custom">Custom (Pixel Coordinates)</option>
-            </select>
+          <label>Microphone Access</label>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <button id="microphone-permission-btn" type="button" class="fluent-button secondary small">
+              Allow microphone
+            </button>
+            <button id="microphone-settings-btn" type="button" class="fluent-button secondary small" style="display: none;">
+              Open Chrome settings
+            </button>
+            <span id="microphone-permission-status" class="setting-hint">Required for voice dictation.</span>
           </div>
         </div>
 
-        <div class="setting-group" id="predefined-pos-group">
-          <label for="pill-predefined-select">Pill Location</label>
-          <div class="select-wrapper">
-            <select id="pill-predefined-select" class="fluent-select">
-              <option value="Top Center">Top Center</option>
-              <option value="Top Left">Top Left</option>
-              <option value="Top Right">Top Right</option>
-              <option value="Bottom Center">Bottom Center</option>
-              <option value="Bottom Left">Bottom Left</option>
-              <option value="Bottom Right">Bottom Right</option>
-            </select>
+        <div id="pending-transcription-group" class="setting-group" style="display: none;">
+          <label for="pending-transcription">Transcription ready to copy</label>
+          <textarea id="pending-transcription" class="fluent-textarea" readonly></textarea>
+          <div style="display: flex; gap: 8px; margin-top: 8px;">
+            <button id="copy-pending-transcription-btn" type="button" class="fluent-button accent small">Copy transcription</button>
+            <button id="dismiss-pending-transcription-btn" type="button" class="fluent-button secondary small">Dismiss</button>
           </div>
-        </div>
-
-        <div class="setting-group" id="custom-pos-group" style="display: none;">
-          <label>Custom Position (X, Y in Pixels)</label>
-          <div style="display: flex; gap: 10px; margin-top: 5px;">
-            <div style="flex: 1;">
-              <span class="setting-hint" style="margin-bottom: 2px; display: block;">X Coordinate</span>
-              <input type="number" id="pill-custom-x" class="fluent-input" style="width: 100%; box-sizing: border-box;"
-                value="0">
-            </div>
-            <div style="flex: 1;">
-              <span class="setting-hint" style="margin-bottom: 2px; display: block;">Y Coordinate</span>
-              <input type="number" id="pill-custom-y" class="fluent-input" style="width: 100%; box-sizing: border-box;"
-                value="60">
-            </div>
-          </div>
-        </div>
-
-        <div class="setting-group checkbox-group">
-          <label class="fluent-checkbox-container">
-            <input type="checkbox" id="autostart-check">
-            <span class="checkmark"></span>
-            Start SpeekTo.Me on system startup
-          </label>
-          <span class="setting-hint">Automatically launches the app in the tray when Windows boots.</span>
-        </div>
-
-        <div class="setting-group checkbox-group">
-          <label class="fluent-checkbox-container">
-            <input type="checkbox" id="typing-mode-check">
-            <span class="checkmark"></span>
-            Use keystroke simulation (typing)
-          </label>
-          <span class="setting-hint">Simulates character-by-character keyboard input instead of pasting.</span>
+          <span class="setting-hint">Chrome could not insert this text into the original page.</span>
         </div>
 
         <div class="setting-group checkbox-group">
@@ -622,7 +567,7 @@
     </div>
   </div>
 
-  <script src="bridge.js"></script>
+  <script src="extension-api.js"></script>
   <script src="main.js"></script>
 </body>
 

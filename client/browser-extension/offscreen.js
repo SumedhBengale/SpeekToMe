@@ -1,8 +1,11 @@
 let audioCtx = null;
 let micStream = null;
-let scriptNode = null;
+let micSource = null;
+let audioWorkletNode = null;
+let monitorGain = null;
 let pcmSamples = [];
 let sampleRate = 48000;
+const MAX_DICTATION_SAMPLES = 12_000_000;
 
 // Meeting capture state
 let meetingMixer = null;
@@ -10,109 +13,179 @@ let meetingRecorder = null;
 let meetingChunks = [];
 let capturedTabs = new Map(); // tabId -> { stream, sourceNode }
 
-chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-  if (message.target !== 'offscreen') return;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.target !== 'offscreen') return false;
 
-  switch (message.action) {
-    case 'start_dictation':
-      try {
-        await startDictation();
-        sendResponse({ success: true });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-      break;
-
-    case 'stop_dictation':
-      try {
-        const result = await stopDictation();
-        sendResponse(result);
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-      break;
-
-    case 'start_meeting':
-      try {
-        await startMeeting();
-        sendResponse({ success: true });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-      break;
-
-    case 'add_tab_stream':
-      try {
-        await addTabStream(message.tabId, message.streamId);
-        sendResponse({ success: true });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-      break;
-
-    case 'remove_tab_stream':
-      try {
-        await removeTabStream(message.tabId);
-        sendResponse({ success: true });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-      break;
-
-    case 'stop_meeting':
-      try {
-        await stopMeeting();
-        sendResponse({ success: true });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-      break;
+  // createDocument() can resolve before this script has finished loading.
+  // Background waits for this synchronous response before sending work.
+  if (message.action === 'ping') {
+    sendResponse({ success: true, ready: true });
+    return false;
   }
+
+  // A microphone permission prompt can outlive the message request. Return a
+  // synchronous acknowledgement and report the eventual result separately so
+  // the response channel is never held open across getUserMedia().
+  if (message.action === 'start_dictation') {
+    sendResponse({ success: true, accepted: true });
+    startDictation(message.requestId)
+      .then(() => notifyDictationStatus(message.requestId, 'started'))
+      .catch((err) => notifyDictationStatus(message.requestId, 'failed', err.message));
+    return false;
+  }
+
+  if (message.action === 'stop_dictation') {
+    sendResponse({ success: true, accepted: true });
+    stopDictation()
+      .then((result) => notifyDictationAudio(message.requestId, result))
+      .catch((err) => notifyDictationStatus(message.requestId, 'failed', err.message));
+    return false;
+  }
+
+  const handleMessage = async () => {
+    switch (message.action) {
+      case 'start_meeting':
+        await startMeeting();
+        return { success: true };
+
+      case 'add_tab_stream':
+        await addTabStream(message.tabId, message.streamId);
+        return { success: true };
+
+      case 'remove_tab_stream':
+        await removeTabStream(message.tabId);
+        return { success: true };
+
+      case 'stop_meeting':
+        await stopMeeting();
+        return { success: true };
+    }
+  };
+
+  handleMessage()
+    .then((res) => sendResponse(res || { success: true }))
+    .catch((err) => sendResponse({ success: false, error: err.message }));
+
+  return true; // Keep message channel open for async response
 });
+
+function notifyBackground(message) {
+  chrome.runtime.sendMessage(
+    { target: 'background', ...message },
+    () => {
+      // This is a notification; explicitly consume any missing-response
+      // lastError so Chrome does not report an unhandled message rejection.
+      void chrome.runtime.lastError;
+    }
+  );
+}
+
+function notifyDictationStatus(requestId, status, error = null) {
+  notifyBackground({
+    action: 'offscreen_dictation_status',
+    requestId,
+    status,
+    ...(error ? { error } : {})
+  });
+}
+
+function notifyDictationAudio(requestId, result) {
+  notifyBackground({
+    action: 'dictation_audio_ready',
+    requestId,
+    success: true,
+    audioBuffer: result.samples.buffer,
+    sampleRate: result.sampleRate,
+    channels: result.channels
+  });
+}
 
 // ==========================================
 // Dictation (Microphone) Recording Logic
 // ==========================================
 async function startDictation() {
+  try {
+    await startDictationCapture();
+  } catch (err) {
+    await cleanupDictation();
+    throw err;
+  }
+}
+
+async function startDictationCapture() {
+  if (micStream || audioWorkletNode) {
+    throw new Error('Dictation is already recording.');
+  }
+
   pcmSamples = [];
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   sampleRate = audioCtx.sampleRate;
 
   micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const source = audioCtx.createMediaStreamSource(micStream);
+  micSource = audioCtx.createMediaStreamSource(micStream);
 
-  // ScriptProcessor collects Float32 samples from microphone in real-time
-  scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
-  scriptNode.onaudioprocess = (event) => {
-    const inputBuffer = event.inputBuffer.getChannelData(0);
-    // Convert Float32 to Int16 PCM
-    for (let i = 0; i < inputBuffer.length; i++) {
+  if (!audioCtx.audioWorklet) {
+    throw new Error('AudioWorklet is unavailable in this browser.');
+  }
+
+  await audioCtx.audioWorklet.addModule(chrome.runtime.getURL('audio-worklet-processor.js'));
+  audioWorkletNode = new AudioWorkletNode(audioCtx, 'dictation-processor');
+  audioWorkletNode.port.onmessage = (event) => {
+    const inputBuffer = new Float32Array(event.data);
+    const remaining = MAX_DICTATION_SAMPLES - pcmSamples.length;
+    for (let i = 0; i < inputBuffer.length && i < remaining; i++) {
       const s = Math.max(-1, Math.min(1, inputBuffer[i]));
       const i16 = s < 0 ? s * 0x8000 : s * 0x7FFF;
       pcmSamples.push(Math.round(i16));
     }
   };
 
-  source.connect(scriptNode);
-  scriptNode.connect(audioCtx.destination);
+  micSource.connect(audioWorkletNode);
+  // The worklet needs an output connection to continue processing,
+  // but dictation must never play the microphone back through the speakers.
+  monitorGain = audioCtx.createGain();
+  monitorGain.gain.value = 0;
+  audioWorkletNode.connect(monitorGain);
+  monitorGain.connect(audioCtx.destination);
 }
 
-async function stopDictation() {
-  if (scriptNode) {
-    scriptNode.disconnect();
+async function cleanupDictation() {
+  if (audioWorkletNode) {
+    audioWorkletNode.disconnect();
+  }
+  if (monitorGain) {
+    monitorGain.disconnect();
+  }
+  if (micSource) {
+    micSource.disconnect();
   }
   if (micStream) {
     micStream.getTracks().forEach(track => track.stop());
   }
-  const finalizedSamples = pcmSamples;
-  const rate = sampleRate;
-  
-  if (audioCtx) {
-    await audioCtx.close();
+
+  const context = audioCtx;
+  audioCtx = null;
+  micStream = null;
+  micSource = null;
+  audioWorkletNode = null;
+  monitorGain = null;
+  pcmSamples = [];
+
+  if (context) {
+    await context.close();
   }
-  
+}
+
+async function stopDictation() {
+  if (!audioCtx && !micStream && !audioWorkletNode) {
+    return { samples: new Int16Array(), sampleRate, channels: 1 };
+  }
+
+  const finalizedSamples = Int16Array.from(pcmSamples);
+  const rate = sampleRate;
+  await cleanupDictation();
+
   return {
-    success: true,
     samples: finalizedSamples,
     sampleRate: rate,
     channels: 1
