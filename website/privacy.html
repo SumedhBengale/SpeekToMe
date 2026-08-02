@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Privacy Policy | speekto.me</title>
-  <meta name="description" content="Privacy Policy for speekto.me AI voice dictation.">
+  <title>Privacy Policy | SpeekTo.Me</title>
+  <meta name="description" content="Privacy Policy for SpeekTo.Me AI voice dictation.">
+  <link rel="icon" type="image/svg+xml" href="/assets/logo.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -12,7 +13,8 @@
   <!-- Navigation -->
   <nav class="navbar">
     <a href="/" class="nav-logo">
-      speekto<span class="logo-dot">.</span>me
+      <img src="/assets/logo.svg" alt="SpeekTo.Me Logo" class="brand-logo-icon">
+      SpeekTo<span class="logo-dot">.</span>Me
     </a>
     <ul class="nav-links">
       <li class="nav-item"><a href="/">Home</a></li>
@@ -20,13 +22,16 @@
       <li class="nav-item"><a href="/pricing">Pricing</a></li>
     </ul>
     <a href="/pricing" class="btn btn-primary nav-btn">Get Started</a>
+    <div class="nav-hamburger" onclick="this.classList.toggle('open')">
+      <span></span><span></span><span></span>
+    </div>
   </nav>
 
   <!-- Privacy Policy Content -->
   <article class="editorial-container">
     <h1>Privacy Policy</h1>
     <p>Last updated: July 2, 2026</p>
-    <p>At <strong>speekto.me</strong>, we value your privacy. This policy outlines how we handle audio recordings and transcribed text when you use our desktop application and cloud API services.</p>
+    <p>At <strong>SpeekTo.Me</strong>, we value your privacy. This policy outlines how we handle audio recordings and transcribed text when you use our desktop application and cloud API services.</p>
 
     <h2>1. Data Collection & Processing</h2>
     <p>To perform transcription, our application records audio locally from your microphone only when you actively trigger the hotkey. This audio is immediately compressed using secure local processing.</p>
@@ -36,7 +41,7 @@
     <p>Audio transcription is processed via secure, state-of-the-art translation systems. If text formatting or enhancement is enabled, the resulting transcript is processed using modern language models to clean grammar and punctuation. Both services process the data in real-time under strict confidentiality agreements. None of your data is ever used to train machine learning models.</p>
 
     <h2>3. Usage Logging</h2>
-    <p>To enforce rate limits and subscription quotas (like the 50-hour monthly limit), we log metadata about requests in a secure database. This includes: user ID, timestamp, transcribed audio duration (in seconds), transcription and AI formatting latency statistics, and request status.</p>
+    <p>To enforce rate limits and subscription quotas, we log metadata about requests in a secure database. This includes: user ID, timestamp, transcribed audio duration (in seconds), transcription and AI formatting latency statistics, and request status.</p>
 
     <h2>4. Changes to This Policy</h2>
     <p>We may update this policy occasionally. Any changes will be posted on this page.</p>
@@ -47,7 +52,10 @@
 
   <!-- Footer -->
   <footer class="footer">
-    <div class="footer-logo">speekto<span class="logo-dot">.</span>me</div>
+    <div class="footer-logo">
+      <img src="/assets/logo.svg" alt="SpeekTo.Me Logo" class="brand-logo-icon-sm">
+      SpeekTo<span class="logo-dot">.</span>Me
+    </div>
     <ul class="footer-nav">
       <li><a href="/">Home</a></li>
       <li><a href="/about">About Us</a></li>

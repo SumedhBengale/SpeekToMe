@@ -43,6 +43,16 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Hamburger Mobile Menu Toggle
+  const hamburger = document.querySelector(".nav-hamburger");
+  const navLinks = document.querySelector(".nav-links");
+  if (hamburger) {
+    hamburger.addEventListener("click", () => {
+      hamburger.classList.toggle("open");
+      if (navLinks) navLinks.classList.toggle("active");
+    });
+  }
+
   // ═══════════════════════════════════════════
   // 3. NAV AUTH STATE
   // ═══════════════════════════════════════════
@@ -250,13 +260,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (calcSlider && calcResult) {
     calcSlider.addEventListener("input", () => {
       const hours = parseInt(calcSlider.value);
-      const costPerHour = (2 / 50).toFixed(3);
-      const totalCost = 2; // flat $2/mo for 50 hours
-      calcResult.innerHTML = `At <strong>${hours} hours/month</strong>, that's just <span class="highlight">$${(
-        totalCost / hours * hours
-      ).toFixed(2)}/month</span> — or <span class="highlight">$${(
-        totalCost / hours
-      ).toFixed(3)}/hour</span>`;
+      const perHour = (2 / hours).toFixed(3);
+      calcResult.innerHTML = `At <strong>${hours} hours/month</strong>, that's just <span class="highlight">$2.00/month</span> — or <span class="highlight">$${perHour}/hour</span> with Unlimited Pro!`;
     });
   }
 

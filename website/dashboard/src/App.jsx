@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import logoSvg from '/logo.svg';
 
 const API_BASE = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
   ? 'http://localhost:8000' 
@@ -675,8 +676,9 @@ export default function App() {
     <div className="dashboard-container">
       {/* 1. Header */}
       <header class="dashboard-header">
-        <a href="/" className="logo">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>SpeekTo.Me<span className="logo-dot">.</span>
+        <a href="/" className="logo" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>
+          <img src={logoSvg} alt="SpeekTo.Me Logo" style={{ width: '26px', height: '26px', marginRight: '8px', verticalAlign: 'middle', display: 'inline-block' }} />
+          SpeekTo<span className="logo-dot">.</span>Me
         </a>
         <nav className="nav-links">
           {user ? (
@@ -988,7 +990,7 @@ export default function App() {
                     
                     <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.5)', marginTop: '8px' }}>
                       {user.plan_tier === 'free' 
-                        ? 'Upgrade to SpeekTo.Me Pro to get 50 hours of dictation limit per month and access to enhanced AI formatting.' 
+                        ? 'Upgrade to SpeekTo.Me Pro to get unlimited dictation and access to Advanced AI Enhancement.' 
                         : 'Your Pro plan subscription is active and will renew monthly.'}
                     </p>
                   </div>
@@ -1237,48 +1239,48 @@ export default function App() {
             {/* Free Plan */}
             <div className={`plan-card ${user.plan_tier === 'free' ? 'active' : ''}`}>
               <div className="plan-header">
+                <span className="plan-badge plan-badge-free">Free Tier</span>
                 <h3>SpeekTo.Me Starter</h3>
                 <p>Perfect for testing out dictation and speed.</p>
                 <div className="plan-price">$0<span>/forever</span></div>
                 
                 <ul className="plan-features" style={{ listStyle: 'none', padding: 0 }}>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    1 hour / month transcription limit
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>1 hour / month transcription limit</span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    5 minutes / day daily session limit
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Fast AI voice dictation</span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    Fast AI voice dictation
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Global keyboard shortcut trigger</span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    Global keyboard shortcut trigger
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Standard latency queue</span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', opacity: 0.65 }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-text-dark)', marginRight: '8px', flexShrink: 0}}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    No custom formatting presets
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Cross-platform desktop & mobile support (coming soon)</span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', opacity: 0.65 }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-text-dark)', marginRight: '8px', flexShrink: 0}}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    No intelligent formatting engine
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Basic community support</span>
                   </li>
                 </ul>
               </div>
 
-              <div>
+              <div className="plan-card-footer">
                 {user.plan_tier === 'free' ? (
-                  <button className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff', cursor: 'default' }} disabled>
-                    Current Active Plan
+                  <button className="btn btn-current-plan" disabled>
+                    ✓ Current Active Plan
                   </button>
                 ) : (
                   <button 
                     onClick={() => setShowCancelModal(true)} 
                     className="btn btn-danger" 
-                    style={{ width: '100%', justifyContent: 'center' }}
                     disabled={loading}
                   >
                     Downgrade to Starter Plan
@@ -1288,57 +1290,57 @@ export default function App() {
             </div>
 
             {/* Pro Plan */}
-            <div className={`plan-card ${user.plan_tier === 'pro' ? 'active' : ''}`}>
+            <div className={`plan-card plan-card-pro ${user.plan_tier === 'pro' ? 'active' : ''}`}>
               <div className="plan-header">
+                <span className="plan-badge">Most Popular</span>
                 <h3>SpeekTo.Me Pro</h3>
                 <p>For power users who dictate essays, logs, and emails.</p>
                 <div className="plan-price">$2.00<span>/month</span></div>
 
                 <ul className="plan-features" style={{ listStyle: 'none', padding: 0 }}>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    50 hours / month transcription limit
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span><strong>Unlimited AI Voice Transcription</strong></span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    1 hour / day daily usage limit
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span><strong>Advanced AI Enhancement & Smart Formatting</strong></span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    High-priority transcription queues
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>High-priority transcription queues (Ultra-low latency)</span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    Intelligent AI formatting & correction
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Custom AI system prompt instructions</span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    Custom formatting prompts and presets
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Cross-platform desktop & mobile support (coming soon)</span>
                   </li>
-                  <li style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginRight: '8px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
-                    Cross-platform desktop & mobile support
+                  <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Priority 24/7 email & chat support</span>
                   </li>
                 </ul>
               </div>
 
-              <div>
+              <div className="plan-card-footer">
                 {user.plan_tier === 'pro' ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
-                    <button className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff', cursor: 'default' }} disabled>
-                      Current Active Plan (Subscribed)
+                    <button className="btn btn-current-plan" disabled>
+                      ✓ Current Active Plan (Subscribed)
                     </button>
                     <button 
                       onClick={() => setShowCancelModal(true)} 
                       className="btn btn-danger btn-sm" 
-                      style={{ width: '100%', justifyContent: 'center' }}
                       disabled={loading}
                     >
-                      ❌ Cancel Subscription
+                      Cancel Subscription
                     </button>
                   </div>
                 ) : (
-                  <button onClick={handleUpgrade} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
+                  <button onClick={handleUpgrade} className="btn btn-primary btn-upgrade-cta">
                     💳 Upgrade to Pro ($2.00/mo)
                   </button>
                 )}

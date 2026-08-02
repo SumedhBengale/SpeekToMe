@@ -81,12 +81,13 @@ h1, h2, h3, h4 {
 .nav-links {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 12px;
 }
 
 .nav-user {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
+  opacity: 0.75;
 }
 
 .btn {
@@ -94,31 +95,45 @@ h1, h2, h3, h4 {
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-dark);
-  padding: 10px 18px;
-  border: var(--border-flat);
-  border-radius: var(--radius-btn);
-  background: var(--color-btn-secondary);
+  padding: 12px 20px;
+  border: 2px solid var(--color-text-dark);
+  border-radius: 12px;
+  background: #ffffff;
   cursor: pointer;
-  box-shadow: var(--shadow-flat-small);
-  transition: all 0.15s ease;
+  box-shadow: 2px 2px 0px var(--color-text-dark);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   outline: none;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
+  text-decoration: none;
 }
 
-.btn:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0px var(--border-color);
+.btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 4px 4px 0px var(--color-text-dark);
 }
 
-.btn:active {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0px var(--border-color);
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 1px 1px 0px var(--color-text-dark);
+}
+
+.btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .btn-primary {
   background: var(--color-btn-primary);
+  color: var(--color-text-dark);
+  font-weight: 700;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #ffb7c7;
 }
 
 .btn-accent {
@@ -126,12 +141,46 @@ h1, h2, h3, h4 {
 }
 
 .btn-danger {
-  background: var(--color-danger);
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #991b1b;
+  box-shadow: 2px 2px 0px #991b1b;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #fecaca;
+  box-shadow: 4px 4px 0px #991b1b;
 }
 
 .btn-sm {
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: 12.5px;
+  border-radius: 8px;
+  box-shadow: 1.5px 1.5px 0px var(--color-text-dark);
+}
+
+.btn-sm:hover:not(:disabled) {
+  box-shadow: 2.5px 2.5px 0px var(--color-text-dark);
+}
+
+.btn-upgrade-cta {
+  width: 100%;
+  padding: 14px 24px;
+  font-size: 15px;
+  letter-spacing: 0.2px;
+}
+
+.btn-current-plan {
+  width: 100%;
+  background: rgba(36, 10, 18, 0.05);
+  border: 1.5px dashed rgba(36, 10, 18, 0.3);
+  color: rgba(36, 10, 18, 0.7);
+  box-shadow: none;
+}
+
+.btn-current-plan:hover {
+  transform: none;
+  box-shadow: none;
 }
 
 /* Dashboard Body Layout */
@@ -264,63 +313,105 @@ h1, h2, h3, h4 {
 /* Pricing Page & Billing */
 .pricing-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-}
-
-@media (max-width: 768px) {
-  .pricing-grid {
-    grid-template-columns: 1fr;
-  }
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 32px;
+  max-width: 920px;
+  margin: 0 auto;
+  align-items: stretch;
 }
 
 .plan-card {
-  border: var(--border-flat);
+  border: 2px solid var(--border-color);
   border-radius: var(--radius-card);
-  padding: 32px;
+  padding: 36px 32px;
   background: var(--bg-card);
-  box-shadow: var(--shadow-flat);
+  box-shadow: 4px 4px 0px var(--border-color);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  min-height: 400px;
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.plan-card-pro {
+  border: 2.5px solid var(--border-color);
+  background: linear-gradient(180deg, #ffffff 0%, #fff7f8 100%);
+  box-shadow: 6px 6px 0px var(--border-color);
+}
+
+.plan-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 8px 8px 0px var(--border-color);
 }
 
 .plan-card.active {
+  background: #fffafa;
+}
+
+.plan-badge {
+  position: absolute;
+  top: 24px;
+  right: 24px;
   background: var(--color-btn-accent);
+  border: 1.5px solid var(--border-color);
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.plan-badge-free {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--color-text-dark);
 }
 
 .plan-header h3 {
-  font-size: 28px;
-  margin-bottom: 8px;
+  font-size: 26px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.plan-header p {
+  font-size: 14px;
+  color: rgba(36, 10, 18, 0.7);
 }
 
 .plan-price {
-  font-size: 40px;
+  font-size: 44px;
   font-weight: 700;
-  margin: 16px 0;
+  margin: 20px 0 24px 0;
   font-family: 'Figtree', sans-serif;
+  line-height: 1;
 }
 
 .plan-price span {
   font-size: 16px;
-  font-weight: 400;
+  font-weight: 500;
   color: rgba(26, 26, 26, 0.6);
+  margin-left: 6px;
 }
 
 .plan-features {
   list-style: none;
-  margin: 20px 0;
+  margin: 24px 0 36px 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .plan-features li {
-  font-size: 15px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  font-size: 14.5px;
+  line-height: 1.4;
+  color: rgba(36, 10, 18, 0.85);
+}
+
+.plan-card-footer {
+  margin-top: auto;
+  padding-top: 20px;
+  width: 100%;
 }
 
 /* Authentication Page layout */
@@ -612,6 +703,82 @@ h1, h2, h3, h4 {
   to {
     transform: translateY(0);
     opacity: 1;
+  }
+}
+
+/* Mobile Responsiveness Polish */
+@media (max-width: 640px) {
+  html, body {
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  .dashboard-header {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .dashboard-main {
+    padding: 20px 14px;
+    width: 100%;
+    max-width: 100vw;
+  }
+
+  .welcome-title {
+    font-size: 24px;
+  }
+
+  .card {
+    padding: 20px 16px;
+    border-radius: 16px;
+  }
+
+  .pricing-grid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .plan-card {
+    padding: 28px 20px;
+    width: 100%;
+    max-width: 100%;
+    min-height: auto;
+  }
+
+  .logs-table-container {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .logs-table th,
+  .logs-table td {
+    padding: 10px 8px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .vocab-form {
+    flex-direction: column;
+  }
+
+  .vocab-form .btn {
+    width: 100%;
+  }
+
+  .tab-navigation {
+    gap: 8px;
+  }
+
+  .tab-navigation .btn {
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+
+  .auth-card {
+    padding: 24px 18px;
+    width: 100%;
   }
 }
 
