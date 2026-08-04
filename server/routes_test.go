@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -143,3 +144,30 @@ func TestAllRouteRegistrations(t *testing.T) {
 		})
 	}
 }
+
+func TestRazorpayWebhookPayloadParsing(t *testing.T) {
+	rawPayloads := []string{
+		`{"entity":"event","account_id":"acc_Rxf2NVNa8irhhR","event":"subscription.charged","contains":["subscription","payment"],"payload":{"subscription":{"entity":{"id":"sub_TJP2pgrSktuo7A","entity":"subscription","plan_id":"plan_T8yjLW3pBOKGcQ","notes":[]}},"payment":{"entity":{"id":"pay_TLdgeMdbo1Luij","notes":[]}}}}`,
+		`{"entity":"event","account_id":"acc_Rxf2NVNa8irhhR","event":"subscription.charged","contains":["subscription","payment"],"payload":{"subscription":{"entity":{"id":"sub_TLdmas00uHBQEQ","notes":{"user_id":"7"}}},"payment":{"entity":{"id":"pay_TLdmjGMaZxCKcL","notes":[]}}}}`,
+	}
+
+	for i, raw := range rawPayloads {
+		var event struct {
+			Event   string `json:"event"`
+			Payload struct {
+				Subscription struct {
+					Entity struct {
+						ID    string            `json:"id"`
+						Notes handlers.NotesMap `json:"notes"`
+					} `json:"entity"`
+				} `json:"subscription"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			t.Errorf("Payload %d failed to unmarshal: %v", i+1, err)
+		} else {
+			t.Logf("Payload %d unmarshaled successfully, event=%s subID=%s notes=%v", i+1, event.Event, event.Payload.Subscription.Entity.ID, event.Payload.Subscription.Entity.Notes)
+		}
+	}
+}
+

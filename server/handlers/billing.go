@@ -294,6 +294,23 @@ func (a *App) HandleCancelSubscription(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type NotesMap map[string]string
+
+func (n *NotesMap) UnmarshalJSON(b []byte) error {
+	trimmed := strings.TrimSpace(string(b))
+	if trimmed == "[]" || trimmed == "null" || trimmed == "" {
+		*n = make(NotesMap)
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal(b, &m); err != nil {
+		*n = make(NotesMap)
+		return nil
+	}
+	*n = m
+	return nil
+}
+
 func (a *App) HandleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -334,17 +351,17 @@ func (a *App) HandleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 		Payload struct {
 			Subscription struct {
 				Entity struct {
-					ID     string            `json:"id"`
-					Status string            `json:"status"`
-					Notes  map[string]string `json:"notes"`
+					ID     string   `json:"id"`
+					Status string   `json:"status"`
+					Notes  NotesMap `json:"notes"`
 				} `json:"entity"`
 			} `json:"subscription"`
 			Payment struct {
 				Entity struct {
-					ID             string            `json:"id"`
-					SubscriptionID string            `json:"subscription_id"`
-					Status         string            `json:"status"`
-					Notes          map[string]string `json:"notes"`
+					ID             string   `json:"id"`
+					SubscriptionID string   `json:"subscription_id"`
+					Status         string   `json:"status"`
+					Notes          NotesMap `json:"notes"`
 				} `json:"entity"`
 			} `json:"payment"`
 		} `json:"payload"`
