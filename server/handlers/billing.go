@@ -113,20 +113,17 @@ func (a *App) HandleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Configured Razorpay plan has invalid amount or currency", http.StatusServiceUnavailable)
 		return
 	}
+	log.Printf("[RAZORPAY PLAN] plan_id=%s amount=%d currency=%s", razorpayPlanID, configuredPlan.Item.Amount, configuredPlan.Item.Currency)
 
 	type RazorpaySubReq struct {
-		PlanID         string            `json:"plan_id"`
-		TotalCount     int               `json:"total_count"`
-		Quantity       int               `json:"quantity"`
-		CustomerNotify bool              `json:"customer_notify"`
-		Notes          map[string]string `json:"notes"`
+		PlanID     string            `json:"plan_id"`
+		TotalCount int               `json:"total_count"`
+		Notes      map[string]string `json:"notes"`
 	}
 
 	subReqBody := RazorpaySubReq{
 		PlanID:         razorpayPlanID,
 		TotalCount:     60,
-		Quantity:       1,
-		CustomerNotify: true,
 		Notes: map[string]string{
 			"user_id": strconv.FormatInt(user.ID, 10),
 		},
@@ -171,7 +168,7 @@ func (a *App) HandleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("[RAZORPAY ERROR] Status %d for PlanID '%s': %s", resp.StatusCode, razorpayPlanID, string(bodyBytes))
+		log.Printf("[RAZORPAY ERROR] Status %d for PlanID '%s' (amount=%d currency=%s total_count=%d): %s", resp.StatusCode, razorpayPlanID, configuredPlan.Item.Amount, configuredPlan.Item.Currency, subReqBody.TotalCount, string(bodyBytes))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{

@@ -232,8 +232,11 @@ func TestCreateSubscriptionStartsImmediatelyWithoutTrial(t *testing.T) {
 	if _, exists := subscriptionRequest["start_at"]; exists {
 		t.Fatalf("create request included start_at; expected immediate subscription")
 	}
-	if notify, ok := subscriptionRequest["customer_notify"].(bool); !ok || !notify {
-		t.Fatalf("customer_notify = %#v, want true", subscriptionRequest["customer_notify"])
+	if _, exists := subscriptionRequest["customer_notify"]; exists {
+		t.Fatalf("create request included optional customer_notify field")
+	}
+	if _, exists := subscriptionRequest["quantity"]; exists {
+		t.Fatalf("create request included optional quantity field")
 	}
 	if subscriptionRequest["plan_id"] != "plan_create" {
 		t.Fatalf("plan_id = %#v, want plan_create", subscriptionRequest["plan_id"])
