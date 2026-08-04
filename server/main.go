@@ -3460,6 +3460,7 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 
 	switch event.Event {
 	case "subscription.activated", "subscription.charged":
+		println("Subscription started or charged")
 		err = database.UpdateUserPlan(userID, "pro", 1, subID)
 	case "subscription.updated":
 		switch status {
