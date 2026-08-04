@@ -78,6 +78,9 @@ func NewDatabase(connStr string) (*Database, error) {
 			is_verified INTEGER DEFAULT 0,
 			verification_token TEXT,
 			razorpay_subscription_id TEXT,
+			razorpay_subscription_status TEXT DEFAULT '',
+			razorpay_current_start INTEGER DEFAULT 0,
+			razorpay_current_end INTEGER DEFAULT 0,
 			rate_limit_rpm INTEGER DEFAULT NULL,
 			is_admin INTEGER DEFAULT 0,
 			totp_secret TEXT DEFAULT NULL,
@@ -148,6 +151,8 @@ func NewDatabase(connStr string) (*Database, error) {
 			received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			event_type TEXT NOT NULL,
 			subscription_id TEXT,
+			payment_id TEXT,
+			invoice_id TEXT,
 			user_id INTEGER,
 			status TEXT,
 			result TEXT,
@@ -155,6 +160,27 @@ func NewDatabase(connStr string) (*Database, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type);
 		CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id);
+
+		CREATE TABLE IF NOT EXISTS subscription_payments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			subscription_id TEXT NOT NULL,
+			payment_id TEXT,
+			invoice_id TEXT,
+			dedupe_key TEXT NOT NULL UNIQUE,
+			event_id TEXT,
+			event_type TEXT NOT NULL,
+			amount INTEGER DEFAULT 0,
+			currency TEXT DEFAULT '',
+			status TEXT DEFAULT '',
+			period_start INTEGER,
+			period_end INTEGER,
+			received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			raw_payload TEXT,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_subscription_payments_user ON subscription_payments(user_id);
+		CREATE INDEX IF NOT EXISTS idx_subscription_payments_subscription ON subscription_payments(subscription_id);
 	`)
 	if err != nil {
 		dbConn.Close()
@@ -163,6 +189,8 @@ func NewDatabase(connStr string) (*Database, error) {
 	
 	// Dynamic migrations for existing databases
 	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN event_id TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN payment_id TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN invoice_id TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_id ON webhook_logs(event_id)")
 	
 	// Dynamic migrations for existing databases to avoid breaking changes
@@ -177,15 +205,21 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN transcription_provider TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_status TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_current_start INTEGER DEFAULT 0")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_current_end INTEGER DEFAULT 0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN rate_limit_rpm INTEGER DEFAULT NULL")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL")
 	_, _ = dbConn.Exec("ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN monthly_usage_seconds REAL DEFAULT 0.0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN is_locked INTEGER DEFAULT 0")
-	_, _ = dbConn.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
+	_, _ = dbConn.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, payment_id TEXT, invoice_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type)")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id)")
+	_, _ = dbConn.Exec("CREATE TABLE IF NOT EXISTS subscription_payments (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, subscription_id TEXT NOT NULL, payment_id TEXT, invoice_id TEXT, dedupe_key TEXT NOT NULL UNIQUE, event_id TEXT, event_type TEXT NOT NULL, amount INTEGER DEFAULT 0, currency TEXT DEFAULT '', status TEXT DEFAULT '', period_start INTEGER, period_end INTEGER, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, raw_payload TEXT)")
+	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_subscription_payments_user ON subscription_payments(user_id)")
+	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_subscription_payments_subscription ON subscription_payments(subscription_id)")
 
 	// Set default configurations
 	configs := map[string]string{
@@ -451,8 +485,79 @@ func (d *Database) GetUserDurationLast24Hours(userID int64) (float64, error) {
 
 // Admin helpers
 func (d *Database) UpdateUserPlan(userID int64, planTier string, planActive int, subID string) error {
-	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP, razorpay_subscription_id = ?, monthly_usage_seconds = 0.0 WHERE id = ?", planTier, planActive, subID, userID)
+	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP, razorpay_subscription_id = ? WHERE id = ?", planTier, planActive, subID, userID)
 	return err
+}
+
+func (d *Database) SetPendingSubscription(userID int64, subID string) error {
+	_, err := d.db.Exec("UPDATE users SET razorpay_subscription_id = ?, razorpay_subscription_status = 'created', razorpay_current_start = 0, razorpay_current_end = 0 WHERE id = ?", subID, userID)
+	return err
+}
+
+func (d *Database) UpdateSubscriptionState(userID int64, subID, status string, periodStart, periodEnd int64, planActive *int) error {
+	if planActive == nil {
+		_, err := d.db.Exec(`
+			UPDATE users
+			SET razorpay_subscription_id = ?, razorpay_subscription_status = ?,
+				razorpay_current_start = ?, razorpay_current_end = ?
+			WHERE id = ?
+		`, subID, status, periodStart, periodEnd, userID)
+		return err
+	}
+	_, err := d.db.Exec(`
+		UPDATE users
+		SET razorpay_subscription_id = ?, razorpay_subscription_status = ?,
+			razorpay_current_start = ?, razorpay_current_end = ?, plan_active = ?
+		WHERE id = ?
+	`, subID, status, periodStart, periodEnd, *planActive, userID)
+	return err
+}
+
+func (d *Database) ResetMonthlyUsage(userID int64) error {
+	_, err := d.db.Exec("UPDATE users SET monthly_usage_seconds = 0.0 WHERE id = ?", userID)
+	return err
+}
+
+// ApplySuccessfulSubscriptionPayment records a successful billing event and activates
+// the plan/reset usage exactly once for the payment or invoice represented by dedupeKey.
+func (d *Database) ApplySuccessfulSubscriptionPayment(userID int64, subID, paymentID, invoiceID, dedupeKey, eventID, eventType string, amount int64, currency, status string, periodStart, periodEnd int64, rawPayload string) (bool, error) {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(`
+		INSERT OR IGNORE INTO subscription_payments
+			(user_id, subscription_id, payment_id, invoice_id, dedupe_key, event_id, event_type, amount, currency, status, period_start, period_end, raw_payload)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, userID, subID, paymentID, invoiceID, dedupeKey, eventID, eventType, amount, currency, status, periodStart, periodEnd, rawPayload)
+	if err != nil {
+		return false, err
+	}
+
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if inserted == 0 {
+		return false, nil
+	}
+
+	_, err = tx.Exec(`
+		UPDATE users
+		SET plan_tier = 'pro', plan_active = 1, plan_activated_at = CURRENT_TIMESTAMP,
+			razorpay_subscription_id = ?, razorpay_subscription_status = 'active',
+			razorpay_current_start = CASE WHEN ? > 0 THEN ? ELSE razorpay_current_start END,
+			razorpay_current_end = CASE WHEN ? > 0 THEN ? ELSE razorpay_current_end END,
+			monthly_usage_seconds = 0.0
+		WHERE id = ?
+	`, subID, periodStart, periodStart, periodEnd, periodEnd, userID)
+	if err != nil {
+		return false, err
+	}
+
+	return true, tx.Commit()
 }
 
 func (d *Database) IsUserPlanActive(userID int64) (bool, error) {
@@ -853,6 +958,8 @@ type WebhookLogEntry struct {
 	ReceivedAt     string  `json:"received_at"`
 	EventType      string  `json:"event_type"`
 	SubscriptionID string  `json:"subscription_id"`
+	PaymentID      string  `json:"payment_id"`
+	InvoiceID      string  `json:"invoice_id"`
 	UserID         *int64  `json:"user_id"`
 	EventID        string  `json:"event_id"`
 	Status         string  `json:"status"`
@@ -873,16 +980,20 @@ func (d *Database) IsWebhookEventProcessed(eventID string) (bool, error) {
 }
 
 func (d *Database) InsertWebhookLog(eventID, eventType, subscriptionID string, userID *int64, status, result, rawPayload string) error {
+	return d.InsertWebhookLogDetailed(eventID, eventType, subscriptionID, "", "", userID, status, result, rawPayload)
+}
+
+func (d *Database) InsertWebhookLogDetailed(eventID, eventType, subscriptionID, paymentID, invoiceID string, userID *int64, status, result, rawPayload string) error {
 	_, err := d.db.Exec(`
-		INSERT INTO webhook_logs (event_id, event_type, subscription_id, user_id, status, result, raw_payload)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, eventID, eventType, subscriptionID, userID, status, result, rawPayload)
+		INSERT INTO webhook_logs (event_id, event_type, subscription_id, payment_id, invoice_id, user_id, status, result, raw_payload)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, eventID, eventType, subscriptionID, paymentID, invoiceID, userID, status, result, rawPayload)
 	return err
 }
 
 func (d *Database) GetWebhookLogs(limit int) ([]WebhookLogEntry, error) {
 	rows, err := d.db.Query(`
-		SELECT id, received_at, event_type, subscription_id, user_id, status, result, raw_payload
+		SELECT id, received_at, event_type, subscription_id, payment_id, invoice_id, user_id, status, result, raw_payload
 		FROM webhook_logs
 		ORDER BY received_at DESC
 		LIMIT ?
@@ -895,7 +1006,7 @@ func (d *Database) GetWebhookLogs(limit int) ([]WebhookLogEntry, error) {
 	var logs []WebhookLogEntry
 	for rows.Next() {
 		var entry WebhookLogEntry
-		if err := rows.Scan(&entry.ID, &entry.ReceivedAt, &entry.EventType, &entry.SubscriptionID, &entry.UserID, &entry.Status, &entry.Result, &entry.RawPayload); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.ReceivedAt, &entry.EventType, &entry.SubscriptionID, &entry.PaymentID, &entry.InvoiceID, &entry.UserID, &entry.Status, &entry.Result, &entry.RawPayload); err != nil {
 			return nil, err
 		}
 		logs = append(logs, entry)

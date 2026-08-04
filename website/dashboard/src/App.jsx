@@ -565,11 +565,12 @@ export default function App() {
       const data = await res.json();
 
       // Real Razorpay subscription popup modal
+      const planAmount = data.amount ? `${data.currency} ${(data.amount / 100).toFixed(2)}` : 'the configured plan';
       const options = {
         key: data.razorpay_key_id,
         subscription_id: data.subscription_id,
         name: 'SpeekTo.Me',
-        description: 'SpeekTo.Me Pro ($2.00/mo)',
+        description: `SpeekTo.Me Pro (${planAmount}/mo)`,
         handler: async function (response) {
           try {
             const verifyRes = await fetch(`${API_BASE}/billing/verify-subscription`, {
@@ -1590,6 +1591,7 @@ export default function App() {
                       <th>Received At</th>
                       <th>Event Type</th>
                       <th>Subscription ID</th>
+                      <th>Payment / Invoice</th>
                       <th>User ID</th>
                       <th>Sub Status</th>
                       <th>Result</th>
@@ -1598,7 +1600,7 @@ export default function App() {
                   <tbody>
                     {webhookLogs.length === 0 ? (
                       <tr>
-                        <td colSpan="7" style={{ textAlign: 'center', opacity: 0.5, padding: '24px' }}>No webhook events received yet.</td>
+                        <td colSpan="8" style={{ textAlign: 'center', opacity: 0.5, padding: '24px' }}>No webhook events received yet.</td>
                       </tr>
                     ) : webhookLogs.map((log) => (
                       <tr key={log.id}>
@@ -1610,6 +1612,14 @@ export default function App() {
                           </code>
                         </td>
                         <td style={{ fontSize: '11px', opacity: 0.7 }}>{log.subscription_id || '—'}</td>
+                        <td style={{ fontSize: '11px', opacity: 0.7 }}>
+                          {log.payment_id || log.invoice_id ? (
+                            <>
+                              {log.payment_id && <div>pay: {log.payment_id}</div>}
+                              {log.invoice_id && <div>inv: {log.invoice_id}</div>}
+                            </>
+                          ) : '—'}
+                        </td>
                         <td>{log.user_id ? `#${log.user_id}` : '—'}</td>
                         <td style={{ fontSize: '12px' }}>{log.status || '—'}</td>
                         <td>
