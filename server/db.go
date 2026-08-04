@@ -135,7 +135,6 @@ func NewDatabase(connStr string) (*Database, error) {
 		CREATE TABLE IF NOT EXISTS webhook_logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			event_id TEXT,
 			event_type TEXT NOT NULL,
 			subscription_id TEXT,
 			user_id INTEGER,
@@ -145,14 +144,15 @@ func NewDatabase(connStr string) (*Database, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type);
 		CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id);
-		CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_id ON webhook_logs(event_id);
 	`)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
 	
+	// Dynamic migrations for existing databases
 	_, _ = db.Exec("ALTER TABLE webhook_logs ADD COLUMN event_id TEXT DEFAULT ''")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_id ON webhook_logs(event_id)")
 	
 	// Dynamic migrations for existing databases to avoid breaking changes
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_tier TEXT DEFAULT 'free'")
