@@ -1,4 +1,4 @@
-package main
+package pipeline
 
 import (
 	"bytes"
@@ -14,6 +14,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"speektome-server/config"
+	"speektome-server/db"
 )
 
 const (
@@ -386,10 +389,9 @@ func doubleMetaphone(s string) string {
 func isSafeAutoExpandSubWord(word string) bool {
 	norm := NormalizeString(word)
 	if len(norm) < 3 {
-		return false // Ignore tiny 1-2 char words like "to", "in", "of", "a", "is", "it", "me"
+		return false
 	}
 
-	// Closed set of high-frequency English grammatical functional connectors
 	connectors := map[string]bool{
 		"the": true, "and": true, "for": true, "with": true,
 		"from": true, "that": true, "this": true, "have": true,
@@ -408,7 +410,7 @@ func isSafeAutoExpandSubWord(word string) bool {
 }
 
 // CompileUserVocabulary compiles database terms into lookup maps
-func CompileUserVocabulary(dbTerms []VocabularyTerm) *UserVocabulary {
+func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 	normalizedLookup := make(map[string]string)
 	compiledTerms := make([]CompiledTerm, 0, len(dbTerms))
 	termsByCount := make(map[int][]CompiledTerm)
@@ -480,7 +482,6 @@ func CompileUserVocabulary(dbTerms []VocabularyTerm) *UserVocabulary {
 
 		// Approach 3: Smart Sub-Word Auto-Expansion for Multi-Word Entries (space-separated)
 		if len(normalizedTokens) > 1 {
-			// Extract constituent space tokens
 			var candidateWords []string
 			for _, tok := range tokens {
 				if tok.Clean != "" {
@@ -587,7 +588,6 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 			fmt.Printf("  * Token at index %d: Original=%q, Clean=%q, Normalized=%q\n", i, tokens[i].Original, tokens[i].Clean, tokens[i].Normalized)
 		}
 		
-		// 1. Try to match exact/normalized phrases greedily (longest phrase first)
 		for k := maxK; k >= 1; k-- {
 			if i+k <= n {
 				var sb strings.Builder
@@ -609,7 +609,6 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 						method = NormalizedMatch
 					}
 					
-					// Increment the appropriate metrics counter
 					if method == ExactMatch {
 						pctx.Metrics.ExactMatches++
 					} else {
@@ -644,7 +643,6 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 			continue
 		}
 		
-		// 2. Multi-Stage Fuzzy & Phonetic Matching
 		if t.fuzzyEnabled {
 			bestSim := 0.0
 			var bestCanonical string
@@ -673,7 +671,6 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 						threshold = MultiWordThreshold
 					}
 
-					// Stage 2: Token-Count Bucket Candidates (Sub-token & CamelCase expanded)
 					candidates := pctx.Vocabulary.TermsByCount[k]
 					for _, term := range candidates {
 						lenDiff := len(joinedNorm) - len(term.Normalized)
@@ -719,7 +716,6 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 						}
 					}
 
-					// Stage 3: Character-Length Decoupled Candidates Fallback
 					if bestCanonical == "" && pctx.Vocabulary.TermsByLength != nil {
 						normLen := len(joinedNorm)
 						for delta := -2; delta <= 2; delta++ {
@@ -779,7 +775,6 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 						}
 					}
 
-					// Stage 4: Phonetic Double Metaphone Matching Fallback
 					if bestCanonical == "" && pctx.Vocabulary.TermsByPhonetic != nil {
 						windowPhonetic := doubleMetaphone(joinedNorm)
 						if windowPhonetic != "" {
@@ -837,7 +832,6 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 						}
 					}
 
-					// Greedy decision: if we matched any terms of length `k`, stop searching shorter lengths
 					if bestCanonical != "" {
 						break
 					}
@@ -879,7 +873,6 @@ func (t *VocabNormalizerTransform) Transform(ctx context.Context, text string, p
 			}
 		}
 		
-		// 3. Keep original
 		if pctx.Debug {
 			fmt.Printf("    -> Keep Original: %q\n", tokens[i].Original)
 		}
@@ -995,10 +988,29 @@ func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, ap
 	return strings.TrimSpace(result.Choices[0].Message.Content), routingLoc, nil
 }
 
-func runDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, systemPrompt, userPrompt string, pctx *PipelineContext) (string, error) {
-	// Try official DeepSeek first
-	if DEEPSEEK_API_KEY != "" {
-		res, loc, err := callChatCompletionsAPI(ctx, client, DEEPSEEK_API_URL, DEEPSEEK_API_KEY, model, systemPrompt, userPrompt, true)
+func getHTTPResponseRouting(resp *http.Response, remoteIP string) string {
+	if resp == nil {
+		return "Unknown Location (No response)"
+	}
+	if groqReg := resp.Header.Get("x-groq-region"); groqReg != "" {
+		return fmt.Sprintf("Groq (%s)", groqReg)
+	}
+	if cfRay := resp.Header.Get("Cf-Ray"); cfRay != "" {
+		parts := strings.Split(cfRay, "-")
+		if len(parts) > 1 {
+			return fmt.Sprintf("Cloudflare (%s)", parts[len(parts)-1])
+		}
+		return fmt.Sprintf("Cloudflare (%s)", cfRay)
+	}
+	if server := resp.Header.Get("Server"); server != "" {
+		return fmt.Sprintf("Server (%s)", server)
+	}
+	return "Unknown Location (No routing headers)"
+}
+
+func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, systemPrompt, userPrompt string, pctx *PipelineContext) (string, error) {
+	if config.DeepSeekAPIKey != "" {
+		res, loc, err := callChatCompletionsAPI(ctx, client, config.DeepSeekAPIURL, config.DeepSeekAPIKey, model, systemPrompt, userPrompt, true)
 		if err == nil {
 			if pctx != nil {
 				pctx.LLMProvider = "deepseek"
@@ -1008,11 +1020,10 @@ func runDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 		}
 	}
 
-	// Fallback to Deep Infra if configured
-	if DEEPINFRA_API_KEY != "" {
+	if config.DeepInfraAPIKey != "" {
 		diURL := "https://api.deepinfra.com/v1/openai/chat/completions"
 		diModel := "deepseek-ai/DeepSeek-V4-Flash"
-		res, loc, err := callChatCompletionsAPI(ctx, client, diURL, DEEPINFRA_API_KEY, diModel, systemPrompt, userPrompt, false)
+		res, loc, err := callChatCompletionsAPI(ctx, client, diURL, config.DeepInfraAPIKey, diModel, systemPrompt, userPrompt, false)
 		if err == nil {
 			if pctx != nil {
 				pctx.LLMProvider = "deepinfra"
@@ -1022,7 +1033,7 @@ func runDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 		}
 	}
 
-	return "", fmt.Errorf("neither DEEPSEEK_API_KEY nor DEEPINFRA_API_KEY is configured or succeeded")
+	return "", fmt.Errorf("neither DeepSeekAPIKey nor DeepInfraAPIKey is configured or succeeded")
 }
 
 func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pctx *PipelineContext) (string, error) {
@@ -1056,7 +1067,7 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 		systemPrompt += "\n\nThe following user-specific vocabulary terms are present in the text and MUST remain unchanged and spelled exactly as shown:\n" + strings.Join(vocabLines, "\n")
 	}
 
-	return runDeepSeekChatCompletion(ctx, t.httpClient, t.model, systemPrompt, text, pctx)
+	return RunDeepSeekChatCompletion(ctx, t.httpClient, t.model, systemPrompt, text, pctx)
 }
 
 // Token wraps individual words and split punctuation bounds
@@ -1096,7 +1107,6 @@ func Tokenize(text string) []Token {
 	
 	i := 0
 	for i < n {
-		// Skip spaces
 		for i < n && isSpace(runes[i]) {
 			i++
 		}
@@ -1104,14 +1114,12 @@ func Tokenize(text string) []Token {
 			break
 		}
 		
-		// Find end of token
 		start := i
 		for i < n && !isSpace(runes[i]) {
 			i++
 		}
 		end := i
 		
-		// Parse prefix, clean, suffix within the token
 		firstWordIdx := -1
 		lastWordIdx := -1
 		for j := start; j < end; j++ {
@@ -1125,7 +1133,6 @@ func Tokenize(text string) []Token {
 		
 		var tok Token
 		if firstWordIdx == -1 {
-			// No word characters found (e.g. just commas or punctuation like ",,,")
 			tok = Token{
 				Original:   string(runes[start:end]),
 				Prefix:     "",

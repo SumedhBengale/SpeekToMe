@@ -9,27 +9,33 @@ import (
 	"testing"
 
 	"github.com/joho/godotenv"
+
+	"speektome-server/auth"
+	"speektome-server/config"
+	"speektome-server/db"
+	"speektome-server/handlers"
 )
 
 func TestHandleValidatePrompt(t *testing.T) {
-	// Initialize database
 	dbFile := "test_val.db"
 	_ = os.Remove(dbFile)
 
-	var err error
-	database, err = NewDatabase(dbFile)
+	database, err := db.NewDatabase(dbFile)
 	if err != nil {
 		t.Fatalf("Failed to initialize test database: %v", err)
 	}
 	defer func() {
-		if database != nil && database.db != nil {
-			_ = database.db.Close()
+		if database != nil {
+			_ = database.Close()
 		}
 		_ = os.Remove(dbFile)
 	}()
 
-	// Create test user and session with unique values to avoid conflicts
-	nonce := generateNonce()
+	app := &handlers.App{
+		DB: database,
+	}
+
+	nonce := auth.GenerateNonce()
 	userID, err := database.GetOrCreateUser("test_google_id_"+nonce, "test_"+nonce+"@example.com", "Test User")
 	if err != nil {
 		t.Fatalf("Failed to create test user: %v", err)
@@ -41,16 +47,14 @@ func TestHandleValidatePrompt(t *testing.T) {
 		t.Fatalf("Failed to create test session: %v", err)
 	}
 
-	// Load keys if present to actually call DeepSeek
 	_ = godotenv.Load()
 	_ = godotenv.Load(".env")
 	_ = godotenv.Load("server/.env")
-	DEEPSEEK_API_KEY = os.Getenv("DEEPSEEK_API_KEY")
-	DEEPINFRA_API_KEY = os.Getenv("DEEPINFRA_API_KEY")
+	config.DeepSeekAPIKey = os.Getenv("DEEPSEEK_API_KEY")
+	config.DeepInfraAPIKey = os.Getenv("DEEPINFRA_API_KEY")
 
-	// Set API URLs
-	DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-	DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/inference/"
+	config.DeepSeekAPIURL = "https://api.deepseek.com/chat/completions"
+	config.DeepInfraBaseURL = "https://api.deepinfra.com/v1/inference/"
 
 	t.Run("Empty prompt is safe", func(t *testing.T) {
 		reqBody := map[string]string{"prompt": ""}
@@ -59,7 +63,7 @@ func TestHandleValidatePrompt(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+token)
 
 		rr := httptest.NewRecorder()
-		handleValidatePrompt(rr, req)
+		app.HandleValidatePrompt(rr, req)
 
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected 200 OK, got %d. Body: %s", rr.Code, rr.Body.String())
@@ -83,15 +87,14 @@ func TestHandleValidatePrompt(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+token)
 
 		rr := httptest.NewRecorder()
-		handleValidatePrompt(rr, req)
+		app.HandleValidatePrompt(rr, req)
 
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("expected 400 Bad Request, got %d", rr.Code)
 		}
 	})
 
-	// If keys are available, do integration testing
-	if DEEPSEEK_API_KEY != "" || DEEPINFRA_API_KEY != "" {
+	if config.DeepSeekAPIKey != "" || config.DeepInfraAPIKey != "" {
 		t.Run("Safe prompt evaluation", func(t *testing.T) {
 			reqBody := map[string]string{"prompt": "Translate the transcribed text to Spanish."}
 			bodyBytes, _ := json.Marshal(reqBody)
@@ -99,7 +102,7 @@ func TestHandleValidatePrompt(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+token)
 
 			rr := httptest.NewRecorder()
-			handleValidatePrompt(rr, req)
+			app.HandleValidatePrompt(rr, req)
 
 			if rr.Code != http.StatusOK {
 				t.Fatalf("expected 200 OK, got %d. Body: %s", rr.Code, rr.Body.String())
@@ -119,7 +122,7 @@ func TestHandleValidatePrompt(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+token)
 
 			rr := httptest.NewRecorder()
-			handleValidatePrompt(rr, req)
+			app.HandleValidatePrompt(rr, req)
 
 			if rr.Code != http.StatusOK {
 				t.Fatalf("expected 200 OK, got %d. Body: %s", rr.Code, rr.Body.String())

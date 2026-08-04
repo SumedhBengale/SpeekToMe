@@ -1,4 +1,4 @@
-package main
+package db
 
 import (
 	"crypto/aes"
@@ -21,6 +21,17 @@ type Database struct {
 	db *sql.DB
 }
 
+func (d *Database) Close() error {
+	if d.db != nil {
+		return d.db.Close()
+	}
+	return nil
+}
+
+func (d *Database) GetDB() *sql.DB {
+	return d.db
+}
+
 func NewDatabase(connStr string) (*Database, error) {
 	driver := "sqlite"
 	if strings.HasPrefix(connStr, "libsql://") || strings.HasPrefix(connStr, "http://") || strings.HasPrefix(connStr, "https://") {
@@ -35,25 +46,25 @@ func NewDatabase(connStr string) (*Database, error) {
 		}
 	}
 
-	db, err := sql.Open(driver, connStr)
+	dbConn, err := sql.Open(driver, connStr)
 	if err != nil {
 		return nil, err
 	}
 	
 	// Configure connection pooling
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(time.Hour)
+	dbConn.SetMaxOpenConns(10)
+	dbConn.SetMaxIdleConns(5)
+	dbConn.SetConnMaxLifetime(time.Hour)
 
 	if driver == "sqlite" {
 		// Enable WAL journal mode and busy timeout (Group A Optimization)
-		_, _ = db.Exec("PRAGMA journal_mode=WAL;")
-		_, _ = db.Exec("PRAGMA synchronous=NORMAL;")
-		_, _ = db.Exec("PRAGMA busy_timeout = 5000;")
+		_, _ = dbConn.Exec("PRAGMA journal_mode=WAL;")
+		_, _ = dbConn.Exec("PRAGMA synchronous=NORMAL;")
+		_, _ = dbConn.Exec("PRAGMA busy_timeout = 5000;")
 	}
 	
 	// Create tables and indices (Group A Optimization)
-	_, err = db.Exec(`
+	_, err = dbConn.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			email TEXT UNIQUE,
@@ -146,35 +157,35 @@ func NewDatabase(connStr string) (*Database, error) {
 		CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id);
 	`)
 	if err != nil {
-		db.Close()
+		dbConn.Close()
 		return nil, err
 	}
 	
 	// Dynamic migrations for existing databases
-	_, _ = db.Exec("ALTER TABLE webhook_logs ADD COLUMN event_id TEXT DEFAULT ''")
-	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_id ON webhook_logs(event_id)")
+	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN event_id TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_id ON webhook_logs(event_id)")
 	
 	// Dynamic migrations for existing databases to avoid breaking changes
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_tier TEXT DEFAULT 'free'")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_active INTEGER DEFAULT 0")
-	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN audio_size_bytes INTEGER DEFAULT 0")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_activated_at TIMESTAMP")
-	_, _ = db.Exec("UPDATE users SET plan_activated_at = created_at WHERE plan_activated_at IS NULL")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN password_hash TEXT")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN verification_token TEXT")
-	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN transcription_provider TEXT DEFAULT ''")
-	_, _ = db.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN rate_limit_rpm INTEGER DEFAULT NULL")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL")
-	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN monthly_usage_seconds REAL DEFAULT 0.0")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN is_locked INTEGER DEFAULT 0")
-	_, _ = db.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
-	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type)")
-	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id)")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN plan_tier TEXT DEFAULT 'free'")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN plan_active INTEGER DEFAULT 0")
+	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN audio_size_bytes INTEGER DEFAULT 0")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN plan_activated_at TIMESTAMP")
+	_, _ = dbConn.Exec("UPDATE users SET plan_activated_at = created_at WHERE plan_activated_at IS NULL")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN password_hash TEXT")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN verification_token TEXT")
+	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN transcription_provider TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN rate_limit_rpm INTEGER DEFAULT NULL")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL")
+	_, _ = dbConn.Exec("ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN monthly_usage_seconds REAL DEFAULT 0.0")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN is_locked INTEGER DEFAULT 0")
+	_, _ = dbConn.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
+	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type)")
+	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id)")
 
 	// Set default configurations
 	configs := map[string]string{
@@ -192,10 +203,10 @@ func NewDatabase(connStr string) (*Database, error) {
 		"default_user_rate_limit_rpm":  "10",
 	}
 	for k, v := range configs {
-		_, _ = db.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
+		_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
 	}
 
-	return &Database{db: db}, nil
+	return &Database{db: dbConn}, nil
 }
 
 // User operations
@@ -351,7 +362,6 @@ func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, l
 	return tx.Commit()
 }
 
-
 func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, error) {
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
@@ -394,7 +404,6 @@ func (d *Database) SetUserTOTPSecret(userID int64, encryptedSecret string) error
 	_, err := d.db.Exec("UPDATE users SET totp_secret = ? WHERE id = ?", encryptedSecret, userID)
 	return err
 }
-
 
 func (d *Database) DeleteSession(token string) error {
 	_, err := d.db.Exec("DELETE FROM sessions WHERE token = ?", token)
@@ -546,13 +555,11 @@ func (d *Database) ListUsersWithStats() ([]map[string]interface{}, error) {
 
 // CreateEmailUser creates a new user with an email and password hash
 func (d *Database) CreateEmailUser(email, password, name, verificationToken string) (int64, error) {
-	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return 0, err
 	}
 
-	// Insert into DB (Google ID is NULL for email/password users)
 	res, err := d.db.Exec("INSERT INTO users (email, password_hash, name, is_verified, verification_token) VALUES (?, ?, ?, 0, ?)", email, string(hashedPassword), name, verificationToken)
 	if err != nil {
 		return 0, err
@@ -948,16 +955,12 @@ func encrypt(plaintext string) (string, error) {
 	return hex.EncodeToString(combined), nil
 }
 
-// decrypt decrypts an AES-256-GCM encrypted hex string produced by encrypt().
-// If the value is not a valid encrypted blob (e.g. a legacy plaintext TOTP secret),
-// it returns the raw value unchanged so that old plaintext secrets still work.
 func decrypt(ciphertextHex string) (string, error) {
 	if ciphertextHex == "" {
 		return "", nil
 	}
 	combined, err := hex.DecodeString(ciphertextHex)
 	if err != nil {
-		// Not a hex string at all — treat as raw plaintext (e.g. legacy TOTP secret)
 		return ciphertextHex, nil
 	}
 	key := getEncryptionKey()
@@ -971,23 +974,17 @@ func decrypt(ciphertextHex string) (string, error) {
 	}
 	nonceSize := aesgcm.NonceSize()
 	if len(combined) < nonceSize {
-		// Too short to be a valid AES-GCM ciphertext — treat as raw plaintext
 		return ciphertextHex, nil
 	}
 	nonce := combined[:nonceSize]
 	ciphertext := combined[nonceSize:]
 	plaintext, err := aesgcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		// Decryption failed — this hex was not encrypted with our key.
-		// Fall back to the raw value so legacy plaintext secrets remain functional.
 		return ciphertextHex, nil
 	}
 	return string(plaintext), nil
 }
 
-// EncryptTOTPSecret encrypts a plaintext TOTP secret using the current ENCRYPTION_KEY.
-// Use this to migrate a manually-pasted plaintext secret to encrypted form.
 func EncryptTOTPSecret(plaintext string) (string, error) {
 	return encrypt(plaintext)
 }
-

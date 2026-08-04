@@ -1,8 +1,10 @@
-package main
+package pipeline
 
 import (
 	"context"
 	"testing"
+
+	"speektome-server/db"
 )
 
 func hasMatch(pctx *PipelineContext, canonical string) bool {
@@ -98,11 +100,11 @@ func TestJaroWinkler(t *testing.T) {
 }
 
 func TestPipelineVocabMatching(t *testing.T) {
-	dbTerms := []VocabularyTerm{
-		{"SpeekTo.Me", "speektome"},
-		{"DeepSeek", "deepseek"},
-		{"Payload CMS Enterprise", "payloadcmsenterprise"},
-		{"Payload CMS", "payloadcms"},
+	dbTerms := []db.VocabularyTerm{
+		{Canonical: "SpeekTo.Me", Normalized: "speektome"},
+		{Canonical: "DeepSeek", Normalized: "deepseek"},
+		{Canonical: "Payload CMS Enterprise", Normalized: "payloadcmsenterprise"},
+		{Canonical: "Payload CMS", Normalized: "payloadcms"},
 	}
 
 	vocab := CompileUserVocabulary(dbTerms)
@@ -164,9 +166,9 @@ func TestPipelineVocabMatching(t *testing.T) {
 }
 
 func TestPipelineDeepSeekEdgeCase(t *testing.T) {
-	dbTerms := []VocabularyTerm{
-		{"DeepSeek", "deepseek"},
-		{"Payload CMS", "payloadcms"}, // Ensures MaxTokenCount >= 2 for the lookahead horizon test
+	dbTerms := []db.VocabularyTerm{
+		{Canonical: "DeepSeek", Normalized: "deepseek"},
+		{Canonical: "Payload CMS", Normalized: "payloadcms"}, // Ensures MaxTokenCount >= 2 for the lookahead horizon test
 	}
 
 	vocab := CompileUserVocabulary(dbTerms)
@@ -201,8 +203,8 @@ func TestPipelineDeepSeekEdgeCase(t *testing.T) {
 }
 
 func TestPipelineMultiWordFuzzyMatching(t *testing.T) {
-	dbTerms := []VocabularyTerm{
-		{"Sumedh Sanjay Bengale", "sumedhsanjaybengale"},
+	dbTerms := []db.VocabularyTerm{
+		{Canonical: "Sumedh Sanjay Bengale", Normalized: "sumedhsanjaybengale"},
 	}
 
 	vocab := CompileUserVocabulary(dbTerms)
@@ -227,8 +229,8 @@ func TestPipelineMultiWordFuzzyMatching(t *testing.T) {
 }
 
 func TestPipelineSumitSenjoyBengli(t *testing.T) {
-	dbTerms := []VocabularyTerm{
-		{"Sumedh Sanjay Bengale", "sumedhsanjaybengale"},
+	dbTerms := []db.VocabularyTerm{
+		{Canonical: "Sumedh Sanjay Bengale", Normalized: "sumedhsanjaybengale"},
 	}
 
 	vocab := CompileUserVocabulary(dbTerms)
@@ -256,8 +258,8 @@ func TestVocabularyCacheLifecycle(t *testing.T) {
 	cache := NewVocabularyCache()
 	defer cache.Close()
 
-	dbTerms := []VocabularyTerm{
-		{"SpeekTo.Me", "speektome"},
+	dbTerms := []db.VocabularyTerm{
+		{Canonical: "SpeekTo.Me", Normalized: "speektome"},
 	}
 	vocab := CompileUserVocabulary(dbTerms)
 	cache.Set(10, vocab)
@@ -298,10 +300,10 @@ func TestExtractSubTokens(t *testing.T) {
 }
 
 func TestSpeekToMeSubTokenMatching(t *testing.T) {
-	dbTerms := []VocabularyTerm{
-		{"SpeekTo.Me", "speektome"},
-		{"Node.js", "nodejs"},
-		{"PostgreSQL", "postgresql"},
+	dbTerms := []db.VocabularyTerm{
+		{Canonical: "SpeekTo.Me", Normalized: "speektome"},
+		{Canonical: "Node.js", Normalized: "nodejs"},
+		{Canonical: "PostgreSQL", Normalized: "postgresql"},
 	}
 
 	vocab := CompileUserVocabulary(dbTerms)
@@ -348,8 +350,8 @@ func TestSpeekToMeSubTokenMatching(t *testing.T) {
 }
 
 func TestPartialPhraseNoMatch(t *testing.T) {
-	dbTerms := []VocabularyTerm{
-		{"SpeekTo.Me", "speektome"},
+	dbTerms := []db.VocabularyTerm{
+		{Canonical: "SpeekTo.Me", Normalized: "speektome"},
 	}
 
 	vocab := CompileUserVocabulary(dbTerms)
@@ -358,7 +360,6 @@ func TestPartialPhraseNoMatch(t *testing.T) {
 
 	p := NewVocabNormalizerTransform("Hybrid Normalizer", true, 0.88)
 
-	// Partial phrase "speak to" (missing "me") should NOT match SpeekTo.Me
 	input := "he went and decided to speak to the principal"
 	got, err := p.Transform(context.Background(), input, pctx)
 	if err != nil {
@@ -370,7 +371,6 @@ func TestPartialPhraseNoMatch(t *testing.T) {
 		t.Errorf("Partial phrase 'speak to' inappropriately replaced: got %q; want %q", got, expected)
 	}
 
-	// Full phrase "speak to me" SHOULD match SpeekTo.Me
 	inputFull := "he went and decided to speak to me the principal"
 	gotFull, err := p.Transform(context.Background(), inputFull, pctx)
 	if err != nil {
@@ -384,9 +384,9 @@ func TestPartialPhraseNoMatch(t *testing.T) {
 }
 
 func TestSmartSubWordAutoExpansion(t *testing.T) {
-	dbTerms := []VocabularyTerm{
-		{"Sumedh Bengale", "sumedhbengale"},
-		{"The Wall Street Journal", "thewallstreetjournal"},
+	dbTerms := []db.VocabularyTerm{
+		{Canonical: "Sumedh Bengale", Normalized: "sumedhbengale"},
+		{Canonical: "The Wall Street Journal", Normalized: "thewallstreetjournal"},
 	}
 
 	vocab := CompileUserVocabulary(dbTerms)
@@ -395,7 +395,6 @@ func TestSmartSubWordAutoExpansion(t *testing.T) {
 
 	p := NewVocabNormalizerTransform("Hybrid Normalizer", true, 0.88)
 
-	// Test 1: Full name "Sumed Bengli" -> "Sumedh Bengale"
 	input1 := "my name is Sumed Bengli"
 	got1, err := p.Transform(context.Background(), input1, pctx)
 	if err != nil {
@@ -405,7 +404,6 @@ func TestSmartSubWordAutoExpansion(t *testing.T) {
 		t.Errorf("Full name match got %q; want %q", got1, "my name is Sumedh Bengale")
 	}
 
-	// Test 2: First name alone "Sumed" -> auto-expanded "Sumedh"
 	input2 := "hello Sumed how are you"
 	got2, err := p.Transform(context.Background(), input2, pctx)
 	if err != nil {
@@ -415,7 +413,6 @@ func TestSmartSubWordAutoExpansion(t *testing.T) {
 		t.Errorf("Auto-expanded first name got %q; want %q", got2, "hello Sumedh how are you")
 	}
 
-	// Test 3: Last name alone "Bengli" -> auto-expanded "Bengale"
 	input3 := "mr Bengli welcome"
 	got3, err := p.Transform(context.Background(), input3, pctx)
 	if err != nil {
@@ -425,7 +422,6 @@ func TestSmartSubWordAutoExpansion(t *testing.T) {
 		t.Errorf("Auto-expanded last name got %q; want %q", got3, "mr Bengale welcome")
 	}
 
-	// Test 4: Common connector "the" should NOT be auto-expanded into capitalized "The"
 	input4 := "reading the newspaper"
 	got4, err := p.Transform(context.Background(), input4, pctx)
 	if err != nil {
@@ -435,6 +431,3 @@ func TestSmartSubWordAutoExpansion(t *testing.T) {
 		t.Errorf("Grammatical connector 'the' inappropriately auto-expanded: got %q; want %q", got4, "reading the newspaper")
 	}
 }
-
-
-

@@ -1,4 +1,4 @@
-package main
+package services
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ import (
 func SendVerificationEmail(targetEmail, name, token string) error {
 	senderEmail := os.Getenv("SES_SENDER_EMAIL")
 	if senderEmail == "" {
-		senderEmail = "noreply@speektome.com" // Default placeholder
+		senderEmail = "noreply@speektome.com"
 	}
 
 	backendURL := os.Getenv("BACKEND_URL")
