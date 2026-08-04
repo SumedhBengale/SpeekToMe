@@ -52,14 +52,16 @@ func (a *App) HandleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 		TotalCount     int               `json:"total_count"`
 		Quantity       int               `json:"quantity"`
 		CustomerNotify int               `json:"customer_notify"`
+		StartAt        int64             `json:"start_at"`
 		Notes          map[string]string `json:"notes"`
 	}
 
 	subReqBody := RazorpaySubReq{
 		PlanID:         razorpayPlanID,
-		TotalCount:     120,
+		TotalCount:     60,
 		Quantity:       1,
 		CustomerNotify: 1,
+		StartAt:        time.Now().Add(60 * time.Second).Unix(),
 		Notes: map[string]string{
 			"user_id": strconv.FormatInt(user.ID, 10),
 		},
