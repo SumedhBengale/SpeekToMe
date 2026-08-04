@@ -3374,19 +3374,22 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	eventID := r.Header.Get("X-Razorpay-Event-Id")
+
 	signature := r.Header.Get("X-Razorpay-Signature")
 	mac := hmac.New(sha256.New, []byte(razorpayWebhookSecret))
 	mac.Write(bodyBytes)
 	expectedSignature := hex.EncodeToString(mac.Sum(nil))
 	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(signature)) != 1 {
 		log.Printf("[RAZORPAY WEBHOOK] Signature verification FAILED for incoming payload")
-		_ = database.InsertWebhookLog("unknown", "", nil, "signature_failed", "Invalid HMAC-SHA256 signature", rawPayload)
+		_ = database.InsertWebhookLog(eventID, "unknown", "", nil, "signature_failed", "Invalid HMAC-SHA256 signature", rawPayload)
 		http.Error(w, "Unauthorized: Invalid webhook signature", http.StatusBadRequest)
 		return
 	}
 
 	// 2. Parse Event JSON Payload
 	type WebhookEvent struct {
+		ID      string `json:"id"`
 		Event   string `json:"event"`
 		Payload struct {
 			Subscription struct {
@@ -3409,8 +3412,21 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 
 	var event WebhookEvent
 	if err := json.Unmarshal(bodyBytes, &event); err != nil {
-		_ = database.InsertWebhookLog("unknown", "", nil, "parse_error", "Failed to parse JSON payload", rawPayload)
+		_ = database.InsertWebhookLog(eventID, "unknown", "", nil, "parse_error", "Failed to parse JSON payload", rawPayload)
 		http.Error(w, "Bad request: invalid event JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	if eventID == "" {
+		eventID = event.ID
+	}
+
+	// 2b. Idempotency Check - prevent duplicate processing of retried webhook events
+	if processed, _ := database.IsWebhookEventProcessed(eventID); processed {
+		log.Printf("[RAZORPAY WEBHOOK IDEMPOTENT] Event ID %s already processed successfully. Skipping.", eventID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"already_processed"}`))
 		return
 	}
 
@@ -3431,7 +3447,7 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 
 	if subID == "" {
 		log.Printf("[RAZORPAY WEBHOOK WARNING] Event %s missing subscription ID in payload", event.Event)
-		_ = database.InsertWebhookLog(event.Event, "", nil, "missing_sub", "No subscription ID in payload", rawPayload)
+		_ = database.InsertWebhookLog(eventID, event.Event, "", nil, "missing_sub", "No subscription ID in payload", rawPayload)
 		http.Error(w, "Bad request: missing subscription details", http.StatusBadRequest)
 		return
 	}
@@ -3448,7 +3464,7 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 		userID, err = database.GetUserBySubscriptionID(subID)
 		if err != nil {
 			log.Printf("[RAZORPAY WEBHOOK WARNING] Could not resolve user for subscription %s: %v", subID, err)
-			_ = database.InsertWebhookLog(event.Event, subID, nil, status, "user_not_found: "+err.Error(), rawPayload)
+			_ = database.InsertWebhookLog(eventID, event.Event, subID, nil, status, "user_not_found: "+err.Error(), rawPayload)
 			http.Error(w, "User not found for subscription ID", http.StatusNotFound)
 			return
 		}
@@ -3459,8 +3475,8 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[RAZORPAY WEBHOOK EVENT] Processing %s for user ID %d (status: %s, sub: %s)", event.Event, userID, status, subID)
 
 	switch event.Event {
-	case "subscription.activated", "subscription.charged":
-		println("Subscription started or charged")
+	case "subscription.activated", "subscription.charged", "payment.captured", "payment.authorized":
+		log.Printf("[RAZORPAY WEBHOOK] Subscription charge/payment captured for user ID %d", userID)
 		err = database.UpdateUserPlan(userID, "pro", 1, subID)
 	case "subscription.updated":
 		switch status {
@@ -3479,11 +3495,12 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	case "subscription.cancelled", "subscription.completed":
 		err = database.UpdateUserPlan(userID, "free", 0, "")
-	case "subscription.halted":
+	case "subscription.halted", "payment.failed":
+		log.Printf("[RAZORPAY WEBHOOK] Payment failed / subscription halted for user ID %d", userID)
 		err = database.UpdateUserPlan(userID, "pro", 0, subID)
 	default:
 		log.Printf("[RAZORPAY WEBHOOK WARNING] Unhandled event type: %s", event.Event)
-		_ = database.InsertWebhookLog(event.Event, subID, userIDPtr, status, "ignored: unhandled event type", rawPayload)
+		_ = database.InsertWebhookLog(eventID, event.Event, subID, userIDPtr, status, "ignored: unhandled event type", rawPayload)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ignored"}`))
 		return
@@ -3491,13 +3508,13 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		log.Printf("[RAZORPAY WEBHOOK ERROR] Failed to update user plan: %v", err)
-		_ = database.InsertWebhookLog(event.Event, subID, userIDPtr, status, "db_error: "+err.Error(), rawPayload)
+		_ = database.InsertWebhookLog(eventID, event.Event, subID, userIDPtr, status, "db_error: "+err.Error(), rawPayload)
 		http.Error(w, "Failed to update user plan", http.StatusInternalServerError)
 		return
 	}
 
 	log.Printf("[RAZORPAY WEBHOOK SUCCESS] %s applied for user ID %d", event.Event, userID)
-	_ = database.InsertWebhookLog(event.Event, subID, userIDPtr, status, "success", rawPayload)
+	_ = database.InsertWebhookLog(eventID, event.Event, subID, userIDPtr, status, "success", rawPayload)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

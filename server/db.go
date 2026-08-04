@@ -135,6 +135,7 @@ func NewDatabase(connStr string) (*Database, error) {
 		CREATE TABLE IF NOT EXISTS webhook_logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			event_id TEXT,
 			event_type TEXT NOT NULL,
 			subscription_id TEXT,
 			user_id INTEGER,
@@ -144,11 +145,14 @@ func NewDatabase(connStr string) (*Database, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type);
 		CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id);
+		CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_id ON webhook_logs(event_id);
 	`)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
+	
+	_, _ = db.Exec("ALTER TABLE webhook_logs ADD COLUMN event_id TEXT DEFAULT ''")
 	
 	// Dynamic migrations for existing databases to avoid breaking changes
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN plan_tier TEXT DEFAULT 'free'")
@@ -843,16 +847,29 @@ type WebhookLogEntry struct {
 	EventType      string  `json:"event_type"`
 	SubscriptionID string  `json:"subscription_id"`
 	UserID         *int64  `json:"user_id"`
+	EventID        string  `json:"event_id"`
 	Status         string  `json:"status"`
 	Result         string  `json:"result"`
 	RawPayload     string  `json:"raw_payload"`
 }
 
-func (d *Database) InsertWebhookLog(eventType, subscriptionID string, userID *int64, status, result, rawPayload string) error {
+func (d *Database) IsWebhookEventProcessed(eventID string) (bool, error) {
+	if eventID == "" {
+		return false, nil
+	}
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM webhook_logs WHERE event_id = ? AND result = 'success'", eventID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (d *Database) InsertWebhookLog(eventID, eventType, subscriptionID string, userID *int64, status, result, rawPayload string) error {
 	_, err := d.db.Exec(`
-		INSERT INTO webhook_logs (event_type, subscription_id, user_id, status, result, raw_payload)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, eventType, subscriptionID, userID, status, result, rawPayload)
+		INSERT INTO webhook_logs (event_id, event_type, subscription_id, user_id, status, result, raw_payload)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, eventID, eventType, subscriptionID, userID, status, result, rawPayload)
 	return err
 }
 
