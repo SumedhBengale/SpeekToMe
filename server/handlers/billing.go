@@ -61,7 +61,7 @@ func (a *App) HandleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 		TotalCount:     60,
 		Quantity:       1,
 		CustomerNotify: 1,
-		StartAt:        time.Now().Add(5 * time.Second).Unix(),
+		StartAt:        time.Now().Add(15 * time.Minute).Unix(),
 		Notes: map[string]string{
 			"user_id": strconv.FormatInt(user.ID, 10),
 		},
