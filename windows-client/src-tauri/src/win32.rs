@@ -463,9 +463,8 @@ mod win32_impl {
                         if is_short_tap {
                             thread::spawn(move || {
                                 thread::sleep(Duration::from_millis(20));
-                                crate::SIMULATING_KEY.store(true, Ordering::SeqCst);
+                                // simulate_single_key now manages SIMULATING_KEY internally.
                                 crate::keyboard::simulate_single_key(hotkey_vk);
-                                crate::SIMULATING_KEY.store(false, Ordering::SeqCst);
                             });
                         }
                         return 1;
@@ -486,9 +485,8 @@ mod win32_impl {
                         }
                         play_chime(false);
                         
-                        crate::SIMULATING_KEY.store(true, Ordering::SeqCst);
+                        // simulate_key_down now manages SIMULATING_KEY internally.
                         crate::keyboard::simulate_key_down(hotkey_vk);
-                        crate::SIMULATING_KEY.store(false, Ordering::SeqCst);
                     }
                 }
             }

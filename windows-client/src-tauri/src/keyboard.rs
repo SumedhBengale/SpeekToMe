@@ -16,10 +16,25 @@ pub const INPUT_KEYBOARD: u32 = 1;
 pub const KEYEVENTF_KEYUP: u32 = 2;
 
 #[cfg(target_os = "windows")]
+fn send_inputs(inputs: &[INPUT]) {
+    unsafe {
+        // Suppress our own synthesized input so the low-level keyboard hook
+        // (win32::keyboard_hook_proc) never re-processes it as a user hotkey.
+        crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
+        windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
+            std::mem::size_of::<INPUT>() as i32
+        );
+        crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub fn simulate_paste() {
     unsafe {
         let mut inputs = [std::mem::zeroed::<INPUT>(); 4];
-        
+
         // 1. Ctrl Down
         inputs[0].r#type = INPUT_KEYBOARD;
         let mut ki0: KEYBDINPUT = std::mem::zeroed();
@@ -46,11 +61,7 @@ pub fn simulate_paste() {
         ki3.dwFlags = KEYEVENTF_KEYUP;
         inputs[3].Anonymous.ki = ki3;
 
-        windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
-            4,
-            inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
-            std::mem::size_of::<INPUT>() as i32
-        );
+        send_inputs(&inputs);
     }
 }
 
@@ -58,7 +69,7 @@ pub fn simulate_paste() {
 pub fn simulate_single_key(vk: u32) {
     unsafe {
         let mut inputs = [std::mem::zeroed::<INPUT>(); 2];
-        
+
         // 1. Key Down
         inputs[0].r#type = INPUT_KEYBOARD;
         let mut ki0: KEYBDINPUT = std::mem::zeroed();
@@ -72,11 +83,7 @@ pub fn simulate_single_key(vk: u32) {
         ki1.dwFlags = KEYEVENTF_KEYUP;
         inputs[1].Anonymous.ki = ki1;
 
-        windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
-            2,
-            inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
-            std::mem::size_of::<INPUT>() as i32
-        );
+        send_inputs(&inputs);
     }
 }
 
@@ -89,12 +96,7 @@ pub fn simulate_key_down(vk: u32) {
         ki.wVk = vk as u16;
         input.Anonymous.ki = ki;
 
-        let inputs = [input];
-        windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
-            1,
-            inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
-            std::mem::size_of::<INPUT>() as i32
-        );
+        send_inputs(std::slice::from_ref(&input));
     }
 }
 
@@ -108,12 +110,7 @@ pub fn simulate_key_up(vk: u32) {
         ki.dwFlags = KEYEVENTF_KEYUP;
         input.Anonymous.ki = ki;
 
-        let inputs = [input];
-        windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
-            1,
-            inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
-            std::mem::size_of::<INPUT>() as i32
-        );
+        send_inputs(std::slice::from_ref(&input));
     }
 }
 
@@ -123,7 +120,7 @@ pub fn simulate_typing(text: &str) {
         let utf16_chars: Vec<u16> = text.encode_utf16().collect();
         for &c in &utf16_chars {
             let mut inputs = [std::mem::zeroed::<INPUT>(); 2];
-            
+
             // 1. Key Down
             inputs[0].r#type = INPUT_KEYBOARD;
             let mut ki0: KEYBDINPUT = std::mem::zeroed();
@@ -140,12 +137,8 @@ pub fn simulate_typing(text: &str) {
             ki1.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
             inputs[1].Anonymous.ki = ki1;
 
-            windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
-                2,
-                inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
-                std::mem::size_of::<INPUT>() as i32
-            );
-            
+            send_inputs(&inputs);
+
             thread::sleep(Duration::from_millis(2));
         }
     }

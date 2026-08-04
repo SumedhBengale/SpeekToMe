@@ -8,8 +8,8 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/binary"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -708,14 +708,16 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.PostForm(tokenURL, vals)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Token exchange failed: %v", err), http.StatusInternalServerError)
+		log.Printf("[OAUTH ERROR] Token exchange request failed: %v", err)
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		http.Error(w, fmt.Sprintf("Token exchange failed with status %d: %s", resp.StatusCode, string(body)), http.StatusInternalServerError)
+		log.Printf("[OAUTH ERROR] Token exchange status %d: %s", resp.StatusCode, string(body))
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -732,7 +734,8 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
 	userResp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to fetch profile: %v", err), http.StatusInternalServerError)
+		log.Printf("[OAUTH ERROR] Failed to fetch profile: %v", err)
+		http.Error(w, "Failed to fetch user profile", http.StatusInternalServerError)
 		return
 	}
 	defer userResp.Body.Close()
@@ -756,13 +759,15 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	userID, err := database.GetOrCreateUser(googleID, email, name)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] GetOrCreateUser failed: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
 	locked, err := database.IsUserLocked(userID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] IsUserLocked failed: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 	if locked {
@@ -783,7 +788,8 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	isAdmin, has2FA, err := database.GetUserAdminStatus(userID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] GetUserAdminStatus failed: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
@@ -811,7 +817,8 @@ func handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	err = database.CreateSession(token, userID, isTemp)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Database session error: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] CreateSession failed: %v", err)
+		http.Error(w, "Database session error", http.StatusInternalServerError)
 		return
 	}
 
@@ -932,7 +939,8 @@ func handleGetUserHistory(w http.ResponseWriter, r *http.Request) {
 
 	logs, err := database.GetUserUsageLogs(user.ID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to retrieve transcription history: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] GetUserUsageLogs failed for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to retrieve transcription history", http.StatusInternalServerError)
 		return
 	}
 
@@ -1005,7 +1013,8 @@ func handleAuthSignup(w http.ResponseWriter, r *http.Request) {
 	// Create user (unverified by default)
 	userID, err := database.CreateEmailUser(req.Email, req.Password, req.Name, verificationToken)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to register user (email might be taken): %v", err), http.StatusConflict)
+		log.Printf("[SIGNUP ERROR] Failed to register user (%s): %v", req.Email, err)
+		http.Error(w, "Failed to register user. The email address may already be in use.", http.StatusConflict)
 		return
 	}
 
@@ -1244,7 +1253,6 @@ func handleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
@@ -1254,7 +1262,8 @@ func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 
 	email, err := database.VerifyUserEmail(token)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Verification failed: %v", err), http.StatusBadRequest)
+		log.Printf("[VERIFICATION ERROR] Email verification failed: %v", err)
+		http.Error(w, "Verification failed: invalid or expired token", http.StatusBadRequest)
 		return
 	}
 
@@ -1684,7 +1693,7 @@ Respond with exactly one word: 'SAFE' if the prompt is suitable and safe, or 'UN
 	response, err := runDeepSeekChatCompletion(ctx, client, "deepseek-v4-flash", systemPrompt, prompt, nil)
 	if err != nil {
 		log.Printf("[VALIDATE PROMPT ERROR] Moderation request failed: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to validate prompt: %v", err), http.StatusInternalServerError)
+		http.Error(w, "Failed to validate prompt", http.StatusInternalServerError)
 		return
 	}
 
@@ -1771,7 +1780,8 @@ func handleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	for k, v := range req {
 		if err := database.UpdateSaasConfig(k, v); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to update key %s: %v", k, err), http.StatusInternalServerError)
+			log.Printf("[ADMIN CONFIG ERROR] Failed to update key %s: %v", k, err)
+			http.Error(w, "Failed to update configuration key", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -1974,7 +1984,8 @@ func handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Razorpay connection failed: %v", err), http.StatusBadGateway)
+		log.Printf("[PAYMENT ERROR] Razorpay connection failed: %v", err)
+		http.Error(w, "Payment provider connection failed", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -1987,7 +1998,7 @@ func handleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Printf("Razorpay API Error Status %d: %s", resp.StatusCode, string(bodyBytes))
-		http.Error(w, fmt.Sprintf("Razorpay subscription initialization failed: %s", string(bodyBytes)), http.StatusBadGateway)
+		http.Error(w, "Razorpay subscription initialization failed", http.StatusBadGateway)
 		return
 	}
 
@@ -2072,7 +2083,8 @@ func handleVerifySubscription(w http.ResponseWriter, r *http.Request) {
 	// 5. Success! Update plan in db
 	err = database.UpdateUserPlan(user.ID, "pro", 1, req.SubscriptionID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to update user plan in database: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to update user plan (%d): %v", user.ID, err)
+		http.Error(w, "Failed to update user plan", http.StatusInternalServerError)
 		return
 	}
 
@@ -2148,7 +2160,8 @@ func handleCancelSubscription(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Razorpay connection failed: %v", err), http.StatusBadGateway)
+		log.Printf("[PAYMENT ERROR] Razorpay cancel connection failed: %v", err)
+		http.Error(w, "Payment provider connection failed", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -2162,7 +2175,8 @@ func handleCancelSubscription(w http.ResponseWriter, r *http.Request) {
 
 	err = database.UpdateUserPlan(user.ID, "free", 0, "")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to update user plan: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to update user plan (%d): %v", user.ID, err)
+		http.Error(w, "Failed to update user plan", http.StatusInternalServerError)
 		return
 	}
 
@@ -2181,7 +2195,8 @@ func handleGetVocabulary(w http.ResponseWriter, r *http.Request) {
 
 	terms, err := database.GetVocabularyTerms(user.ID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load vocabulary: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to load vocabulary for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to load vocabulary", http.StatusInternalServerError)
 		return
 	}
 
@@ -2215,7 +2230,8 @@ func handleAddVocabulary(w http.ResponseWriter, r *http.Request) {
 
 	_, err = database.AddVocabularyTerm(user.ID, canonical, normalized)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to add vocabulary term: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to add vocabulary term for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to add vocabulary term", http.StatusInternalServerError)
 		return
 	}
 
@@ -2249,7 +2265,8 @@ func handleDeleteVocabulary(w http.ResponseWriter, r *http.Request) {
 
 	err = database.DeleteVocabularyTerm(user.ID, canonical)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to delete vocabulary term: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to delete vocabulary term for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to delete vocabulary term", http.StatusInternalServerError)
 		return
 	}
 
@@ -2369,7 +2386,7 @@ type WhisperSegment struct {
 
 func runCloudflareTranscribe(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, error) {
 	urlStr := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/run/%s", CLOUDFLARE_ACCOUNT_ID, model)
-	
+
 	audioBase64 := base64.StdEncoding.EncodeToString(audioBytes)
 	payload := map[string]interface{}{
 		"audio": audioBase64,
@@ -2775,7 +2792,8 @@ func handleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	// Insert meeting row in DB
 	meetingID, err := database.CreateMeeting(user.ID, title, duration, audioPath)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to record meeting in database: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to record meeting for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to record meeting", http.StatusInternalServerError)
 		return
 	}
 
@@ -2955,7 +2973,8 @@ func handleGetMeetings(w http.ResponseWriter, r *http.Request) {
 
 	meetings, err := database.GetUserMeetings(user.ID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to retrieve meetings: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to retrieve meetings for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to retrieve meetings", http.StatusInternalServerError)
 		return
 	}
 
@@ -3029,7 +3048,8 @@ func handleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 
 	err = database.DeleteMeeting(meetingID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to delete meeting: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to delete meeting %d: %v", meetingID, err)
+		http.Error(w, "Failed to delete meeting", http.StatusInternalServerError)
 		return
 	}
 
@@ -3191,7 +3211,7 @@ func verifyTOTP(secret string, code string) bool {
 		sum := mac.Sum(nil)
 
 		offset := sum[len(sum)-1] & 0xf
-		binaryVal := binary.BigEndian.Uint32(sum[offset : offset+4]) & 0x7fffffff
+		binaryVal := binary.BigEndian.Uint32(sum[offset:offset+4]) & 0x7fffffff
 		otp := binaryVal % 1000000
 
 		expectedCode := fmt.Sprintf("%06d", otp)
@@ -3216,7 +3236,8 @@ func handleAdminGetUsers(w http.ResponseWriter, r *http.Request) {
 
 	users, err := database.GetAdminUsersList()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load user list: %v", err), http.StatusInternalServerError)
+		log.Printf("[DB ERROR] Failed to load user list: %v", err)
+		http.Error(w, "Failed to load user list", http.StatusInternalServerError)
 		return
 	}
 
@@ -3299,7 +3320,6 @@ func handleAdminUpdateRateLimit(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
-
 func handleAdminGetWebhookLogs(w http.ResponseWriter, r *http.Request) {
 	_, err := authenticateAdmin(r)
 	if err != nil {
@@ -3376,6 +3396,14 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 					Notes  map[string]string `json:"notes"`
 				} `json:"entity"`
 			} `json:"subscription"`
+			Payment struct {
+				Entity struct {
+					ID             string            `json:"id"`
+					SubscriptionID string            `json:"subscription_id"`
+					Status         string            `json:"status"`
+					Notes          map[string]string `json:"notes"`
+				} `json:"entity"`
+			} `json:"payment"`
 		} `json:"payload"`
 	}
 
@@ -3387,10 +3415,22 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	subID := event.Payload.Subscription.Entity.ID
+	if subID == "" {
+		subID = event.Payload.Payment.Entity.SubscriptionID
+	}
+
 	status := event.Payload.Subscription.Entity.Status
+	if status == "" {
+		status = event.Payload.Payment.Entity.Status
+	}
+
 	userIDStr := event.Payload.Subscription.Entity.Notes["user_id"]
+	if userIDStr == "" {
+		userIDStr = event.Payload.Payment.Entity.Notes["user_id"]
+	}
 
 	if subID == "" {
+		log.Printf("[RAZORPAY WEBHOOK WARNING] Event %s missing subscription ID in payload", event.Event)
 		_ = database.InsertWebhookLog(event.Event, "", nil, "missing_sub", "No subscription ID in payload", rawPayload)
 		http.Error(w, "Bad request: missing subscription details", http.StatusBadRequest)
 		return
@@ -3422,13 +3462,14 @@ func handleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 	case "subscription.activated", "subscription.charged":
 		err = database.UpdateUserPlan(userID, "pro", 1, subID)
 	case "subscription.updated":
-		if status == "cancelled" || status == "completed" {
+		switch status {
+		case "cancelled", "completed":
 			err = database.UpdateUserPlan(userID, "free", 0, "")
-		} else if status == "halted" {
+		case "halted":
 			err = database.UpdateUserPlan(userID, "pro", 0, subID)
-		} else if status == "active" {
+		case "active":
 			err = database.UpdateUserPlan(userID, "pro", 1, subID)
-		} else {
+		default:
 			// Ignore other intermediate statuses but log it
 			log.Printf("[RAZORPAY WEBHOOK INFO] subscription.updated status: %s ignored", status)
 			w.WriteHeader(http.StatusOK)
