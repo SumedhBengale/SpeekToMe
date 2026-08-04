@@ -428,28 +428,34 @@ func (a *App) HandleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[RAZORPAY WEBHOOK EVENT] Processing %s for user ID %d (status: %s, sub: %s)", event.Event, userID, status, subID)
 
 	switch event.Event {
-	case "subscription.activated", "subscription.charged", "payment.captured", "payment.authorized":
-		log.Printf("[RAZORPAY WEBHOOK] Subscription charge/payment captured for user ID %d", userID)
+	case "subscription.authenticated", "subscription.activated", "subscription.charged", "payment.captured", "payment.authorized", "subscription.resumed":
+		log.Printf("[RAZORPAY WEBHOOK] Subscription active/charged for user ID %d (event: %s)", userID, event.Event)
 		err = a.DB.UpdateUserPlan(userID, "pro", 1, subID)
+
+	case "subscription.paused", "subscription.halted", "payment.failed":
+		log.Printf("[RAZORPAY WEBHOOK] Subscription paused/halted for user ID %d (event: %s)", userID, event.Event)
+		err = a.DB.UpdateUserPlan(userID, "pro", 0, subID)
+
+	case "subscription.cancelled", "subscription.completed":
+		log.Printf("[RAZORPAY WEBHOOK] Subscription cancelled/completed for user ID %d (event: %s)", userID, event.Event)
+		err = a.DB.UpdateUserPlan(userID, "free", 0, "")
+
 	case "subscription.updated":
 		switch status {
 		case "cancelled", "completed":
 			err = a.DB.UpdateUserPlan(userID, "free", 0, "")
-		case "halted":
+		case "halted", "paused":
 			err = a.DB.UpdateUserPlan(userID, "pro", 0, subID)
-		case "active":
+		case "active", "authenticated":
 			err = a.DB.UpdateUserPlan(userID, "pro", 1, subID)
 		default:
 			log.Printf("[RAZORPAY WEBHOOK INFO] subscription.updated status: %s ignored", status)
+			_ = a.DB.InsertWebhookLog(eventID, event.Event, subID, userIDPtr, status, "ignored: status "+status, rawPayload)
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"status":"ignored"}`))
 			return
 		}
-	case "subscription.cancelled", "subscription.completed":
-		err = a.DB.UpdateUserPlan(userID, "free", 0, "")
-	case "subscription.halted", "payment.failed":
-		log.Printf("[RAZORPAY WEBHOOK] Payment failed / subscription halted for user ID %d", userID)
-		err = a.DB.UpdateUserPlan(userID, "pro", 0, subID)
+
 	default:
 		log.Printf("[RAZORPAY WEBHOOK WARNING] Unhandled event type: %s", event.Event)
 		_ = a.DB.InsertWebhookLog(eventID, event.Event, subID, userIDPtr, status, "ignored: unhandled event type", rawPayload)
