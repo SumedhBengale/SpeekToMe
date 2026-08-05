@@ -1,10 +1,7 @@
 package handlers
 
 import (
-	"bytes"
-	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,21 +11,23 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
+
+	razorpay "github.com/razorpay/razorpay-go"
+	"github.com/razorpay/razorpay-go/utils"
 )
 
 var razorpayAPIBaseURL = "https://api.razorpay.com"
 
 type razorpaySubscription struct {
-	ID            string `json:"id"`
-	PlanID        string `json:"plan_id"`
-	Status        string `json:"status"`
-	PaidCount     int64  `json:"paid_count"`
-	ChargeAt      int64  `json:"charge_at"`
-	StartAt       int64  `json:"start_at"`
-	CurrentStart  int64  `json:"current_start"`
-	CurrentEnd    int64  `json:"current_end"`
-	Notes         NotesMap `json:"notes"`
+	ID           string   `json:"id"`
+	PlanID       string   `json:"plan_id"`
+	Status       string   `json:"status"`
+	PaidCount    int64    `json:"paid_count"`
+	ChargeAt     int64    `json:"charge_at"`
+	StartAt      int64    `json:"start_at"`
+	CurrentStart int64    `json:"current_start"`
+	CurrentEnd   int64    `json:"current_end"`
+	Notes        NotesMap `json:"notes"`
 }
 
 type razorpayPayment struct {
@@ -49,29 +48,20 @@ type razorpayPlan struct {
 	} `json:"item"`
 }
 
-func razorpayGET(path, keyID, keySecret string, target interface{}) error {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(razorpayAPIBaseURL, "/")+path, nil)
+func newRazorpayClient(keyID, keySecret string) *razorpay.Client {
+	client := razorpay.NewClient(keyID, keySecret)
+	if razorpayAPIBaseURL != "" && razorpayAPIBaseURL != "https://api.razorpay.com" {
+		client.Request.BaseURL = strings.TrimRight(razorpayAPIBaseURL, "/")
+	}
+	return client
+}
+
+func decodeMap(src map[string]interface{}, target interface{}) error {
+	b, err := json.Marshal(src)
 	if err != nil {
 		return err
 	}
-	req.SetBasicAuth(keyID, keySecret)
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("razorpay API returned status %d: %s", resp.StatusCode, string(body))
-	}
-	if err := json.Unmarshal(body, target); err != nil {
-		return fmt.Errorf("invalid Razorpay API response: %w", err)
-	}
-	return nil
+	return json.Unmarshal(b, target)
 }
 
 func (a *App) HandleCreateSubscription(w http.ResponseWriter, r *http.Request) {
@@ -103,79 +93,39 @@ func (a *App) HandleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Billing service not configured"})
 		return
 	}
-	var configuredPlan razorpayPlan
-	if err := razorpayGET("/v1/plans/"+razorpayPlanID, razorpayKeyID, razorpayKeySecret, &configuredPlan); err != nil {
+
+	client := newRazorpayClient(razorpayKeyID, razorpayKeySecret)
+
+	planData, err := client.Plan.Fetch(razorpayPlanID, nil, nil)
+	if err != nil {
 		log.Printf("[PAYMENT ERROR] Failed to verify configured plan %s: %v", razorpayPlanID, err)
 		http.Error(w, "Could not verify billing plan", http.StatusBadGateway)
 		return
 	}
-	if configuredPlan.Item.Amount <= 0 || configuredPlan.Item.Currency == "" {
+	var configuredPlan razorpayPlan
+	if err := decodeMap(planData, &configuredPlan); err != nil || configuredPlan.Item.Amount <= 0 || configuredPlan.Item.Currency == "" {
 		http.Error(w, "Configured Razorpay plan has invalid amount or currency", http.StatusServiceUnavailable)
 		return
 	}
 	log.Printf("[RAZORPAY PLAN] plan_id=%s amount=%d currency=%s", razorpayPlanID, configuredPlan.Item.Amount, configuredPlan.Item.Currency)
 
-	type RazorpaySubReq struct {
-		PlanID     string            `json:"plan_id"`
-		TotalCount int               `json:"total_count"`
-		Notes      map[string]string `json:"notes"`
-	}
-
-	subReqBody := RazorpaySubReq{
-		PlanID:         razorpayPlanID,
-		TotalCount:     60,
-		Notes: map[string]string{
+	subReqParams := map[string]interface{}{
+		"plan_id":     razorpayPlanID,
+		"total_count": 60,
+		"notes": map[string]string{
 			"user_id": strconv.FormatInt(user.ID, 10),
 		},
 	}
 
-	jsonBytes, err := json.Marshal(subReqBody)
+	subData, err := client.Subscription.Create(subReqParams, nil)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to encode subscription request"})
-		return
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("POST", strings.TrimRight(razorpayAPIBaseURL, "/")+"/v1/subscriptions", bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to create Razorpay HTTP request"})
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(razorpayKeyID, razorpayKeySecret)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[PAYMENT ERROR] Razorpay connection failed: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Payment provider connection failed"})
-		return
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read Razorpay response"})
-		return
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("[RAZORPAY ERROR] Status %d for PlanID '%s' (amount=%d currency=%s total_count=%d): %s", resp.StatusCode, razorpayPlanID, configuredPlan.Item.Amount, configuredPlan.Item.Currency, subReqBody.TotalCount, string(bodyBytes))
+		log.Printf("[RAZORPAY ERROR] Subscription initialization failed for PlanID '%s': %v", razorpayPlanID, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":           "Razorpay subscription initialization failed",
-			"razorpay_status": resp.StatusCode,
-			"details":         string(bodyBytes),
-			"plan_id":         razorpayPlanID,
+			"error":   "Razorpay subscription initialization failed",
+			"details": err.Error(),
+			"plan_id": razorpayPlanID,
 		})
 		return
 	}
@@ -183,14 +133,11 @@ func (a *App) HandleCreateSubscription(w http.ResponseWriter, r *http.Request) {
 	var rzResp struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(bodyBytes, &rzResp); err != nil {
-		http.Error(w, "Failed to parse Razorpay subscription details", http.StatusInternalServerError)
-		return
-	}
-	if rzResp.ID == "" {
+	if err := decodeMap(subData, &rzResp); err != nil || rzResp.ID == "" {
 		http.Error(w, "Razorpay returned an empty subscription ID", http.StatusBadGateway)
 		return
 	}
+
 	if err := a.DB.SetPendingSubscription(user.ID, rzResp.ID); err != nil {
 		log.Printf("[DB ERROR] Failed to save pending subscription (%d): %v", user.ID, err)
 		http.Error(w, "Failed to save subscription", http.StatusInternalServerError)
@@ -246,13 +193,17 @@ func (a *App) HandleVerifySubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := req.PaymentID + "|" + req.SubscriptionID
+	if req.PaymentID == "" || req.SubscriptionID == "" || req.Signature == "" {
+		http.Error(w, "Missing Razorpay payment verification fields", http.StatusBadRequest)
+		return
+	}
 
-	mac := hmac.New(sha256.New, []byte(razorpayKeySecret))
-	mac.Write([]byte(message))
-	expectedSignature := hex.EncodeToString(mac.Sum(nil))
+	verificationParams := map[string]interface{}{
+		"razorpay_payment_id":      req.PaymentID,
+		"razorpay_subscription_id": req.SubscriptionID,
+	}
 
-	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(req.Signature)) != 1 {
+	if !utils.VerifySubscriptionSignature(verificationParams, req.Signature, razorpayKeySecret) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -261,41 +212,46 @@ func (a *App) HandleVerifySubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.PaymentID == "" || req.SubscriptionID == "" || req.Signature == "" {
-		http.Error(w, "Missing Razorpay payment verification fields", http.StatusBadRequest)
-		return
-	}
 	if user.RazorpaySubscriptionID == "" || user.RazorpaySubscriptionID != req.SubscriptionID {
 		http.Error(w, "Subscription does not belong to the current user", http.StatusForbidden)
 		return
 	}
 
-	var subscription razorpaySubscription
-	if err := razorpayGET("/v1/subscriptions/"+req.SubscriptionID, razorpayKeyID, razorpayKeySecret, &subscription); err != nil {
+	client := newRazorpayClient(razorpayKeyID, razorpayKeySecret)
+
+	subData, err := client.Subscription.Fetch(req.SubscriptionID, nil, nil)
+	if err != nil {
 		log.Printf("[PAYMENT ERROR] Failed to fetch subscription %s: %v", req.SubscriptionID, err)
 		http.Error(w, "Could not verify Razorpay subscription", http.StatusBadGateway)
 		return
 	}
-	if subscription.ID != req.SubscriptionID || subscription.PlanID != razorpayPlanID {
+	var subscription razorpaySubscription
+	if err := decodeMap(subData, &subscription); err != nil || subscription.ID != req.SubscriptionID || subscription.PlanID != razorpayPlanID {
 		http.Error(w, "Razorpay subscription does not match the configured plan", http.StatusBadRequest)
 		return
 	}
 
-	var payment razorpayPayment
-	if err := razorpayGET("/v1/payments/"+req.PaymentID, razorpayKeyID, razorpayKeySecret, &payment); err != nil {
+	payData, err := client.Payment.Fetch(req.PaymentID, nil, nil)
+	if err != nil {
 		log.Printf("[PAYMENT ERROR] Failed to fetch payment %s: %v", req.PaymentID, err)
 		http.Error(w, "Could not verify Razorpay payment", http.StatusBadGateway)
 		return
 	}
-	if payment.ID != req.PaymentID || (payment.SubscriptionID != "" && payment.SubscriptionID != req.SubscriptionID) || (!payment.Captured && payment.Status != "captured") {
+	var payment razorpayPayment
+	if err := decodeMap(payData, &payment); err != nil || payment.ID != req.PaymentID || (payment.SubscriptionID != "" && payment.SubscriptionID != req.SubscriptionID) || (!payment.Captured && payment.Status != "captured") {
 		http.Error(w, "Razorpay payment is not captured for this subscription", http.StatusBadRequest)
 		return
 	}
 
-	var plan razorpayPlan
-	if err := razorpayGET("/v1/plans/"+razorpayPlanID, razorpayKeyID, razorpayKeySecret, &plan); err != nil {
+	planData, err := client.Plan.Fetch(razorpayPlanID, nil, nil)
+	if err != nil {
 		log.Printf("[PAYMENT ERROR] Failed to fetch plan %s: %v", razorpayPlanID, err)
 		http.Error(w, "Could not verify Razorpay plan", http.StatusBadGateway)
+		return
+	}
+	var plan razorpayPlan
+	if err := decodeMap(planData, &plan); err != nil {
+		http.Error(w, "Could not verify Razorpay plan details", http.StatusBadGateway)
 		return
 	}
 	if plan.Item.Amount > 0 && payment.Amount != plan.Item.Amount {
@@ -371,40 +327,16 @@ func (a *App) HandleCancelSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type RazorpayCancelReq struct {
-		CancelAtCycleEnd int `json:"cancel_at_cycle_end"`
+	client := newRazorpayClient(razorpayKeyID, razorpayKeySecret)
+	cancelParams := map[string]interface{}{
+		"cancel_at_cycle_end": 0,
 	}
-	cancelReqBody := RazorpayCancelReq{CancelAtCycleEnd: 0}
-	jsonBytes, err := json.Marshal(cancelReqBody)
+
+	_, err = client.Subscription.Cancel(subID, cancelParams, nil)
 	if err != nil {
-		http.Error(w, "Failed to encode cancel request", http.StatusInternalServerError)
-		return
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	apiURL := fmt.Sprintf("%s/v1/subscriptions/%s/cancel", strings.TrimRight(razorpayAPIBaseURL, "/"), subID)
-	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		http.Error(w, "Failed to create Razorpay HTTP request", http.StatusInternalServerError)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(razorpayKeyID, razorpayKeySecret)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[PAYMENT ERROR] Razorpay cancel connection failed: %v", err)
-		http.Error(w, "Payment provider connection failed", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		log.Printf("Razorpay Subscription %s cancelled successfully", subID)
+		log.Printf("Razorpay Cancel API returned error: %v. Proceeding with local downgrade to prevent lockout.", err)
 	} else {
-		log.Printf("Razorpay Cancel API returned status %d: %s. Proceeding with local downgrade to prevent lockout.", resp.StatusCode, string(bodyBytes))
+		log.Printf("Razorpay Subscription %s cancelled successfully", subID)
 	}
 
 	err = a.DB.UpdateUserPlan(user.ID, "free", 0, "")
@@ -464,10 +396,8 @@ func (a *App) HandleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 
 	eventID := r.Header.Get("X-Razorpay-Event-Id")
 	signature := r.Header.Get("X-Razorpay-Signature")
-	mac := hmac.New(sha256.New, []byte(razorpayWebhookSecret))
-	mac.Write(bodyBytes)
-	expectedSignature := hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(signature)) != 1 {
+
+	if !utils.VerifyWebhookSignature(rawPayload, signature, razorpayWebhookSecret) {
 		log.Printf("[RAZORPAY WEBHOOK] Signature verification FAILED for incoming payload")
 		_ = a.DB.InsertWebhookLog(eventID, "unknown", "", nil, "signature_failed", "Invalid HMAC-SHA256 signature", rawPayload)
 		http.Error(w, "Unauthorized: Invalid webhook signature", http.StatusBadRequest)
@@ -638,7 +568,6 @@ func (a *App) HandleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 			err = a.DB.UpdateSubscriptionState(userID, subID, status, event.Payload.Subscription.Entity.CurrentStart, event.Payload.Subscription.Entity.CurrentEnd, nil)
 		}
 	case event.Event == "subscription.authenticated" || event.Event == "subscription.activated" || event.Event == "subscription.resumed" || event.Event == "payment.authorized":
-		// Authentication/state notifications do not prove that a new invoice was paid.
 		log.Printf("[RAZORPAY WEBHOOK] Recorded non-payment subscription event for user ID %d: %s", userID, event.Event)
 		err = a.DB.UpdateSubscriptionState(userID, subID, status, event.Payload.Subscription.Entity.CurrentStart, event.Payload.Subscription.Entity.CurrentEnd, nil)
 	default:
