@@ -504,12 +504,17 @@ func (d *Database) UpdateSubscriptionState(userID int64, subID, status string, p
 		`, subID, status, periodStart, periodEnd, userID)
 		return err
 	}
+	planTier := "pro"
+	if *planActive == 0 {
+		planTier = "free"
+	}
 	_, err := d.db.Exec(`
 		UPDATE users
 		SET razorpay_subscription_id = ?, razorpay_subscription_status = ?,
-			razorpay_current_start = ?, razorpay_current_end = ?, plan_active = ?
+			razorpay_current_start = ?, razorpay_current_end = ?, plan_active = ?,
+			plan_tier = ?
 		WHERE id = ?
-	`, subID, status, periodStart, periodEnd, *planActive, userID)
+	`, subID, status, periodStart, periodEnd, *planActive, planTier, userID)
 	return err
 }
 

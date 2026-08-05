@@ -101,11 +101,12 @@ func TestRazorpayWebhookPaymentIsIdempotentAndAuthenticationDoesNotActivate(t *t
 	if rec := signedWebhookRequest(t, database, "evt_halted", secret, halted); rec.Code != http.StatusOK {
 		t.Fatalf("halted webhook status = %d, want 200", rec.Code)
 	}
-	if err := database.GetDB().QueryRow("SELECT plan_active, monthly_usage_seconds FROM users WHERE id = 1").Scan(&active, &usage); err != nil {
+	var planTier string
+	if err := database.GetDB().QueryRow("SELECT plan_active, monthly_usage_seconds, plan_tier FROM users WHERE id = 1").Scan(&active, &usage, &planTier); err != nil {
 		t.Fatalf("read halted state: %v", err)
 	}
-	if active != 0 || usage != 17.0 {
-		t.Fatalf("halted payment state incorrect: active=%d usage=%v", active, usage)
+	if active != 0 || usage != 17.0 || planTier != "free" {
+		t.Fatalf("halted payment state incorrect: active=%d usage=%v tier=%s (want free)", active, usage, planTier)
 	}
 }
 
