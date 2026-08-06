@@ -131,6 +131,12 @@ func NewDatabase(connStr string) (*Database, error) {
 		CREATE INDEX IF NOT EXISTS idx_sessions_token_expires ON sessions(token, expires_at);
 		CREATE INDEX IF NOT EXISTS idx_vocabulary_user ON vocabulary(user_id);
 
+		CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			email TEXT UNIQUE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+
 		CREATE TABLE IF NOT EXISTS meetings (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id INTEGER NOT NULL,
@@ -1103,4 +1109,9 @@ func decrypt(ciphertextHex string) (string, error) {
 
 func EncryptTOTPSecret(plaintext string) (string, error) {
 	return encrypt(plaintext)
+}
+
+func (d *Database) AddNewsletterSubscriber(email string) error {
+	_, err := d.db.Exec("INSERT OR IGNORE INTO newsletter_subscribers (email) VALUES (?)", email)
+	return err
 }

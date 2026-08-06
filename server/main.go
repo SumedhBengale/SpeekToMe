@@ -93,6 +93,7 @@ func main() {
 	mux.HandleFunc("POST /generate", app.HandleGenerate)
 	mux.HandleFunc("POST /validate-prompt", app.HandleValidatePrompt)
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("POST /newsletter/subscribe", app.HandleNewsletterSubscribe)
 	mux.HandleFunc("GET /auth/vocabulary", app.HandleGetVocabulary)
 	mux.HandleFunc("POST /auth/vocabulary", app.HandleAddVocabulary)
 	mux.HandleFunc("DELETE /auth/vocabulary", app.HandleDeleteVocabulary)

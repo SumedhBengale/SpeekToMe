@@ -377,9 +377,10 @@ func (a *App) HandleAuthLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 type SignupRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Name     string `json:"name"`
+	Email          string `json:"email"`
+	Password       string `json:"password"`
+	Name           string `json:"name"`
+	TurnstileToken string `json:"cf-turnstile-response"`
 }
 
 func (a *App) HandleAuthSignup(w http.ResponseWriter, r *http.Request) {
@@ -394,6 +395,16 @@ func (a *App) HandleAuthSignup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	if os.Getenv("TURNSTILE_SECRET") != "" {
+		ip := auth.GetClientIP(r)
+		if !auth.VerifyTurnstile(req.TurnstileToken, ip) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Bot verification failed. Please complete the CAPTCHA."})
+			return
+		}
 	}
 
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
@@ -452,8 +463,9 @@ func (a *App) HandleAuthSignup(w http.ResponseWriter, r *http.Request) {
 }
 
 type LoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email          string `json:"email"`
+	Password       string `json:"password"`
+	TurnstileToken string `json:"cf-turnstile-response"`
 }
 
 func (a *App) HandleAuthLoginCredentials(w http.ResponseWriter, r *http.Request) {
@@ -468,6 +480,16 @@ func (a *App) HandleAuthLoginCredentials(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	if os.Getenv("TURNSTILE_SECRET") != "" {
+		ip := auth.GetClientIP(r)
+		if !auth.VerifyTurnstile(req.TurnstileToken, ip) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Bot verification failed. Please complete the CAPTCHA."})
+			return
+		}
 	}
 
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))

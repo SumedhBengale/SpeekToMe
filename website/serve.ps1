@@ -1,14 +1,5 @@
-# 1. Build React dashboard
-Push-Location dashboard
+# 1. Build unified React + Vite application
 npm run build
-Pop-Location
 
-# 2. Copy root marketing pages & static files to dist/
-Copy-Item -Path index.html, about.html, pricing.html, privacy.html, refund.html, terms.html, styles.css, script.js -Destination dist/ -Force
-if (Test-Path assets) {
-    Copy-Item -Path assets -Destination dist/ -Recurse -Force
-}
-
-
-# 3. Serve the unified dist directory locally
+# 2. Serve dist directory locally
 npx wrangler pages dev dist --port 8080
