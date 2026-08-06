@@ -1052,98 +1052,10 @@ export default function App() {
           </div>
 
           {activeSubTab === 'stats' && (
-            <div className="grid-dashboard">
-              {/* Left Column: Logs */}
-              <div className="dashboard-col">
-                <div className="card">
-                  <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg> Recent Transcriptions
-                  </h3>
-                  {logs.length === 0 ? (
-                    <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
-                      No recent dictations found. Open SpeekTo.Me on your desktop to make your first transcription!
-                    </p>
-                  ) : (
-                    <div className="logs-table-container">
-                      <table className="logs-table">
-                        <thead>
-                          <tr>
-                            <th>Date & Time</th>
-                            <th>Audio Duration</th>
-                            <th>Processing</th>
-                            <th style={{ width: '40%' }}>Final Transcription</th>
-                            <th>Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {logs.map((log, idx) => {
-                            const textOutput = log.final_output || log.input_transcript;
-                            return (
-                              <tr key={idx}>
-                                <td style={{ whiteSpace: 'nowrap', fontWeight: '500' }}>
-                                  {formatDate(log.timestamp)}
-                                </td>
-                                <td style={{ whiteSpace: 'nowrap' }}>
-                                  {formatSeconds(log.audio_duration)}
-                                </td>
-                                <td>
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                    <span style={{ fontWeight: '600', fontSize: '13px' }}>
-                                      {log.total_time ? `${log.total_time.toFixed(2)}s` : 'N/A'}
-                                    </span>
-                                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                                      {log.enhance_enabled && (
-                                        <span className="badge-pill badge-pill-accent">✨ Enhanced</span>
-                                      )}
-                                      {log.transcription_provider && (
-                                        <span className="badge-pill">{log.transcription_provider}</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="transcription-cell">
-                                  {textOutput ? (
-                                    <div className="transcription-text-box">
-                                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {textOutput}
-                                      </span>
-                                      <button
-                                        className="transcription-copy-btn"
-                                        title="Copy transcription"
-                                        onClick={(e) => {
-                                          navigator.clipboard.writeText(textOutput);
-                                          const btn = e.currentTarget;
-                                          btn.innerText = 'Copied!';
-                                          setTimeout(() => { btn.innerText = 'Copy'; }, 1500);
-                                        }}
-                                      >
-                                        Copy
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <span style={{ color: 'rgba(36, 10, 18, 0.4)', italic: 'true', fontSize: '13px' }}>
-                                      No transcript
-                                    </span>
-                                  )}
-                                </td>
-                                <td>
-                                  <span className={`badge-status ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
-                                    {log.status === 'success' ? '✓ Success' : '✕ Failed'}
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Right Column: Usage Limits & Subscription */}
-              <div className="dashboard-col">
-                <div className="card">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {/* Top Row: Usage Analytics & Plan Tier (Side by Side) */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
+                <div className="card" style={{ marginBottom: 0 }}>
                   <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg> Usage Analytics
                   </h3>
@@ -1174,7 +1086,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="card" style={{ background: 'var(--color-btn-accent)' }}>
+                <div className="card" style={{ background: 'var(--color-btn-accent)', marginBottom: 0 }}>
                   <h3 className="card-title" style={{ borderBottomColor: 'var(--border-color)', display: 'flex', alignItems: 'center' }}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ marginRight: '6px' }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
                     Plan Tier: {user.plan_tier.toUpperCase()}
@@ -1205,6 +1117,97 @@ export default function App() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Bottom Row: Full Width Recent Transcriptions Table */}
+              <div className="card" style={{ width: '100%' }}>
+                <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg> Recent Transcriptions
+                </h3>
+                {logs.length === 0 ? (
+                  <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
+                    No recent dictations found. Open SpeekTo.Me on your desktop to make your first transcription!
+                  </p>
+                ) : (
+                  <div className="logs-table-container">
+                    <table className="logs-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: '15%' }}>Date & Time</th>
+                          <th style={{ width: '10%' }}>Audio Duration</th>
+                          <th style={{ width: '15%' }}>Processing</th>
+                          <th style={{ width: '50%' }}>Final Transcription</th>
+                          <th style={{ width: '10%', textAlign: 'center' }}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {logs.map((log, idx) => {
+                          const textOutput = log.final_output || log.input_transcript;
+                          return (
+                            <tr key={idx}>
+                              <td style={{ whiteSpace: 'nowrap', fontWeight: '500' }}>
+                                {formatDate(log.timestamp)}
+                              </td>
+                              <td style={{ whiteSpace: 'nowrap' }}>
+                                {formatSeconds(log.audio_duration)}
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  <span style={{ fontWeight: '600', fontSize: '13px' }}>
+                                    {log.total_time ? `${log.total_time.toFixed(2)}s` : 'N/A'}
+                                  </span>
+                                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                    {log.enhance_enabled && (
+                                      <span className="badge-pill badge-pill-accent">✨ Enhanced</span>
+                                    )}
+                                    {log.transcription_provider && (
+                                      <span className="badge-pill">{log.transcription_provider}</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="transcription-cell">
+                                {textOutput ? (
+                                  <div className="transcription-text-box">
+                                    <div className="transcription-scroll-area">
+                                      {textOutput}
+                                    </div>
+                                    <button
+                                      className="btn btn-primary btn-sm transcription-copy-btn"
+                                      title="Copy transcription"
+                                      onClick={(e) => {
+                                        navigator.clipboard.writeText(textOutput);
+                                        const btn = e.currentTarget;
+                                        const originalHTML = btn.innerHTML;
+                                        btn.innerHTML = '✓ Copied!';
+                                        btn.style.background = '#d1fae5';
+                                        setTimeout(() => {
+                                          btn.innerHTML = originalHTML;
+                                          btn.style.background = '';
+                                        }, 1500);
+                                      }}
+                                    >
+                                      📋 Copy
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: 'rgba(36, 10, 18, 0.4)', italic: 'true', fontSize: '13px' }}>
+                                    No transcript
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                <span className={`badge-status ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
+                                  {log.status === 'success' ? '✓ Success' : '✕ Failed'}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           )}
