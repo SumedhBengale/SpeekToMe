@@ -179,8 +179,8 @@ function renderClientLanguageUI() {
   selectedLanguages.forEach(code => {
     const chip = document.createElement('span');
     chip.className = 'lang-chip';
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:#3b82f6;color:white;padding:4px 10px;border-radius:16px;font-size:12px;font-weight:600;';
-    chip.innerHTML = `${escapeHtml(getLanguageName(code))} (${code.toUpperCase()}) <button type="button" style="background:none;border:none;color:white;cursor:pointer;font-weight:bold;margin-left:4px;" title="Remove">&times;</button>`;
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:var(--accent-color, #00e676);color:#000000;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,0.3);';
+    chip.innerHTML = `${escapeHtml(getLanguageName(code))} <button type="button" style="background:none;border:none;color:#000000;cursor:pointer;font-weight:bold;margin-left:2px;font-size:14px;line-height:1;" title="Remove">&times;</button>`;
     
     chip.querySelector('button').addEventListener('click', () => {
       if (selectedLanguages.length <= 1) {
@@ -198,7 +198,7 @@ function renderClientLanguageUI() {
     if (!selectedLanguages.includes(lang.code)) {
       const opt = document.createElement('option');
       opt.value = lang.code;
-      opt.textContent = `${lang.name} (${lang.code.toUpperCase()})`;
+      opt.textContent = lang.name;
       selectEl.appendChild(opt);
     }
   });

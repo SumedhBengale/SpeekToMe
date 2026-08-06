@@ -1275,61 +1275,39 @@ export default function App() {
               <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10z"/></svg> 🌐 Spoken Language Preferences
               </h3>
-              <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '16px' }}>
+              <p style={{ fontSize: '14px', color: 'var(--color-text-dark)', opacity: 0.75, marginBottom: '20px' }}>
                 Select up to 5 languages you speak during voice dictations. Selecting a single primary language locks Whisper to maximum transcription accuracy. Selecting multiple languages informs Whisper's multi-lingual model without translating.
               </p>
               
               {authError && <div className="auth-error" style={{ marginBottom: '16px' }}>{authError}</div>}
-              {successMessage && <div className="auth-success" style={{ marginBottom: '16px', background: '#d1fae5', color: '#065f46', padding: '10px 14px', borderRadius: '6px', border: '1px solid #a7f3d0' }}>{successMessage}</div>}
+              {successMessage && <div className="auth-success" style={{ marginBottom: '16px', background: '#d1fae5', color: '#065f46', padding: '10px 14px', borderRadius: '12px', border: 'var(--border-flat)', boxShadow: 'var(--shadow-flat-small)' }}>{successMessage}</div>}
 
-              <div style={{ marginBottom: '20px' }}>
-                <label style={{ fontSize: '13px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'rgba(26,26,26,0.6)', display: 'block', marginBottom: '8px' }}>
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ fontSize: '13px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--color-text-dark)', display: 'block', marginBottom: '10px' }}>
                   Currently Selected Languages ({userLanguages.length}/5):
                 </label>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                   {userLanguages.map(code => (
-                    <span 
+                    <button 
                       key={code} 
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        background: '#3b82f6',
-                        color: 'white',
-                        padding: '6px 12px',
-                        borderRadius: '20px',
-                        fontSize: '13px',
-                        fontWeight: '600',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-                      }}
+                      type="button"
+                      onClick={() => handleToggleLanguage(code)}
+                      className="btn btn-primary"
+                      style={{ padding: '6px 14px', fontSize: '13px' }}
+                      title="Click to remove"
+                      disabled={savingLangs}
                     >
-                      {getLanguageName(code)} ({code.toUpperCase()})
-                      <button 
-                        onClick={() => handleToggleLanguage(code)}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          color: 'white',
-                          cursor: 'pointer',
-                          fontWeight: 'bold',
-                          padding: '0 2px',
-                          lineHeight: '1'
-                        }}
-                        title="Remove"
-                        disabled={savingLangs}
-                      >
-                        ×
-                      </button>
-                    </span>
+                      {getLanguageName(code)} ×
+                    </button>
                   ))}
                 </div>
               </div>
 
-              <div style={{ borderTop: '1px solid rgba(26,26,26,0.1)', paddingTop: '16px' }}>
-                <label style={{ fontSize: '13px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'rgba(26,26,26,0.6)', display: 'block', marginBottom: '12px' }}>
+              <div style={{ borderTop: 'var(--border-flat)', paddingTop: '20px' }}>
+                <label style={{ fontSize: '13px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--color-text-dark)', display: 'block', marginBottom: '14px' }}>
                   All 99 Supported Whisper Languages (Click to toggle):
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '8px', maxHeight: '360px', overflowY: 'auto', paddingRight: '4px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', maxHeight: '380px', overflowY: 'auto', paddingRight: '4px' }}>
                   {SUPPORTED_LANGUAGES.map(lang => {
                     const selected = userLanguages.includes(lang.code);
                     return (
@@ -1338,26 +1316,16 @@ export default function App() {
                         type="button"
                         onClick={() => handleToggleLanguage(lang.code)}
                         disabled={savingLangs}
+                        className={`btn ${selected ? 'btn-primary' : ''}`}
                         style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justify: 'space-between',
-                          padding: '8px 12px',
-                          borderRadius: '8px',
-                          border: selected ? '2px solid #3b82f6' : '1px solid rgba(26,26,26,0.15)',
-                          background: selected ? '#eff6ff' : '#ffffff',
-                          color: selected ? '#1d4ed8' : '#1e293b',
-                          fontWeight: selected ? '600' : '400',
+                          padding: '10px 14px',
                           fontSize: '13px',
-                          cursor: 'pointer',
-                          textAlign: 'left',
-                          transition: 'all 0.15s ease'
+                          fontWeight: selected ? '700' : '600',
+                          justifyContent: 'center',
+                          textAlign: 'center'
                         }}
                       >
-                        <span>{lang.name}</span>
-                        <span style={{ fontSize: '11px', color: selected ? '#1d4ed8' : '#94a3b8', fontWeight: 'bold' }}>
-                          {lang.code.toUpperCase()}
-                        </span>
+                        {lang.name}
                       </button>
                     );
                   })}
