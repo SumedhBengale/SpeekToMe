@@ -317,7 +317,11 @@ a:not(.btn):not(.logo):not(.nav-logo):not(.footer-social-icon):hover::after {
 /* Table styling for transcription logs */
 .logs-table-container {
   overflow-x: auto;
-  margin-top: 10px;
+  margin-top: 14px;
+  border: 2px solid var(--border-color);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 2px 2px 0px var(--border-color);
 }
 
 .logs-table {
@@ -327,39 +331,110 @@ a:not(.btn):not(.logo):not(.nav-logo):not(.footer-social-icon):hover::after {
 }
 
 .logs-table th {
-  padding: 12px;
-  font-weight: 600;
-  font-size: 13px;
+  padding: 14px 16px;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
-  color: rgba(26, 26, 26, 0.6);
-  border-bottom: var(--border-flat);
+  color: #240a12;
+  background: #fdf2f4;
+  border-bottom: 2px solid var(--border-color);
 }
 
 .logs-table td {
-  padding: 14px 12px;
-  border-bottom: 1px solid rgba(26, 26, 26, 0.1);
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(36, 10, 18, 0.08);
   font-size: 14px;
+  vertical-align: middle;
+  transition: background 0.15s ease;
+}
+
+.logs-table tr:hover td {
+  background: rgba(255, 209, 220, 0.15);
 }
 
 .logs-table tr:last-child td {
   border-bottom: none;
 }
 
+.transcription-cell {
+  max-width: 320px;
+  min-width: 200px;
+}
+
+.transcription-text-box {
+  background: #fdf8f9;
+  border: 1px solid #ffd1dc;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #240a12;
+  word-break: break-word;
+  max-height: 70px;
+  overflow-y: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.transcription-copy-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: rgba(36, 10, 18, 0.5);
+  transition: all 0.15s ease;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.transcription-copy-btn:hover {
+  background: #ffd1dc;
+  color: #240a12;
+}
+
 .badge-status {
-  display: inline-block;
-  padding: 3px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
   border-radius: 12px;
   font-size: 11px;
-  font-weight: 600;
-  border: 1px solid var(--border-color);
+  font-weight: 700;
+  border: 1.5px solid var(--border-color);
 }
 
 .badge-success {
-  background: var(--color-btn-accent);
+  background: #d1fae5;
+  color: #065f46;
+  border-color: #a7f3d0;
 }
 
 .badge-failed {
-  background: var(--color-danger);
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fca5a5;
+}
+
+.badge-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+}
+
+.badge-pill-accent {
+  background: #fff0f3;
+  color: #be185d;
+  border-color: #fbcfe8;
 }
 
 /* Pricing Page & Billing */

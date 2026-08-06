@@ -1012,25 +1012,72 @@ export default function App() {
                       <table className="logs-table">
                         <thead>
                           <tr>
-                            <th>Date</th>
-                            <th>Duration</th>
-                            <th>Speed</th>
+                            <th>Date & Time</th>
+                            <th>Audio Duration</th>
+                            <th>Processing</th>
+                            <th style={{ width: '40%' }}>Final Transcription</th>
                             <th>Status</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {logs.map((log, idx) => (
-                            <tr key={idx}>
-                              <td>{formatDate(log.timestamp)}</td>
-                              <td>{formatSeconds(log.audio_duration)}</td>
-                              <td>{log.total_time ? `${log.total_time.toFixed(1)}s` : 'N/A'}</td>
-                              <td>
-                                <span className={`badge-status ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
-                                  {log.status}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
+                          {logs.map((log, idx) => {
+                            const textOutput = log.final_output || log.input_transcript;
+                            return (
+                              <tr key={idx}>
+                                <td style={{ whiteSpace: 'nowrap', fontWeight: '500' }}>
+                                  {formatDate(log.timestamp)}
+                                </td>
+                                <td style={{ whiteSpace: 'nowrap' }}>
+                                  {formatSeconds(log.audio_duration)}
+                                </td>
+                                <td>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span style={{ fontWeight: '600', fontSize: '13px' }}>
+                                      {log.total_time ? `${log.total_time.toFixed(2)}s` : 'N/A'}
+                                    </span>
+                                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                      {log.enhance_enabled && (
+                                        <span className="badge-pill badge-pill-accent">✨ Enhanced</span>
+                                      )}
+                                      {log.transcription_provider && (
+                                        <span className="badge-pill">{log.transcription_provider}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="transcription-cell">
+                                  {textOutput ? (
+                                    <div className="transcription-text-box">
+                                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {textOutput}
+                                      </span>
+                                      <button 
+                                        className="transcription-copy-btn"
+                                        title="Copy transcription"
+                                        onClick={(e) => {
+                                          navigator.clipboard.writeText(textOutput);
+                                          const btn = e.currentTarget;
+                                          btn.innerText = 'Copied!';
+                                          setTimeout(() => { btn.innerText = 'Copy'; }, 1500);
+                                        }}
+                                      >
+                                        Copy
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span style={{ color: 'rgba(36, 10, 18, 0.4)', italic: 'true', fontSize: '13px' }}>
+                                      No transcript
+                                    </span>
+                                  )}
+                                </td>
+                                <td>
+                                  <span className={`badge-status ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
+                                    {log.status === 'success' ? '✓ Success' : '✕ Failed'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1048,7 +1095,7 @@ export default function App() {
                   <div className="usage-summary">
                     <div className="usage-stats">
                       <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
-                      <span>{formatSecondsToHours(user.duration_seconds)} / {formatSecondsToHours(user.monthly_limit_seconds || (user.plan_tier === 'pro' ? 50 * 3600 : 1 * 3600))}</span>
+                      <span>{formatSecondsToHours(user.duration_seconds)} / {formatSecondsToHours(user.monthly_limit_seconds || 3600)}</span>
                     </div>
                     
                     <div className="progress-bar-container">
@@ -1056,7 +1103,7 @@ export default function App() {
                         className="progress-bar-fill" 
                         style={{ 
                           width: `${Math.min(
-                            (user.duration_seconds / (user.monthly_limit_seconds || (user.plan_tier === 'pro' ? 50 * 3600 : 1 * 3600))) * 100, 
+                            (user.duration_seconds / (user.monthly_limit_seconds || 3600)) * 100, 
                             100
                           )}%` 
                         }}

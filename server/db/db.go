@@ -729,17 +729,26 @@ func (d *Database) VerifyUserEmail(token string) (string, error) {
 }
 
 type UsageLog struct {
-	Timestamp       string  `json:"timestamp"`
-	AudioDuration   float64 `json:"audio_duration"`
-	TotalTime       float64 `json:"total_time"`
-	Status          string  `json:"status"`
-	InputTranscript string  `json:"input_transcript"`
-	FinalOutput     string  `json:"final_output"`
+	ID                    int64   `json:"id"`
+	Timestamp             string  `json:"timestamp"`
+	AudioDuration         float64 `json:"audio_duration"`
+	WhisperTime           float64 `json:"whisper_time"`
+	LLMTime               float64 `json:"llm_time"`
+	TotalTime             float64 `json:"total_time"`
+	EnhanceEnabled        bool    `json:"enhance_enabled"`
+	EnhanceModel          string  `json:"enhance_model"`
+	InputTranscript       string  `json:"input_transcript"`
+	FinalOutput           string  `json:"final_output"`
+	Status                string  `json:"status"`
+	TranscriptionProvider string  `json:"transcription_provider"`
+	LLMProvider           string  `json:"llm_provider"`
 }
 
 func (d *Database) GetUserUsageLogs(userID int64) ([]UsageLog, error) {
 	rows, err := d.db.Query(`
-		SELECT timestamp, audio_duration, total_time, status, COALESCE(input_transcript, ''), COALESCE(final_output, '')
+		SELECT id, timestamp, audio_duration, COALESCE(whisper_time, 0.0), COALESCE(llm_time, 0.0), total_time, 
+		       COALESCE(enhance_enabled, 0), COALESCE(enhance_model, ''), COALESCE(input_transcript, ''), 
+		       COALESCE(final_output, ''), status, COALESCE(transcription_provider, ''), COALESCE(llm_provider, '')
 		FROM usage_logs
 		WHERE user_id = ?
 		ORDER BY timestamp DESC
@@ -753,8 +762,14 @@ func (d *Database) GetUserUsageLogs(userID int64) ([]UsageLog, error) {
 	logs := make([]UsageLog, 0)
 	for rows.Next() {
 		var l UsageLog
-		err := rows.Scan(&l.Timestamp, &l.AudioDuration, &l.TotalTime, &l.Status, &l.InputTranscript, &l.FinalOutput)
+		var enhanceVal int
+		err := rows.Scan(
+			&l.ID, &l.Timestamp, &l.AudioDuration, &l.WhisperTime, &l.LLMTime, &l.TotalTime,
+			&enhanceVal, &l.EnhanceModel, &l.InputTranscript, &l.FinalOutput,
+			&l.Status, &l.TranscriptionProvider, &l.LLMProvider,
+		)
 		if err == nil {
+			l.EnhanceEnabled = enhanceVal == 1
 			logs = append(logs, l)
 		}
 	}
