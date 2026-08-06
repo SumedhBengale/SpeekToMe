@@ -870,7 +870,7 @@ export default function App() {
                 onVerify={setTurnstileToken} 
                 resetTrigger={resetTurnstile} 
               />
-              <button type="submit" className="btn btn-primary auth-submit-btn">
+              <button type="submit" className="btn btn-primary auth-submit-btn" disabled={loading || !turnstileToken}>
                 {loading ? <div className="spinner"></div> : 'Sign In'}
               </button>
             </form>
@@ -945,7 +945,7 @@ export default function App() {
                 onVerify={setTurnstileToken} 
                 resetTrigger={resetTurnstile} 
               />
-              <button type="submit" className="btn btn-primary auth-submit-btn">
+              <button type="submit" className="btn btn-primary auth-submit-btn" disabled={loading || !turnstileToken}>
                 {loading ? <div className="spinner"></div> : 'Create Account'}
               </button>
             </form>
