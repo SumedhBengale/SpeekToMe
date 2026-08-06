@@ -13,6 +13,8 @@ import TurnstileWidget from './components/TurnstileWidget';
 import logoSvg from '/logo.svg';
 
 
+import { SUPPORTED_LANGUAGES, getLanguageName } from './utils/languages';
+
 const API_BASE = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
   ? 'http://localhost:8000' 
   : ''); // Fallback to current host root if no variable is provided
@@ -22,6 +24,8 @@ export default function App() {
 
   const [token, setToken] = useState(localStorage.getItem('speektome_token') || '');
   const [user, setUser] = useState(null);
+  const [userLanguages, setUserLanguages] = useState(['en']);
+  const [savingLangs, setSavingLangs] = useState(false);
   const [logs, setLogs] = useState([]);
   const [route, setRoute] = useState('loading');
   const [loading, setLoading] = useState(false);
@@ -113,6 +117,9 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setUser(data);
+        if (data.languages && Array.isArray(data.languages)) {
+          setUserLanguages(data.languages);
+        }
         setRoute('dashboard');
         fetchUsageLogs();
         fetchVocabulary();
@@ -126,6 +133,48 @@ export default function App() {
       setRoute('dashboard'); // Fallback to let dashboard load if server is temporarily unreachable
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleLanguage = async (code) => {
+    let updated;
+    if (userLanguages.includes(code)) {
+      if (userLanguages.length <= 1) {
+        setAuthError("At least 1 language must be selected.");
+        return;
+      }
+      updated = userLanguages.filter(c => c !== code);
+    } else {
+      if (userLanguages.length >= 5) {
+        setAuthError("You can select at most 5 spoken languages.");
+        return;
+      }
+      updated = [...userLanguages, code];
+    }
+    setUserLanguages(updated);
+    setAuthError('');
+    setSavingLangs(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/languages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ languages: updated })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUserLanguages(data.languages || updated);
+        setSuccessMessage("Spoken languages updated successfully!");
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || "Failed to update language settings.");
+      }
+    } catch (err) {
+      setAuthError("Could not connect to server to update languages.");
+    } finally {
+      setSavingLangs(false);
     }
   };
 
@@ -984,6 +1033,13 @@ export default function App() {
             >
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> Custom Vocabulary
             </button>
+            <button 
+              onClick={() => { setActiveSubTab('languages'); setActiveMeeting(null); }} 
+              className={`btn ${activeSubTab === 'languages' ? 'btn-primary' : ''}`}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Languages ({userLanguages.length}/5)
+            </button>
             {user.plan_active && (
               <button 
                 onClick={() => { setActiveSubTab('meetings'); }} 
@@ -1210,6 +1266,102 @@ export default function App() {
                     </tbody>
                   </table>
                 )}
+              </div>
+            </div>
+          )}
+
+          {activeSubTab === 'languages' && (
+            <div className="card">
+              <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10z"/></svg> 🌐 Spoken Language Preferences
+              </h3>
+              <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '16px' }}>
+                Select up to 5 languages you speak during voice dictations. Selecting a single primary language locks Whisper to maximum transcription accuracy. Selecting multiple languages informs Whisper's multi-lingual model without translating.
+              </p>
+              
+              {authError && <div className="auth-error" style={{ marginBottom: '16px' }}>{authError}</div>}
+              {successMessage && <div className="auth-success" style={{ marginBottom: '16px', background: '#d1fae5', color: '#065f46', padding: '10px 14px', borderRadius: '6px', border: '1px solid #a7f3d0' }}>{successMessage}</div>}
+
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ fontSize: '13px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'rgba(26,26,26,0.6)', display: 'block', marginBottom: '8px' }}>
+                  Currently Selected Languages ({userLanguages.length}/5):
+                </label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {userLanguages.map(code => (
+                    <span 
+                      key={code} 
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        background: '#3b82f6',
+                        color: 'white',
+                        padding: '6px 12px',
+                        borderRadius: '20px',
+                        fontSize: '13px',
+                        fontWeight: '600',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                      }}
+                    >
+                      {getLanguageName(code)} ({code.toUpperCase()})
+                      <button 
+                        onClick={() => handleToggleLanguage(code)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'white',
+                          cursor: 'pointer',
+                          fontWeight: 'bold',
+                          padding: '0 2px',
+                          lineHeight: '1'
+                        }}
+                        title="Remove"
+                        disabled={savingLangs}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid rgba(26,26,26,0.1)', paddingTop: '16px' }}>
+                <label style={{ fontSize: '13px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'rgba(26,26,26,0.6)', display: 'block', marginBottom: '12px' }}>
+                  All 99 Supported Whisper Languages (Click to toggle):
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '8px', maxHeight: '360px', overflowY: 'auto', paddingRight: '4px' }}>
+                  {SUPPORTED_LANGUAGES.map(lang => {
+                    const selected = userLanguages.includes(lang.code);
+                    return (
+                      <button
+                        key={lang.code}
+                        type="button"
+                        onClick={() => handleToggleLanguage(lang.code)}
+                        disabled={savingLangs}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justify: 'space-between',
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          border: selected ? '2px solid #3b82f6' : '1px solid rgba(26,26,26,0.15)',
+                          background: selected ? '#eff6ff' : '#ffffff',
+                          color: selected ? '#1d4ed8' : '#1e293b',
+                          fontWeight: selected ? '600' : '400',
+                          fontSize: '13px',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <span>{lang.name}</span>
+                        <span style={{ fontSize: '11px', color: selected ? '#1d4ed8' : '#94a3b8', fontWeight: 'bold' }}>
+                          {lang.code.toUpperCase()}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
