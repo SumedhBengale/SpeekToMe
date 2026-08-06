@@ -1041,10 +1041,10 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 		return "", nil
 	}
 
-	systemPrompt := "You are an expert transcription editor. Enhance the provided transcription by correcting grammar, punctuation, and typos. Preserve all technical terms, proper names, and original meaning. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text."
+	systemPrompt := "You are an expert transcription editor. Refine the provided voice transcription by fixing grammar, punctuation (adding missing commas, periods, and question marks), and capitalization. Remove verbal disfluencies (such as 'uh', 'um', stutters, and repeated filler words). Preserve all technical terms, proper names, and original meaning intact. Do not translate into other languages. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text."
 	if strings.TrimSpace(t.customPrompt) != "" {
 		systemPrompt = fmt.Sprintf(
-			"You are an expert transcription editor. Enhance the provided transcription according to these custom instructions:\n%s\n\nPreserve the original meaning unless instructed otherwise. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text.",
+			"You are an expert transcription editor. Enhance the provided transcription according to these custom instructions:\n%s\n\nFix grammar, punctuation, and remove verbal disfluencies while preserving original meaning unless instructed otherwise. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text.",
 			strings.TrimSpace(t.customPrompt),
 		)
 	}

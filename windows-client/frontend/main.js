@@ -126,12 +126,116 @@ const onboardThemeSelect = document.getElementById('onboard-theme-select');
 // Initialization & Config Binding
 // ==========================================
 
+const SUPPORTED_LANGUAGES = [
+  { code: "af", name: "Afrikaans" }, { code: "am", name: "Amharic" }, { code: "ar", name: "Arabic" },
+  { code: "as", name: "Assamese" }, { code: "az", name: "Azerbaijani" }, { code: "ba", name: "Bashkir" },
+  { code: "be", name: "Belarusian" }, { code: "bg", name: "Bulgarian" }, { code: "bn", name: "Bengali" },
+  { code: "bo", name: "Tibetan" }, { code: "br", name: "Breton" }, { code: "bs", name: "Bosnian" },
+  { code: "ca", name: "Catalan" }, { code: "cs", name: "Czech" }, { code: "cy", name: "Welsh" },
+  { code: "da", name: "Danish" }, { code: "de", name: "German" }, { code: "el", name: "Greek" },
+  { code: "en", name: "English" }, { code: "es", name: "Spanish" }, { code: "et", name: "Estonian" },
+  { code: "eu", name: "Basque" }, { code: "fa", name: "Persian" }, { code: "fi", name: "Finnish" },
+  { code: "fo", name: "Faroese" }, { code: "fr", name: "French" }, { code: "gl", name: "Galician" },
+  { code: "gu", name: "Gujarati" }, { code: "ha", name: "Hausa" }, { code: "haw", name: "Hawaiian" },
+  { code: "he", name: "Hebrew" }, { code: "hi", name: "Hindi" }, { code: "hr", name: "Croatian" },
+  { code: "ht", name: "Haitian Creole" }, { code: "hu", name: "Hungarian" }, { code: "hy", name: "Armenian" },
+  { code: "id", name: "Indonesian" }, { code: "is", name: "Icelandic" }, { code: "it", name: "Italian" },
+  { code: "ja", name: "Japanese" }, { code: "jw", name: "Javanese" }, { code: "ka", name: "Georgian" },
+  { code: "kk", name: "Kazakh" }, { code: "km", name: "Khmer" }, { code: "kn", name: "Kannada" },
+  { code: "ko", name: "Korean" }, { code: "la", name: "Latin" }, { code: "lb", name: "Luxembourgish" },
+  { code: "ln", name: "Lingala" }, { code: "lo", name: "Lao" }, { code: "lt", name: "Lithuanian" },
+  { code: "lv", name: "Latvian" }, { code: "mg", name: "Malagasy" }, { code: "mi", name: "Maori" },
+  { code: "mk", name: "Macedonian" }, { code: "ml", name: "Malayalam" }, { code: "mn", name: "Mongolian" },
+  { code: "mr", name: "Marathi" }, { code: "ms", name: "Malay" }, { code: "mt", name: "Maltese" },
+  { code: "my", name: "Burmese" }, { code: "ne", name: "Nepali" }, { code: "nl", name: "Dutch" },
+  { code: "nn", name: "Nynorsk" }, { code: "no", name: "Norwegian" }, { code: "oc", name: "Occitan" },
+  { code: "pa", name: "Punjabi" }, { code: "pl", name: "Polish" }, { code: "ps", name: "Pashto" },
+  { code: "pt", name: "Portuguese" }, { code: "ro", name: "Romanian" }, { code: "ru", name: "Russian" },
+  { code: "sa", name: "Sanskrit" }, { code: "sd", name: "Sindhi" }, { code: "si", name: "Sinhala" },
+  { code: "sk", name: "Slovak" }, { code: "sl", name: "Slovenian" }, { code: "sn", name: "Shona" },
+  { code: "so", name: "Somali" }, { code: "sq", name: "Albanian" }, { code: "sr", name: "Serbian" },
+  { code: "su", name: "Sundanese" }, { code: "sv", name: "Swedish" }, { code: "sw", name: "Swahili" },
+  { code: "ta", name: "Tamil" }, { code: "te", name: "Telugu" }, { code: "tg", name: "Tajik" },
+  { code: "th", name: "Thai" }, { code: "tk", name: "Turkmen" }, { code: "tl", name: "Tagalog" },
+  { code: "tr", name: "Turkish" }, { code: "tt", name: "Tatar" }, { code: "uk", name: "Ukrainian" },
+  { code: "ur", name: "Urdu" }, { code: "uz", name: "Uzbek" }, { code: "vi", name: "Vietnamese" },
+  { code: "yi", name: "Yiddish" }, { code: "yo", name: "Yoruba" }, { code: "yue", name: "Cantonese" },
+  { code: "zh", name: "Chinese" }
+];
+
+let selectedLanguages = ["en"];
+
+function getLanguageName(code) {
+  const item = SUPPORTED_LANGUAGES.find(l => l.code === code);
+  return item ? item.name : code;
+}
+
+function renderClientLanguageUI() {
+  const chipsContainer = document.getElementById('client-lang-chips');
+  const selectEl = document.getElementById('client-lang-select');
+  if (!chipsContainer || !selectEl) return;
+
+  chipsContainer.innerHTML = '';
+  selectedLanguages.forEach(code => {
+    const chip = document.createElement('span');
+    chip.className = 'lang-chip';
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:#3b82f6;color:white;padding:4px 10px;border-radius:16px;font-size:12px;font-weight:600;';
+    chip.innerHTML = `${escapeHtml(getLanguageName(code))} (${code.toUpperCase()}) <button type="button" style="background:none;border:none;color:white;cursor:pointer;font-weight:bold;margin-left:4px;" title="Remove">&times;</button>`;
+    
+    chip.querySelector('button').addEventListener('click', () => {
+      if (selectedLanguages.length <= 1) {
+        showToast("At least 1 language must be selected.", "Languages", "warning");
+        return;
+      }
+      selectedLanguages = selectedLanguages.filter(c => c !== code);
+      saveLanguagesToBackend();
+    });
+    chipsContainer.appendChild(chip);
+  });
+
+  selectEl.innerHTML = '';
+  SUPPORTED_LANGUAGES.forEach(lang => {
+    if (!selectedLanguages.includes(lang.code)) {
+      const opt = document.createElement('option');
+      opt.value = lang.code;
+      opt.textContent = `${lang.name} (${lang.code.toUpperCase()})`;
+      selectEl.appendChild(opt);
+    }
+  });
+}
+
+async function saveLanguagesToBackend() {
+  try {
+    const updated = await invoke('update_languages', { languages: selectedLanguages });
+    selectedLanguages = updated || selectedLanguages;
+    renderClientLanguageUI();
+    showToast("Spoken languages saved!", "Languages", "info");
+  } catch (err) {
+    showToast(err || "Failed to update language preferences.", "Languages", "error");
+    renderClientLanguageUI();
+  }
+}
+
 async function init() {
   try {
     try {
       API_URL = await invoke('get_api_url');
     } catch (err) {
       console.error("Failed to load API URL from backend:", err);
+    }
+
+    const addLangBtn = document.getElementById('client-add-lang-btn');
+    if (addLangBtn) {
+      addLangBtn.addEventListener('click', () => {
+        const selectEl = document.getElementById('client-lang-select');
+        if (!selectEl || !selectEl.value) return;
+        if (selectedLanguages.length >= 5) {
+          showToast("You can select at most 5 spoken languages.", "Languages", "warning");
+          return;
+        }
+        selectedLanguages.push(selectEl.value);
+        saveLanguagesToBackend();
+      });
     }
 
     // 1. Tab selection setup (Dashboard)
@@ -653,6 +757,10 @@ function updateAuthUI(userInfo) {
   const accountDesc = document.getElementById('account-desc');
   
   if (userInfo) {
+    if (userInfo.languages && Array.isArray(userInfo.languages)) {
+      selectedLanguages = userInfo.languages;
+      renderClientLanguageUI();
+    }
     userNameEl.textContent = userInfo.name;
     userEmailEl.textContent = userInfo.email;
     

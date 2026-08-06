@@ -180,6 +180,21 @@ async fn delete_vocabulary_term(term: String) -> Result<(), String> {
     api::delete_vocab_term(&api::get_api_url(), &token, &term).await
 }
 
+#[tauri::command]
+async fn update_languages(languages: Vec<String>) -> Result<Vec<String>, String> {
+    let token = {
+        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        config.session_token.clone().ok_or("Not logged in")?
+    };
+    let res = api::update_user_languages(&api::get_api_url(), &token, languages.clone()).await?;
+    {
+        let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        active.languages = Some(res.clone());
+        config::save_config(&active);
+    }
+    Ok(res)
+}
+
 pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -291,6 +306,7 @@ fn main() {
             get_vocabulary,
             add_vocabulary_term,
             delete_vocabulary_term,
+            update_languages,
             start_meeting,
             stop_meeting,
             cancel_meeting,

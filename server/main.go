@@ -88,6 +88,7 @@ func main() {
 	mux.HandleFunc("POST /auth/2fa/verify", app.HandleAuth2FAVerify)
 	mux.HandleFunc("GET /auth/verify", app.HandleAuthVerify)
 	mux.HandleFunc("GET /auth/me", app.HandleAuthMe)
+	mux.HandleFunc("POST /auth/languages", app.HandleUpdateLanguages)
 	mux.HandleFunc("GET /usage/history", app.HandleGetUserHistory)
 	mux.HandleFunc("POST /auth/logout", app.HandleAuthLogout)
 	mux.HandleFunc("POST /generate", app.HandleGenerate)

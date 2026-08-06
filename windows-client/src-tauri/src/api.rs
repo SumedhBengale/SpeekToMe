@@ -9,6 +9,7 @@ pub struct UserInfo {
     pub plan_activated_at: String,
     pub duration_seconds: f64,
     pub monthly_limit_seconds: f64,
+    pub languages: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -425,5 +426,30 @@ pub async fn upload_meeting(
         Ok(body_text)
     } else {
         Err(format!("Upload failed with status {}: {}", status, body_text))
+    }
+}
+
+pub async fn update_user_languages(api_url: &str, token: &str, languages: Vec<String>) -> Result<Vec<String>, String> {
+    let client = create_client();
+    let mut payload = std::collections::HashMap::new();
+    payload.insert("languages", languages);
+
+    let res = client.post(format!("{}/auth/languages", api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if res.status().is_success() {
+        #[derive(Deserialize)]
+        struct Resp {
+            languages: Vec<String>,
+        }
+        let parsed = res.json::<Resp>().await.map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(parsed.languages)
+    } else {
+        let err_text = res.text().await.unwrap_or_default();
+        Err(format!("Server error: {}", err_text))
     }
 }

@@ -137,7 +137,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var whisperRouting string
-	rawText, _, whisperProvider, whisperRouting, whisperErr = services.RunWhisperTranscribeWithModel(ctx, audioBytes, model)
+	rawText, _, whisperProvider, whisperRouting, whisperErr = services.RunWhisperTranscribeWithModel(ctx, audioBytes, model, user.Languages)
 	if whisperErr == nil {
 		groqLatency = time.Since(whisperStart).Seconds()
 	} else {

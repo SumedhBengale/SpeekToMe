@@ -33,6 +33,9 @@ pub struct AppConfig {
     pub autostart: bool,      // true/false
     pub theme: String,        // "forest", "lavender", "mint", "classic_dark"
     
+    #[serde(default)]
+    pub languages: Option<Vec<String>>,
+    
     #[serde(default = "default_pill_position_mode")]
     pub pill_position_mode: String,
     
@@ -66,6 +69,7 @@ impl Default for AppConfig {
             session_token: None,
             autostart: false,
             theme: "forest".to_string(),
+            languages: Some(vec!["en".to_string()]),
             pill_position_mode: default_pill_position_mode(),
             pill_predefined_position: default_pill_predefined_position(),
             pill_custom_x: default_pill_custom_x(),

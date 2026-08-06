@@ -173,12 +173,12 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 
 			go func() {
 				defer wg.Done()
-				_, micSegs, micProvider, micRouting, errMicTrans = services.RunWhisperTranscribeWithModel(r.Context(), micBuf.Bytes(), "whisper-large-v3-turbo")
+				_, micSegs, micProvider, micRouting, errMicTrans = services.RunWhisperTranscribeWithModel(r.Context(), micBuf.Bytes(), "whisper-large-v3-turbo", user.Languages)
 			}()
 
 			go func() {
 				defer wg.Done()
-				_, lbSegs, _, _, errLbTrans = services.RunWhisperTranscribeWithModel(r.Context(), lbBuf.Bytes(), "whisper-large-v3-turbo")
+				_, lbSegs, _, _, errLbTrans = services.RunWhisperTranscribeWithModel(r.Context(), lbBuf.Bytes(), "whisper-large-v3-turbo", user.Languages)
 			}()
 
 			wg.Wait()
@@ -239,7 +239,7 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		var errWhisper error
 		var segments []services.WhisperSegment
 		var mixProvider, mixRouting string
-		rawText, segments, mixProvider, mixRouting, errWhisper = services.RunWhisperTranscribeWithModel(r.Context(), audioBytes, "whisper-large-v3-turbo")
+		rawText, segments, mixProvider, mixRouting, errWhisper = services.RunWhisperTranscribeWithModel(r.Context(), audioBytes, "whisper-large-v3-turbo", user.Languages)
 		if errWhisper == nil {
 			whisperProvider = mixProvider
 			whisperRouting = mixRouting

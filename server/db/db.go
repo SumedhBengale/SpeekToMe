@@ -15,6 +15,8 @@ import (
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
+
+	"speektome-server/utils"
 )
 
 type Database struct {
@@ -85,7 +87,8 @@ func NewDatabase(connStr string) (*Database, error) {
 			is_admin INTEGER DEFAULT 0,
 			totp_secret TEXT DEFAULT NULL,
 			monthly_usage_seconds REAL DEFAULT 0.0,
-			is_locked INTEGER DEFAULT 0
+			is_locked INTEGER DEFAULT 0,
+			languages TEXT DEFAULT '["en"]'
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY,
@@ -220,6 +223,7 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = dbConn.Exec("ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN monthly_usage_seconds REAL DEFAULT 0.0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN is_locked INTEGER DEFAULT 0")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN languages TEXT DEFAULT '[\"en\"]'")
 	_, _ = dbConn.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, payment_id TEXT, invoice_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type)")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id)")
@@ -257,7 +261,7 @@ func (d *Database) GetOrCreateUser(googleID, email, name string) (int64, error) 
 		return id, nil
 	}
 	
-	res, err := d.db.Exec("INSERT INTO users (google_id, email, name, is_verified) VALUES (?, ?, ?, 1)", googleID, email, name)
+	res, err := d.db.Exec("INSERT INTO users (google_id, email, name, is_verified, languages) VALUES (?, ?, ?, 1, '[\"en\"]')", googleID, email, name)
 	if err != nil {
 		return 0, err
 	}
@@ -284,20 +288,23 @@ type UserProfile struct {
 	IsTempSession          int
 	MonthlyUsageSeconds    float64
 	IsLocked               int
+	Languages              []string
 }
 
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
+	var langsStr sql.NullString
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked, COALESCE(u.languages, '["en"]')
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked, &langsStr)
 	if err != nil {
 		return nil, err
 	}
+	u.Languages = utils.ParseLanguagesJSON(langsStr.String)
 	if u.IsLocked == 1 {
 		return nil, fmt.Errorf("ACCOUNT_LOCKED")
 	}
@@ -313,7 +320,7 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, 
 		       COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), 
 		       u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked,
-		       v.canonical_term, v.normalized_term
+		       COALESCE(u.languages, '["en"]'), v.canonical_term, v.normalized_term
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		LEFT JOIN vocabulary v ON u.id = v.user_id
@@ -326,6 +333,7 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 
 	var u UserProfile
 	var terms []VocabularyTerm
+	var langsStr sql.NullString
 	userParsed := false
 
 	for rows.Next() {
@@ -334,7 +342,7 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 			&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, 
 			&u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, 
 			&u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked,
-			&canonical, &normalized,
+			&langsStr, &canonical, &normalized,
 		)
 		if err != nil {
 			return nil, nil, err
@@ -346,6 +354,9 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 				Normalized: normalized.String,
 			})
 		}
+	}
+	if userParsed {
+		u.Languages = utils.ParseLanguagesJSON(langsStr.String)
 	}
 
 	if err = rows.Err(); err != nil {
@@ -400,6 +411,12 @@ func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, l
 	}
 
 	return tx.Commit()
+}
+
+func (d *Database) UpdateUserLanguages(userID int64, languages []string) error {
+	jsonStr := utils.FormatLanguagesJSON(languages)
+	_, err := d.db.Exec("UPDATE users SET languages = ? WHERE id = ?", jsonStr, userID)
+	return err
 }
 
 func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, error) {

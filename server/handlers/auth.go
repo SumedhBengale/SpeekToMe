@@ -21,6 +21,7 @@ import (
 	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
+	"speektome-server/utils"
 )
 
 type App struct {
@@ -343,6 +344,49 @@ func (a *App) HandleAuthMe(w http.ResponseWriter, r *http.Request) {
 		"duration_seconds":      user.MonthlyUsageSeconds,
 		"monthly_limit_seconds": monthlyLimitSeconds,
 		"is_admin":              user.IsAdmin == 1,
+		"languages":             user.Languages,
+	})
+}
+
+func (a *App) HandleUpdateLanguages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" && r.Method != "PUT" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, err := auth.Authenticate(r, a.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var req struct {
+		Languages []string `json:"languages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	validated, err := utils.ValidateLanguages(req.Languages)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := a.DB.UpdateUserLanguages(user.ID, validated); err != nil {
+		log.Printf("[DB ERROR] UpdateUserLanguages failed for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to update language preferences", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "success",
+		"languages": validated,
 	})
 }
 

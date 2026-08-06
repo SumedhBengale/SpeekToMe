@@ -18,6 +18,7 @@ import (
 
 	"speektome-server/config"
 	"speektome-server/ratelimit"
+	"speektome-server/utils"
 )
 
 var (
@@ -123,13 +124,42 @@ type WhisperSegment struct {
 	Text  string  `json:"text"`
 }
 
-func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, error) {
+func BuildWhisperPrompt(userLanguages []string) (string, string) {
+	valid, err := utils.ValidateLanguages(userLanguages)
+	if err != nil || len(valid) == 0 {
+		valid = []string{"en"}
+	}
+
+	langParam := ""
+	promptStr := "Transcribe the audio accurately with full grammar and correct punctuation. Do not translate into other languages. Do not output 'Thank you', 'Thanks for watching', or subtitle credits during silence."
+
+	if len(valid) == 1 {
+		langParam = valid[0]
+	} else {
+		var names []string
+		for _, code := range valid {
+			names = append(names, utils.GetLanguageName(code))
+		}
+		promptStr = fmt.Sprintf("Transcribe the audio accurately. Spoken languages may include: %s. Do not translate into other languages. Do not output 'Thank you' or subtitle credits during silence.", strings.Join(names, ", "))
+	}
+
+	return langParam, promptStr
+}
+
+func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model string, langParam, promptStr string) (string, []WhisperSegment, string, error) {
 	urlStr := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/run/%s", config.CloudflareAccountID, model)
 
 	audioBase64 := base64.StdEncoding.EncodeToString(audioBytes)
 	payload := map[string]interface{}{
 		"audio": audioBase64,
 	}
+	if langParam != "" {
+		payload["language"] = langParam
+	}
+	if promptStr != "" {
+		payload["initial_prompt"] = promptStr
+	}
+
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
 		return "", nil, "", err
@@ -193,6 +223,7 @@ func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model strin
 	hallucinations := map[string]bool{
 		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
 		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
+		"thank you!": true, "thanks!": true,
 	}
 	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
 	if hallucinations[checkText] {
@@ -206,7 +237,7 @@ func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model strin
 	return rawText, response.Result.Segments, routingLoc, nil
 }
 
-func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string) (string, []WhisperSegment, string, error) {
+func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string, langParam, promptStr string) (string, []WhisperSegment, string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	filePart, err := writer.CreateFormFile("audio", "recording.ogg")
@@ -214,6 +245,14 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 		return "", nil, "", err
 	}
 	_, _ = filePart.Write(audioBytes)
+
+	if langParam != "" {
+		_ = writer.WriteField("language", langParam)
+	}
+	if promptStr != "" {
+		_ = writer.WriteField("initial_prompt", promptStr)
+		_ = writer.WriteField("prompt", promptStr)
+	}
 	_ = writer.Close()
 
 	ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -265,6 +304,7 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	hallucinations := map[string]bool{
 		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
 		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
+		"thank you!": true, "thanks!": true,
 	}
 	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
 	if hallucinations[checkText] {
@@ -278,11 +318,17 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	return rawText, result.Segments, routingLoc, nil
 }
 
-func RunGroqTranscribe(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, error) {
+func RunGroqTranscribe(ctx context.Context, audioBytes []byte, model string, langParam, promptStr string) (string, []WhisperSegment, string, error) {
 	groqBody := &bytes.Buffer{}
 	writer := multipart.NewWriter(groqBody)
 	_ = writer.WriteField("model", model)
 	_ = writer.WriteField("response_format", "verbose_json")
+	if langParam != "" {
+		_ = writer.WriteField("language", langParam)
+	}
+	if promptStr != "" {
+		_ = writer.WriteField("prompt", promptStr)
+	}
 	filePart, err := writer.CreateFormFile("file", "recording.ogg")
 	if err != nil {
 		return "", nil, "", err
@@ -339,6 +385,7 @@ func RunGroqTranscribe(ctx context.Context, audioBytes []byte, model string) (st
 	hallucinations := map[string]bool{
 		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
 		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
+		"thank you!": true, "thanks!": true,
 	}
 	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'")
 	if hallucinations[checkText] {
@@ -352,8 +399,9 @@ func RunGroqTranscribe(ctx context.Context, audioBytes []byte, model string) (st
 	return rawText, result.Segments, routingLoc, nil
 }
 
-func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string) (string, []WhisperSegment, string, string, error) {
+func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string, userLanguages []string) (string, []WhisperSegment, string, string, error) {
 	cfg := config.ConfigManager.Get()
+	langParam, promptStr := BuildWhisperPrompt(userLanguages)
 
 	providers := []string{cfg.DefaultProvider}
 	allProviders := []string{"groq", "deepinfra", "cloudflare"}
@@ -369,8 +417,8 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 		case "groq":
 			if cfg.GroqEnabled && config.GroqAPIKey != "" {
 				if ratelimit.GroqRateLimiter.Allow() {
-					log.Printf("[GROQ] Attempting transcription using model %s", model)
-					text, segments, loc, err := RunGroqTranscribe(ctx, audioBytes, model)
+					log.Printf("[GROQ] Attempting transcription using model %s (lang: %q)", model, langParam)
+					text, segments, loc, err := RunGroqTranscribe(ctx, audioBytes, model, langParam, promptStr)
 					if err == nil {
 						return text, segments, "groq", loc, nil
 					}
@@ -389,8 +437,8 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 				}
 				diURL := config.DeepInfraBaseURL + diModel
 
-				log.Printf("[DI INFRA] Attempting transcription using model %s", diModel)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL)
+				log.Printf("[DI INFRA] Attempting transcription using model %s (lang: %q)", diModel, langParam)
+				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr)
 				if err == nil {
 					return text, segments, "deepinfra", loc, nil
 				}
@@ -403,8 +451,8 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 				if model == "whisper-large-v3" {
 					cfModel = "@cf/openai/whisper"
 				}
-				log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s", cfModel)
-				text, segments, loc, err := RunCloudflareTranscribe(ctx, audioBytes, cfModel)
+				log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s (lang: %q)", cfModel, langParam)
+				text, segments, loc, err := RunCloudflareTranscribe(ctx, audioBytes, cfModel, langParam, promptStr)
 				if err == nil {
 					return text, segments, "cloudflare", loc, nil
 				}
@@ -421,6 +469,6 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 }
 
 func RunWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
-	text, segments, _, _, err := RunWhisperTranscribeWithModel(ctx, audioBytes, "whisper-large-v3-turbo")
+	text, segments, _, _, err := RunWhisperTranscribeWithModel(ctx, audioBytes, "whisper-large-v3-turbo", []string{"en"})
 	return text, segments, err
 }
