@@ -15,8 +15,8 @@ import logoSvg from '/logo.svg';
 
 import { SUPPORTED_LANGUAGES, getLanguageName } from './utils/languages';
 
-const API_BASE = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-  ? 'http://localhost:8000' 
+const API_BASE = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://localhost:8000'
   : ''); // Fallback to current host root if no variable is provided
 
 export default function App() {
@@ -33,7 +33,7 @@ export default function App() {
   const [successMessage, setSuccessMessage] = useState('');
   const [turnstileToken, setTurnstileToken] = useState('');
   const [resetTurnstile, setResetTurnstile] = useState(0);
-  
+
   // Auth Form inputs
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -70,7 +70,7 @@ export default function App() {
     const verifiedEmail = params.get('email');
     const queryTempToken = params.get('temp_token');
     const require2fa = params.get('require_2fa');
-    
+
     if (queryToken) {
       localStorage.setItem('speektome_token', queryToken);
       setToken(queryToken);
@@ -216,9 +216,9 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/auth/vocabulary`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ canonical_term: newVocabTerm.trim() })
       });
@@ -244,9 +244,9 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/auth/vocabulary`, {
         method: 'DELETE',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ canonical_term: term })
       });
@@ -340,10 +340,10 @@ export default function App() {
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email, 
+        body: JSON.stringify({
+          email,
           password,
-          'cf-turnstile-response': turnstileToken 
+          'cf-turnstile-response': turnstileToken
         })
       });
       const data = await res.json();
@@ -532,13 +532,13 @@ export default function App() {
       // 1. Save Plan Details
       const planRes = await fetch(`${API_BASE}/admin/users/${editingUser.id}/plan`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ 
-          plan_tier: editPlanTier, 
-          plan_active: parseInt(editPlanActive) 
+        body: JSON.stringify({
+          plan_tier: editPlanTier,
+          plan_active: parseInt(editPlanActive)
         })
       });
       if (!planRes.ok) {
@@ -550,12 +550,12 @@ export default function App() {
       const rpmVal = editRateLimit.trim() === '' ? null : parseInt(editRateLimit);
       const limitRes = await fetch(`${API_BASE}/admin/users/${editingUser.id}/rate-limit`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ 
-          rate_limit_rpm: rpmVal 
+        body: JSON.stringify({
+          rate_limit_rpm: rpmVal
         })
       });
       if (!limitRes.ok) {
@@ -586,11 +586,11 @@ export default function App() {
       const res = await fetch(`${API_BASE}/auth/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email, 
-          password, 
+        body: JSON.stringify({
+          email,
+          password,
           name,
-          'cf-turnstile-response': turnstileToken 
+          'cf-turnstile-response': turnstileToken
         })
       });
       const data = await res.json();
@@ -699,8 +699,8 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/billing/cancel-subscription`, {
         method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}` 
+        headers: {
+          'Authorization': `Bearer ${token}`
         }
       });
       if (res.ok) {
@@ -782,25 +782,25 @@ export default function App() {
         <nav className="nav-links">
           {user ? (
             <>
-              <span className="nav-user"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>{user.name} ({user.email})</span>
+              <span className="nav-user"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline-block' }}><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" /></svg>{user.name} ({user.email})</span>
               {user.is_admin && (
-                <button 
-                  onClick={() => setRoute(route === 'admin' ? 'dashboard' : 'admin')} 
+                <button
+                  onClick={() => setRoute(route === 'admin' ? 'dashboard' : 'admin')}
                   className="btn btn-primary btn-sm"
                   style={{ background: route === 'admin' ? '#034f46' : 'var(--color-primary)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Admin Panel
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg> Admin Panel
                 </button>
               )}
               <button onClick={() => setRoute(route === 'dashboard' ? 'billing' : 'dashboard')} className="btn btn-primary btn-sm">
                 {route === 'dashboard' ? (
                   <>
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline-block' }}><rect x="1" y="4" width="22" height="16" rx="2" ry="2" /><line x1="1" y1="10" x2="23" y2="10" /></svg>
                     Manage Subscription
                   </>
                 ) : (
                   <>
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline-block' }}><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>
                     Back to Stats
                   </>
                 )}
@@ -827,11 +827,11 @@ export default function App() {
             <form onSubmit={handle2faVerify}>
               <div className="auth-form-control">
                 <label>Verification Code</label>
-                <input 
-                  type="text" 
-                  value={totpCode} 
-                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))} 
-                  placeholder="000000" 
+                <input
+                  type="text"
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="000000"
                   className="auth-input"
                   style={{ textAlign: 'center', fontSize: '24px', letterSpacing: '8px' }}
                   required
@@ -862,17 +862,17 @@ export default function App() {
 
             {authError && <div className="auth-error">{authError}</div>}
             {successMessage && (
-              <div 
-                className="auth-success" 
-                style={{ 
-                  background: '#d1fae5', 
-                  border: '2px solid #1a1a1a', 
-                  padding: '12px 14px', 
-                  borderRadius: '12px', 
-                  color: '#1a1a1a', 
-                  fontSize: '13.5px', 
-                  fontWeight: '500', 
-                  marginBottom: '20px', 
+              <div
+                className="auth-success"
+                style={{
+                  background: '#d1fae5',
+                  border: '2px solid #1a1a1a',
+                  padding: '12px 14px',
+                  borderRadius: '12px',
+                  color: '#1a1a1a',
+                  fontSize: '13.5px',
+                  fontWeight: '500',
+                  marginBottom: '20px',
                   textAlign: 'center',
                   boxShadow: '2px 2px 0px #1a1a1a'
                 }}
@@ -882,7 +882,7 @@ export default function App() {
             )}
 
             <button onClick={handleGoogleLogin} className="btn google-auth-btn" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12.24 10.285V13.4h6.887c-.58 2.716-2.85 4.67-5.918 4.67-3.568 0-6.46-2.892-6.46-6.46s2.892-6.46 6.46-6.46c1.614 0 3.08.595 4.22 1.57l2.4-2.4C17.96 2.68 15.26 1.7 12.24 1.7 6.58 1.7 2 6.28 2 11.94s4.58 10.24 10.24 10.24c5.93 0 9.87-4.17 9.87-10.04 0-.67-.07-1.33-.19-1.855H12.24z"/></svg> Sign in with Google
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12.24 10.285V13.4h6.887c-.58 2.716-2.85 4.67-5.918 4.67-3.568 0-6.46-2.892-6.46-6.46s2.892-6.46 6.46-6.46c1.614 0 3.08.595 4.22 1.57l2.4-2.4C17.96 2.68 15.26 1.7 12.24 1.7 6.58 1.7 2 6.28 2 11.94s4.58 10.24 10.24 10.24c5.93 0 9.87-4.17 9.87-10.04 0-.67-.07-1.33-.19-1.855H12.24z" /></svg> Sign in with Google
             </button>
 
             <div className="auth-divider-advanced">
@@ -895,29 +895,29 @@ export default function App() {
             <form onSubmit={handleLogin}>
               <div className="auth-form-control">
                 <label>Email Address</label>
-                <input 
-                  type="email" 
-                  value={email} 
-                  onChange={(e) => setEmail(e.target.value)} 
-                  placeholder="name@example.com" 
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
                   className="auth-input"
                   required
                 />
               </div>
               <div className="auth-form-control">
                 <label>Password</label>
-                <input 
-                  type="password" 
-                  value={password} 
-                  onChange={(e) => setPassword(e.target.value)} 
-                  placeholder="••••••••" 
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
                   className="auth-input"
                   required
                 />
               </div>
-              <TurnstileWidget 
-                onVerify={setTurnstileToken} 
-                resetTrigger={resetTurnstile} 
+              <TurnstileWidget
+                onVerify={setTurnstileToken}
+                resetTrigger={resetTurnstile}
               />
               <button type="submit" className="btn btn-primary auth-submit-btn" disabled={loading || !turnstileToken}>
                 {loading ? <div className="spinner"></div> : 'Sign In'}
@@ -946,7 +946,7 @@ export default function App() {
             {authError && <div className="auth-error">{authError}</div>}
 
             <button onClick={handleGoogleLogin} className="btn google-auth-btn" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12.24 10.285V13.4h6.887c-.58 2.716-2.85 4.67-5.918 4.67-3.568 0-6.46-2.892-6.46-6.46s2.892-6.46 6.46-6.46c1.614 0 3.08.595 4.22 1.57l2.4-2.4C17.96 2.68 15.26 1.7 12.24 1.7 6.58 1.7 2 6.28 2 11.94s4.58 10.24 10.24 10.24c5.93 0 9.87-4.17 9.87-10.04 0-.67-.07-1.33-.19-1.855H12.24z"/></svg> Sign up with Google
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12.24 10.285V13.4h6.887c-.58 2.716-2.85 4.67-5.918 4.67-3.568 0-6.46-2.892-6.46-6.46s2.892-6.46 6.46-6.46c1.614 0 3.08.595 4.22 1.57l2.4-2.4C17.96 2.68 15.26 1.7 12.24 1.7 6.58 1.7 2 6.28 2 11.94s4.58 10.24 10.24 10.24c5.93 0 9.87-4.17 9.87-10.04 0-.67-.07-1.33-.19-1.855H12.24z" /></svg> Sign up with Google
             </button>
 
             <div className="auth-divider-advanced">
@@ -959,40 +959,40 @@ export default function App() {
             <form onSubmit={handleSignup}>
               <div className="auth-form-control">
                 <label>Full Name</label>
-                <input 
-                  type="text" 
-                  value={name} 
-                  onChange={(e) => setName(e.target.value)} 
-                  placeholder="John Doe" 
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="John Doe"
                   className="auth-input"
                   required
                 />
               </div>
               <div className="auth-form-control">
                 <label>Email Address</label>
-                <input 
-                  type="email" 
-                  value={email} 
-                  onChange={(e) => setEmail(e.target.value)} 
-                  placeholder="name@example.com" 
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
                   className="auth-input"
                   required
                 />
               </div>
               <div className="auth-form-control">
                 <label>Password</label>
-                <input 
-                  type="password" 
-                  value={password} 
-                  onChange={(e) => setPassword(e.target.value)} 
-                  placeholder="••••••••" 
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
                   className="auth-input"
                   required
                 />
               </div>
-              <TurnstileWidget 
-                onVerify={setTurnstileToken} 
-                resetTrigger={resetTurnstile} 
+              <TurnstileWidget
+                onVerify={setTurnstileToken}
+                resetTrigger={resetTurnstile}
               />
               <button type="submit" className="btn btn-primary auth-submit-btn" disabled={loading || !turnstileToken}>
                 {loading ? <div className="spinner"></div> : 'Create Account'}
@@ -1019,34 +1019,34 @@ export default function App() {
 
           {/* Sub-tab Navigation */}
           <div className="tab-navigation">
-            <button 
-              onClick={() => { setActiveSubTab('stats'); setActiveMeeting(null); }} 
+            <button
+              onClick={() => { setActiveSubTab('stats'); setActiveMeeting(null); }}
               className={`btn ${activeSubTab === 'stats' ? 'btn-primary' : ''}`}
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
             >
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> Stats & Logs
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg> Stats & Logs
             </button>
-            <button 
-              onClick={() => { setActiveSubTab('vocab'); setActiveMeeting(null); }} 
+            <button
+              onClick={() => { setActiveSubTab('vocab'); setActiveMeeting(null); }}
               className={`btn ${activeSubTab === 'vocab' ? 'btn-primary' : ''}`}
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
             >
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> Custom Vocabulary
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg> Custom Vocabulary
             </button>
-            <button 
-              onClick={() => { setActiveSubTab('languages'); setActiveMeeting(null); }} 
+            <button
+              onClick={() => { setActiveSubTab('languages'); setActiveMeeting(null); }}
               className={`btn ${activeSubTab === 'languages' ? 'btn-primary' : ''}`}
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
             >
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Languages ({userLanguages.length}/5)
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg> Languages ({userLanguages.length}/5)
             </button>
             {user.plan_active && (
-              <button 
-                onClick={() => { setActiveSubTab('meetings'); }} 
+              <button
+                onClick={() => { setActiveSubTab('meetings'); }}
                 className={`btn ${activeSubTab === 'meetings' ? 'btn-primary' : ''}`}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
               >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> Meeting Notes
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" /></svg> Meeting Notes
               </button>
             )}
           </div>
@@ -1057,7 +1057,7 @@ export default function App() {
               <div className="dashboard-col">
                 <div className="card">
                   <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg> Recent Transcriptions
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg> Recent Transcriptions
                   </h3>
                   {logs.length === 0 ? (
                     <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
@@ -1107,7 +1107,7 @@ export default function App() {
                                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                         {textOutput}
                                       </span>
-                                      <button 
+                                      <button
                                         className="transcription-copy-btn"
                                         title="Copy transcription"
                                         onClick={(e) => {
@@ -1145,30 +1145,30 @@ export default function App() {
               <div className="dashboard-col">
                 <div className="card">
                   <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> Usage Analytics
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg> Usage Analytics
                   </h3>
-                  
+
                   <div className="usage-summary">
                     <div className="usage-stats">
                       <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
                       <span>{formatSecondsToHours(user.duration_seconds)} / {formatSecondsToHours(user.monthly_limit_seconds || 3600)}</span>
                     </div>
-                    
+
                     <div className="progress-bar-container">
-                      <div 
-                        className="progress-bar-fill" 
-                        style={{ 
+                      <div
+                        className="progress-bar-fill"
+                        style={{
                           width: `${Math.min(
-                            (user.duration_seconds / (user.monthly_limit_seconds || 3600)) * 100, 
+                            (user.duration_seconds / (user.monthly_limit_seconds || 3600)) * 100,
                             100
-                          )}%` 
+                          )}%`
                         }}
                       ></div>
                     </div>
-                    
+
                     <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.5)', marginTop: '8px' }}>
-                      {user.plan_tier === 'free' 
-                        ? 'Upgrade to SpeekTo.Me Pro to get unlimited dictation and access to Advanced AI Enhancement.' 
+                      {user.plan_tier === 'free'
+                        ? 'Upgrade to SpeekTo.Me Pro to get unlimited dictation and access to Advanced AI Enhancement.'
                         : 'Your Pro plan subscription is active and will renew monthly.'}
                     </p>
                   </div>
@@ -1176,17 +1176,17 @@ export default function App() {
 
                 <div className="card" style={{ background: 'var(--color-btn-accent)' }}>
                   <h3 className="card-title" style={{ borderBottomColor: 'var(--border-color)', display: 'flex', alignItems: 'center' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{marginRight: '6px'}}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ marginRight: '6px' }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
                     Plan Tier: {user.plan_tier.toUpperCase()}
                   </h3>
                   <p style={{ fontSize: '14px', marginBottom: '16px', fontWeight: '500' }}>
-                    {user.plan_active 
-                      ? `Active since ${formatDate(user.plan_activated_at)}` 
+                    {user.plan_active
+                      ? `Active since ${formatDate(user.plan_activated_at)}`
                       : 'No active paid subscription.'}
                   </p>
                   {!user.plan_active ? (
                     <button onClick={() => setRoute('billing')} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', verticalAlign: 'middle', display: 'inline-block'}}><path d="M4.5 16.5c-1.5 1.25-2.5 3.5-2.5 3.5s2.25-1 3.5-2.5M12 2C8 2 5 5 5 9c0 1.66.84 3.5 1.5 4.5L12 22l5.5-8.5c.66-1 1.5-2.84 1.5-4.5 0-4-3-7-7-7z"/><path d="M12 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline-block' }}><path d="M4.5 16.5c-1.5 1.25-2.5 3.5-2.5 3.5s2.25-1 3.5-2.5M12 2C8 2 5 5 5 9c0 1.66.84 3.5 1.5 4.5L12 22l5.5-8.5c.66-1 1.5-2.84 1.5-4.5 0-4-3-7-7-7z" /><path d="M12 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" /></svg>
                       Upgrade to Pro ($2.00/mo)
                     </button>
                   ) : (
@@ -1194,9 +1194,9 @@ export default function App() {
                       <button onClick={() => setRoute('billing')} className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff' }}>
                         Manage Billing Details
                       </button>
-                      <button 
-                        onClick={() => setShowCancelModal(true)} 
-                        className="btn btn-danger" 
+                      <button
+                        onClick={() => setShowCancelModal(true)}
+                        className="btn btn-danger"
                         style={{ width: '100%', justifyContent: 'center' }}
                         disabled={loading}
                       >
@@ -1215,15 +1215,15 @@ export default function App() {
               <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '20px' }}>
                 Add specialized terms, abbreviations, acronyms, or names that you want the dictation pipeline to recognize and spell correctly.
               </p>
-              
+
               {authError && <div className="auth-error" style={{ marginBottom: '20px' }}>{authError}</div>}
-              
+
               <form onSubmit={handleAddVocab} className="vocab-form">
-                <input 
-                  type="text" 
-                  value={newVocabTerm} 
-                  onChange={(e) => setNewVocabTerm(e.target.value)} 
-                  placeholder="e.g. Synaptican, SpeekTo.Me, ChatGPT" 
+                <input
+                  type="text"
+                  value={newVocabTerm}
+                  onChange={(e) => setNewVocabTerm(e.target.value)}
+                  placeholder="e.g. Synaptican, SpeekTo.Me, ChatGPT"
                   className="auth-input"
                   required
                 />
@@ -1252,8 +1252,8 @@ export default function App() {
                           <td><strong>{term.canonical_term}</strong></td>
                           <td><code style={{ background: 'var(--bg-canvas)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(26,26,26,0.1)' }}>{term.normalized_term}</code></td>
                           <td style={{ textAlign: 'right' }}>
-                            <button 
-                              onClick={() => handleDeleteVocab(term.canonical_term)} 
+                            <button
+                              onClick={() => handleDeleteVocab(term.canonical_term)}
                               className="btn btn-danger btn-sm"
                               style={{ padding: '4px 8px' }}
                               disabled={loading}
@@ -1273,12 +1273,12 @@ export default function App() {
           {activeSubTab === 'languages' && (
             <div className="card">
               <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10z"/></svg> 🌐 Spoken Language Preferences
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10z" /></svg>  Spoken Language Preferences
               </h3>
               <p style={{ fontSize: '14px', color: 'var(--color-text-dark)', opacity: 0.75, marginBottom: '20px' }}>
                 Select up to 5 languages you speak during voice dictations. Selecting a single primary language locks Whisper to maximum transcription accuracy. Selecting multiple languages informs Whisper's multi-lingual model without translating.
               </p>
-              
+
               {authError && <div className="auth-error" style={{ marginBottom: '16px' }}>{authError}</div>}
               {successMessage && <div className="auth-success" style={{ marginBottom: '16px', background: '#d1fae5', color: '#065f46', padding: '10px 14px', borderRadius: '12px', border: 'var(--border-flat)', boxShadow: 'var(--shadow-flat-small)' }}>{successMessage}</div>}
 
@@ -1288,8 +1288,8 @@ export default function App() {
                 </label>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                   {userLanguages.map(code => (
-                    <button 
-                      key={code} 
+                    <button
+                      key={code}
                       type="button"
                       onClick={() => handleToggleLanguage(code)}
                       className="btn btn-primary"
@@ -1307,7 +1307,7 @@ export default function App() {
                 <label style={{ fontSize: '13px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--color-text-dark)', display: 'block', marginBottom: '14px' }}>
                   All 99 Supported Whisper Languages (Click to toggle):
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', maxHeight: '380px', overflowY: 'auto', paddingRight: '4px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', maxHeight: '380px', overflowY: 'auto', paddingRight: '4px', padingTop: '10px', paddingBottom: '20px' }}>
                   {SUPPORTED_LANGUAGES.map(lang => {
                     const selected = userLanguages.includes(lang.code);
                     return (
@@ -1340,9 +1340,9 @@ export default function App() {
                 <div className="card">
                   <div className="meeting-detail-header">
                     <div>
-                      <button 
-                        onClick={() => setActiveMeeting(null)} 
-                        className="btn btn-sm" 
+                      <button
+                        onClick={() => setActiveMeeting(null)}
+                        className="btn btn-sm"
                         style={{ marginBottom: '12px' }}
                       >
                         ⬅ Back to Meetings List
@@ -1352,8 +1352,8 @@ export default function App() {
                     </div>
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                       <span className="meeting-meta-badge">⏱ {formatSeconds(activeMeeting.duration)}</span>
-                      <button 
-                        onClick={() => handleDeleteMeeting(activeMeeting.id)} 
+                      <button
+                        onClick={() => handleDeleteMeeting(activeMeeting.id)}
                         className="btn btn-danger btn-sm"
                         disabled={loading}
                       >
@@ -1406,12 +1406,12 @@ export default function App() {
                             let segments = [];
                             try {
                               segments = JSON.parse(activeMeeting.segments_json);
-                            } catch (e) {}
-                            
+                            } catch (e) { }
+
                             if (!segments || segments.length === 0) {
                               return <p style={{ color: 'rgba(26,26,26,0.5)' }}>No individual segment metadata available.</p>;
                             }
-                            
+
                             return (
                               <div className="segments-list">
                                 {segments.map((seg, idx) => (
@@ -1444,8 +1444,8 @@ export default function App() {
                   ) : (
                     <div className="meetings-grid">
                       {meetings.map((meeting) => (
-                        <div 
-                          key={meeting.id} 
+                        <div
+                          key={meeting.id}
                           onClick={() => setActiveMeeting(meeting)}
                           className="card meeting-card"
                           style={{ padding: '24px', margin: 0 }}
@@ -1485,30 +1485,30 @@ export default function App() {
                 <h3>SpeekTo.Me Starter</h3>
                 <p>Perfect for testing out dictation and speed.</p>
                 <div className="plan-price">$0<span>/forever</span></div>
-                
+
                 <ul className="plan-features" style={{ listStyle: 'none', padding: 0 }}>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>1 hour / month transcription limit</span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>Fast AI voice dictation</span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>Global keyboard shortcut trigger</span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>Standard latency queue</span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>Cross-platform desktop & mobile support (coming soon)</span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>Basic community support</span>
                   </li>
                 </ul>
@@ -1520,9 +1520,9 @@ export default function App() {
                     ✓ Current Active Plan
                   </button>
                 ) : (
-                  <button 
-                    onClick={() => setShowCancelModal(true)} 
-                    className="btn btn-danger" 
+                  <button
+                    onClick={() => setShowCancelModal(true)}
+                    className="btn btn-danger"
                     disabled={loading}
                   >
                     Downgrade to Starter Plan
@@ -1541,27 +1541,27 @@ export default function App() {
 
                 <ul className="plan-features" style={{ listStyle: 'none', padding: 0 }}>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span><strong>Unlimited AI Voice Transcription</strong></span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span><strong>Advanced AI Enhancement & Smart Formatting</strong></span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>High-priority transcription queues (Ultra-low latency)</span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>Custom AI system prompt instructions</span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>Cross-platform desktop & mobile support (coming soon)</span>
                   </li>
                   <li style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-success)', marginTop: '3px', flexShrink: 0}}><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--color-success)', marginTop: '3px', flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                     <span>Priority 24/7 email & chat support</span>
                   </li>
                 </ul>
@@ -1573,9 +1573,9 @@ export default function App() {
                     <button className="btn btn-current-plan" disabled>
                       ✓ Current Active Plan (Subscribed)
                     </button>
-                    <button 
-                      onClick={() => setShowCancelModal(true)} 
-                      className="btn btn-danger btn-sm" 
+                    <button
+                      onClick={() => setShowCancelModal(true)}
+                      className="btn btn-danger btn-sm"
                       disabled={loading}
                     >
                       Cancel Subscription
@@ -1623,16 +1623,16 @@ export default function App() {
               Are you sure you want to cancel your SpeekTo.Me Pro subscription? Your account will be immediately downgraded to the Starter tier, and you will not be billed further.
             </p>
             <div style={{ display: 'flex', gap: '16px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-              <button 
-                onClick={() => setShowCancelModal(false)} 
-                className="btn" 
+              <button
+                onClick={() => setShowCancelModal(false)}
+                className="btn"
                 style={{ background: '#fff' }}
                 disabled={loading}
               >
                 Keep Subscription
               </button>
-              <button 
-                onClick={handleConfirmCancelSubscription} 
+              <button
+                onClick={handleConfirmCancelSubscription}
                 className="btn btn-danger"
                 disabled={loading}
               >
@@ -1683,140 +1683,140 @@ export default function App() {
           {/* Users Tab */}
           {adminSubTab === 'users' && (
             <>
-          <div className="card" style={{ padding: '24px' }}>
-            <h3 className="card-title" style={{ marginBottom: '20px' }}>👥 Active Users Directory</h3>
-            <div className="logs-table-container">
-              <table className="logs-table">
-                <thead>
-                  <tr>
-                    <th>User ID</th>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Plan Tier</th>
-                    <th>Plan Status</th>
-                    <th>Rate Limit</th>
-                    <th>Total Transcribed</th>
-                    <th style={{ textAlign: 'right' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {adminUsers.map((u) => (
-                    <tr key={u.id}>
-                      <td>#{u.id}</td>
-                      <td><strong>{u.name}</strong></td>
-                      <td>{u.email}</td>
-                      <td>
-                        <span className={`badge-status ${u.plan_tier === 'pro' ? 'badge-success' : 'badge-failed'}`} style={{ textTransform: 'uppercase', background: u.plan_tier === 'pro' ? '#d1fae5' : '#f3f4f6', color: u.plan_tier === 'pro' ? '#065f46' : '#374151', border: '1px solid rgba(26,26,26,0.15)', padding: '2px 8px' }}>
-                          {u.plan_tier}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge-status ${u.plan_active ? 'badge-success' : 'badge-failed'}`}>
-                          {u.plan_active ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                      <td>
-                        {u.rate_limit_rpm !== null ? `${u.rate_limit_rpm} RPM` : <span style={{ opacity: 0.5 }}>Default (10)</span>}
-                      </td>
-                      <td>
-                        <strong>{formatSeconds(u.total_usage_seconds)}</strong>
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button 
-                          onClick={() => handleOpenEditUser(u)} 
-                          className="btn btn-primary btn-sm"
-                          style={{ padding: '6px 12px' }}
-                        >
-                          ✏️ Edit Plan & Limit
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Edit User Modal */}
-          {editingUser && (
-            <div className="modal-overlay" style={{
-              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-              backgroundColor: 'rgba(26, 26, 26, 0.6)', display: 'flex',
-              justifyContent: 'center', alignItems: 'center', zIndex: 1000,
-              backdropFilter: 'blur(4px)'
-            }}>
-              <div className="card" style={{ maxWidth: '480px', width: '90%', margin: '20px', position: 'relative', background: '#fff' }}>
-                <h3 className="card-title" style={{ fontSize: '22px' }}>
-                  ⚙️ Edit User #{editingUser.id}
-                </h3>
-                <p style={{ fontSize: '14px', color: 'rgba(26,26,26,0.6)', marginBottom: '20px' }}>
-                  Modify subscription tier and customize rate limits for <strong>{editingUser.name}</strong> ({editingUser.email}).
-                </p>
-
-                <form onSubmit={handleSaveEditUser}>
-                  <div className="auth-form-control" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Subscription Tier</label>
-                    <select 
-                      value={editPlanTier} 
-                      onChange={(e) => setEditPlanTier(e.target.value)}
-                      className="auth-input"
-                      style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a', background: '#fff' }}
-                    >
-                      <option value="free">Starter (Free)</option>
-                      <option value="pro">Pro (Paid)</option>
-                    </select>
-                  </div>
-
-                  <div className="auth-form-control" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Plan Status</label>
-                    <select 
-                      value={editPlanActive} 
-                      onChange={(e) => setEditPlanActive(parseInt(e.target.value))}
-                      className="auth-input"
-                      style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a', background: '#fff' }}
-                    >
-                      <option value="0">Inactive / Not Subscribed</option>
-                      <option value="1">Active / Subscribed</option>
-                    </select>
-                  </div>
-
-                  <div className="auth-form-control" style={{ marginBottom: '24px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Requests Per Minute (RPM) Rate Limit</label>
-                    <input 
-                      type="number" 
-                      value={editRateLimit} 
-                      onChange={(e) => setEditRateLimit(e.target.value)}
-                      placeholder="e.g. 25 (leave blank to use defaults)"
-                      className="auth-input"
-                      style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a' }}
-                    />
-                    <small style={{ color: 'rgba(26,26,26,0.5)', marginTop: '4px', display: 'block' }}>
-                      Overrides the default user limit (10 RPM). Leave blank to clear override.
-                    </small>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '16px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                    <button 
-                      type="button"
-                      onClick={() => setEditingUser(null)} 
-                      className="btn" 
-                      style={{ background: '#fff' }}
-                      disabled={loading}
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      type="submit" 
-                      className="btn btn-primary"
-                      disabled={loading}
-                    >
-                      {loading ? <div className="spinner"></div> : 'Save Changes'}
-                    </button>
-                  </div>
-                </form>
+              <div className="card" style={{ padding: '24px' }}>
+                <h3 className="card-title" style={{ marginBottom: '20px' }}>👥 Active Users Directory</h3>
+                <div className="logs-table-container">
+                  <table className="logs-table">
+                    <thead>
+                      <tr>
+                        <th>User ID</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Plan Tier</th>
+                        <th>Plan Status</th>
+                        <th>Rate Limit</th>
+                        <th>Total Transcribed</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminUsers.map((u) => (
+                        <tr key={u.id}>
+                          <td>#{u.id}</td>
+                          <td><strong>{u.name}</strong></td>
+                          <td>{u.email}</td>
+                          <td>
+                            <span className={`badge-status ${u.plan_tier === 'pro' ? 'badge-success' : 'badge-failed'}`} style={{ textTransform: 'uppercase', background: u.plan_tier === 'pro' ? '#d1fae5' : '#f3f4f6', color: u.plan_tier === 'pro' ? '#065f46' : '#374151', border: '1px solid rgba(26,26,26,0.15)', padding: '2px 8px' }}>
+                              {u.plan_tier}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`badge-status ${u.plan_active ? 'badge-success' : 'badge-failed'}`}>
+                              {u.plan_active ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td>
+                            {u.rate_limit_rpm !== null ? `${u.rate_limit_rpm} RPM` : <span style={{ opacity: 0.5 }}>Default (10)</span>}
+                          </td>
+                          <td>
+                            <strong>{formatSeconds(u.total_usage_seconds)}</strong>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              onClick={() => handleOpenEditUser(u)}
+                              className="btn btn-primary btn-sm"
+                              style={{ padding: '6px 12px' }}
+                            >
+                              ✏️ Edit Plan & Limit
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+
+              {/* Edit User Modal */}
+              {editingUser && (
+                <div className="modal-overlay" style={{
+                  position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                  backgroundColor: 'rgba(26, 26, 26, 0.6)', display: 'flex',
+                  justifyContent: 'center', alignItems: 'center', zIndex: 1000,
+                  backdropFilter: 'blur(4px)'
+                }}>
+                  <div className="card" style={{ maxWidth: '480px', width: '90%', margin: '20px', position: 'relative', background: '#fff' }}>
+                    <h3 className="card-title" style={{ fontSize: '22px' }}>
+                      ⚙️ Edit User #{editingUser.id}
+                    </h3>
+                    <p style={{ fontSize: '14px', color: 'rgba(26,26,26,0.6)', marginBottom: '20px' }}>
+                      Modify subscription tier and customize rate limits for <strong>{editingUser.name}</strong> ({editingUser.email}).
+                    </p>
+
+                    <form onSubmit={handleSaveEditUser}>
+                      <div className="auth-form-control" style={{ marginBottom: '16px' }}>
+                        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Subscription Tier</label>
+                        <select
+                          value={editPlanTier}
+                          onChange={(e) => setEditPlanTier(e.target.value)}
+                          className="auth-input"
+                          style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a', background: '#fff' }}
+                        >
+                          <option value="free">Starter (Free)</option>
+                          <option value="pro">Pro (Paid)</option>
+                        </select>
+                      </div>
+
+                      <div className="auth-form-control" style={{ marginBottom: '16px' }}>
+                        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Plan Status</label>
+                        <select
+                          value={editPlanActive}
+                          onChange={(e) => setEditPlanActive(parseInt(e.target.value))}
+                          className="auth-input"
+                          style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a', background: '#fff' }}
+                        >
+                          <option value="0">Inactive / Not Subscribed</option>
+                          <option value="1">Active / Subscribed</option>
+                        </select>
+                      </div>
+
+                      <div className="auth-form-control" style={{ marginBottom: '24px' }}>
+                        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '6px' }}>Requests Per Minute (RPM) Rate Limit</label>
+                        <input
+                          type="number"
+                          value={editRateLimit}
+                          onChange={(e) => setEditRateLimit(e.target.value)}
+                          placeholder="e.g. 25 (leave blank to use defaults)"
+                          className="auth-input"
+                          style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '2px solid #1a1a1a' }}
+                        />
+                        <small style={{ color: 'rgba(26,26,26,0.5)', marginTop: '4px', display: 'block' }}>
+                          Overrides the default user limit (10 RPM). Leave blank to clear override.
+                        </small>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '16px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => setEditingUser(null)}
+                          className="btn"
+                          style={{ background: '#fff' }}
+                          disabled={loading}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="btn btn-primary"
+                          disabled={loading}
+                        >
+                          {loading ? <div className="spinner"></div> : 'Save Changes'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
             </>
           )}
 
@@ -1885,15 +1885,15 @@ export default function App() {
               <div className="card" style={{ padding: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
                   <h3 className="card-title" style={{ margin: 0 }}>⚡ In-Memory Rate Limiting Counts (Fixed-Window 60s)</h3>
-                  <button 
-                    onClick={() => handleResetRateLimitCache()} 
-                    className="btn btn-failed" 
+                  <button
+                    onClick={() => handleResetRateLimitCache()}
+                    className="btn btn-failed"
                     style={{ fontSize: '12px' }}
                   >
                     🗑️ Reset All Rate Limits Globally
                   </button>
                 </div>
-                
+
                 <div className="logs-table-container">
                   <table className="logs-table">
                     <thead>
@@ -1923,9 +1923,9 @@ export default function App() {
                               </span>
                             </td>
                             <td style={{ textAlign: 'right' }}>
-                              <button 
-                                onClick={() => handleResetRateLimitCache(rawUserId)} 
-                                className="btn btn-secondary" 
+                              <button
+                                onClick={() => handleResetRateLimitCache(rawUserId)}
+                                className="btn btn-secondary"
                                 style={{ fontSize: '11px', padding: '6px 10px' }}
                               >
                                 Reset User Limit
@@ -1942,15 +1942,15 @@ export default function App() {
               <div className="card" style={{ padding: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
                   <h3 className="card-title" style={{ margin: 0 }}>📖 Active User Vocabulary Cache</h3>
-                  <button 
-                    onClick={() => handleInvalidateVocabCache()} 
-                    className="btn btn-failed" 
+                  <button
+                    onClick={() => handleInvalidateVocabCache()}
+                    className="btn btn-failed"
                     style={{ fontSize: '12px' }}
                   >
                     🗑️ Invalidate All Vocabulary Cache
                   </button>
                 </div>
-                
+
                 <div className="logs-table-container">
                   <table className="logs-table">
                     <thead>
@@ -1976,9 +1976,9 @@ export default function App() {
                             <span className="badge-status badge-success">Cached in Memory</span>
                           </td>
                           <td style={{ textAlign: 'right' }}>
-                            <button 
-                              onClick={() => handleInvalidateVocabCache(uid)} 
-                              className="btn btn-secondary" 
+                            <button
+                              onClick={() => handleInvalidateVocabCache(uid)}
+                              className="btn btn-secondary"
                               style={{ fontSize: '11px', padding: '6px 10px' }}
                             >
                               Invalidate Cache
