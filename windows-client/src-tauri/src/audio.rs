@@ -547,14 +547,12 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
                 total_lb_samples += loopback_16k.len();
             }
 
-            // Mix audio based on absolute stream timeline
-            let mic_start_idx = mic_carry_encode.len().saturating_sub(mic_16k.len());
+            // Mix audio for current 100ms frame
             let mut mixed = Vec::with_capacity(mic_16k.len());
             for i in 0..mic_16k.len() {
-                let abs_idx = mic_start_idx + i;
                 let m_val = mic_16k[i] as i32;
-                let lb_val = if abs_idx < loopback_carry_encode.len() {
-                    loopback_carry_encode[abs_idx] as i32
+                let lb_val = if i < loopback_16k.len() {
+                    loopback_16k[i] as i32
                 } else {
                     0
                 };
@@ -633,13 +631,11 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
             loopback_carry_encode.resize(mic_carry_encode.len(), 0);
         }
 
-        let mic_start_idx = mic_carry_encode.len().saturating_sub(mic_16k.len());
         let mut mixed = Vec::with_capacity(mic_16k.len());
         for i in 0..mic_16k.len() {
-            let abs_idx = mic_start_idx + i;
             let m_val = mic_16k[i] as i32;
-            let lb_val = if abs_idx < loopback_carry_encode.len() {
-                loopback_carry_encode[abs_idx] as i32
+            let lb_val = if i < loopback_16k.len() {
+                loopback_16k[i] as i32
             } else {
                 0
             };
