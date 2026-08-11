@@ -1355,19 +1355,35 @@ async function viewMeeting(id) {
       transcriptTextEl.textContent = m.transcript || 'No transcript text available.';
     }
 
+    let isUserHoveringTranscript = false;
+    transcriptTextEl.onmouseenter = () => { isUserHoveringTranscript = true; };
+    transcriptTextEl.onmouseleave = () => { isUserHoveringTranscript = false; };
+    transcriptTextEl.onwheel = () => { isUserHoveringTranscript = true; };
+
+    let lastActiveSpan = null;
+
     player.ontimeupdate = () => {
       const time = player.currentTime;
       const spans = transcriptTextEl.querySelectorAll('.transcript-segment');
+      let currentActiveSpan = null;
+
       spans.forEach(span => {
         const start = parseFloat(span.dataset.start);
         const end = parseFloat(span.dataset.end);
         if (time >= start && time <= end) {
           span.classList.add('active');
-          span.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          currentActiveSpan = span;
         } else {
           span.classList.remove('active');
         }
       });
+
+      if (currentActiveSpan && currentActiveSpan !== lastActiveSpan) {
+        lastActiveSpan = currentActiveSpan;
+        if (!isUserHoveringTranscript) {
+          currentActiveSpan.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }
     };
 
     // Render summary and actions
