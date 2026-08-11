@@ -1187,7 +1187,7 @@ export default function App() {
                                         }, 1500);
                                       }}
                                     >
-                                      📋 Copy
+                                      Copy
                                     </button>
                                   </div>
                                 ) : (

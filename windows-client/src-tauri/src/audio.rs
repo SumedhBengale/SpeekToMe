@@ -478,11 +478,16 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
             }
         }
 
-        let mut loopback_carry: Vec<i16> = Vec::new();
         let mut mic_carry_encode: Vec<i16> = Vec::new();
         let mut loopback_carry_encode: Vec<i16> = Vec::new();
         let mut mixed_carry: Vec<i16> = Vec::new();
-        let mut granule_pos: u64 = 0;
+        
+        let mut granule_pos_mic: u64 = 0;
+        let mut granule_pos_lb: u64 = 0;
+        let mut granule_pos_mixed: u64 = 0;
+
+        let mut total_mic_samples: usize = 0;
+        let mut total_lb_samples: usize = 0;
 
         let mut encoded_buf_mixed = [0u8; 512];
         let mut encoded_buf_mic = [0u8; 512];
@@ -505,68 +510,78 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
             let mic_16k = resample_to_16k_mono(&mic_raw, mic_rate, mic_channels);
             let loopback_16k = resample_to_16k_mono(&loopback_raw, loopback_rate, loopback_channels);
 
-            let mut loopback_all = std::mem::take(&mut loopback_carry);
-            loopback_all.extend(loopback_16k);
+            total_mic_samples += mic_16k.len();
+            mic_carry_encode.extend_from_slice(&mic_16k);
 
-            let mut loopback_aligned = Vec::new();
-            if loopback_all.len() < mic_16k.len() {
-                loopback_aligned.extend(&loopback_all);
-                loopback_aligned.resize(mic_16k.len(), 0);
-            } else {
-                loopback_aligned.extend(loopback_all.iter().take(mic_16k.len()));
-                loopback_carry = loopback_all[mic_16k.len()..].to_vec();
+            if !loopback_16k.is_empty() {
+                let target_lb_pos = total_mic_samples.saturating_sub(loopback_16k.len());
+                if total_lb_samples < target_lb_pos {
+                    let missing = target_lb_pos - total_lb_samples;
+                    loopback_carry_encode.resize(loopback_carry_encode.len() + missing, 0);
+                    total_lb_samples = target_lb_pos;
+                }
+                loopback_carry_encode.extend_from_slice(&loopback_16k);
+                total_lb_samples += loopback_16k.len();
             }
 
+            // Mix audio based on absolute stream timeline
+            let mic_start_idx = mic_carry_encode.len().saturating_sub(mic_16k.len());
             let mut mixed = Vec::with_capacity(mic_16k.len());
             for i in 0..mic_16k.len() {
-                let sum = mic_16k[i] as i32 + loopback_aligned[i] as i32;
-                let clamped = sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-                mixed.push(clamped);
+                let abs_idx = mic_start_idx + i;
+                let m_val = mic_16k[i] as i32;
+                let lb_val = if abs_idx < loopback_carry_encode.len() {
+                    loopback_carry_encode[abs_idx] as i32
+                } else {
+                    0
+                };
+                mixed.push((m_val + lb_val).clamp(i16::MIN as i32, i16::MAX as i32) as i16);
             }
-
-            let mut mic_all = std::mem::take(&mut mic_carry_encode);
-            mic_all.extend(mic_16k);
-
-            let mut lb_all = std::mem::take(&mut loopback_carry_encode);
-            lb_all.extend(loopback_aligned);
-
-            let mut mixed_all = std::mem::take(&mut mixed_carry);
-            mixed_all.extend(mixed);
+            mixed_carry.extend_from_slice(&mixed);
 
             let chunk_size = 960;
-            let chunks_count = mixed_all.len() / chunk_size;
-
-            for c_idx in 0..chunks_count {
+            
+            // Encode available mic chunks
+            let mic_chunks_count = mic_carry_encode.len() / chunk_size;
+            for c_idx in 0..mic_chunks_count {
                 let start = c_idx * chunk_size;
                 let end = start + chunk_size;
-
-                let mic_chunk = &mic_all[start..end];
-                let lb_chunk = &lb_all[start..end];
-                let mixed_chunk = &mixed_all[start..end];
-
-                granule_pos += 2880;
-
-                if let Ok(len) = encoder_mic.encode(mic_chunk, &mut encoded_buf_mic) {
+                granule_pos_mic += 2880;
+                if let Ok(len) = encoder_mic.encode(&mic_carry_encode[start..end], &mut encoded_buf_mic) {
                     let packet = encoded_buf_mic[..len].to_vec();
-                    let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
-                }
-
-                if let Ok(len) = encoder_loopback.encode(lb_chunk, &mut encoded_buf_lb) {
-                    let packet = encoded_buf_lb[..len].to_vec();
-                    let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
-                }
-
-                if let Ok(len) = encoder_mixed.encode(mixed_chunk, &mut encoded_buf_mixed) {
-                    let packet = encoded_buf_mixed[..len].to_vec();
-                    let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
+                    let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mic);
                 }
             }
+            mic_carry_encode = mic_carry_encode[mic_chunks_count * chunk_size..].to_vec();
 
-            mic_carry_encode = mic_all[chunks_count * chunk_size..].to_vec();
-            loopback_carry_encode = lb_all[chunks_count * chunk_size..].to_vec();
-            mixed_carry = mixed_all[chunks_count * chunk_size..].to_vec();
+            // Encode available loopback chunks
+            let lb_chunks_count = loopback_carry_encode.len() / chunk_size;
+            for c_idx in 0..lb_chunks_count {
+                let start = c_idx * chunk_size;
+                let end = start + chunk_size;
+                granule_pos_lb += 2880;
+                if let Ok(len) = encoder_loopback.encode(&loopback_carry_encode[start..end], &mut encoded_buf_lb) {
+                    let packet = encoded_buf_lb[..len].to_vec();
+                    let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_lb);
+                }
+            }
+            loopback_carry_encode = loopback_carry_encode[lb_chunks_count * chunk_size..].to_vec();
+
+            // Encode available mixed chunks
+            let mixed_chunks_count = mixed_carry.len() / chunk_size;
+            for c_idx in 0..mixed_chunks_count {
+                let start = c_idx * chunk_size;
+                let end = start + chunk_size;
+                granule_pos_mixed += 2880;
+                if let Ok(len) = encoder_mixed.encode(&mixed_carry[start..end], &mut encoded_buf_mixed) {
+                    let packet = encoded_buf_mixed[..len].to_vec();
+                    let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mixed);
+                }
+            }
+            mixed_carry = mixed_carry[mixed_chunks_count * chunk_size..].to_vec();
         }
 
+        // Final flush at end of recording
         let mic_raw = {
             let mut lock = mic_buffer.lock().unwrap();
             std::mem::take(&mut *lock)
@@ -578,88 +593,102 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
         let mic_16k = resample_to_16k_mono(&mic_raw, mic_rate, mic_channels);
         let loopback_16k = resample_to_16k_mono(&loopback_raw, loopback_rate, loopback_channels);
 
-        let mut loopback_all = std::mem::take(&mut loopback_carry);
-        loopback_all.extend(loopback_16k);
+        total_mic_samples += mic_16k.len();
+        mic_carry_encode.extend_from_slice(&mic_16k);
 
-        let mut loopback_aligned = Vec::new();
-        if loopback_all.len() < mic_16k.len() {
-            loopback_aligned.extend(&loopback_all);
-            loopback_aligned.resize(mic_16k.len(), 0);
-        } else {
-            loopback_aligned.extend(loopback_all.iter().take(mic_16k.len()));
+        if !loopback_16k.is_empty() {
+            let target_lb_pos = total_mic_samples.saturating_sub(loopback_16k.len());
+            if total_lb_samples < target_lb_pos {
+                let missing = target_lb_pos - total_lb_samples;
+                loopback_carry_encode.resize(loopback_carry_encode.len() + missing, 0);
+            }
+            loopback_carry_encode.extend_from_slice(&loopback_16k);
         }
 
+        // Align loopback length to match mic total length at shutdown
+        if loopback_carry_encode.len() < mic_carry_encode.len() {
+            loopback_carry_encode.resize(mic_carry_encode.len(), 0);
+        }
+
+        let mic_start_idx = mic_carry_encode.len().saturating_sub(mic_16k.len());
         let mut mixed = Vec::with_capacity(mic_16k.len());
         for i in 0..mic_16k.len() {
-            let sum = mic_16k[i] as i32 + loopback_aligned[i] as i32;
-            mixed.push(sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+            let abs_idx = mic_start_idx + i;
+            let m_val = mic_16k[i] as i32;
+            let lb_val = if abs_idx < loopback_carry_encode.len() {
+                loopback_carry_encode[abs_idx] as i32
+            } else {
+                0
+            };
+            mixed.push((m_val + lb_val).clamp(i16::MIN as i32, i16::MAX as i32) as i16);
         }
-
-        let mut mic_all = std::mem::take(&mut mic_carry_encode);
-        mic_all.extend(mic_16k);
-
-        let mut lb_all = std::mem::take(&mut loopback_carry_encode);
-        lb_all.extend(loopback_aligned);
-
-        let mut mixed_all = std::mem::take(&mut mixed_carry);
-        mixed_all.extend(mixed);
+        mixed_carry.extend_from_slice(&mixed);
 
         let chunk_size = 960;
-        let chunks_count = mixed_all.len() / chunk_size;
 
-        for c_idx in 0..chunks_count {
+        // Flush mic
+        let mic_chunks_count = mic_carry_encode.len() / chunk_size;
+        for c_idx in 0..mic_chunks_count {
             let start = c_idx * chunk_size;
             let end = start + chunk_size;
-
-            let mic_chunk = &mic_all[start..end];
-            let lb_chunk = &lb_all[start..end];
-            let mixed_chunk = &mixed_all[start..end];
-
-            granule_pos += 2880;
-
-            if let Ok(len) = encoder_mic.encode(mic_chunk, &mut encoded_buf_mic) {
+            granule_pos_mic += 2880;
+            if let Ok(len) = encoder_mic.encode(&mic_carry_encode[start..end], &mut encoded_buf_mic) {
                 let packet = encoded_buf_mic[..len].to_vec();
-                let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
+                let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mic);
             }
-
-            if let Ok(len) = encoder_loopback.encode(lb_chunk, &mut encoded_buf_lb) {
-                let packet = encoded_buf_lb[..len].to_vec();
-                let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
-            }
-
-            if let Ok(len) = encoder_mixed.encode(mixed_chunk, &mut encoded_buf_mixed) {
-                let packet = encoded_buf_mixed[..len].to_vec();
-                let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos);
+        }
+        let mic_rem = &mic_carry_encode[mic_chunks_count * chunk_size..];
+        if !mic_rem.is_empty() {
+            let mut final_chunk = mic_rem.to_vec();
+            final_chunk.resize(chunk_size, 0);
+            granule_pos_mic += 2880;
+            if let Ok(len) = encoder_mic.encode(&final_chunk, &mut encoded_buf_mic) {
+                let packet = encoded_buf_mic[..len].to_vec();
+                let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mic);
             }
         }
 
-        let mic_remainder = &mic_all[chunks_count * chunk_size..];
-        let lb_remainder = &lb_all[chunks_count * chunk_size..];
-        let mixed_remainder = &mixed_all[chunks_count * chunk_size..];
-
-        if !mixed_remainder.is_empty() {
-            let mut final_chunk_mic = mic_remainder.to_vec();
-            final_chunk_mic.resize(chunk_size, 0);
-            let mut final_chunk_lb = lb_remainder.to_vec();
-            final_chunk_lb.resize(chunk_size, 0);
-            let mut final_chunk_mixed = mixed_remainder.to_vec();
-            final_chunk_mixed.resize(chunk_size, 0);
-
-            granule_pos += 2880;
-
-            if let Ok(len) = encoder_mic.encode(&final_chunk_mic, &mut encoded_buf_mic) {
-                let packet = encoded_buf_mic[..len].to_vec();
-                let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos);
-            }
-
-            if let Ok(len) = encoder_loopback.encode(&final_chunk_lb, &mut encoded_buf_lb) {
+        // Flush loopback
+        let lb_chunks_count = loopback_carry_encode.len() / chunk_size;
+        for c_idx in 0..lb_chunks_count {
+            let start = c_idx * chunk_size;
+            let end = start + chunk_size;
+            granule_pos_lb += 2880;
+            if let Ok(len) = encoder_loopback.encode(&loopback_carry_encode[start..end], &mut encoded_buf_lb) {
                 let packet = encoded_buf_lb[..len].to_vec();
-                let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos);
+                let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_lb);
             }
+        }
+        let lb_rem = &loopback_carry_encode[lb_chunks_count * chunk_size..];
+        if !lb_rem.is_empty() {
+            let mut final_chunk = lb_rem.to_vec();
+            final_chunk.resize(chunk_size, 0);
+            granule_pos_lb += 2880;
+            if let Ok(len) = encoder_loopback.encode(&final_chunk, &mut encoded_buf_lb) {
+                let packet = encoded_buf_lb[..len].to_vec();
+                let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_lb);
+            }
+        }
 
-            if let Ok(len) = encoder_mixed.encode(&final_chunk_mixed, &mut encoded_buf_mixed) {
+        // Flush mixed
+        let mixed_chunks_count = mixed_carry.len() / chunk_size;
+        for c_idx in 0..mixed_chunks_count {
+            let start = c_idx * chunk_size;
+            let end = start + chunk_size;
+            granule_pos_mixed += 2880;
+            if let Ok(len) = encoder_mixed.encode(&mixed_carry[start..end], &mut encoded_buf_mixed) {
                 let packet = encoded_buf_mixed[..len].to_vec();
-                let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos);
+                let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mixed);
+            }
+        }
+        let mixed_rem = &mixed_carry[mixed_chunks_count * chunk_size..];
+        if !mixed_rem.is_empty() {
+            let mut final_chunk = mixed_rem.to_vec();
+            final_chunk.resize(chunk_size, 0);
+            granule_pos_mixed += 2880;
+            if let Ok(len) = encoder_mixed.encode(&final_chunk, &mut encoded_buf_mixed) {
+                let packet = encoded_buf_mixed[..len].to_vec();
+                let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mixed);
             }
         }
     });

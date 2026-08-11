@@ -186,45 +186,14 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 			if errMicTrans == nil && errLbTrans == nil {
 				whisperProvider = micProvider
 				whisperRouting = micRouting
-				type Segment struct {
-					Start   float64 `json:"start"`
-					End     float64 `json:"end"`
-					Text    string  `json:"text"`
-					Speaker string  `json:"speaker"`
-				}
-				var merged []Segment
 
 				userName := user.Name
 				if userName == "" {
 					userName = "Local Speaker"
 				}
 
-				for _, s := range micSegs {
-					merged = append(merged, Segment{
-						Start:   s.Start,
-						End:     s.End,
-						Text:    s.Text,
-						Speaker: userName,
-					})
-				}
-				for _, s := range lbSegs {
-					merged = append(merged, Segment{
-						Start:   s.Start,
-						End:     s.End,
-						Text:    s.Text,
-						Speaker: "Remote Speaker",
-					})
-				}
-
-				sort.Slice(merged, func(i, j int) bool {
-					return merged[i].Start < merged[j].Start
-				})
-
-				var transcriptBuilder strings.Builder
-				for _, s := range merged {
-					transcriptBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", s.Speaker, s.Text))
-				}
-				rawText = transcriptBuilder.String()
+				merged, rawTextStr := deduplicateMeetingSegments(micSegs, lbSegs, userName)
+				rawText = rawTextStr
 
 				segBytes, _ := json.Marshal(merged)
 				segmentsJSON = string(segBytes)
@@ -486,4 +455,139 @@ Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" 
 	}
 
 	return analysis.PolishedTranscript, analysis.Summary, analysis.ActionItems, nil
+}
+
+type MeetingSegment struct {
+	Start   float64 `json:"start"`
+	End     float64 `json:"end"`
+	Text    string  `json:"text"`
+	Speaker string  `json:"speaker"`
+}
+
+func deduplicateMeetingSegments(micSegs []services.WhisperSegment, lbSegs []services.WhisperSegment, localSpeakerName string) ([]MeetingSegment, string) {
+	if localSpeakerName == "" {
+		localSpeakerName = "Local Speaker"
+	}
+
+	var candidates []MeetingSegment
+
+	for _, s := range lbSegs {
+		cleanText := strings.TrimSpace(s.Text)
+		if cleanText == "" {
+			continue
+		}
+		candidates = append(candidates, MeetingSegment{
+			Start:   s.Start,
+			End:     s.End,
+			Text:    cleanText,
+			Speaker: "Remote Speaker",
+		})
+	}
+
+	for _, m := range micSegs {
+		cleanMicText := strings.TrimSpace(m.Text)
+		if cleanMicText == "" {
+			continue
+		}
+
+		isBleed := false
+		for _, lb := range lbSegs {
+			cleanLbText := strings.TrimSpace(lb.Text)
+			if cleanLbText == "" {
+				continue
+			}
+
+			// Time overlap check (within +/- 2.0s window)
+			timeOverlap := !(m.End < lb.Start-2.0 || m.Start > lb.End+2.0)
+			if timeOverlap {
+				similarity := calculateTextSimilarity(cleanMicText, cleanLbText)
+				if similarity >= 0.45 {
+					isBleed = true
+					break
+				}
+			}
+		}
+
+		if !isBleed {
+			candidates = append(candidates, MeetingSegment{
+				Start:   m.Start,
+				End:     m.End,
+				Text:    cleanMicText,
+				Speaker: localSpeakerName,
+			})
+		}
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Start == candidates[j].Start {
+			return candidates[i].End < candidates[j].End
+		}
+		return candidates[i].Start < candidates[j].Start
+	})
+
+	var merged []MeetingSegment
+	for _, seg := range candidates {
+		if len(merged) == 0 {
+			merged = append(merged, seg)
+			continue
+		}
+
+		last := &merged[len(merged)-1]
+		if last.Speaker == seg.Speaker && seg.Start <= last.End+1.5 {
+			last.Text = strings.TrimSpace(last.Text + " " + seg.Text)
+			if seg.End > last.End {
+				last.End = seg.End
+			}
+		} else {
+			merged = append(merged, seg)
+		}
+	}
+
+	var transcriptBuilder strings.Builder
+	for _, s := range merged {
+		transcriptBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", s.Speaker, s.Text))
+	}
+
+	return merged, transcriptBuilder.String()
+}
+
+func calculateTextSimilarity(s1, s2 string) float64 {
+	words1 := tokenizeString(s1)
+	words2 := tokenizeString(s2)
+
+	if len(words1) == 0 || len(words2) == 0 {
+		return 0.0
+	}
+
+	set1 := make(map[string]bool)
+	for _, w := range words1 {
+		set1[w] = true
+	}
+
+	var common int
+	for _, w := range words2 {
+		if set1[w] {
+			common++
+		}
+	}
+
+	maxWords := len(words1)
+	if len(words2) > maxWords {
+		maxWords = len(words2)
+	}
+
+	return float64(common) / float64(maxWords)
+}
+
+func tokenizeString(s string) []string {
+	s = strings.ToLower(s)
+	var sb strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == ' ' {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune(' ')
+		}
+	}
+	return strings.Fields(sb.String())
 }
