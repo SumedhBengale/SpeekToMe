@@ -393,15 +393,42 @@ Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" 
 	content = strings.TrimSpace(content)
 
 	var analysis struct {
-		PolishedTranscript string `json:"polished_transcript"`
-		Summary            string `json:"summary"`
-		ActionItems        string `json:"action_items"`
+		PolishedTranscript string      `json:"polished_transcript"`
+		Summary            string      `json:"summary"`
+		ActionItems        interface{} `json:"action_items"`
 	}
 	if err := json.Unmarshal([]byte(content), &analysis); err != nil {
-		return transcript, content, "No action items extracted.", nil
+		log.Printf("[DEEPSEEK PARSE WARNING] Failed to unmarshal JSON analysis: %v. Raw content: %s", err, content)
+		return transcript, "AI Summary parse error.", "No action items extracted.", nil
 	}
 
-	return analysis.PolishedTranscript, analysis.Summary, analysis.ActionItems, nil
+	actionItemsStr := "No action items extracted."
+	if analysis.ActionItems != nil {
+		switch v := analysis.ActionItems.(type) {
+		case string:
+			actionItemsStr = v
+		case []interface{}:
+			var items []string
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					items = append(items, s)
+				}
+			}
+			actionItemsStr = strings.Join(items, "\n")
+		}
+	}
+
+	polishedStr := analysis.PolishedTranscript
+	if polishedStr == "" {
+		polishedStr = transcript
+	}
+
+	summaryStr := analysis.Summary
+	if summaryStr == "" {
+		summaryStr = "AI Summary not available."
+	}
+
+	return polishedStr, summaryStr, actionItemsStr, nil
 }
 
 type EnergySample struct {

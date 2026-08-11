@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"speektome-server/services"
@@ -42,6 +44,48 @@ func TestDiarizeSegmentsWithEnergy(t *testing.T) {
 	}
 
 	t.Logf("Formatted Diarized Transcript:\n%s", text)
+}
+
+func TestFlexibleActionItemsUnmarshaling(t *testing.T) {
+	jsonPayload := `{
+		"polished_transcript": "John: Hello",
+		"summary": "Meeting summary text.",
+		"action_items": [
+			"- Review transcription quality",
+			"- Test live conversation"
+		]
+	}`
+
+	var analysis struct {
+		PolishedTranscript string      `json:"polished_transcript"`
+		Summary            string      `json:"summary"`
+		ActionItems        interface{} `json:"action_items"`
+	}
+
+	err := json.Unmarshal([]byte(jsonPayload), &analysis)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal JSON with array action_items: %v", err)
+	}
+
+	var actionItemsStr string
+	if analysis.ActionItems != nil {
+		switch v := analysis.ActionItems.(type) {
+		case string:
+			actionItemsStr = v
+		case []interface{}:
+			var items []string
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					items = append(items, s)
+				}
+			}
+			actionItemsStr = strings.Join(items, "\n")
+		}
+	}
+
+	if !strings.Contains(actionItemsStr, "Review transcription quality") {
+		t.Errorf("Expected actionItemsStr to contain item text, got %s", actionItemsStr)
+	}
 }
 
 func TestDeduplicateMeetingSegments_BleedRemoval(t *testing.T) {
