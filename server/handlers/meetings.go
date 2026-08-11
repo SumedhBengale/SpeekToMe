@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"speektome-server/auth"
@@ -151,60 +150,13 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	var whisperProvider string
 	var whisperRouting string
 
-	fileMic, _, errMic := r.FormFile("file_mic")
-	fileLoopback, _, errLb := r.FormFile("file_loopback")
-
-	var parallelSuccess bool
-	if errMic == nil && errLb == nil {
-		defer fileMic.Close()
-		defer fileLoopback.Close()
-
-		var micBuf, lbBuf bytes.Buffer
-		_, err1 := io.Copy(&micBuf, fileMic)
-		_, err2 := io.Copy(&lbBuf, fileLoopback)
-
-		if err1 == nil && err2 == nil && ((config.CloudflareAPIToken != "" && config.CloudflareAccountID != "") || config.DeepInfraAPIKey != "" || config.GroqAPIKey != "") {
-			var micSegs, lbSegs []services.WhisperSegment
-			var errMicTrans, errLbTrans error
-			var micProvider, micRouting string
-
-			var wg sync.WaitGroup
-			wg.Add(2)
-
-			go func() {
-				defer wg.Done()
-				_, micSegs, micProvider, micRouting, errMicTrans = services.RunWhisperTranscribeWithModel(r.Context(), micBuf.Bytes(), "whisper-large-v3-turbo", user.Languages)
-			}()
-
-			go func() {
-				defer wg.Done()
-				_, lbSegs, _, _, errLbTrans = services.RunWhisperTranscribeWithModel(r.Context(), lbBuf.Bytes(), "whisper-large-v3-turbo", user.Languages)
-			}()
-
-			wg.Wait()
-
-			if errMicTrans == nil && errLbTrans == nil {
-				whisperProvider = micProvider
-				whisperRouting = micRouting
-
-				userName := user.Name
-				if userName == "" {
-					userName = "Local Speaker"
-				}
-
-				merged, rawTextStr := deduplicateMeetingSegments(micSegs, lbSegs, userName)
-				rawText = rawTextStr
-
-				segBytes, _ := json.Marshal(merged)
-				segmentsJSON = string(segBytes)
-				parallelSuccess = true
-			} else {
-				log.Printf("[DIARIZATION ERROR] Parallel transcription failed (mic_err=%v, lb_err=%v). Falling back to mixed audio.", errMicTrans, errLbTrans)
-			}
-		}
+	energyJSONStr := r.FormValue("energy_json")
+	var energySamples []EnergySample
+	if energyJSONStr != "" {
+		_ = json.Unmarshal([]byte(energyJSONStr), &energySamples)
 	}
 
-	if !parallelSuccess && ((config.CloudflareAPIToken != "" && config.CloudflareAccountID != "") || config.DeepInfraAPIKey != "" || config.GroqAPIKey != "") {
+	if (config.CloudflareAPIToken != "" && config.CloudflareAccountID != "") || config.DeepInfraAPIKey != "" || config.GroqAPIKey != "" {
 		var errWhisper error
 		var segments []services.WhisperSegment
 		var mixProvider, mixRouting string
@@ -212,21 +164,16 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		if errWhisper == nil {
 			whisperProvider = mixProvider
 			whisperRouting = mixRouting
-			type Segment struct {
-				Start   float64 `json:"start"`
-				End     float64 `json:"end"`
-				Text    string  `json:"text"`
-				Speaker string  `json:"speaker,omitempty"`
+
+			userName := user.Name
+			if userName == "" {
+				userName = "Local Speaker"
 			}
-			var segList []Segment
-			for _, s := range segments {
-				segList = append(segList, Segment{
-					Start: s.Start,
-					End:   s.End,
-					Text:  s.Text,
-				})
-			}
-			segBytes, _ := json.Marshal(segList)
+
+			merged, rawTextStr := diarizeSegmentsWithEnergy(segments, energySamples, userName)
+			rawText = rawTextStr
+
+			segBytes, _ := json.Marshal(merged)
 			segmentsJSON = string(segBytes)
 		} else {
 			log.Printf("[GROQ ERROR] Transcription failed: %v", errWhisper)
@@ -457,11 +404,103 @@ Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" 
 	return analysis.PolishedTranscript, analysis.Summary, analysis.ActionItems, nil
 }
 
+type EnergySample struct {
+	Time float64 `json:"time"`
+	Mic  uint32  `json:"mic"`
+	Lb   uint32  `json:"lb"`
+}
+
 type MeetingSegment struct {
 	Start   float64 `json:"start"`
 	End     float64 `json:"end"`
 	Text    string  `json:"text"`
 	Speaker string  `json:"speaker"`
+}
+
+func diarizeSegmentsWithEnergy(segments []services.WhisperSegment, energySamples []EnergySample, localSpeakerName string) ([]MeetingSegment, string) {
+	if localSpeakerName == "" {
+		localSpeakerName = "Local Speaker"
+	}
+
+	type rawLabeled struct {
+		Start   float64
+		End     float64
+		Text    string
+		Speaker string
+	}
+
+	var labeled []rawLabeled
+
+	for _, seg := range segments {
+		cleanText := strings.TrimSpace(seg.Text)
+		if cleanText == "" {
+			continue
+		}
+
+		var totalMic, totalLb float64
+		var count float64
+
+		if len(energySamples) > 0 {
+			for _, sample := range energySamples {
+				if sample.Time >= seg.Start && sample.Time <= seg.End {
+					totalMic += float64(sample.Mic)
+					totalLb += float64(sample.Lb)
+					count++
+				}
+			}
+		}
+
+		speaker := localSpeakerName
+		if count > 0 {
+			avgMic := totalMic / count
+			avgLb := totalLb / count
+			if avgLb > 15.0 && avgLb >= avgMic*0.75 {
+				speaker = "Remote Speaker"
+			}
+		}
+
+		labeled = append(labeled, rawLabeled{
+			Start:   seg.Start,
+			End:     seg.End,
+			Text:    cleanText,
+			Speaker: speaker,
+		})
+	}
+
+	var merged []MeetingSegment
+	for _, seg := range labeled {
+		if len(merged) == 0 {
+			merged = append(merged, MeetingSegment{
+				Start:   seg.Start,
+				End:     seg.End,
+				Text:    seg.Text,
+				Speaker: seg.Speaker,
+			})
+			continue
+		}
+
+		last := &merged[len(merged)-1]
+		if last.Speaker == seg.Speaker && seg.Start <= last.End+1.5 {
+			last.Text = strings.TrimSpace(last.Text + " " + seg.Text)
+			if seg.End > last.End {
+				last.End = seg.End
+			}
+		} else {
+			merged = append(merged, MeetingSegment{
+				Start:   seg.Start,
+				End:     seg.End,
+				Text:    seg.Text,
+				Speaker: seg.Speaker,
+			})
+		}
+	}
+
+	var transcriptBuilder strings.Builder
+	for _, s := range merged {
+		transcriptBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", s.Speaker, s.Text))
+	}
+
+	return merged, transcriptBuilder.String()
 }
 
 func deduplicateMeetingSegments(micSegs []services.WhisperSegment, lbSegs []services.WhisperSegment, localSpeakerName string) ([]MeetingSegment, string) {

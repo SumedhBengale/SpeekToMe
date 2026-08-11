@@ -386,6 +386,7 @@ pub async fn upload_meeting(
     mixed_bytes: Vec<u8>,
     mic_bytes: Option<Vec<u8>>,
     loopback_bytes: Option<Vec<u8>>,
+    energy_json: Option<String>,
 ) -> Result<String, String> {
     let client = create_client();
     let mixed_part = reqwest::multipart::Part::bytes(mixed_bytes)
@@ -411,6 +412,10 @@ pub async fn upload_meeting(
             .mime_str("audio/ogg")
             .unwrap();
         form = form.part("file_loopback", lb_part);
+    }
+
+    if let Some(energy) = energy_json {
+        form = form.text("energy_json", energy);
     }
 
     let res = client.post(format!("{}/meetings", api_url))

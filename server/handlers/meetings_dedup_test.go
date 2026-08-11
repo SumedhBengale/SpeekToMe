@@ -6,6 +6,44 @@ import (
 	"speektome-server/services"
 )
 
+func TestDiarizeSegmentsWithEnergy(t *testing.T) {
+	segments := []services.WhisperSegment{
+		{Start: 0.0, End: 3.0, Text: "Hello everyone, welcome to the presentation."},
+		{Start: 3.5, End: 6.0, Text: "Hi Sumedh, thanks for having me."},
+		{Start: 6.5, End: 9.0, Text: "Let us review the Q3 roadmap."},
+	}
+
+	energy := []EnergySample{
+		{Time: 0.5, Mic: 120, Lb: 5},
+		{Time: 1.5, Mic: 150, Lb: 10},
+		{Time: 2.5, Mic: 130, Lb: 2},
+		{Time: 4.0, Mic: 15, Lb: 180},
+		{Time: 5.0, Mic: 20, Lb: 210},
+		{Time: 7.0, Mic: 140, Lb: 8},
+		{Time: 8.0, Mic: 160, Lb: 12},
+	}
+
+	merged, text := diarizeSegmentsWithEnergy(segments, energy, "Sumedh Bengale")
+
+	if len(merged) != 3 {
+		t.Fatalf("Expected 3 merged segments, got %d", len(merged))
+	}
+
+	if merged[0].Speaker != "Sumedh Bengale" {
+		t.Errorf("Expected first speaker to be Sumedh Bengale, got %s", merged[0].Speaker)
+	}
+
+	if merged[1].Speaker != "Remote Speaker" {
+		t.Errorf("Expected second speaker to be Remote Speaker, got %s", merged[1].Speaker)
+	}
+
+	if merged[2].Speaker != "Sumedh Bengale" {
+		t.Errorf("Expected third speaker to be Sumedh Bengale, got %s", merged[2].Speaker)
+	}
+
+	t.Logf("Formatted Diarized Transcript:\n%s", text)
+}
+
 func TestDeduplicateMeetingSegments_BleedRemoval(t *testing.T) {
 	micSegs := []services.WhisperSegment{
 		{Start: 0.5, End: 3.0, Text: "Hello, can everyone see my shared screen?"},

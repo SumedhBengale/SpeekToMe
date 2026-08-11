@@ -1,8 +1,16 @@
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use serde::{Serialize, Deserialize};
 
 pub use crate::audio_processing::{is_speech, resample_to_16k_mono, encode_opus_ogg};
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct EnergySample {
+    pub time: f32,
+    pub mic: u32,
+    pub lb: u32,
+}
 
 pub static CURRENT_VOLUME: AtomicU32 = AtomicU32::new(0);
 const MAX_DICTATION_SAMPLES: usize = 12_000_000;
@@ -493,11 +501,15 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
         let mut encoded_buf_mic = [0u8; 512];
         let mut encoded_buf_lb = [0u8; 512];
 
+        let mut energy_log: Vec<EnergySample> = Vec::new();
+        let mut loop_count: usize = 0;
+
         loop {
             if shutdown_rx.recv_timeout(std::time::Duration::from_millis(100)).is_ok() {
                 break;
             }
 
+            loop_count += 1;
             let mic_raw = {
                 let mut lock = mic_buffer.lock().unwrap();
                 std::mem::take(&mut *lock)
@@ -512,6 +524,17 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
 
             total_mic_samples += mic_16k.len();
             mic_carry_encode.extend_from_slice(&mic_16k);
+
+            if loop_count % 5 == 0 {
+                let time_sec = total_mic_samples as f32 / 16000.0;
+                let mic_vol = MIC_VOLUME.load(Ordering::Relaxed);
+                let lb_vol = LOOPBACK_VOLUME.load(Ordering::Relaxed);
+                energy_log.push(EnergySample {
+                    time: time_sec,
+                    mic: mic_vol,
+                    lb: lb_vol,
+                });
+            }
 
             if !loopback_16k.is_empty() {
                 let target_lb_pos = total_mic_samples.saturating_sub(loopback_16k.len());
@@ -690,6 +713,11 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
                 let packet = encoded_buf_mixed[..len].to_vec();
                 let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mixed);
             }
+        }
+
+        let energy_path = output_ogg_path.with_extension("energy.json");
+        if let Ok(json_bytes) = serde_json::to_vec(&energy_log) {
+            let _ = std::fs::write(energy_path, json_bytes);
         }
     });
 

@@ -409,8 +409,9 @@ async fn upload_meeting(title: String, filepath: String) -> Result<String, Strin
         .map_err(|e| format!("Failed to read meeting audio: {}", e))?;
     let mic_bytes = std::fs::read(expected_path.with_extension("mic.ogg")).ok();
     let loopback_bytes = std::fs::read(expected_path.with_extension("loopback.ogg")).ok();
+    let energy_json = std::fs::read_to_string(expected_path.with_extension("energy.json")).ok();
 
-    crate::api::upload_meeting(&api::get_api_url(), &token, &title, mixed_bytes, mic_bytes, loopback_bytes).await
+    crate::api::upload_meeting(&api::get_api_url(), &token, &title, mixed_bytes, mic_bytes, loopback_bytes, energy_json).await
 }
 
 #[tauri::command]
