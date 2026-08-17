@@ -62,6 +62,21 @@ export default function App() {
   const [activeSubTab, setActiveSubTab] = useState('stats');
   const [showCancelModal, setShowCancelModal] = useState(false);
 
+  // Profile, Password Reset & Account Deletion states
+  const [profileSummary, setProfileSummary] = useState(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [resetEmailSuccess, setResetEmailSuccess] = useState('');
+  const [resetEmailError, setResetEmailError] = useState('');
+  const [sendingResetEmail, setSendingResetEmail] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [resetTokenParam, setResetTokenParam] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [resettingPassword, setResettingPassword] = useState(false);
+
   // 1. Initial Authentication & Redirect check
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -70,8 +85,13 @@ export default function App() {
     const verifiedEmail = params.get('email');
     const queryTempToken = params.get('temp_token');
     const require2fa = params.get('require_2fa');
+    const queryResetToken = params.get('reset_token');
 
-    if (queryToken) {
+    if (queryResetToken) {
+      setResetTokenParam(queryResetToken);
+      setRoute('reset-password');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (queryToken) {
       localStorage.setItem('speektome_token', queryToken);
       setToken(queryToken);
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -100,7 +120,7 @@ export default function App() {
   useEffect(() => {
     if (token) {
       fetchUserProfile();
-    } else if (route !== '2fa' && route !== 'signup') {
+    } else if (route !== '2fa' && route !== 'signup' && route !== 'reset-password' && route !== 'forgot-password') {
       const params = new URLSearchParams(window.location.search);
       if (!params.get('temp_token')) {
         setRoute('login');
@@ -124,6 +144,7 @@ export default function App() {
         fetchUsageLogs();
         fetchVocabulary();
         fetchMeetings();
+        fetchProfileSummary();
       } else {
         // Token invalid or expired
         handleLogoutLocal();
@@ -133,6 +154,24 @@ export default function App() {
       setRoute('dashboard'); // Fallback to let dashboard load if server is temporarily unreachable
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchProfileSummary = async () => {
+    if (!token) return;
+    setLoadingSummary(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/profile/summary`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setProfileSummary(data);
+      }
+    } catch (err) {
+      console.error("Failed to load profile summary:", err);
+    } finally {
+      setLoadingSummary(false);
     }
   };
 
@@ -325,6 +364,110 @@ export default function App() {
       console.error("Logout failed on server:", err);
     }
     handleLogoutLocal();
+  };
+
+  const handleSendPasswordReset = async (e) => {
+    if (e) e.preventDefault();
+    setResetEmailError('');
+    setResetEmailSuccess('');
+    const targetEmail = user ? user.email : forgotEmail;
+    if (!targetEmail) {
+      setResetEmailError('Please specify an email address.');
+      return;
+    }
+    if (!turnstileToken) {
+      setResetEmailError('Please complete the verification check.');
+      return;
+    }
+    setSendingResetEmail(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: targetEmail,
+          'cf-turnstile-response': turnstileToken
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setResetEmailSuccess(data.message || 'If an account exists with this email, a password reset link has been sent.');
+      } else {
+        setResetEmailError(data.error || 'Failed to send password reset email.');
+      }
+    } catch (err) {
+      setResetEmailError('Could not connect to server.');
+    } finally {
+      setSendingResetEmail(false);
+      setTurnstileToken('');
+      setResetTurnstile(prev => prev + 1);
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    if (newPassword !== confirmNewPassword) {
+      setAuthError('Passwords do not match.');
+      return;
+    }
+    if (!turnstileToken) {
+      setAuthError('Please complete the verification check.');
+      return;
+    }
+    setResettingPassword(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: resetTokenParam,
+          password: newPassword,
+          'cf-turnstile-response': turnstileToken
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSuccessMessage(data.message || 'Password updated successfully! Please sign in with your new password.');
+        setRoute('login');
+        setResetTokenParam('');
+        setNewPassword('');
+        setConfirmNewPassword('');
+      } else {
+        setAuthError(data.error || 'Failed to reset password.');
+      }
+    } catch (err) {
+      setAuthError('Could not connect to server.');
+    } finally {
+      setResettingPassword(false);
+      setTurnstileToken('');
+      setResetTurnstile(prev => prev + 1);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText.trim() !== 'DELETE') return;
+    setDeletingAccount(true);
+    setAuthError('');
+    try {
+      const res = await fetch(`${API_BASE}/auth/account`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setShowDeleteModal(false);
+        setDeleteConfirmText('');
+        handleLogoutLocal();
+        setSuccessMessage('Your account and all associated data have been permanently deleted.');
+      } else {
+        const errText = await res.text();
+        setAuthError(errText || 'Failed to delete account.');
+      }
+    } catch (err) {
+      setAuthError('Could not connect to server.');
+    } finally {
+      setDeletingAccount(false);
+    }
   };
 
   const handleLogin = async (e) => {
@@ -782,7 +925,15 @@ export default function App() {
         <nav className="nav-links">
           {user ? (
             <>
-              <span className="nav-user"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline-block' }}><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" /></svg>{user.name} ({user.email})</span>
+              <span
+                className="nav-user"
+                onClick={() => { setActiveSubTab('profile'); setRoute('dashboard'); setActiveMeeting(null); fetchProfileSummary(); }}
+                style={{ cursor: 'pointer', transition: 'opacity 0.2s ease' }}
+                title="Click to view Profile"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline-block' }}><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" /></svg>
+                {user.name} ({user.email})
+              </span>
               {user.is_admin && (
                 <button
                   onClick={() => setRoute(route === 'admin' ? 'dashboard' : 'admin')}
@@ -905,7 +1056,17 @@ export default function App() {
                 />
               </div>
               <div className="auth-form-control">
-                <label>Password</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ margin: 0 }}>Password</label>
+                  <button
+                    type="button"
+                    onClick={() => { setRoute('forgot-password'); setAuthError(''); setResetEmailSuccess(''); setResetEmailError(''); setForgotEmail(email); }}
+                    className="auth-toggle-link"
+                    style={{ fontSize: '12px' }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
                 <input
                   type="password"
                   value={password}
@@ -928,6 +1089,117 @@ export default function App() {
               Don't have an account?{' '}
               <button onClick={() => { setRoute('signup'); setAuthError(''); }} className="auth-toggle-link">
                 Sign Up
+              </button>
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* Forgot Password Page */}
+      {route === 'forgot-password' && (
+        <main className="auth-page">
+          <div className="auth-box">
+            <div className="auth-header">
+              <h2>Reset Password</h2>
+              <p>Enter your email address to receive a secure password reset link.</p>
+            </div>
+
+            {resetEmailSuccess && (
+              <div
+                style={{
+                  background: '#d1fae5',
+                  border: '2px solid #1a1a1a',
+                  padding: '12px 14px',
+                  borderRadius: '12px',
+                  color: '#1a1a1a',
+                  fontSize: '13.5px',
+                  fontWeight: '500',
+                  marginBottom: '20px',
+                  textAlign: 'center',
+                  boxShadow: '2px 2px 0px #1a1a1a'
+                }}
+              >
+                {resetEmailSuccess}
+              </div>
+            )}
+            {resetEmailError && <div className="auth-error">{resetEmailError}</div>}
+
+            <form onSubmit={handleSendPasswordReset}>
+              <div className="auth-form-control">
+                <label>Email Address</label>
+                <input
+                  type="email"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="auth-input"
+                  required
+                />
+              </div>
+              <TurnstileWidget
+                onVerify={setTurnstileToken}
+                resetTrigger={resetTurnstile}
+              />
+              <button type="submit" className="btn btn-primary auth-submit-btn" disabled={sendingResetEmail || !turnstileToken}>
+                {sendingResetEmail ? <div className="spinner"></div> : 'Send Password Reset Link'}
+              </button>
+            </form>
+
+            <div className="auth-toggle">
+              <button onClick={() => { setRoute('login'); setResetEmailError(''); setResetEmailSuccess(''); setAuthError(''); }} className="auth-toggle-link">
+                Back to Sign In
+              </button>
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* Reset Password Submission Page */}
+      {route === 'reset-password' && (
+        <main className="auth-page">
+          <div className="auth-box">
+            <div className="auth-header">
+              <h2>Choose New Password</h2>
+              <p>Set a new password for your SpeekTo.Me account.</p>
+            </div>
+
+            {authError && <div className="auth-error">{authError}</div>}
+
+            <form onSubmit={handleResetPasswordSubmit}>
+              <div className="auth-form-control">
+                <label>New Password</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="At least 8 characters (letters & numbers)"
+                  className="auth-input"
+                  required
+                />
+              </div>
+              <div className="auth-form-control">
+                <label>Confirm New Password</label>
+                <input
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  placeholder="Re-enter new password"
+                  className="auth-input"
+                  required
+                />
+              </div>
+              <TurnstileWidget
+                onVerify={setTurnstileToken}
+                resetTrigger={resetTurnstile}
+              />
+              <button type="submit" className="btn btn-primary auth-submit-btn" disabled={resettingPassword || !turnstileToken}>
+                {resettingPassword ? <div className="spinner"></div> : 'Update Password'}
+              </button>
+            </form>
+
+            <div className="auth-toggle">
+              <button onClick={() => { setRoute('login'); setAuthError(''); }} className="auth-toggle-link">
+                Back to Sign In
               </button>
             </div>
           </div>
@@ -1049,6 +1321,13 @@ export default function App() {
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" /></svg> Meeting Notes
               </button>
             )}
+            <button
+              onClick={() => { setActiveSubTab('profile'); setActiveMeeting(null); fetchProfileSummary(); }}
+              className={`btn ${activeSubTab === 'profile' ? 'btn-primary' : ''}`}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg> Profile
+            </button>
           </div>
 
           {activeSubTab === 'stats' && (
@@ -1186,9 +1465,7 @@ export default function App() {
                                           btn.style.background = '';
                                         }, 1500);
                                       }}
-                                    >
-                                      Copy
-                                    </button>
+                                    > Copy</button>
                                   </div>
                                 ) : (
                                   <span style={{ color: 'rgba(36, 10, 18, 0.4)', italic: 'true', fontSize: '13px' }}>
@@ -1368,18 +1645,18 @@ export default function App() {
                   {authError && <div className="auth-error" style={{ marginBottom: '20px' }}>{authError}</div>}
 
                   <div className="meeting-detail-grid">
-                    {/* Left Column: Summary & Actions */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                      <div>
-                        <h3 className="meeting-section-title">💡 Meeting Summary</h3>
-                        <div className="meeting-text-box">
+                    {/* Left Column: AI Summary & Action Items */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <div className="meeting-panel-card">
+                        <h3 className="meeting-section-title">Summary & Takeaways</h3>
+                        <div className="meeting-text-box" style={{ maxHeight: '280px' }}>
                           {activeMeeting.summary || "No summary generated for this meeting."}
                         </div>
                       </div>
 
-                      <div>
-                        <h3 className="meeting-section-title">☑ Action Items</h3>
-                        <div className="meeting-text-box">
+                      <div className="meeting-panel-card">
+                        <h3 className="meeting-section-title">Action Items</h3>
+                        <div className="meeting-text-box" style={{ maxHeight: '240px' }}>
                           {activeMeeting.action_items ? (
                             <ul className="action-items-list">
                               {activeMeeting.action_items.split('\n').filter(item => item.trim() !== '').map((item, idx) => (
@@ -1387,55 +1664,142 @@ export default function App() {
                               ))}
                             </ul>
                           ) : (
-                            "No action items found."
+                            <span style={{ color: 'rgba(26,26,26,0.5)' }}>No action items detected.</span>
                           )}
                         </div>
                       </div>
                     </div>
 
-                    {/* Right Column: Full Transcript & Segments */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                      <div>
-                        <h3 className="meeting-section-title">🎙 Full Transcript</h3>
-                        <div className="meeting-text-box">
-                          {activeMeeting.transcript || "No transcript found."}
-                        </div>
+                    {/* Right Column: Unified Meeting Chat Dialogue */}
+                    <div className="meeting-panel-card">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                        <h3 className="meeting-section-title" style={{ margin: 0 }}>Conversation Dialogue</h3>
+                        <span style={{ fontSize: '12px', color: 'rgba(26,26,26,0.5)', fontWeight: 500 }}>
+                          Speaker Diarization
+                        </span>
                       </div>
 
-                      <div>
-                        <h3 className="meeting-section-title">📊 Audio Segments</h3>
-                        <div className="meeting-text-box" style={{ maxHeight: '350px' }}>
-                          {(() => {
-                            let segments = [];
-                            try {
-                              segments = JSON.parse(activeMeeting.segments_json);
-                            } catch (e) { }
+                      <div className="meeting-text-box meeting-chat-stream" style={{ maxHeight: '600px', minHeight: '400px', overflowY: 'auto' }}>
+                        {(() => {
+                          let segments = [];
+                          try {
+                            segments = JSON.parse(activeMeeting.segments_json);
+                          } catch (e) { }
 
-                            if (!segments || segments.length === 0) {
-                              return <p style={{ color: 'rgba(26,26,26,0.5)' }}>No individual segment metadata available.</p>;
-                            }
+                          const userName = (user && user.name) ? user.name.toLowerCase() : '';
+
+                          // 1. If we have segmented diarization, group continuous turns with start timestamp
+                          if (segments && Array.isArray(segments) && segments.length > 0) {
+                            const groupedTurns = [];
+                            let currentTurn = null;
+
+                            segments.forEach((seg) => {
+                              const spk = seg.speaker || 'Speaker';
+                              if (!currentTurn || currentTurn.speaker !== spk) {
+                                currentTurn = {
+                                  speaker: spk,
+                                  start: seg.start || 0,
+                                  end: seg.end || 0,
+                                  text: seg.text || ''
+                                };
+                                groupedTurns.push(currentTurn);
+                              } else {
+                                currentTurn.text += ' ' + (seg.text || '');
+                                currentTurn.end = seg.end || currentTurn.end;
+                              }
+                            });
 
                             return (
                               <div className="segments-list">
-                                {segments.map((seg, idx) => (
-                                  <div key={idx} className="segment-item">
-                                    <span className="segment-time">
-                                      {formatSeconds(seg.start || 0)} - {formatSeconds(seg.end || 0)}
-                                    </span>
-                                    <span className="segment-text">{seg.text}</span>
-                                  </div>
-                                ))}
+                                {groupedTurns.map((turn, idx) => {
+                                  const speakerName = turn.speaker || 'Speaker';
+                                  const cleanLowerSpeaker = speakerName.toLowerCase().replace(/[\[\]]/g, '').trim();
+                                  const isRemote = cleanLowerSpeaker.includes('remote') || cleanLowerSpeaker.includes('system') || cleanLowerSpeaker.includes('participant') || cleanLowerSpeaker.includes('caller');
+                                  const isMe = !isRemote && (cleanLowerSpeaker === 'you' || cleanLowerSpeaker === 'me' || (userName && cleanLowerSpeaker.includes(userName)) || !cleanLowerSpeaker.includes('speaker 2'));
+                                  const initials = speakerName.replace(/[\[\]]/g, '').split(' ').filter(Boolean).map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'SP';
+
+                                  return (
+                                    <div key={idx} className={`segment-item ${isRemote ? 'is-remote' : 'is-me'}`}>
+                                      <div className="segment-header">
+                                        <div className={`segment-avatar ${isRemote ? 'is-remote-avatar' : ''}`}>
+                                          {initials}
+                                        </div>
+                                        <span className="segment-speaker-name">{speakerName}</span>
+                                        <span className="segment-time">
+                                          {formatSeconds(turn.start || 0)}
+                                        </span>
+                                      </div>
+                                      <div className="segment-text">{turn.text}</div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             );
-                          })()}
-                        </div>
+                          }
+
+                          // 2. Fallback: Parse transcript text if segments_json is not present
+                          const rawTranscript = activeMeeting.transcript || "";
+                          if (!rawTranscript.trim()) {
+                            return <p style={{ color: 'rgba(26,26,26,0.5)', textAlign: 'center', padding: '40px 0' }}>No transcript found.</p>;
+                          }
+
+                          const lines = rawTranscript.split('\n').map(l => l.trim()).filter(Boolean);
+                          const dialogueTurns = [];
+                          const lineRegex = /^([^:\n]{1,50}):\s*(.+)$/;
+
+                          lines.forEach((line) => {
+                            const match = line.match(lineRegex);
+                            if (match) {
+                              dialogueTurns.push({
+                                speaker: match[1].trim(),
+                                text: match[2].trim()
+                              });
+                            } else {
+                              if (dialogueTurns.length > 0) {
+                                dialogueTurns[dialogueTurns.length - 1].text += ' ' + line;
+                              } else {
+                                dialogueTurns.push({
+                                  speaker: 'Speaker',
+                                  text: line
+                                });
+                              }
+                            }
+                          });
+
+                          return (
+                            <div className="segments-list">
+                              {dialogueTurns.map((turn, idx) => {
+                                const speakerName = turn.speaker || 'Speaker';
+                                const cleanLowerSpeaker = speakerName.toLowerCase().replace(/[\[\]]/g, '').trim();
+                                const isRemote = cleanLowerSpeaker.includes('remote') || cleanLowerSpeaker.includes('system') || cleanLowerSpeaker.includes('participant') || cleanLowerSpeaker.includes('caller');
+                                const isMe = !isRemote && (cleanLowerSpeaker === 'you' || cleanLowerSpeaker === 'me' || (userName && cleanLowerSpeaker.includes(userName)) || !cleanLowerSpeaker.includes('speaker 2'));
+                                const initials = speakerName.replace(/[\[\]]/g, '').split(' ').filter(Boolean).map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'SP';
+
+                                return (
+                                  <div key={idx} className={`segment-item ${isRemote ? 'is-remote' : 'is-me'}`}>
+                                    <div className="segment-header">
+                                      <div className={`segment-avatar ${isRemote ? 'is-remote-avatar' : ''}`}>
+                                        {initials}
+                                      </div>
+                                      <span className="segment-speaker-name">{speakerName}</span>
+                                    </div>
+                                    <div className="segment-text">{turn.text}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
                 </div>
               ) : (
                 <div className="card">
-                  <h3 className="card-title">📝 Recorded Meetings</h3>
+                  <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" /></svg>
+                    Recorded Meetings
+                  </h3>
                   <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '24px' }}>
                     View details, transcripts, action items, and summaries of meetings recorded via your SpeekTo.Me desktop client.
                   </p>
@@ -1458,8 +1822,9 @@ export default function App() {
                           <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.6)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', height: '38px', lineHeight: '19px' }}>
                             {meeting.summary || "Click to view full transcript and summaries."}
                           </p>
-                          <div className="meeting-card-duration">
-                            ⏱ Duration: {formatSeconds(meeting.duration)}
+                          <div className="meeting-card-duration" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                            Duration: {formatSeconds(meeting.duration)}
                           </div>
                         </div>
                       ))}
@@ -1468,6 +1833,257 @@ export default function App() {
                 </div>
               )}
             </>
+          )}
+
+          {/* Profile SubTab */}
+          {activeSubTab === 'profile' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {/* 1. Account Details Card */}
+              <div className="card" style={{ marginBottom: 0 }}>
+                <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                  Account Overview
+                </h3>
+                <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '16px' }}>
+                  Basic account credentials and subscription status associated with your SpeekTo.Me account.
+                </p>
+
+                <div className="profile-info-grid">
+                  <div className="profile-info-item">
+                    <span className="profile-info-label">Full Name</span>
+                    <span className="profile-info-value">{user.name}</span>
+                  </div>
+                  <div className="profile-info-item">
+                    <span className="profile-info-label">Email Address</span>
+                    <span className="profile-info-value">{user.email}</span>
+                  </div>
+                  <div className="profile-info-item">
+                    <span className="profile-info-label">Plan Tier</span>
+                    <span className="profile-info-value" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className={`badge-status ${user.plan_active ? 'badge-success' : 'badge-failed'}`}>
+                        {user.plan_tier.toUpperCase()} {user.plan_active ? '(ACTIVE)' : '(FREE)'}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="profile-info-item">
+                    <span className="profile-info-label">Member Since</span>
+                    <span className="profile-info-value">{formatDate(profileSummary?.created_at || user.plan_activated_at)}</span>
+                  </div>
+                  <div className="profile-info-item">
+                    <span className="profile-info-label">Authentication Method</span>
+                    <span className="profile-info-value">
+                      {profileSummary?.has_google_auth && profileSummary?.has_password
+                        ? 'Google OAuth + Password'
+                        : profileSummary?.has_google_auth
+                        ? 'Google OAuth'
+                        : 'Email & Password'}
+                    </span>
+                  </div>
+                  <div className="profile-info-item">
+                    <span className="profile-info-label">Spoken Languages ({userLanguages.length}/5)</span>
+                    <span className="profile-info-value" style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                      {userLanguages.map(code => (
+                        <span key={code} className="badge-pill">{getLanguageName(code)}</span>
+                      ))}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Summarized Activity & Usage Dashboard */}
+              <div className="card" style={{ marginBottom: 0 }}>
+                <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>
+                  Usage & Activity Summary
+                </h3>
+                <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '20px' }}>
+                  Consolidated transcription, meeting recording, and AI usage statistics inferred from your account history.
+                </p>
+
+                <div className="profile-stats-grid">
+                  <div className="stat-card">
+                    <span className="stat-card-title">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
+                      Dictations
+                    </span>
+                    <span className="stat-card-value">{profileSummary?.total_transcriptions ?? logs.length}</span>
+                    <span className="stat-card-sub">Total voice inputs processed</span>
+                  </div>
+
+                  <div className="stat-card">
+                    <span className="stat-card-title">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                      Total Audio Dictated
+                    </span>
+                    <span className="stat-card-value">{formatSeconds(profileSummary?.total_audio_duration_seconds ?? 0)}</span>
+                    <span className="stat-card-sub">All-time audio processed</span>
+                  </div>
+
+                  <div className="stat-card">
+                    <span className="stat-card-title">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                      Words Transcribed
+                    </span>
+                    <span className="stat-card-value">{(profileSummary?.total_words_transcribed ?? 0).toLocaleString()}</span>
+                    <span className="stat-card-sub">Estimated words delivered</span>
+                  </div>
+
+                  <div className="stat-card">
+                    <span className="stat-card-title">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                      Meetings Recorded
+                    </span>
+                    <span className="stat-card-value">{profileSummary?.total_meetings ?? meetings.length}</span>
+                    <span className="stat-card-sub">{formatSeconds(profileSummary?.total_meeting_duration_seconds ?? 0)} total duration</span>
+                  </div>
+
+                  <div className="stat-card">
+                    <span className="stat-card-title">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
+                      Custom Vocabulary
+                    </span>
+                    <span className="stat-card-value">{profileSummary?.total_vocabulary_terms ?? vocabTerms.length}</span>
+                    <span className="stat-card-sub">Domain-specific custom terms</span>
+                  </div>
+
+                  <div className="stat-card">
+                    <span className="stat-card-title">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+                      AI Enhancements
+                    </span>
+                    <span className="stat-card-value">{profileSummary?.total_enhancements ?? 0}</span>
+                    <span className="stat-card-sub">AI structured transcriptions</span>
+                  </div>
+                </div>
+
+                {/* Current Monthly Quota meter */}
+                <div style={{ marginTop: '8px', background: 'var(--bg-canvas)', border: '1.5px solid var(--border-color)', borderRadius: '12px', padding: '18px 20px' }}>
+                  <div className="usage-stats" style={{ marginBottom: '8px' }}>
+                    <span>Current Month Usage Quota</span>
+                    <span>{formatSecondsToHours(user.duration_seconds)} / {formatSecondsToHours(user.monthly_limit_seconds || 3600)}</span>
+                  </div>
+                  <div className="progress-bar-container">
+                    <div
+                      className="progress-bar-fill"
+                      style={{
+                        width: `${Math.min(
+                          (user.duration_seconds / (user.monthly_limit_seconds || 3600)) * 100,
+                          100
+                        )}%`
+                      }}
+                    ></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Password & Security Card */}
+              <div className="card" style={{ marginBottom: 0 }}>
+                <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                  Password & Security
+                </h3>
+                <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '16px' }}>
+                  Send a secure password reset link to your email address (<strong>{user.email}</strong>). Complete the verification below to request the link.
+                </p>
+
+                {resetEmailSuccess && (
+                  <div style={{ background: '#d1fae5', border: '1.5px solid #065f46', color: '#065f46', padding: '12px 16px', borderRadius: '10px', fontSize: '13.5px', fontWeight: '600', marginBottom: '16px' }}>
+                    {resetEmailSuccess}
+                  </div>
+                )}
+
+                {resetEmailError && (
+                  <div style={{ background: '#fee2e2', border: '1.5px solid #991b1b', color: '#991b1b', padding: '12px 16px', borderRadius: '10px', fontSize: '13.5px', fontWeight: '600', marginBottom: '16px' }}>
+                    {resetEmailError}
+                  </div>
+                )}
+
+                <form onSubmit={handleSendPasswordReset} style={{ maxWidth: '440px' }}>
+                  <TurnstileWidget
+                    onVerify={setTurnstileToken}
+                    resetTrigger={resetTurnstile}
+                  />
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={sendingResetEmail || !turnstileToken}
+                    style={{ width: '100%', justifyContent: 'center' }}
+                  >
+                    {sendingResetEmail ? <div className="spinner"></div> : 'Send Password Reset Email'}
+                  </button>
+                </form>
+              </div>
+
+              {/* 4. Danger Zone Card */}
+              <div className="card danger-zone-card" style={{ marginBottom: 0 }}>
+                <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
+                  Danger Zone
+                </h3>
+                <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.75)', marginBottom: '18px', lineHeight: '1.5' }}>
+                  Permanently delete your SpeekTo.Me account, recorded meeting notes, audio files, custom vocabulary terms, and all associated usage history. This action is irreversible.
+                </p>
+
+                <button
+                  onClick={() => { setShowDeleteModal(true); setDeleteConfirmText(''); setAuthError(''); }}
+                  className="btn btn-danger"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                  Delete Account
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 2-Step Delete Account Modal */}
+          {showDeleteModal && (
+            <div className="modal-overlay">
+              <div className="modal-content" style={{ border: '2px solid #991b1b' }}>
+                <h3 className="modal-title" style={{ color: '#991b1b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
+                  Permanently Delete Account
+                </h3>
+
+                {authError && <div className="auth-error" style={{ marginBottom: '14px' }}>{authError}</div>}
+
+                <p className="modal-desc">
+                  <strong>Confirmation 1 of 2:</strong> You are about to permanently delete your account (<strong>{user.email}</strong>). All meetings, audio recordings, custom vocabulary, and history will be wiped out immediately.
+                </p>
+
+                <div style={{ marginTop: '16px', background: 'var(--bg-canvas)', border: '1.5px solid rgba(153, 27, 27, 0.3)', padding: '14px', borderRadius: '10px' }}>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: '700', marginBottom: '8px', color: '#991b1b' }}>
+                    Confirmation 2 of 2: To proceed, type DELETE in capital letters below:
+                  </label>
+                  <input
+                    type="text"
+                    value={deleteConfirmText}
+                    onChange={(e) => setDeleteConfirmText(e.target.value)}
+                    placeholder="DELETE"
+                    className="auth-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                    autoFocus
+                  />
+                </div>
+
+                <div className="modal-actions">
+                  <button
+                    onClick={() => { setShowDeleteModal(false); setDeleteConfirmText(''); }}
+                    className="btn"
+                    disabled={deletingAccount}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDeleteAccount}
+                    className="btn btn-danger"
+                    disabled={deleteConfirmText.trim() !== 'DELETE' || deletingAccount}
+                  >
+                    {deletingAccount ? <div className="spinner"></div> : 'Permanently Delete My Account'}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </main>
       )}

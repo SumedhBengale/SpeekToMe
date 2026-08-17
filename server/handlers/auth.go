@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"speektome-server/auth"
 	"speektome-server/config"
 	"speektome-server/db"
@@ -478,7 +480,7 @@ func (a *App) HandleAuthSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	verificationToken := auth.GenerateNonce() + auth.GenerateNonce()
+	verificationToken := auth.GenerateCryptoToken(32)
 
 	userID, err := a.DB.CreateEmailUser(req.Email, req.Password, req.Name, verificationToken)
 	if err != nil {
@@ -803,3 +805,192 @@ func (a *App) HandleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(htmlContent))
 }
+
+func (a *App) HandleGetProfileSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, err := auth.Authenticate(r, a.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	summary, err := a.DB.GetUserProfileSummary(user.ID)
+	if err != nil {
+		log.Printf("[DB ERROR] GetUserProfileSummary failed for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to retrieve user profile summary", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(summary)
+}
+
+type ForgotPasswordRequest struct {
+	Email          string `json:"email"`
+	TurnstileToken string `json:"cf-turnstile-response"`
+}
+
+func (a *App) HandleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var req ForgotPasswordRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	targetEmail := strings.TrimSpace(strings.ToLower(req.Email))
+
+	// If authenticated user didn't specify an email, fall back to current user's email
+	if targetEmail == "" {
+		if authUser, authErr := auth.Authenticate(r, a.DB); authErr == nil && authUser != nil {
+			targetEmail = strings.TrimSpace(strings.ToLower(authUser.Email))
+		}
+	}
+
+	if targetEmail == "" {
+		http.Error(w, "Email address is required", http.StatusBadRequest)
+		return
+	}
+
+	if os.Getenv("TURNSTILE_SECRET") != "" {
+		ip := auth.GetClientIP(r)
+		if !auth.VerifyTurnstile(req.TurnstileToken, ip) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Bot verification failed. Please complete the CAPTCHA."})
+			return
+		}
+	}
+
+	ip := auth.GetClientIP(r)
+	if !ratelimit.AuthRateLimiterInst.Allow("forgot_ip:"+ip, 5, 5*time.Minute) || !ratelimit.AuthRateLimiterInst.Allow("forgot_email:"+targetEmail, 5, 5*time.Minute) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Too many reset attempts. Please try again in a few minutes."})
+		return
+	}
+
+	resetToken := auth.GenerateCryptoToken(32)
+	expiresAt := time.Now().Add(1 * time.Hour)
+
+	name, err := a.DB.SetPasswordResetToken(targetEmail, resetToken, expiresAt)
+	if err == nil {
+		if name == "" {
+			name = strings.Split(targetEmail, "@")[0]
+		}
+		if sendErr := services.SendPasswordResetEmail(targetEmail, name, resetToken); sendErr != nil {
+			log.Printf("[EMAIL ERROR] Failed to send password reset email to %s: %v", targetEmail, sendErr)
+		}
+	} else {
+		// Log but do not reveal user existence to caller
+		log.Printf("[PASSWORD RESET] User lookup failed for %s: %v", targetEmail, err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": "If an account with this email exists, a password reset link has been sent.",
+	})
+}
+
+type ResetPasswordRequest struct {
+	Token          string `json:"token"`
+	Password       string `json:"password"`
+	TurnstileToken string `json:"cf-turnstile-response"`
+}
+
+func (a *App) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var req ResetPasswordRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	req.Token = strings.TrimSpace(req.Token)
+	req.Password = strings.TrimSpace(req.Password)
+
+	if req.Token == "" || req.Password == "" {
+		http.Error(w, "Token and new password are required", http.StatusBadRequest)
+		return
+	}
+
+	if os.Getenv("TURNSTILE_SECRET") != "" {
+		ip := auth.GetClientIP(r)
+		if !auth.VerifyTurnstile(req.TurnstileToken, ip) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Bot verification failed. Please complete the CAPTCHA."})
+			return
+		}
+	}
+
+	if err := auth.ValidatePasswordStrength(req.Password); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+
+	if err := a.DB.ResetPasswordWithToken(req.Token, string(hashedPassword)); err != nil {
+		log.Printf("[PASSWORD RESET ERROR] Failed to reset password with token: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": "Your password has been successfully updated. You may now log in.",
+	})
+}
+
+func (a *App) HandleDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" && r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, err := auth.Authenticate(r, a.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if err := a.DB.DeleteUserAccount(user.ID); err != nil {
+		log.Printf("[DB ERROR] DeleteUserAccount failed for user %d: %v", user.ID, err)
+		http.Error(w, "Failed to delete account. Please contact support.", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "deleted",
+		"message": "Account and all associated data have been permanently deleted.",
+	})
+}
+

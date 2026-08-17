@@ -68,9 +68,10 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 120<<20)
 	err = r.ParseMultipartForm(100 << 20)
 	if err != nil {
-		http.Error(w, "Failed to parse multipart form", http.StatusBadRequest)
+		http.Error(w, "Failed to parse multipart form: audio payload exceeds limit (max 120MB)", http.StatusBadRequest)
 		return
 	}
 
@@ -126,14 +127,14 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dir := "uploads/meetings"
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		http.Error(w, "Failed to create uploads directory", http.StatusInternalServerError)
 		return
 	}
 
 	filename := fmt.Sprintf("meeting_%d_%d.ogg", user.ID, time.Now().UnixNano())
 	audioPath := filepath.Join(dir, filename)
-	if err := os.WriteFile(audioPath, audioBytes, 0644); err != nil {
+	if err := os.WriteFile(audioPath, audioBytes, 0600); err != nil {
 		http.Error(w, "Failed to save audio file to disk", http.StatusInternalServerError)
 		return
 	}

@@ -523,11 +523,17 @@ func (a *App) HandleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Subscription user mismatch", http.StatusForbidden)
 				return
 			}
-			userID = noteUserID
+			if userID == 0 {
+				if a.DB.UserExists(noteUserID) {
+					userID = noteUserID
+				} else {
+					log.Printf("[RAZORPAY WEBHOOK WARNING] notes.user_id %d does not exist in users table", noteUserID)
+				}
+			}
 		}
 	}
 	if userID == 0 {
-		log.Printf("[RAZORPAY WEBHOOK WARNING] Could not resolve user for subscription %s: %v", subID, lookupErr)
+		log.Printf("[RAZORPAY WEBHOOK WARNING] Could not resolve verified user for subscription %s: %v", subID, lookupErr)
 		_ = a.DB.InsertWebhookLogDetailed(eventID, event.Event, subID, paymentID, invoiceID, nil, status, "user_not_found", rawPayload)
 		http.Error(w, "User not found for subscription ID", http.StatusNotFound)
 		return

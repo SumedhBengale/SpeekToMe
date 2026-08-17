@@ -171,36 +171,50 @@ function getLanguageName(code) {
 }
 
 function renderClientLanguageUI() {
-  const chipsContainer = document.getElementById('client-lang-chips');
-  const selectEl = document.getElementById('client-lang-select');
-  if (!chipsContainer || !selectEl) return;
+  const containers = [
+    { chips: document.getElementById('client-lang-chips'), select: document.getElementById('client-lang-select') },
+    { chips: document.getElementById('onboard-lang-chips'), select: document.getElementById('onboard-lang-select') }
+  ];
 
-  chipsContainer.innerHTML = '';
-  selectedLanguages.forEach(code => {
-    const chip = document.createElement('span');
-    chip.className = 'lang-chip';
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:var(--accent-color, #00e676);color:#000000;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,0.3);';
-    chip.innerHTML = `${escapeHtml(getLanguageName(code))} <button type="button" style="background:none;border:none;color:#000000;cursor:pointer;font-weight:bold;margin-left:2px;font-size:14px;line-height:1;" title="Remove">&times;</button>`;
-    
-    chip.querySelector('button').addEventListener('click', () => {
-      if (selectedLanguages.length <= 1) {
-        showToast("At least 1 language must be selected.", "Languages", "warning");
-        return;
-      }
-      selectedLanguages = selectedLanguages.filter(c => c !== code);
-      saveLanguagesToBackend();
+  containers.forEach(({ chips: chipsContainer, select: selectEl }) => {
+    if (!chipsContainer || !selectEl) return;
+
+    chipsContainer.innerHTML = '';
+    selectedLanguages.forEach(code => {
+      const chip = document.createElement('span');
+      chip.className = 'lang-chip';
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:var(--accent-color, #00e676);color:#000000;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,0.3);';
+      chip.innerHTML = `${escapeHtml(getLanguageName(code))} <button type="button" style="background:none;border:none;color:#000000;cursor:pointer;font-weight:bold;margin-left:2px;font-size:14px;line-height:1;" title="Remove">&times;</button>`;
+      
+      chip.querySelector('button').addEventListener('click', () => {
+        if (selectedLanguages.length <= 1) {
+          showToast("At least 1 language must be selected.", "Languages", "warning");
+          return;
+        }
+        selectedLanguages = selectedLanguages.filter(c => c !== code);
+        saveLanguagesToBackend();
+      });
+      chipsContainer.appendChild(chip);
     });
-    chipsContainer.appendChild(chip);
-  });
 
-  selectEl.innerHTML = '';
-  SUPPORTED_LANGUAGES.forEach(lang => {
-    if (!selectedLanguages.includes(lang.code)) {
-      const opt = document.createElement('option');
-      opt.value = lang.code;
-      opt.textContent = lang.name;
-      selectEl.appendChild(opt);
-    }
+    selectEl.innerHTML = '';
+    
+    // Add placeholder default option
+    const placeholderOpt = document.createElement('option');
+    placeholderOpt.value = '';
+    placeholderOpt.textContent = '-- Click to select language --';
+    placeholderOpt.disabled = true;
+    placeholderOpt.selected = true;
+    selectEl.appendChild(placeholderOpt);
+
+    SUPPORTED_LANGUAGES.forEach(lang => {
+      if (!selectedLanguages.includes(lang.code)) {
+        const opt = document.createElement('option');
+        opt.value = lang.code;
+        opt.textContent = lang.name;
+        selectEl.appendChild(opt);
+      }
+    });
   });
 }
 
@@ -228,7 +242,27 @@ async function init() {
     if (addLangBtn) {
       addLangBtn.addEventListener('click', () => {
         const selectEl = document.getElementById('client-lang-select');
-        if (!selectEl || !selectEl.value) return;
+        if (!selectEl || !selectEl.value) {
+          showToast("Please select a language from the dropdown.", "Languages", "warning");
+          return;
+        }
+        if (selectedLanguages.length >= 5) {
+          showToast("You can select at most 5 spoken languages.", "Languages", "warning");
+          return;
+        }
+        selectedLanguages.push(selectEl.value);
+        saveLanguagesToBackend();
+      });
+    }
+
+    const onboardAddLangBtn = document.getElementById('onboard-add-lang-btn');
+    if (onboardAddLangBtn) {
+      onboardAddLangBtn.addEventListener('click', () => {
+        const selectEl = document.getElementById('onboard-lang-select');
+        if (!selectEl || !selectEl.value) {
+          showToast("Please select a language from the dropdown.", "Languages", "warning");
+          return;
+        }
         if (selectedLanguages.length >= 5) {
           showToast("You can select at most 5 spoken languages.", "Languages", "warning");
           return;
@@ -1299,6 +1333,10 @@ async function viewMeeting(id) {
       let currentBlock = null;
       let currentBlockText = null;
 
+      // Determine local user name if available (from DOM or window state)
+      const domUserName = userNameEl && userNameEl.textContent ? userNameEl.textContent.trim() : '';
+      const userName = domUserName ? domUserName.toLowerCase() : '';
+
       segments.forEach(seg => {
         const speakerName = seg.speaker || 'Speaker';
         
@@ -1306,7 +1344,12 @@ async function viewMeeting(id) {
           currentSpeaker = speakerName;
           
           currentBlock = document.createElement('div');
-          currentBlock.className = 'meeting-speaker-block';
+          
+          const cleanLowerSpeaker = speakerName.toLowerCase().replace(/[\[\]]/g, '').trim();
+          const isRemote = cleanLowerSpeaker.includes('remote') || cleanLowerSpeaker.includes('system') || cleanLowerSpeaker.includes('participant') || cleanLowerSpeaker.includes('caller');
+          const isMe = !isRemote && (cleanLowerSpeaker === 'you' || cleanLowerSpeaker === 'me' || (userName && cleanLowerSpeaker.includes(userName)) || !cleanLowerSpeaker.includes('speaker 2'));
+
+          currentBlock.className = `meeting-speaker-block ${isRemote ? 'is-remote' : 'is-me'}`;
           
           const header = document.createElement('div');
           header.className = 'meeting-speaker-header';
@@ -1314,7 +1357,7 @@ async function viewMeeting(id) {
           const avatar = document.createElement('div');
           avatar.className = 'meeting-speaker-avatar';
           avatar.textContent = getInitials(speakerName);
-          avatar.style.backgroundColor = getAvatarColor(speakerName);
+          avatar.style.backgroundColor = isRemote ? '#2f80ed' : getAvatarColor(speakerName);
           
           const nameSpan = document.createElement('span');
           nameSpan.className = 'meeting-speaker-name';

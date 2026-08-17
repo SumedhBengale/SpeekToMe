@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -88,6 +90,11 @@ func main() {
 	mux.HandleFunc("POST /auth/2fa/verify", app.HandleAuth2FAVerify)
 	mux.HandleFunc("GET /auth/verify", app.HandleAuthVerify)
 	mux.HandleFunc("GET /auth/me", app.HandleAuthMe)
+	mux.HandleFunc("GET /auth/profile/summary", app.HandleGetProfileSummary)
+	mux.HandleFunc("POST /auth/forgot-password", app.HandleForgotPassword)
+	mux.HandleFunc("POST /auth/reset-password", app.HandleResetPassword)
+	mux.HandleFunc("DELETE /auth/account", app.HandleDeleteAccount)
+	mux.HandleFunc("POST /auth/delete-account", app.HandleDeleteAccount)
 	mux.HandleFunc("POST /auth/languages", app.HandleUpdateLanguages)
 	mux.HandleFunc("GET /usage/history", app.HandleGetUserHistory)
 	mux.HandleFunc("POST /auth/logout", app.HandleAuthLogout)
@@ -125,12 +132,43 @@ func main() {
 	log.Fatal(http.ListenAndServe("127.0.0.1:8000", handler))
 }
 
+func isAllowedOrigin(origin string) bool {
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	hostname := strings.ToLower(u.Hostname())
+	if hostname == "localhost" || hostname == "127.0.0.1" || strings.HasSuffix(hostname, ".pages.dev") || strings.HasSuffix(hostname, ".speekto.me") || hostname == "speekto.me" {
+		return true
+	}
+	if strings.ToLower(u.Scheme) == "tauri" {
+		return true
+	}
+	frontend := os.Getenv("FRONTEND_URL")
+	if frontend != "" {
+		if fu, err := url.Parse(frontend); err == nil && strings.EqualFold(fu.Hostname(), hostname) {
+			return true
+		}
+	}
+	return false
+}
+
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		origin := r.Header.Get("Origin")
+		if origin != "" && isAllowedOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Vary", "Origin")
+		} else if origin == "" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE, PUT")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin, X-Razorpay-Event-Id, X-Razorpay-Signature")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

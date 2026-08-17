@@ -143,7 +143,22 @@
             <div id="onboard-prompt-validation-banner" class="validation-banner hidden"></div>
           </div>
 
-          <button id="onboard-next-3-btn" class="fluent-button accent">Next Step ➔</button>
+          <div class="setting-group"
+            style="margin-top: 14px; border-top: 1px solid var(--border-color, rgba(255,255,255,0.1)); padding-top: 14px;">
+            <label class="accent-label">Spoken Languages (Select up to 5)</label>
+            <span class="setting-hint" style="margin-bottom: 8px; margin-left: 0; display: block;">1 language locks Whisper for max speed. Multiple languages guide multi-lingual detection.</span>
+            <div id="onboard-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
+              <!-- Rendered dynamically -->
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <select id="onboard-lang-select" class="fluent-select" style="flex: 1;">
+                <!-- Options populated dynamically -->
+              </select>
+              <button type="button" id="onboard-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add Language</button>
+            </div>
+          </div>
+
+          <button id="onboard-next-3-btn" class="fluent-button accent" style="margin-top: 14px;">Next Step ➔</button>
         </div>
 
         <!-- Step 4: Finish -->
@@ -153,7 +168,7 @@
           </p>
 
           <div class="tutorial-card">
-            <p><strong>💡 How to use SpeekTo.Me:</strong></p>
+            <p><strong>How to use SpeekTo.Me:</strong></p>
             <ul>
               <li><strong>Hold</strong> your hotkey to record audio.</li>
               <li><strong>Speak</strong> normally (whispering works too!).</li>
@@ -228,10 +243,10 @@
           <label for="theme-select">App Theme</label>
           <div class="select-wrapper">
             <select id="theme-select" class="fluent-select">
-              <option value="forest">🧁 Pale Cream (Default)</option>
-              <option value="lavender">💜 Sleek Lavender</option>
-              <option value="mint">🌿 Dark Mint</option>
-              <option value="classic_dark">🌌 Classic Dark</option>
+              <option value="forest">Pale Cream (Default)</option>
+              <option value="lavender">Sleek Lavender</option>
+              <option value="mint">Dark Mint</option>
+              <option value="classic_dark">Classic Dark</option>
             </select>
           </div>
         </div>
@@ -348,8 +363,7 @@
             <select id="client-lang-select" class="fluent-select" style="flex: 1;">
               <!-- Options populated dynamically -->
             </select>
-            <button id="client-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add
-              Language</button>
+            <button id="client-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add Language</button>
           </div>
         </div>
       </div>
@@ -470,14 +484,14 @@
               style="display: flex; gap: 10px; margin-bottom: 20px; align-items: center;">
               <input type="text" id="meetings-search-input" class="fluent-input" placeholder="Search meetings..."
                 style="flex: 1;">
-              <button id="meetings-start-rec-btn" class="fluent-button primary">🔴 Record New Note</button>
+              <button id="meetings-start-rec-btn" class="fluent-button primary">New Meeting</button>
             </div>
 
             <div class="meetings-list-container"
               style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; min-height: 200px; padding: 15px;">
               <div id="meetings-empty-msg" class="meetings-empty"
                 style="text-align: center; color: var(--text-secondary); padding: 50px 0;">
-                No meeting notes recorded yet. Click "Record New Note" to start!
+                No meeting notes recorded yet. Click "New Meeting" to start!
               </div>
               <div id="meetings-list" class="meetings-list-grid"
                 style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 15px;">
@@ -579,9 +593,7 @@
                   style="background: none; border: none; padding: 6px 12px; color: var(--text-secondary); font-size: 13.5px; font-weight: 500; cursor: pointer; border-radius: 4px;">Action
                   Items</button>
                 <button id="meeting-delete-btn" class="fluent-button danger small"
-                  style="margin-left: auto; font-size: 11px; padding: 5px 8px; display: flex; align-items: center; gap: 3px;">
-                  <span>🗑️</span> Delete
-                </button>
+                  style="margin-left: auto; font-size: 11px; padding: 5px 8px; display: flex; align-items: center; gap: 3px;">Delete</button>
               </div>
 
               <div class="detail-tab-content">

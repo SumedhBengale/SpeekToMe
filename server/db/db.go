@@ -224,6 +224,9 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN monthly_usage_seconds REAL DEFAULT 0.0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN is_locked INTEGER DEFAULT 0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN languages TEXT DEFAULT '[\"en\"]'")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN password_reset_token TEXT")
+	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN password_reset_expires TIMESTAMP")
+	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_users_pwd_reset ON users(password_reset_token)")
 	_, _ = dbConn.Exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, event_type TEXT NOT NULL, subscription_id TEXT, payment_id TEXT, invoice_id TEXT, user_id INTEGER, status TEXT, result TEXT, raw_payload TEXT)")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event ON webhook_logs(event_type)")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_user ON webhook_logs(user_id)")
@@ -253,19 +256,43 @@ func NewDatabase(connStr string) (*Database, error) {
 	return &Database{db: dbConn}, nil
 }
 
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%x", h)
+}
+
 // User operations
 func (d *Database) GetOrCreateUser(googleID, email, name string) (int64, error) {
 	var id int64
+	// 1. Check if user with this google_id already exists
 	err := d.db.QueryRow("SELECT id FROM users WHERE google_id = ?", googleID).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
+
+	// 2. Check if a user with this verified email already exists (e.g. registered via email/password)
+	if email != "" {
+		var existingID int64
+		err = d.db.QueryRow("SELECT id FROM users WHERE email = ?", email).Scan(&existingID)
+		if err == nil {
+			// Link google_id and mark as verified
+			_, _ = d.db.Exec("UPDATE users SET google_id = ?, is_verified = 1 WHERE id = ?", googleID, existingID)
+			return existingID, nil
+		}
+	}
 	
+	// 3. Insert new user
 	res, err := d.db.Exec("INSERT INTO users (google_id, email, name, is_verified, languages) VALUES (?, ?, ?, 1, '[\"en\"]')", googleID, email, name)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+func (d *Database) UserExists(userID int64) bool {
+	var id int64
+	err := d.db.QueryRow("SELECT id FROM users WHERE id = ?", userID).Scan(&id)
+	return err == nil
 }
 
 // Session operations
@@ -693,7 +720,8 @@ func (d *Database) CreateEmailUser(email, password, name, verificationToken stri
 		return 0, err
 	}
 
-	res, err := d.db.Exec("INSERT INTO users (email, password_hash, name, is_verified, verification_token) VALUES (?, ?, ?, 0, ?)", email, string(hashedPassword), name, verificationToken)
+	tokenHash := hashToken(verificationToken)
+	res, err := d.db.Exec("INSERT INTO users (email, password_hash, name, is_verified, verification_token) VALUES (?, ?, ?, 0, ?)", email, string(hashedPassword), name, tokenHash)
 	if err != nil {
 		return 0, err
 	}
@@ -730,9 +758,14 @@ func (d *Database) AuthenticateEmailUser(email, password string) (int64, error) 
 
 // VerifyUserEmail checks the verification token, marks user as verified, and returns user email
 func (d *Database) VerifyUserEmail(token string) (string, error) {
+	if token == "" {
+		return "", fmt.Errorf("invalid or expired verification token")
+	}
 	var id int64
 	var email string
-	err := d.db.QueryRow("SELECT id, email FROM users WHERE verification_token = ?", token).Scan(&id, &email)
+	tokenHash := hashToken(token)
+	// Support checking both hashed token and legacy raw token
+	err := d.db.QueryRow("SELECT id, email FROM users WHERE verification_token = ? OR verification_token = ?", tokenHash, token).Scan(&id, &email)
 	if err != nil {
 		return "", fmt.Errorf("invalid or expired verification token")
 	}
@@ -1146,4 +1179,244 @@ func EncryptTOTPSecret(plaintext string) (string, error) {
 func (d *Database) AddNewsletterSubscriber(email string) error {
 	_, err := d.db.Exec("INSERT OR IGNORE INTO newsletter_subscribers (email) VALUES (?)", email)
 	return err
+}
+
+type UserProfileSummary struct {
+	ID                     int64    `json:"id"`
+	Email                  string   `json:"email"`
+	Name                   string   `json:"name"`
+	PlanTier               string   `json:"plan_tier"`
+	PlanActive             bool     `json:"plan_active"`
+	PlanActivatedAt        string   `json:"plan_activated_at"`
+	CreatedAt              string   `json:"created_at"`
+	Languages              []string `json:"languages"`
+	HasPassword            bool     `json:"has_password"`
+	HasGoogleAuth          bool     `json:"has_google_auth"`
+	TotalTranscriptions    int      `json:"total_transcriptions"`
+	TotalAudioDuration     float64  `json:"total_audio_duration_seconds"`
+	TotalWordsTranscribed  int      `json:"total_words_transcribed"`
+	TotalMeetings          int      `json:"total_meetings"`
+	TotalMeetingDuration   float64  `json:"total_meeting_duration_seconds"`
+	TotalVocabularyTerms   int      `json:"total_vocabulary_terms"`
+	TotalEnhancements      int      `json:"total_enhancements"`
+	MonthlyUsageSeconds    float64  `json:"monthly_usage_seconds"`
+	LastActiveAt           string   `json:"last_active_at"`
+}
+
+func (d *Database) GetUserProfileSummary(userID int64) (*UserProfileSummary, error) {
+	var summary UserProfileSummary
+	var langsStr sql.NullString
+	var pwdHash sql.NullString
+	var googleID sql.NullString
+	var planActivatedAt sql.NullString
+	var createdAt sql.NullString
+	var planActive int
+
+	err := d.db.QueryRow(`
+		SELECT id, email, name, plan_tier, plan_active, plan_activated_at, created_at,
+		       COALESCE(languages, '["en"]'), password_hash, google_id, COALESCE(monthly_usage_seconds, 0.0)
+		FROM users
+		WHERE id = ?
+	`, userID).Scan(
+		&summary.ID, &summary.Email, &summary.Name, &summary.PlanTier, &planActive,
+		&planActivatedAt, &createdAt, &langsStr, &pwdHash, &googleID, &summary.MonthlyUsageSeconds,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	summary.PlanActive = planActive == 1
+	summary.PlanActivatedAt = planActivatedAt.String
+	summary.CreatedAt = createdAt.String
+	summary.Languages = utils.ParseLanguagesJSON(langsStr.String)
+	summary.HasPassword = pwdHash.Valid && strings.TrimSpace(pwdHash.String) != ""
+	summary.HasGoogleAuth = googleID.Valid && strings.TrimSpace(googleID.String) != ""
+
+	// Get usage logs stats
+	var totalLogs int
+	var totalDuration float64
+	var totalEnhance int
+	var lastLogTimestamp sql.NullString
+
+	_ = d.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(audio_duration), 0.0), COALESCE(SUM(enhance_enabled), 0), MAX(timestamp)
+		FROM usage_logs
+		WHERE user_id = ? AND status = 'success'
+	`, userID).Scan(&totalLogs, &totalDuration, &totalEnhance, &lastLogTimestamp)
+
+	summary.TotalTranscriptions = totalLogs
+	summary.TotalAudioDuration = totalDuration
+	summary.TotalEnhancements = totalEnhance
+
+	// Calculate words transcribed from usage logs (estimate by whitespace splitting on non-empty outputs)
+	rows, err := d.db.Query(`
+		SELECT COALESCE(final_output, input_transcript, '')
+		FROM usage_logs
+		WHERE user_id = ? AND status = 'success'
+	`, userID)
+	if err == nil {
+		totalWords := 0
+		for rows.Next() {
+			var txt string
+			if err := rows.Scan(&txt); err == nil && txt != "" {
+				totalWords += len(strings.Fields(txt))
+			}
+		}
+		rows.Close()
+		summary.TotalWordsTranscribed = totalWords
+	}
+
+	// Get meetings stats
+	var totalMeetings int
+	var totalMeetingDuration float64
+	var lastMeetingTimestamp sql.NullString
+
+	_ = d.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(duration), 0.0), MAX(timestamp)
+		FROM meetings
+		WHERE user_id = ?
+	`, userID).Scan(&totalMeetings, &totalMeetingDuration, &lastMeetingTimestamp)
+
+	summary.TotalMeetings = totalMeetings
+	summary.TotalMeetingDuration = totalMeetingDuration
+
+	// Add meeting transcript word counts
+	mRows, err := d.db.Query(`
+		SELECT COALESCE(transcript, '')
+		FROM meetings
+		WHERE user_id = ?
+	`, userID)
+	if err == nil {
+		meetingWords := 0
+		for mRows.Next() {
+			var mTxt string
+			if err := mRows.Scan(&mTxt); err == nil && mTxt != "" {
+				meetingWords += len(strings.Fields(mTxt))
+			}
+		}
+		mRows.Close()
+		summary.TotalWordsTranscribed += meetingWords
+	}
+
+	// Get vocabulary stats
+	var totalVocab int
+	_ = d.db.QueryRow(`SELECT COUNT(*) FROM vocabulary WHERE user_id = ?`, userID).Scan(&totalVocab)
+	summary.TotalVocabularyTerms = totalVocab
+
+	// Determine most recent activity
+	summary.LastActiveAt = summary.CreatedAt
+	if lastLogTimestamp.Valid && lastLogTimestamp.String != "" {
+		summary.LastActiveAt = lastLogTimestamp.String
+	}
+	if lastMeetingTimestamp.Valid && lastMeetingTimestamp.String != "" {
+		if lastMeetingTimestamp.String > summary.LastActiveAt {
+			summary.LastActiveAt = lastMeetingTimestamp.String
+		}
+	}
+
+	return &summary, nil
+}
+
+func (d *Database) SetPasswordResetToken(email, token string, expiresAt time.Time) (string, error) {
+	var name string
+	var id int64
+	err := d.db.QueryRow("SELECT id, name FROM users WHERE email = ?", email).Scan(&id, &name)
+	if err != nil {
+		return "", fmt.Errorf("user not found")
+	}
+
+	tokenHash := hashToken(token)
+	expiresStr := expiresAt.UTC().Format("2006-01-02 15:04:05")
+	_, err = d.db.Exec(`
+		UPDATE users
+		SET password_reset_token = ?, password_reset_expires = ?
+		WHERE id = ?
+	`, tokenHash, expiresStr, id)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func (d *Database) ValidatePasswordResetToken(token string) (int64, string, error) {
+	if token == "" {
+		return 0, "", fmt.Errorf("invalid reset token")
+	}
+	var id int64
+	var email string
+	var expiresStr string
+	tokenHash := hashToken(token)
+	// Support checking both hashed token and raw token for backward compatibility
+	err := d.db.QueryRow(`
+		SELECT id, email, password_reset_expires
+		FROM users
+		WHERE password_reset_token = ? OR password_reset_token = ?
+	`, tokenHash, token).Scan(&id, &email, &expiresStr)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid or expired reset token")
+	}
+
+	t, err := time.Parse("2006-01-02 15:04:05", expiresStr)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, expiresStr)
+	}
+	if err == nil && time.Now().UTC().After(t) {
+		return 0, "", fmt.Errorf("password reset token has expired")
+	}
+
+	return id, email, nil
+}
+
+func (d *Database) ResetPasswordWithToken(token, newPasswordHash string) error {
+	id, _, err := d.ValidatePasswordResetToken(token)
+	if err != nil {
+		return err
+	}
+
+	_, err = d.db.Exec(`
+		UPDATE users
+		SET password_hash = ?, password_reset_token = NULL, password_reset_expires = NULL, is_verified = 1
+		WHERE id = ?
+	`, newPasswordHash, id)
+	if err != nil {
+		return err
+	}
+
+	// Security: Invalidate all existing active sessions upon password reset
+	_, _ = d.db.Exec("DELETE FROM sessions WHERE user_id = ?", id)
+
+	return nil
+}
+
+func (d *Database) DeleteUserAccount(userID int64) error {
+	// Clean up any local meeting audio files
+	rows, err := d.db.Query("SELECT audio_path FROM meetings WHERE user_id = ?", userID)
+	if err == nil {
+		for rows.Next() {
+			var audioPath string
+			if err := rows.Scan(&audioPath); err == nil && audioPath != "" {
+				_ = os.Remove(audioPath)
+			}
+		}
+		rows.Close()
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, _ = tx.Exec("DELETE FROM sessions WHERE user_id = ?", userID)
+	_, _ = tx.Exec("DELETE FROM meetings WHERE user_id = ?", userID)
+	_, _ = tx.Exec("DELETE FROM usage_logs WHERE user_id = ?", userID)
+	_, _ = tx.Exec("DELETE FROM vocabulary WHERE user_id = ?", userID)
+	_, _ = tx.Exec("DELETE FROM subscription_payments WHERE user_id = ?", userID)
+	_, _ = tx.Exec("DELETE FROM webhook_logs WHERE user_id = ?", userID)
+	_, err = tx.Exec("DELETE FROM users WHERE id = ?", userID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }

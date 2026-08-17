@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
+	"speektome-server/auth"
 	"speektome-server/db"
 	"speektome-server/handlers"
 	"speektome-server/pipeline"
@@ -170,4 +172,136 @@ func TestRazorpayWebhookPayloadParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestIsValidRedirectSecurity(t *testing.T) {
+	// Must reject dangerous pseudo-schemes
+	dangerousURLs := []string{
+		"javascript:alert(1)",
+		"JAVASCRIPT:alert(document.cookie)",
+		"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+		"vbscript:msgbox(1)",
+		"file:///etc/passwd",
+		"http://evil-attacker.com/steal-token",
+		"https://evil-speekto.me.attacker.com",
+		"//evil.com/phish",
+		"/\\evil.com",
+	}
+
+	for _, u := range dangerousURLs {
+		if auth.IsValidRedirect(u) {
+			t.Errorf("Security violation: IsValidRedirect(%q) returned true for dangerous URL!", u)
+		}
+	}
+
+	// Must accept safe legitimate redirect URLs
+	safeURLs := []string{
+		"/dashboard",
+		"/dashboard?verified=true",
+		"http://localhost:8080/dashboard",
+		"http://localhost:5173/auth/callback",
+		"http://127.0.0.1:8000/auth/callback",
+		"https://speekto-me.pages.dev/dashboard",
+		"https://2fa2faa0.speekto-me.pages.dev/dashboard",
+		"https://speekto.me/dashboard",
+		"https://api.speekto.me/health",
+		"tauri://localhost/callback",
+		"speektome://auth/callback",
+	}
+
+	for _, u := range safeURLs {
+		if !auth.IsValidRedirect(u) {
+			t.Errorf("False positive: IsValidRedirect(%q) returned false for safe URL!", u)
+		}
+	}
+}
+
+func TestGoogleOAuthAccountLinking(t *testing.T) {
+	databasePath := t.TempDir() + "/oauth_link_test.db"
+	database, err := db.NewDatabase(databasePath)
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+	defer database.Close()
+
+	// 1. User signs up via email/password first
+	email := "linking_user@example.com"
+	userID, err := database.CreateEmailUser(email, "Password1234", "Linking User", "verify_token_123")
+	if err != nil {
+		t.Fatalf("CreateEmailUser failed: %v", err)
+	}
+
+	// 2. User later logs in with Google OAuth using the same email
+	googleID := "google_oauth_sub_987654"
+	linkedUserID, err := database.GetOrCreateUser(googleID, email, "Linking User Google")
+	if err != nil {
+		t.Fatalf("GetOrCreateUser failed: %v", err)
+	}
+
+	if linkedUserID != userID {
+		t.Errorf("Expected linked user ID %d, got %d", userID, linkedUserID)
+	}
+
+	// Verify google_id is linked and user is verified
+	sessionToken := "test_session_token_link"
+	err = database.CreateSession(sessionToken, linkedUserID, 0)
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	profile, err := database.GetUserBySession(sessionToken)
+	if err != nil {
+		t.Fatalf("GetUserBySession failed: %v", err)
+	}
+
+	if profile.ID != userID || profile.Email != email {
+		t.Errorf("Profile mismatch: id=%d, email=%s", profile.ID, profile.Email)
+	}
+}
+
+func TestPasswordResetRevokesSessions(t *testing.T) {
+	databasePath := t.TempDir() + "/pwd_revoke_test.db"
+	database, err := db.NewDatabase(databasePath)
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+	defer database.Close()
+
+	userID, err := database.CreateEmailUser("revoketest@example.com", "OldPassword123", "Revoke User", "tok")
+	if err != nil {
+		t.Fatalf("CreateEmailUser: %v", err)
+	}
+
+	// Create 2 active sessions
+	session1 := "session_token_111"
+	session2 := "session_token_222"
+	_ = database.CreateSession(session1, userID, 0)
+	_ = database.CreateSession(session2, userID, 0)
+
+	// Verify sessions are active
+	if _, err := database.GetUserBySession(session1); err != nil {
+		t.Fatalf("session1 should be active: %v", err)
+	}
+
+	// Issue password reset token
+	resetToken := "reset_token_secret_xyz"
+	_, err = database.SetPasswordResetToken("revoketest@example.com", resetToken, time.Now().Add(1*time.Hour))
+	if err != nil {
+		t.Fatalf("SetPasswordResetToken failed: %v", err)
+	}
+
+	// Reset password
+	err = database.ResetPasswordWithToken(resetToken, "NewHashedPassword123")
+	if err != nil {
+		t.Fatalf("ResetPasswordWithToken failed: %v", err)
+	}
+
+	// Verify all prior sessions are revoked
+	if _, err := database.GetUserBySession(session1); err == nil {
+		t.Errorf("Security failure: session1 was NOT revoked after password reset!")
+	}
+	if _, err := database.GetUserBySession(session2); err == nil {
+		t.Errorf("Security failure: session2 was NOT revoked after password reset!")
+	}
+}
+
 

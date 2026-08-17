@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -25,9 +26,25 @@ func GenerateSessionToken() string {
 
 // Generate random hex nonces for OAuth states
 func GenerateNonce() string {
-	b := make([]byte, 8)
+	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+// Generate high-entropy cryptographic token for password resets and verifications (default 32 bytes = 256 bits)
+func GenerateCryptoToken(bytesCount int) string {
+	if bytesCount <= 0 {
+		bytesCount = 32
+	}
+	b := make([]byte, bytesCount)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%x", b)
+}
+
+// HashSecurityToken computes the SHA-256 hash of a security token for secure database storage
+func HashSecurityToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%x", h)
 }
 
 // Extract bearer token and retrieve user
@@ -94,40 +111,47 @@ func IsValidRedirect(redirectURL string) bool {
 	if err != nil {
 		return false
 	}
+
+	// Strictly block dangerous pseudo-schemes
+	schemeLower := strings.ToLower(u.Scheme)
+	if schemeLower == "javascript" || schemeLower == "data" || schemeLower == "vbscript" || schemeLower == "file" || schemeLower == "blob" {
+		return false
+	}
+
+	// Relative paths
 	if u.Scheme == "" && u.Host == "" {
 		return strings.HasPrefix(redirectURL, "/") && !strings.HasPrefix(redirectURL, "//") && !strings.Contains(redirectURL, "\\")
 	}
+
+	// Known allowed desktop client custom schemes
+	if schemeLower == "tauri" || schemeLower == "speektome" {
+		return true
+	}
+
+	if schemeLower != "http" && schemeLower != "https" {
+		return false
+	}
+
 	frontend := os.Getenv("FRONTEND_URL")
 	backend := os.Getenv("BACKEND_URL")
 
-	var allowedHosts []string
+	var allowedHosts = []string{"localhost", "127.0.0.1", "speekto.me", "api.speekto.me", "dashboard.speekto.me"}
 	if frontend != "" {
-		if fu, err := url.Parse(frontend); err == nil {
+		if fu, err := url.Parse(frontend); err == nil && fu.Hostname() != "" {
 			allowedHosts = append(allowedHosts, fu.Hostname())
 		}
-	} else {
-		allowedHosts = append(allowedHosts, "localhost", "127.0.0.1")
 	}
 	if backend != "" {
-		if bu, err := url.Parse(backend); err == nil {
+		if bu, err := url.Parse(backend); err == nil && bu.Hostname() != "" {
 			allowedHosts = append(allowedHosts, bu.Hostname())
 		}
 	}
 
-	redirectHost := u.Hostname()
+	redirectHost := strings.ToLower(u.Hostname())
 	for _, allowed := range allowedHosts {
-		if strings.EqualFold(redirectHost, allowed) {
+		if redirectHost == strings.ToLower(allowed) || strings.HasSuffix(redirectHost, ".pages.dev") || strings.HasSuffix(redirectHost, ".speekto.me") {
 			return true
 		}
-	}
-
-	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "" {
-		for _, r := range u.Scheme {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '+' || r == '-' || r == '.') {
-				return false
-			}
-		}
-		return true
 	}
 
 	return false

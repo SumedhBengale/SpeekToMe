@@ -34,9 +34,10 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 15<<20)
 	err := r.ParseMultipartForm(10 << 20)
 	if err != nil {
-		http.Error(w, "Failed to parse multipart request", http.StatusBadRequest)
+		http.Error(w, "Failed to parse multipart request: file too large (max 15MB)", http.StatusBadRequest)
 		return
 	}
 
