@@ -776,6 +776,34 @@ function formatDuration(seconds) {
   return `${m}m ${s}s`;
 }
 
+function formatUsageFraction(usedSec, totalSec) {
+  const safeUsed = Number(usedSec) || 0.0;
+  const rawTotal = Number(totalSec) || 3600.0;
+  
+  let totalHours = rawTotal / 3600.0;
+  if (rawTotal >= 730 && rawTotal <= 10000) {
+    totalHours = rawTotal;
+  }
+
+  let usedStr = '0m';
+  if (safeUsed < 60) {
+    usedStr = `${Math.round(safeUsed)}s`;
+  } else if (safeUsed < 3600) {
+    usedStr = `${Math.round(safeUsed / 60)}m`;
+  } else {
+    usedStr = `${(safeUsed / 3600.0).toFixed(1)}h`;
+  }
+
+  let totalStr = '';
+  if (totalHours >= 730 || rawTotal >= 730 * 3600.0) {
+    totalStr = 'Unlimited';
+  } else {
+    totalStr = Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`;
+  }
+
+  return `${usedStr} / ${totalStr}`;
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return "N/A";
   try {
@@ -817,16 +845,17 @@ function updateAuthUI(userInfo) {
     if (subActivated) subActivated.textContent = formatDate(userInfo.plan_activated_at);
     if (subUsage) subUsage.textContent = formatDuration(userInfo.duration_seconds);
 
-    // Enforce 50-hour monthly limit progress bar calculations (50 hours = 180,000 seconds)
-    const maxSeconds = 180000.0;
+    // Calculate quota limits and display used/total fraction
+    const isPaid = userInfo.plan_active && userInfo.plan_tier === 'pro';
+    const maxSeconds = userInfo.monthly_limit_seconds || (isPaid ? 180000.0 : 3600.0);
     const usageSeconds = userInfo.duration_seconds || 0.0;
-    const percent = Math.min(100.0, (usageSeconds / maxSeconds) * 100.0).toFixed(1);
+    const percent = Math.min(100.0, (usageSeconds / maxSeconds) * 100.0);
     
     const subUsagePercent = document.getElementById('sub-usage-percent');
     const subUsageBar = document.getElementById('sub-usage-bar');
     
-    if (subUsagePercent) subUsagePercent.textContent = `${percent}%`;
-    if (subUsageBar) subUsageBar.style.width = `${percent}%`;
+    if (subUsagePercent) subUsagePercent.textContent = formatUsageFraction(usageSeconds, maxSeconds);
+    if (subUsageBar) subUsageBar.style.width = `${percent.toFixed(1)}%`;
 
     // Hide descriptive text when user is successfully logged in
     if (accountDesc) accountDesc.classList.add('hidden');

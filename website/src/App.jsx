@@ -864,8 +864,40 @@ export default function App() {
 
   // Helper formatting routines
   const formatSecondsToHours = (seconds) => {
-    if (!seconds || seconds <= 0) return '0.0h';
-    return `${(seconds / 3600).toFixed(1)}h`;
+    const s = Number(seconds) || 0;
+    if (s <= 0) return '0.0h';
+    if (s >= 730 && s <= 10000) return 'Unlimited';
+    const hours = s / 3600;
+    if (hours >= 730) return 'Unlimited';
+    return `${hours.toFixed(1)}h`;
+  };
+
+  const formatUsageFraction = (usedSec, totalSec) => {
+    const safeUsed = Number(usedSec) || 0;
+    const rawTotal = Number(totalSec) || 3600;
+    
+    let totalHours = rawTotal / 3600;
+    if (rawTotal >= 730 && rawTotal <= 10000) {
+      totalHours = rawTotal;
+    }
+
+    let usedStr = '0m';
+    if (safeUsed < 60) {
+      usedStr = `${Math.round(safeUsed)}s`;
+    } else if (safeUsed < 3600) {
+      usedStr = `${Math.round(safeUsed / 60)}m`;
+    } else {
+      usedStr = `${(safeUsed / 3600).toFixed(1)}h`;
+    }
+
+    let totalStr = '';
+    if (totalHours >= 730 || rawTotal >= 730 * 3600) {
+      totalStr = 'Unlimited';
+    } else {
+      totalStr = Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`;
+    }
+
+    return `${usedStr} / ${totalStr}`;
   };
 
   const formatSeconds = (seconds) => {
@@ -1342,7 +1374,7 @@ export default function App() {
                   <div className="usage-summary">
                     <div className="usage-stats">
                       <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
-                      <span>{formatSecondsToHours(user.duration_seconds)} / {formatSecondsToHours(user.monthly_limit_seconds || 3600)}</span>
+                      <span>{formatUsageFraction(user.duration_seconds, user.monthly_limit_seconds || 3600)}</span>
                     </div>
 
                     <div className="progress-bar-container">
@@ -1960,7 +1992,7 @@ export default function App() {
                 <div style={{ marginTop: '8px', background: 'var(--bg-canvas)', border: '1.5px solid var(--border-color)', borderRadius: '12px', padding: '18px 20px' }}>
                   <div className="usage-stats" style={{ marginBottom: '8px' }}>
                     <span>Current Month Usage Quota</span>
-                    <span>{formatSecondsToHours(user.duration_seconds)} / {formatSecondsToHours(user.monthly_limit_seconds || 3600)}</span>
+                    <span>{formatUsageFraction(user.duration_seconds, user.monthly_limit_seconds || 3600)}</span>
                   </div>
                   <div className="progress-bar-container">
                     <div
