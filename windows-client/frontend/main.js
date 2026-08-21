@@ -1231,7 +1231,7 @@ async function loadMeetings() {
   } catch (err) {
     console.error("Failed to load meetings:", err);
     listGrid.innerHTML = '';
-    emptyMsg.textContent = 'Error connecting to SpeekTo.Me server. Ensure the server is running.';
+    emptyMsg.textContent = 'Error connecting to SpeekTo.Me server.';
     emptyMsg.style.display = 'block';
   }
 }
