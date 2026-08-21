@@ -264,6 +264,30 @@ a:not(.btn):not(.logo):not(.nav-logo):not(.footer-social-icon):hover::after {
   margin-bottom: 8px;
 }
 
+.dashboard-announcement-card {
+  margin-top: 14px;
+  padding: 10px 16px;
+  background: rgba(36, 10, 18, 0.04);
+  border: 1px solid rgba(36, 10, 18, 0.12);
+  border-radius: var(--radius-btn, 8px);
+  display: inline-block;
+  max-width: 100%;
+  transition: all 0.15s ease;
+}
+
+.dashboard-announcement-card:hover {
+  background: rgba(36, 10, 18, 0.06);
+  border-color: rgba(36, 10, 18, 0.18);
+}
+
+.dashboard-announcement-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--color-text-dark, #240a12);
+  opacity: 0.85;
+  font-weight: 500;
+}
+
 .grid-dashboard {
   display: grid;
   grid-template-columns: 2fr 1fr;
@@ -1326,6 +1350,37 @@ a:not(.btn):not(.logo):not(.nav-logo):not(.footer-social-icon):hover::after {
 .beta-badge:hover {
   transform: translateY(-1px);
   box-shadow: 2px 2px 0px #240a12;
+}
+
+/* FUP Tooltip Badge */
+.fup-tooltip-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 50%;
+  background: var(--color-danger, #ffe4e6);
+  color: #9f1239;
+  border: 1px solid #240a12;
+  box-shadow: 1px 1px 0px #240a12;
+  cursor: help;
+  vertical-align: middle;
+  line-height: 1;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  user-select: none;
+  font-style: normal;
+}
+
+.fup-tooltip-badge:hover {
+  transform: scale(1.1);
+  box-shadow: 1.5px 1.5px 0px #240a12;
+}
+
+.fup-tooltip-badge svg {
+  display: block;
 }
 
 

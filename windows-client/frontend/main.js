@@ -791,7 +791,7 @@ function formatDuration(seconds) {
   return `${m}m ${s}s`;
 }
 
-function formatUsageFraction(usedSec, totalSec) {
+function formatUsageParts(usedSec, totalSec) {
   const safeUsed = Number(usedSec) || 0.0;
   const rawTotal = Number(totalSec) || 3600.0;
   
@@ -809,14 +809,20 @@ function formatUsageFraction(usedSec, totalSec) {
     usedStr = `${(safeUsed / 3600.0).toFixed(1)}h`;
   }
 
-  let totalStr = '';
-  if (totalHours >= 730 || rawTotal >= 730 * 3600.0) {
-    totalStr = 'Unlimited';
-  } else {
-    totalStr = Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`;
-  }
+  const isUnlimited = totalHours >= 730 || rawTotal >= 730 * 3600.0;
+  const totalStr = isUnlimited ? 'Unlimited' : (Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`);
 
-  return `${usedStr} / ${totalStr}`;
+  let fupHours = Math.round(totalHours);
+  if (rawTotal >= 730 * 3600.0) {
+    fupHours = Math.round(rawTotal / 3600.0);
+  }
+  const fupTooltip = `Fair Usage Limit: ${fupHours.toLocaleString()} hours / month.`;
+
+  return { usedStr, totalStr, isUnlimited, fupTooltip, display: `${usedStr} / ${totalStr}` };
+}
+
+function formatUsageFraction(usedSec, totalSec) {
+  return formatUsageParts(usedSec, totalSec).display;
 }
 
 function formatDate(dateStr) {
@@ -869,7 +875,14 @@ function updateAuthUI(userInfo) {
     const subUsagePercent = document.getElementById('sub-usage-percent');
     const subUsageBar = document.getElementById('sub-usage-bar');
     
-    if (subUsagePercent) subUsagePercent.textContent = formatUsageFraction(usageSeconds, maxSeconds);
+    if (subUsagePercent) {
+      const usage = formatUsageParts(usageSeconds, maxSeconds);
+      if (usage.isUnlimited) {
+        subUsagePercent.innerHTML = `${usage.usedStr} / ${usage.totalStr} <span class="fup-tooltip-badge" title="${usage.fupTooltip}" aria-label="${usage.fupTooltip}"><svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>`;
+      } else {
+        subUsagePercent.textContent = usage.display;
+      }
+    }
     if (subUsageBar) subUsageBar.style.width = `${percent.toFixed(1)}%`;
 
     // Hide descriptive text when user is successfully logged in

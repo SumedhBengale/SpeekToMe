@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 
 	"speektome-server/db"
@@ -32,6 +33,7 @@ type ProviderConfig struct {
 	GroqRateLimitRPM        int
 	DefaultUserRateLimitRPM int
 	Notification            string
+	WhisperBasePrompt       string
 }
 
 type CachedConfigManager struct {
@@ -72,6 +74,7 @@ var ConfigManager = &CachedConfigManager{
 		GroqRateLimitRPM:        20,
 		DefaultUserRateLimitRPM: 10,
 		Notification:            "",
+		WhisperBasePrompt:       "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
 	},
 	rawConfigs: make(map[string]string),
 }
@@ -93,6 +96,7 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 		CloudflareEnabled:       true,
 		GroqRateLimitRPM:        20,
 		DefaultUserRateLimitRPM: 10,
+		WhisperBasePrompt:       "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
 	}
 
 	// STT Provider Routing
@@ -144,6 +148,11 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 	// Notification Announcement String
 	if val, ok := dbConfigs["notification"]; ok {
 		newConfig.Notification = val
+	}
+
+	// Whisper Base Prompt String
+	if val, ok := dbConfigs["whisper_base_prompt"]; ok && strings.TrimSpace(val) != "" {
+		newConfig.WhisperBasePrompt = strings.TrimSpace(val)
 	}
 
 	ConfigManager.Set(newConfig, dbConfigs)

@@ -872,7 +872,7 @@ export default function App() {
     return `${hours.toFixed(1)}h`;
   };
 
-  const formatUsageFraction = (usedSec, totalSec) => {
+  const formatUsageParts = (usedSec, totalSec) => {
     const safeUsed = Number(usedSec) || 0;
     const rawTotal = Number(totalSec) || 3600;
     
@@ -890,14 +890,20 @@ export default function App() {
       usedStr = `${(safeUsed / 3600).toFixed(1)}h`;
     }
 
-    let totalStr = '';
-    if (totalHours >= 730 || rawTotal >= 730 * 3600) {
-      totalStr = 'Unlimited';
-    } else {
-      totalStr = Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`;
-    }
+    const isUnlimited = totalHours >= 730 || rawTotal >= 730 * 3600;
+    const totalStr = isUnlimited ? 'Unlimited' : (Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`);
 
-    return `${usedStr} / ${totalStr}`;
+    let fupHours = Math.round(totalHours);
+    if (rawTotal >= 730 * 3600) {
+      fupHours = Math.round(rawTotal / 3600);
+    }
+    const fupTooltip = `Fair Usage Limit: ${fupHours.toLocaleString()} hours / month.`;
+
+    return { usedStr, totalStr, isUnlimited, fupTooltip, display: `${usedStr} / ${totalStr}` };
+  };
+
+  const formatUsageFraction = (usedSec, totalSec) => {
+    return formatUsageParts(usedSec, totalSec).display;
   };
 
   const formatSeconds = (seconds) => {
@@ -1319,6 +1325,11 @@ export default function App() {
           <div className="welcome-section">
             <h1 className="welcome-title">Welcome back, {user.name.split(' ')[0]}</h1>
             <p>Here is your current SpeekTo.Me usage and transcription analytics.</p>
+            {user.notification && user.notification.trim() !== '' && (
+              <div className="dashboard-announcement-card">
+                <span className="dashboard-announcement-text">{user.notification.trim()}</span>
+              </div>
+            )}
           </div>
 
           {/* Sub-tab Navigation */}
@@ -1375,7 +1386,23 @@ export default function App() {
                   <div className="usage-summary">
                     <div className="usage-stats">
                       <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
-                      <span>{formatUsageFraction(user.duration_seconds, user.monthly_limit_seconds || 3600)}</span>
+                      {(() => {
+                        const usage = formatUsageParts(user.duration_seconds, user.monthly_limit_seconds || 3600);
+                        return (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', paddingBottom:'2px' }}>
+                            {usage.usedStr} / {usage.totalStr}
+                            {usage.isUnlimited && (
+                              <span
+                                className="fup-tooltip-badge"
+                                title={usage.fupTooltip}
+                                aria-label={usage.fupTooltip}
+                              >
+                                <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     <div className="progress-bar-container">
@@ -2012,7 +2039,23 @@ export default function App() {
                 <div style={{ marginTop: '8px', background: 'var(--bg-canvas)', border: '1.5px solid var(--border-color)', borderRadius: '12px', padding: '18px 20px' }}>
                   <div className="usage-stats" style={{ marginBottom: '8px' }}>
                     <span>Current Month Usage Quota</span>
-                    <span>{formatUsageFraction(user.duration_seconds, user.monthly_limit_seconds || 3600)}</span>
+                    {(() => {
+                      const usage = formatUsageParts(user.duration_seconds, user.monthly_limit_seconds || 3600);
+                      return (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          {usage.usedStr} / {usage.totalStr}
+                          {usage.isUnlimited && (
+                            <span
+                              className="fup-tooltip-badge"
+                              title={usage.fupTooltip}
+                              aria-label={usage.fupTooltip}
+                            >
+                              <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div className="progress-bar-container">
                     <div

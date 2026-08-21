@@ -131,7 +131,14 @@ func BuildWhisperPrompt(userLanguages []string) (string, string) {
 	}
 
 	langParam := ""
-	promptStr := "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation."
+	cfg := config.ConfigManager.Get()
+	basePrompt := cfg.WhisperBasePrompt
+	if strings.TrimSpace(basePrompt) == "" {
+		basePrompt = "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation."
+	}
+	basePrompt = strings.TrimSpace(basePrompt)
+
+	promptStr := basePrompt
 
 	if len(valid) == 1 {
 		langParam = valid[0]
@@ -140,7 +147,8 @@ func BuildWhisperPrompt(userLanguages []string) (string, string) {
 		for _, code := range valid {
 			names = append(names, utils.GetLanguageName(code))
 		}
-		promptStr = fmt.Sprintf("Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation in the identified language (%s).", strings.Join(names, ", "))
+		// Append language instruction to base prompt
+		promptStr = fmt.Sprintf("%s The transcription should be in the following identified languages: %s.", basePrompt, strings.Join(names, ", "))
 	}
 
 	return langParam, promptStr

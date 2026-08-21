@@ -249,6 +249,7 @@ func NewDatabase(connStr string) (*Database, error) {
 		"ratelimit_groq_rpm":            "20",
 		"ratelimit_default_user_rpm":    "10",
 		"notification":                  "",
+		"whisper_base_prompt":           "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
 	}
 	for k, v := range configs {
 		_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
