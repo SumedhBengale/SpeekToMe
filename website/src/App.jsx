@@ -1508,7 +1508,7 @@ export default function App() {
                               </td>
                               <td style={{ textAlign: 'center' }}>
                                 <span className={`badge-status ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
-                                  {log.status === 'success' ? '✓ Success' : '✕ Failed'}
+                                  {log.status === 'success' ? 'Success' : 'Failed'}
                                 </span>
                               </td>
                             </tr>
@@ -1524,7 +1524,10 @@ export default function App() {
 
           {activeSubTab === 'vocab' && (
             <div className="card">
-              <h3 className="card-title">📖 Custom Vocabulary Terms</h3>
+              <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
+                Custom Vocabulary Terms
+              </h3>
               <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.6)', marginBottom: '20px' }}>
                 Add specialized terms, abbreviations, acronyms, or names that you want the dictation pipeline to recognize and spell correctly.
               </p>
@@ -1664,7 +1667,10 @@ export default function App() {
                       <span className="meeting-card-date">Recorded on {formatDate(activeMeeting.timestamp)}</span>
                     </div>
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <span className="meeting-meta-badge">⏱ {formatSeconds(activeMeeting.duration)}</span>
+                      <span className="meeting-meta-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                        {formatSeconds(activeMeeting.duration)}
+                      </span>
                       <button
                         onClick={() => handleDeleteMeeting(activeMeeting.id)}
                         className="btn btn-danger btn-sm"
@@ -1849,16 +1855,28 @@ export default function App() {
                           key={meeting.id}
                           onClick={() => setActiveMeeting(meeting)}
                           className="card meeting-card"
-                          style={{ padding: '24px', margin: 0 }}
                         >
-                          <span className="meeting-card-date">{formatDate(meeting.timestamp)}</span>
-                          <h4 style={{ fontSize: '18px', marginBottom: '8px' }}>{meeting.title}</h4>
-                          <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.6)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', height: '38px', lineHeight: '19px' }}>
+                          <div className="meeting-card-top">
+                            <div className="meeting-card-icon-wrap">
+                              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                            </div>
+                            <span className="meeting-card-date">{formatDate(meeting.timestamp)}</span>
+                          </div>
+                          
+                          <h4 className="meeting-card-title">{meeting.title}</h4>
+                          
+                          <p className="meeting-card-summary">
                             {meeting.summary || "Click to view full transcript and summaries."}
                           </p>
-                          <div className="meeting-card-duration" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-                            Duration: {formatSeconds(meeting.duration)}
+
+                          <div className="meeting-card-bottom">
+                            <div className="meeting-card-duration">
+                              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                              <span>{formatSeconds(meeting.duration)}</span>
+                            </div>
+                            <span className="meeting-card-arrow">
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
+                            </span>
                           </div>
                         </div>
                       ))}
@@ -2055,7 +2073,7 @@ export default function App() {
                   Danger Zone
                 </h3>
                 <p style={{ fontSize: '14px', color: 'rgba(26, 26, 26, 0.75)', marginBottom: '18px', lineHeight: '1.5' }}>
-                  Permanently delete your SpeekTo.Me account, recorded meeting notes, audio files, custom vocabulary terms, and all associated usage history. This action is irreversible.
+                  Permanently delete your SpeekTo.Me account, recorded meeting notes, custom vocabulary terms, and all associated usage history. This action is irreversible.
                 </p>
 
                 <button
@@ -2594,7 +2612,10 @@ export default function App() {
 
               <div className="card" style={{ padding: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
-                  <h3 className="card-title" style={{ margin: 0 }}>📖 Active User Vocabulary Cache</h3>
+                  <h3 className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
+                    Active User Vocabulary Cache
+                  </h3>
                   <button
                     onClick={() => handleInvalidateVocabCache()}
                     className="btn btn-failed"

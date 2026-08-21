@@ -135,7 +135,6 @@ export default function HomePage() {
           </div>
 
           <div className="os-badge-container">
-            <span className="os-label">Supported on</span>
             <div className="os-badges">
               <span className="os-badge" style={{ background: '#d1fae5', color: '#065f46', borderColor: '#a7f3d0' }}>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
