@@ -100,6 +100,11 @@ fn get_api_url() -> String {
 }
 
 #[tauri::command]
+fn open_external_url(url: String) {
+    api::open_browser(&url);
+}
+
+#[tauri::command]
 fn logout() {
     let token_opt = {
         let active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
@@ -313,6 +318,7 @@ fn main() {
             get_meeting_levels,
             upload_meeting,
             get_api_url,
+            open_external_url,
             validate_prompt
         ])
         .build(tauri::generate_context!())

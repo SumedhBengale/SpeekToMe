@@ -10,6 +10,7 @@ pub struct UserInfo {
     pub duration_seconds: f64,
     pub monthly_limit_seconds: f64,
     pub languages: Option<Vec<String>>,
+    pub notification: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
