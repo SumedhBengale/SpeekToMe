@@ -16,8 +16,8 @@ var (
 	CloudflareAccountID string
 	GoogleClientID      string
 	GoogleClientSecret  string
-	BackendURL           string
-	DatabaseURL          string
+	BackendURL          string
+	DatabaseURL         string
 
 	GroqAPIURL       = "https://api.groq.com/openai/v1/audio/transcriptions"
 	DeepInfraBaseURL = "https://api.deepinfra.com/v1/inference/"
@@ -31,6 +31,7 @@ type ProviderConfig struct {
 	CloudflareEnabled       bool
 	GroqRateLimitRPM        int
 	DefaultUserRateLimitRPM int
+	Notification            string
 }
 
 type CachedConfigManager struct {
@@ -64,12 +65,13 @@ func (m *CachedConfigManager) Set(c ProviderConfig, raw map[string]string) {
 
 var ConfigManager = &CachedConfigManager{
 	config: ProviderConfig{
-		DefaultProvider:         "groq",
+		DefaultProvider:         "deepinfra",
 		GroqEnabled:             true,
 		DeepInfraEnabled:        true,
 		CloudflareEnabled:       true,
 		GroqRateLimitRPM:        20,
 		DefaultUserRateLimitRPM: 10,
+		Notification:            "",
 	},
 	rawConfigs: make(map[string]string),
 }
@@ -85,7 +87,7 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 	}
 
 	newConfig := ProviderConfig{
-		DefaultProvider:         "groq",
+		DefaultProvider:         "deepinfra",
 		GroqEnabled:             true,
 		DeepInfraEnabled:        true,
 		CloudflareEnabled:       true,
@@ -93,27 +95,55 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 		DefaultUserRateLimitRPM: 10,
 	}
 
-	if val, ok := dbConfigs["whisper_default_provider"]; ok && val != "" {
+	// STT Provider Routing
+	if val, ok := dbConfigs["provider_default_stt"]; ok && val != "" {
+		newConfig.DefaultProvider = val
+	} else if val, ok := dbConfigs["whisper_default_provider"]; ok && val != "" {
 		newConfig.DefaultProvider = val
 	}
-	if val, ok := dbConfigs["groq_enabled"]; ok {
+
+	if val, ok := dbConfigs["provider_groq_enabled"]; ok {
+		newConfig.GroqEnabled = val == "true"
+	} else if val, ok := dbConfigs["groq_enabled"]; ok {
 		newConfig.GroqEnabled = val == "true"
 	}
-	if val, ok := dbConfigs["deepinfra_enabled"]; ok {
+
+	if val, ok := dbConfigs["provider_deepinfra_enabled"]; ok {
+		newConfig.DeepInfraEnabled = val == "true"
+	} else if val, ok := dbConfigs["deepinfra_enabled"]; ok {
 		newConfig.DeepInfraEnabled = val == "true"
 	}
-	if val, ok := dbConfigs["cloudflare_enabled"]; ok {
+
+	if val, ok := dbConfigs["provider_cloudflare_enabled"]; ok {
+		newConfig.CloudflareEnabled = val == "true"
+	} else if val, ok := dbConfigs["cloudflare_enabled"]; ok {
 		newConfig.CloudflareEnabled = val == "true"
 	}
-	if val, ok := dbConfigs["groq_rate_limit_rpm"]; ok {
+
+	// Rate Limits
+	if val, ok := dbConfigs["ratelimit_groq_rpm"]; ok {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			newConfig.GroqRateLimitRPM = limit
+		}
+	} else if val, ok := dbConfigs["groq_rate_limit_rpm"]; ok {
 		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
 			newConfig.GroqRateLimitRPM = limit
 		}
 	}
-	if val, ok := dbConfigs["default_user_rate_limit_rpm"]; ok {
+
+	if val, ok := dbConfigs["ratelimit_default_user_rpm"]; ok {
 		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
 			newConfig.DefaultUserRateLimitRPM = limit
 		}
+	} else if val, ok := dbConfigs["default_user_rate_limit_rpm"]; ok {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			newConfig.DefaultUserRateLimitRPM = limit
+		}
+	}
+
+	// Notification Announcement String
+	if val, ok := dbConfigs["notification"]; ok {
+		newConfig.Notification = val
 	}
 
 	ConfigManager.Set(newConfig, dbConfigs)

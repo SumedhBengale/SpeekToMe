@@ -102,14 +102,22 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	cfg := config.ConfigManager.GetRawAll()
 	if isPaid {
 		monthlyLimitSeconds = 180000.0
-		if val, ok := cfg["paid_monthly_limit_seconds"]; ok {
+		if val, ok := cfg["quota_paid_monthly_seconds"]; ok {
+			if limit, err := strconv.ParseFloat(val, 64); err == nil {
+				monthlyLimitSeconds = limit
+			}
+		} else if val, ok := cfg["paid_monthly_limit_seconds"]; ok {
 			if limit, err := strconv.ParseFloat(val, 64); err == nil {
 				monthlyLimitSeconds = limit
 			}
 		}
 	} else {
 		monthlyLimitSeconds = 3600.0
-		if val, ok := cfg["free_monthly_limit_seconds"]; ok {
+		if val, ok := cfg["quota_free_monthly_seconds"]; ok {
+			if limit, err := strconv.ParseFloat(val, 64); err == nil {
+				monthlyLimitSeconds = limit
+			}
+		} else if val, ok := cfg["free_monthly_limit_seconds"]; ok {
 			if limit, err := strconv.ParseFloat(val, 64); err == nil {
 				monthlyLimitSeconds = limit
 			}

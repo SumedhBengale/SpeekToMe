@@ -58,7 +58,7 @@ function escapeHtml(str) {
 }
 
 // DOM Elements - Navigation & Tab Panes
-const tabItems = document.querySelectorAll('.nav-item');
+const tabItems = document.querySelectorAll('.nav-item[data-tab]');
 const tabPanes = document.querySelectorAll('.tab-pane');
 
 // Dashboard Input Elements
@@ -325,6 +325,21 @@ async function init() {
         } finally {
           refreshBtn.disabled = false;
           refreshBtn.innerHTML = originalText;
+        }
+      });
+    }
+
+    // 3.6. Bind Open Web Dashboard Sidebar Button
+    const openWebDashboardNavBtn = document.getElementById('open-web-dashboard-nav-btn');
+    if (openWebDashboardNavBtn) {
+      openWebDashboardNavBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        try {
+          await invoke('open_external_url', { url: "https://speekto.me/dashboard" });
+        } catch (err) {
+          console.error("Failed to open web dashboard:", err);
+          // Fallback if running outside full Tauri context
+          window.open("https://speekto.me/dashboard", "_blank");
         }
       });
     }
@@ -864,11 +879,27 @@ function updateAuthUI(userInfo) {
     authLoggingIn.classList.add('hidden');
     authLoggedIn.classList.remove('hidden');
 
+    // Render sidebar announcement / notification if provided
+    const sidebarAnnouncement = document.getElementById('sidebar-announcement');
+    const sidebarAnnouncementText = document.getElementById('sidebar-announcement-text');
+    if (sidebarAnnouncement && sidebarAnnouncementText) {
+      const notif = (userInfo.notification || '').trim();
+      if (notif) {
+        sidebarAnnouncementText.textContent = notif;
+        sidebarAnnouncement.classList.remove('hidden');
+      } else {
+        sidebarAnnouncement.classList.add('hidden');
+      }
+    }
+
     const sidebarFooter = document.getElementById('sidebar-footer');
     if (sidebarFooter) sidebarFooter.style.display = 'block';
   } else {
     // Show descriptive text when logged out
     if (accountDesc) accountDesc.classList.remove('hidden');
+
+    const sidebarAnnouncement = document.getElementById('sidebar-announcement');
+    if (sidebarAnnouncement) sidebarAnnouncement.classList.add('hidden');
 
     authLoggedIn.classList.add('hidden');
     authLoggingIn.classList.add('hidden');

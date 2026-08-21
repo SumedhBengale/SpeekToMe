@@ -236,18 +236,19 @@ func NewDatabase(connStr string) (*Database, error) {
 
 	// Set default configurations
 	configs := map[string]string{
-		"free_rate_limit_rpm":          "3",
-		"paid_rate_limit_rpm":          "15",
-		"free_fup_limit_seconds_daily": "300",
-		"paid_fup_limit_seconds_daily": "3600",
-		"free_monthly_limit_seconds":   "3600",
-		"paid_monthly_limit_seconds":   "180000",
-		"whisper_default_provider":     "groq",
-		"groq_enabled":                 "true",
-		"deepinfra_enabled":            "true",
-		"cloudflare_enabled":           "true",
-		"groq_rate_limit_rpm":          "20",
-		"default_user_rate_limit_rpm":  "10",
+		"ratelimit_free_rpm":            "3",
+		"ratelimit_paid_rpm":            "15",
+		"quota_free_daily_fup_seconds":  "3600",
+		"quota_paid_daily_fup_seconds":  "86400",
+		"quota_free_monthly_seconds":    "3600",
+		"quota_paid_monthly_seconds":    "2700000",
+		"provider_default_stt":          "deepinfra",
+		"provider_groq_enabled":         "false",
+		"provider_deepinfra_enabled":    "true",
+		"provider_cloudflare_enabled":   "false",
+		"ratelimit_groq_rpm":            "20",
+		"ratelimit_default_user_rpm":    "10",
+		"notification":                  "",
 	}
 	for k, v := range configs {
 		_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
