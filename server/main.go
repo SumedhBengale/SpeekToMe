@@ -137,7 +137,9 @@ func isAllowedOrigin(origin string) bool {
 		return false
 	}
 	hostname := u.Hostname()
-	if hostname == "localhost" || hostname == "127.0.0.1" || strings.HasSuffix(hostname, ".speektome.com") || hostname == "speektome.com" {
+	if hostname == "localhost" || hostname == "127.0.0.1" ||
+		strings.HasSuffix(hostname, ".speekto.me") || hostname == "speekto.me" ||
+		strings.HasSuffix(hostname, ".speektome.com") || hostname == "speektome.com" {
 		return true
 	}
 	return false

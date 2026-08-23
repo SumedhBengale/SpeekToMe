@@ -300,4 +300,25 @@ func TestPasswordResetRevokesSessions(t *testing.T) {
 	}
 }
 
+func TestCORSAllowedOrigins(t *testing.T) {
+	testOrigins := []struct {
+		origin  string
+		allowed bool
+	}{
+		{"https://speekto.me", true},
+		{"https://app.speekto.me", true},
+		{"https://dashboard.speekto.me", true},
+		{"https://speektome.com", true},
+		{"http://localhost:5173", true},
+		{"http://127.0.0.1:3000", true},
+		{"https://malicious.com", false},
+		{"https://fakespeekto.me.evil.com", false},
+	}
 
+	for _, tt := range testOrigins {
+		res := isAllowedOrigin(tt.origin)
+		if res != tt.allowed {
+			t.Errorf("isAllowedOrigin(%q) = %v, want %v", tt.origin, res, tt.allowed)
+		}
+	}
+}
