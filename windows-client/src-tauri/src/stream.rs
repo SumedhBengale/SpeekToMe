@@ -253,10 +253,7 @@ pub fn start_streaming_session(
                                 if !delta.is_empty() {
                                     let normalized_delta = crate::vocab::get_vocab_manager().process_text(&delta);
                                     println!("[STREAM FINAL] Emitting final remaining delta: {:?}", normalized_delta);
-                                    let type_text = normalized_delta.clone();
-                                    tauri::async_runtime::spawn_blocking(move || {
-                                        crate::keyboard::simulate_typing(&type_text);
-                                    });
+                                    crate::keyboard::simulate_typing(&normalized_delta);
                                 }
 
                                 final_res = Some(StreamFinalResult {

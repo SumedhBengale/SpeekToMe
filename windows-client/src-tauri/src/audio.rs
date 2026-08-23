@@ -246,6 +246,8 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     } else {
                         println!("Recording aborted and discarded.");
                     }
+                    crate::win32::hide_overlay();
+                    crate::win32::play_chime(false);
                     return;
                 }
             }
@@ -267,16 +269,25 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                         crate::api::process_and_paste(samples, sample_rate, channels);
                     } else {
                         println!("Silence or keyboard click detected. Transcription request skipped.");
+                        crate::win32::hide_overlay();
+                        crate::win32::play_chime(false);
                     }
+                } else {
+                    crate::win32::hide_overlay();
+                    crate::win32::play_chime(false);
                 }
             } else {
                 drop(s);
                 CURRENT_VOLUME.store(0, Ordering::Relaxed);
                 println!("Recording aborted and discarded.");
+                crate::win32::hide_overlay();
+                crate::win32::play_chime(false);
             }
         }
         Err(e) => {
             eprintln!("Failed to build input stream: {:?}", e);
+            crate::win32::hide_overlay();
+            crate::win32::play_chime(false);
         }
     }
 }

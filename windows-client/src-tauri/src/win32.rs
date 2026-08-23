@@ -72,6 +72,22 @@ mod win32_impl {
         }
     }
 
+    pub fn show_overlay() {
+        if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+            unsafe {
+                ShowWindow(send_hwnd.0, SW_SHOWNA);
+            }
+        }
+    }
+
+    pub fn hide_overlay() {
+        if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+            unsafe {
+                ShowWindow(send_hwnd.0, SW_HIDE);
+            }
+        }
+    }
+
     pub fn update_overlay_position() {
         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
             let hwnd = send_hwnd.0;
@@ -454,16 +470,12 @@ mod win32_impl {
                     let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
                     if is_toggle_mode {
                         if state.is_key_held {
-                            // Stop recording in toggle mode
+                            // Stop recording in toggle mode (audio thread will hide overlay when done typing)
                             state.is_key_held = false;
                             state.press_time = None;
                             if let Some(mut last_release) = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().ok() {
                                 *last_release = Some(std::time::Instant::now());
                             }
-                            if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
-                                ShowWindow(send_hwnd.0, SW_HIDE);
-                            }
-                            play_chime(false);
                             if let Some(tx) = state.stop_tx.take() {
                                 let _ = tx.send(true);
                             }
@@ -478,9 +490,7 @@ mod win32_impl {
                             }
                             state.is_key_held = true;
                             state.press_time = Some(std::time::Instant::now());
-                            if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
-                                ShowWindow(send_hwnd.0, SW_SHOWNA);
-                            }
+                            show_overlay();
                             play_chime(true);
                             crate::keyboard::release_modifier_keys();
                             let (tx, rx) = std::sync::mpsc::channel();
@@ -500,9 +510,7 @@ mod win32_impl {
                             }
                             state.is_key_held = true;
                             state.press_time = Some(std::time::Instant::now());
-                            if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
-                                ShowWindow(send_hwnd.0, SW_SHOWNA);
-                            }
+                            show_overlay();
                             play_chime(true);
                             crate::keyboard::release_modifier_keys();
                             let (tx, rx) = std::sync::mpsc::channel();
@@ -516,17 +524,13 @@ mod win32_impl {
                 }
             } else if is_up {
                 if !is_toggle_mode {
-                    // Hold Mode: stop recording on release of combination key
+                    // Hold Mode: stop recording on release of combination key (audio thread will hide overlay when done typing)
                     let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
                     if state.is_key_held && is_key_part_of_combo(vk_code, req_modifiers, req_vk) {
                         state.is_key_held = false;
                         if let Some(mut last_release) = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().ok() {
                             *last_release = Some(std::time::Instant::now());
                         }
-                        if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
-                            ShowWindow(send_hwnd.0, SW_HIDE);
-                        }
-                        play_chime(false);
                         if let Some(tx) = state.stop_tx.take() {
                             let _ = tx.send(true);
                         }
@@ -551,35 +555,27 @@ mod win32_impl {
             cbWndExtra: 0,
             hInstance: hinstance,
             hIcon: std::ptr::null_mut(),
-            hCursor: windows_sys::Win32::UI::WindowsAndMessaging::LoadCursorW(std::ptr::null_mut(), 32512 as *const u16),
+            hCursor: std::ptr::null_mut(),
             hbrBackground: std::ptr::null_mut(),
-            lpszMenuName: ptr::null(),
+            lpszMenuName: std::ptr::null(),
             lpszClassName: overlay_class.as_ptr(),
         };
         RegisterClassW(&wnd_class_overlay);
         
-        let width = 76;
-        let height = 32;
-        let (x, y) = {
-            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-            calculate_pill_position(&config, width, height)
-        };
-        
         let hwnd_overlay = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
             overlay_class.as_ptr(),
-            encode_wide("SpeekTo.Me Overlay").as_ptr(),
+            ptr::null(),
             WS_POPUP,
-            x, y, width, height,
-            std::ptr::null_mut(), std::ptr::null_mut(), hinstance, ptr::null()
+            0, 0, 76, 32,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            hinstance,
+            ptr::null_mut()
         );
         
-        if hwnd_overlay == std::ptr::null_mut() {
-            panic!("Failed to create SpeekTo.Me overlay window!");
-        }
-        
-        update_layered_overlay(hwnd_overlay);
         crate::OVERLAY_HWND.set(SendHWND(hwnd_overlay)).ok();
+        update_overlay_position();
         
         let tray_class = encode_wide("SpeekTo.MeTrayClass");
         let wnd_class_tray = WNDCLASSW {
@@ -591,7 +587,7 @@ mod win32_impl {
             hIcon: std::ptr::null_mut(),
             hCursor: std::ptr::null_mut(),
             hbrBackground: std::ptr::null_mut(),
-            lpszMenuName: ptr::null(),
+            lpszMenuName: std::ptr::null(),
             lpszClassName: tray_class.as_ptr(),
         };
         RegisterClassW(&wnd_class_tray);
@@ -599,10 +595,13 @@ mod win32_impl {
         let hwnd_tray = CreateWindowExW(
             0,
             tray_class.as_ptr(),
-            encode_wide("SpeekTo.Me Tray Helper Window").as_ptr(),
+            encode_wide("SpeekTo.Me Message Window").as_ptr(),
             0,
             0, 0, 0, 0,
-            std::ptr::null_mut(), std::ptr::null_mut(), hinstance, ptr::null()
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            hinstance,
+            ptr::null_mut()
         );
         
         if hwnd_tray == std::ptr::null_mut() {
@@ -680,7 +679,7 @@ mod win32_impl {
 }
 
 #[cfg(target_os = "windows")]
-pub use win32_impl::{SendHWND, calculate_pill_position, update_overlay_position, play_chime, run_win32_hook_and_tray_thread, ensure_single_instance};
+pub use win32_impl::{SendHWND, calculate_pill_position, update_overlay_position, play_chime, show_overlay, hide_overlay, run_win32_hook_and_tray_thread, ensure_single_instance};
 
 // ==========================================
 // Non-Windows Implementation Stubs
@@ -697,6 +696,10 @@ mod win32_stub {
 
     pub fn update_overlay_position() {}
 
+    pub fn show_overlay() {}
+
+    pub fn hide_overlay() {}
+
     pub fn play_chime(_start: bool) {}
 
     pub fn ensure_single_instance() {}
@@ -710,4 +713,4 @@ mod win32_stub {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub use win32_stub::{SendHWND, calculate_pill_position, update_overlay_position, play_chime, run_win32_hook_and_tray_thread, ensure_single_instance};
+pub use win32_stub::{SendHWND, calculate_pill_position, update_overlay_position, play_chime, show_overlay, hide_overlay, run_win32_hook_and_tray_thread, ensure_single_instance};

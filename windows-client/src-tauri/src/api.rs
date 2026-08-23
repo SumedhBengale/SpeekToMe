@@ -212,9 +212,13 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                         }
                     }
                 }
+                crate::win32::hide_overlay();
+                crate::win32::play_chime(false);
             }
             Err(err) => {
                 eprintln!("Transcription failed: {}", err);
+                crate::win32::hide_overlay();
+                crate::win32::play_chime(false);
             }
         }
     });
