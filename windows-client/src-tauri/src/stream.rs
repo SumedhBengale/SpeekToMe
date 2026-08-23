@@ -40,13 +40,20 @@ pub struct StreamSessionHandle {
     pub rx_final: Receiver<Result<StreamFinalResult, String>>,
 }
 
+fn normalize_word(w: &str) -> String {
+    w.chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
+}
+
 pub fn compute_text_delta(previous: &str, incoming: &str) -> String {
     let prev_trimmed = previous.trim();
     let inc_trimmed = incoming.trim();
     if prev_trimmed.is_empty() {
         return incoming.to_string();
     }
-    if inc_trimmed.len() <= prev_trimmed.len() {
+    if inc_trimmed.len() <= prev_trimmed.len() && !inc_trimmed.starts_with(prev_trimmed) {
         return String::new();
     }
 
@@ -56,27 +63,90 @@ pub fn compute_text_delta(previous: &str, incoming: &str) -> String {
         return delta;
     }
 
-    // Word-based suffix extraction
     let prev_words: Vec<&str> = prev_trimmed.split_whitespace().collect();
     let inc_words: Vec<&str> = inc_trimmed.split_whitespace().collect();
 
-    if inc_words.len() > prev_words.len() {
+    if inc_words.is_empty() {
+        return String::new();
+    }
+
+    let norm_prev: Vec<String> = prev_words.iter().map(|w| normalize_word(w)).collect();
+    let norm_inc: Vec<String> = inc_words.iter().map(|w| normalize_word(w)).collect();
+
+    let mut best_inc_idx = None;
+
+    // 1. Try 3-word suffix match
+    if norm_prev.len() >= 3 {
+        let target = (&norm_prev[norm_prev.len() - 3], &norm_prev[norm_prev.len() - 2], &norm_prev[norm_prev.len() - 1]);
+        for i in 0..norm_inc.len().saturating_sub(2) {
+            if (&norm_inc[i], &norm_inc[i + 1], &norm_inc[i + 2]) == target {
+                best_inc_idx = Some(i + 3);
+                break;
+            }
+        }
+    }
+
+    // 2. Try 2-word suffix match
+    if best_inc_idx.is_none() && norm_prev.len() >= 2 {
+        let target = (&norm_prev[norm_prev.len() - 2], &norm_prev[norm_prev.len() - 1]);
+        for i in 0..norm_inc.len().saturating_sub(1) {
+            if (&norm_inc[i], &norm_inc[i + 1]) == target {
+                best_inc_idx = Some(i + 2);
+                break;
+            }
+        }
+    }
+
+    // 3. Try 1-word suffix match closest to expected position
+    if best_inc_idx.is_none() {
+        if let Some(last_prev_word) = norm_prev.last() {
+            let expected_idx = norm_prev.len().saturating_sub(1) as isize;
+            let mut min_distance = isize::MAX;
+            for (i, iw) in norm_inc.iter().enumerate() {
+                if iw == last_prev_word {
+                    let distance = (i as isize - expected_idx).abs();
+                    if distance < min_distance {
+                        min_distance = distance;
+                        best_inc_idx = Some(i + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    if best_inc_idx.is_none() {
         let mut match_count = 0;
-        for (pw, iw) in prev_words.iter().zip(inc_words.iter()) {
-            if pw.eq_ignore_ascii_case(iw) {
+        for (pw, iw) in norm_prev.iter().zip(norm_inc.iter()) {
+            if pw == iw || pw.contains(iw) || iw.contains(pw) {
                 match_count += 1;
             } else {
                 break;
             }
         }
-        if match_count == prev_words.len() {
+        if match_count > 0 && match_count < inc_words.len() {
+            best_inc_idx = Some(match_count);
+        }
+    }
+
+    if let Some(idx) = best_inc_idx {
+        if idx < inc_words.len() {
             let mut res = String::new();
-            for word in &inc_words[match_count..] {
+            for word in &inc_words[idx..] {
                 res.push(' ');
                 res.push_str(word);
             }
             return res;
         }
+    }
+
+    if inc_words.len() > prev_words.len() {
+        let skip = prev_words.len();
+        let mut res = String::new();
+        for word in &inc_words[skip..] {
+            res.push(' ');
+            res.push_str(word);
+        }
+        return res;
     }
 
     String::new()
@@ -228,5 +298,11 @@ mod tests {
         assert_eq!(compute_text_delta("Hello world", "Hello world this is a test"), " this is a test");
         assert_eq!(compute_text_delta("Hello world", "Hello world"), "");
         assert_eq!(compute_text_delta("Hello world", "Hello"), "");
+
+        // Contraction and punctuation variations
+        let prev = "Hello, I am trying to.";
+        let inc = "Hello, I'm trying to speak to this speak to my application amadible. I do not think so.";
+        let delta = compute_text_delta(prev, inc);
+        assert_eq!(delta, " speak to this speak to my application amadible. I do not think so.");
     }
 }
