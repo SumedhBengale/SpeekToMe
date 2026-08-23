@@ -241,14 +241,20 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
             builder = builder.inner_size(800.0, 600.0);
         }
 
-        if let Ok(window) = builder.build() {
-            #[cfg(target_os = "windows")]
-            {
-                use window_vibrancy::apply_mica;
-                let _ = apply_mica(&window, None);
+        match builder.build() {
+            Ok(window) => {
+                #[cfg(target_os = "windows")]
+                {
+                    use window_vibrancy::apply_mica;
+                    let _ = apply_mica(&window, None);
+                }
+                let _ = window.show();
+                let _ = window.set_focus();
+                println!("[WINDOW] Settings window built and displayed successfully.");
             }
-            let _ = window.show();
-            let _ = window.set_focus();
+            Err(e) => {
+                eprintln!("[WINDOW BUILD ERROR] Failed to build settings window: {}", e);
+            }
         }
     }
 }
@@ -345,6 +351,8 @@ fn cleanup_old_recordings() {
 }
 
 fn main() {
+    println!("[STARTUP] Starting SpeekTo.Me Windows Client...");
+
     // 0. Ensure only one instance of the app is running
     win32::ensure_single_instance();
 
@@ -352,18 +360,12 @@ fn main() {
     let _ = get_active_config();
     let _ = crate::vocab::get_vocab_manager();
 
-    if let Some(token) = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).session_token.clone() {
-        let api_url = api::get_api_url();
-        tauri::async_runtime::spawn(async move {
-            let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token).await;
-        });
-    }
-
     // 2. Cleanup old meeting recordings from previous runs (if older than 24 hours)
     cleanup_old_recordings();
     
     // 3. Spawn Keyboard Hook & System Tray Worker Thread
     thread::spawn(|| {
+        println!("[STARTUP] Win32 hook and system tray worker thread spawned.");
         unsafe {
             win32::run_win32_hook_and_tray_thread();
         }
@@ -372,7 +374,17 @@ fn main() {
     // 4. Launch Tauri app
     tauri::Builder::default()
         .setup(|app| {
-            show_or_create_settings_window(app.handle());
+            let handle = app.handle().clone();
+            let _ = TAURI_APP.set(handle.clone());
+
+            if let Some(token) = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).session_token.clone() {
+                let api_url = api::get_api_url();
+                tauri::async_runtime::spawn(async move {
+                    let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token).await;
+                });
+            }
+
+            show_or_create_settings_window(&handle);
             Ok(())
         })
         .on_window_event(|window, event| {

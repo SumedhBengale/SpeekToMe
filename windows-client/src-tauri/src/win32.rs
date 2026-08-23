@@ -590,7 +590,8 @@ mod win32_impl {
                 nid.szTip[i] = c;
             }
         }
-        Shell_NotifyIconW(NIM_ADD, &nid);
+        let tray_ok = Shell_NotifyIconW(NIM_ADD, &nid);
+        println!("[WIN32] System tray icon registered (success: {}).", tray_ok != 0);
         
         let hook_id = SetWindowsHookExW(
             WH_KEYBOARD_LL,
@@ -600,7 +601,9 @@ mod win32_impl {
         );
         
         if hook_id == std::ptr::null_mut() {
-            panic!("Failed to register global keyboard hook!");
+            eprintln!("[WIN32 ERROR] Failed to register global keyboard hook!");
+        } else {
+            println!("[WIN32] Global keyboard hook successfully registered.");
         }
         
         let mut msg: MSG = mem::zeroed();
@@ -609,9 +612,9 @@ mod win32_impl {
             DispatchMessageW(&msg);
         }
         
+        println!("[WIN32] Win32 message loop exited.");
         UnhookWindowsHookEx(hook_id);
         Shell_NotifyIconW(NIM_DELETE, &nid);
-        windows_sys::Win32::System::Threading::ExitProcess(0);
     }
     pub fn ensure_single_instance() {
         use windows_sys::Win32::Foundation::GetLastError;
