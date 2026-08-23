@@ -124,6 +124,9 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	enhance := false
 	customPrompt := ""
 
+	var lastEmittedInterim string
+	lastInterimTime := time.Now()
+
 	// Read audio loop
 	for {
 		msgType, data, err := conn.Read(ctx)
@@ -154,6 +157,22 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			if audioAccumulator.Len() > 15<<20 {
 				_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Audio stream payload exceeded 15MB limit"})
 				break
+			}
+
+			// Periodically perform interim transcription if enough audio is buffered
+			if audioAccumulator.Len() >= 8000 && time.Since(lastInterimTime) >= 350*time.Millisecond {
+				currentBytes := audioAccumulator.Bytes()
+				go func(audioSnap []byte) {
+					interimText, _, _, _, err := services.RunStreamingTranscribe(ctx, audioSnap, user.Languages)
+					if err == nil && interimText != "" && interimText != lastEmittedInterim {
+						lastEmittedInterim = interimText
+						_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+							Type: "interim",
+							Text: interimText,
+						})
+					}
+				}(currentBytes)
+				lastInterimTime = time.Now()
 			}
 		}
 	}

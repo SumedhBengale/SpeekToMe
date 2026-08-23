@@ -39,6 +39,48 @@ pub struct StreamSessionHandle {
     pub rx_final: Receiver<Result<StreamFinalResult, String>>,
 }
 
+pub fn compute_text_delta(previous: &str, incoming: &str) -> String {
+    let prev_trimmed = previous.trim();
+    let inc_trimmed = incoming.trim();
+    if prev_trimmed.is_empty() {
+        return incoming.to_string();
+    }
+    if inc_trimmed.len() <= prev_trimmed.len() {
+        return String::new();
+    }
+
+    if inc_trimmed.starts_with(prev_trimmed) {
+        let prev_char_count = prev_trimmed.chars().count();
+        let delta: String = inc_trimmed.chars().skip(prev_char_count).collect();
+        return delta;
+    }
+
+    // Word-based suffix extraction
+    let prev_words: Vec<&str> = prev_trimmed.split_whitespace().collect();
+    let inc_words: Vec<&str> = inc_trimmed.split_whitespace().collect();
+
+    if inc_words.len() > prev_words.len() {
+        let mut match_count = 0;
+        for (pw, iw) in prev_words.iter().zip(inc_words.iter()) {
+            if pw.eq_ignore_ascii_case(iw) {
+                match_count += 1;
+            } else {
+                break;
+            }
+        }
+        if match_count == prev_words.len() {
+            let mut res = String::new();
+            for word in &inc_words[match_count..] {
+                res.push(' ');
+                res.push_str(word);
+            }
+            return res;
+        }
+    }
+
+    String::new()
+}
+
 /// Converts HTTP/HTTPS API URL to WS/WSS URL
 pub fn get_stream_ws_url(api_url: &str, token: &str) -> String {
     let base = api_url.trim_end_matches('/');
@@ -108,12 +150,29 @@ pub fn start_streaming_session(
         };
 
         let read_task = async move {
+            let mut emitted_text = String::new();
             let mut final_res: Option<StreamFinalResult> = None;
             while let Some(msg_res) = read.next().await {
                 match msg_res {
                     Ok(Message::Text(text)) => {
                         if let Ok(event) = serde_json::from_str::<StreamEventResponse>(&text) {
-                            if event.event_type == "final" {
+                            if event.event_type == "interim" {
+                                let delta = compute_text_delta(&emitted_text, &event.text);
+                                if !delta.is_empty() {
+                                    let normalized_delta = crate::vocab::get_vocab_manager().process_text(&delta);
+                                    println!("[STREAM INTERIM] Emitting live text delta: {:?}", normalized_delta);
+                                    crate::keyboard::simulate_typing(&normalized_delta);
+                                    emitted_text.push_str(&delta);
+                                }
+                            } else if event.event_type == "final" {
+                                let delta = compute_text_delta(&emitted_text, &event.text);
+                                if !delta.is_empty() {
+                                    let normalized_delta = crate::vocab::get_vocab_manager().process_text(&delta);
+                                    println!("[STREAM FINAL] Emitting final remaining delta: {:?}", normalized_delta);
+                                    crate::keyboard::simulate_typing(&normalized_delta);
+                                    emitted_text.push_str(&delta);
+                                }
+
                                 final_res = Some(StreamFinalResult {
                                     text: event.text,
                                     log_id: event.log_id,
@@ -142,4 +201,18 @@ pub fn start_streaming_session(
         tx: audio_tx,
         rx_final: final_rx,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_text_delta() {
+        assert_eq!(compute_text_delta("", "Hello"), "Hello");
+        assert_eq!(compute_text_delta("Hello", "Hello world"), " world");
+        assert_eq!(compute_text_delta("Hello world", "Hello world this is a test"), " this is a test");
+        assert_eq!(compute_text_delta("Hello world", "Hello world"), "");
+        assert_eq!(compute_text_delta("Hello world", "Hello"), "");
+    }
 }

@@ -153,7 +153,95 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
             }
             println!("Recording started...");
             
-            // Wait for key release/abort signal
+            let (is_stream_mode, api_url, token, enhance, custom_prompt) = {
+                let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                (
+                    cfg.transcription_mode == "stream" && cfg.session_token.is_some(),
+                    crate::api::get_api_url(),
+                    cfg.session_token.clone().unwrap_or_default(),
+                    cfg.enhance,
+                    cfg.custom_prompt.clone(),
+                )
+            };
+
+            if is_stream_mode {
+                let stream_handle = match crate::stream::start_streaming_session(
+                    api_url.clone(),
+                    token.clone(),
+                    enhance,
+                    custom_prompt.clone(),
+                ) {
+                    Ok(handle) => Some(handle),
+                    Err(e) => {
+                        eprintln!("[STREAM INIT ERROR] Failed to start live stream session: {}. Falling back to batch mode.", e);
+                        None
+                    }
+                };
+
+                if let Some(handle) = stream_handle {
+                    let mut last_encoded_len = 0;
+                    let mut is_aborted = false;
+
+                    loop {
+                        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                            Ok(true) => {
+                                // Hotkey released normally
+                                break;
+                            }
+                            Ok(false) => {
+                                // Aborted
+                                is_aborted = true;
+                                break;
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                // Periodic tick: check for new samples to encode and stream
+                                let current_samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                                if current_samples.len() > last_encoded_len + 3200 { // at least 200ms of new audio
+                                    if let Ok(ogg_bytes) = encode_opus_ogg(&current_samples, sample_rate, channels) {
+                                        let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                                        last_encoded_len = current_samples.len();
+                                    }
+                                }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                is_aborted = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    drop(s);
+                    CURRENT_VOLUME.store(0, Ordering::Relaxed);
+                    println!("Recording stopped.");
+
+                    if !is_aborted {
+                        let final_samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        if final_samples.len() > last_encoded_len {
+                            if let Ok(ogg_bytes) = encode_opus_ogg(&final_samples, sample_rate, channels) {
+                                let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                            }
+                        }
+                        let _ = handle.tx.send(crate::stream::StreamAudioMessage::EndOfStream);
+
+                        if let Ok(Ok(final_result)) = handle.rx_final.recv_timeout(std::time::Duration::from_secs(5)) {
+                            println!("[STREAM SUCCESS] Live streaming completed. Final text: {}", final_result.text);
+                            if let (Some(log_id), Some(ack_token)) = (final_result.log_id, final_result.ack_token) {
+                                let ack_api = api_url.clone();
+                                let ack_auth = token.clone();
+                                let ack_txt = final_result.text.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = crate::api::send_transcribe_ack(&ack_api, &ack_auth, log_id, &ack_token, &ack_txt).await;
+                                });
+                            }
+                        }
+                    } else {
+                        println!("Recording aborted and discarded.");
+                    }
+                    return;
+                }
+            }
+
+            // Fallback / standard batch mode: Wait for key release/abort signal
             if let Ok(true) = rx.recv() {
                 // Drop stream to stop recording
                 drop(s);
