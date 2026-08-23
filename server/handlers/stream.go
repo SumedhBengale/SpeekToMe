@@ -160,10 +160,17 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Periodically perform interim transcription if enough audio is buffered
-			if audioAccumulator.Len() >= 8000 && time.Since(lastInterimTime) >= 350*time.Millisecond {
+			if audioAccumulator.Len() >= 16000 && time.Since(lastInterimTime) >= 350*time.Millisecond {
 				currentBytes := audioAccumulator.Bytes()
-				go func(audioSnap []byte) {
-					interimText, _, _, _, err := services.RunStreamingTranscribe(ctx, audioSnap, user.Languages)
+				format := startPayload.Format
+				go func(audioSnap []byte, fmtStr string) {
+					var toTranscribe []byte
+					if fmtStr == "pcm" {
+						toTranscribe = utils.EncodePCMToWAV(audioSnap, 16000, 1)
+					} else {
+						toTranscribe = audioSnap
+					}
+					interimText, _, _, _, err := services.RunStreamingTranscribe(ctx, toTranscribe, user.Languages)
 					if err == nil && interimText != "" && interimText != lastEmittedInterim {
 						lastEmittedInterim = interimText
 						_ = writeStreamJSON(ctx, conn, StreamEventMessage{
@@ -171,21 +178,29 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 							Text: interimText,
 						})
 					}
-				}(currentBytes)
+				}(currentBytes, format)
 				lastInterimTime = time.Now()
 			}
 		}
 	}
 
-	audioBytes := audioAccumulator.Bytes()
-	audioSizeBytes := len(audioBytes)
+	audioRaw := audioAccumulator.Bytes()
+	audioSizeBytes := len(audioRaw)
 	if audioSizeBytes == 0 {
 		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "final", Text: ""})
 		conn.Close(websocket.StatusNormalClosure, "Empty audio stream")
 		return
 	}
 
-	audioDuration := utils.GetOggOpusDuration(audioBytes)
+	var audioBytes []byte
+	var audioDuration float64
+	if startPayload.Format == "pcm" {
+		audioBytes = utils.EncodePCMToWAV(audioRaw, 16000, 1)
+		audioDuration = float64(len(audioRaw)) / (16000.0 * 2.0)
+	} else {
+		audioBytes = audioRaw
+		audioDuration = utils.GetOggOpusDuration(audioBytes)
+	}
 	whisperStart := time.Now()
 
 	// Transcribe accumulated stream

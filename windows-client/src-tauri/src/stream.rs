@@ -108,9 +108,14 @@ pub fn start_streaming_session(
     let ws_url = get_stream_ws_url(&api_url, &token);
 
     tauri::async_runtime::spawn(async move {
+        println!("[STREAM CLIENT] Connecting to WebSocket: {}", ws_url);
         let ws_stream = match connect_async(&ws_url).await {
-            Ok((stream, _)) => stream,
+            Ok((stream, _)) => {
+                println!("[STREAM CLIENT] WebSocket connection established successfully!");
+                stream
+            }
             Err(e) => {
+                eprintln!("[STREAM CLIENT ERROR] WebSocket connection failed: {}", e);
                 let _ = final_tx.send(Err(format!("WebSocket connection failed: {}", e)));
                 return;
             }
@@ -121,7 +126,7 @@ pub fn start_streaming_session(
         // 1. Send start handshake frame
         let start_payload = serde_json::json!({
             "type": "start",
-            "format": "opus",
+            "format": "pcm",
             "sample_rate": 16000,
             "channels": 1,
             "enhance": enhance,
@@ -129,6 +134,7 @@ pub fn start_streaming_session(
         });
 
         if let Err(e) = write.send(Message::Text(start_payload.to_string())).await {
+            eprintln!("[STREAM CLIENT ERROR] Failed to send start frame: {}", e);
             let _ = final_tx.send(Err(format!("Failed to send start frame: {}", e)));
             return;
         }
@@ -143,6 +149,7 @@ pub fn start_streaming_session(
                         }
                     }
                     StreamAudioMessage::EndOfStream => {
+                        println!("[STREAM CLIENT] Sending end_of_stream message to server.");
                         let _ = write.send(Message::Text(r#"{"type":"end_of_stream"}"#.to_string())).await;
                         break;
                     }
