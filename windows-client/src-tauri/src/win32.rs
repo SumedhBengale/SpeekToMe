@@ -7,7 +7,6 @@ mod win32_impl {
     use std::ptr;
     use std::sync::atomic::Ordering;
     use std::thread;
-    use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, RECT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -375,6 +374,55 @@ mod win32_impl {
         }
     }
 
+    unsafe fn get_active_modifier_mask(vk_code: u32, is_keydown: bool) -> u32 {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        let mut mask = 0;
+
+        let ctrl_pressed = (GetAsyncKeyState(0x11) as u16 & 0x8000) != 0;
+        let shift_pressed = (GetAsyncKeyState(0x10) as u16 & 0x8000) != 0;
+        let alt_pressed = (GetAsyncKeyState(0x12) as u16 & 0x8000) != 0;
+        let win_pressed = ((GetAsyncKeyState(0x5B) as u16 & 0x8000) != 0) || ((GetAsyncKeyState(0x5C) as u16 & 0x8000) != 0);
+
+        let is_ctrl = vk_code == 0x11 || vk_code == 0xA2 || vk_code == 0xA3;
+        let is_shift = vk_code == 0x10 || vk_code == 0xA0 || vk_code == 0xA1;
+        let is_alt = vk_code == 0x12 || vk_code == 0xA4 || vk_code == 0xA5;
+        let is_win = vk_code == 0x5B || vk_code == 0x5C;
+
+        if (ctrl_pressed && (!is_ctrl || is_keydown)) || (is_ctrl && is_keydown) {
+            mask |= crate::config::HOTKEY_CTRL;
+        }
+        if (shift_pressed && (!is_shift || is_keydown)) || (is_shift && is_keydown) {
+            mask |= crate::config::HOTKEY_SHIFT;
+        }
+        if (alt_pressed && (!is_alt || is_keydown)) || (is_alt && is_keydown) {
+            mask |= crate::config::HOTKEY_ALT;
+        }
+        if (win_pressed && (!is_win || is_keydown)) || (is_win && is_keydown) {
+            mask |= crate::config::HOTKEY_WIN;
+        }
+
+        mask
+    }
+
+    fn is_key_part_of_combo(vk_code: u32, req_modifiers: u32, req_vk: u32) -> bool {
+        if req_vk != 0 && vk_code == req_vk {
+            return true;
+        }
+        if (req_modifiers & crate::config::HOTKEY_CTRL != 0) && (vk_code == 0x11 || vk_code == 0xA2 || vk_code == 0xA3) {
+            return true;
+        }
+        if (req_modifiers & crate::config::HOTKEY_SHIFT != 0) && (vk_code == 0x10 || vk_code == 0xA0 || vk_code == 0xA1) {
+            return true;
+        }
+        if (req_modifiers & crate::config::HOTKEY_ALT != 0) && (vk_code == 0x12 || vk_code == 0xA4 || vk_code == 0xA5) {
+            return true;
+        }
+        if (req_modifiers & crate::config::HOTKEY_WIN != 0) && (vk_code == 0x5B || vk_code == 0x5C) {
+            return true;
+        }
+        false
+    }
+
     pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if crate::SIMULATING_KEY.load(Ordering::SeqCst) {
             return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
@@ -384,97 +432,106 @@ mod win32_impl {
             let kb_struct = *(lparam as *const KBDLLHOOKSTRUCT);
             let vk_code = kb_struct.vkCode;
             
-            let hotkey_vk = crate::ACTIVE_HOTKEY_VK.load(Ordering::Relaxed);
-            
-            if vk_code == hotkey_vk {
-                let wparam_usize = wparam as usize;
-                if wparam_usize == WM_KEYDOWN as usize || wparam_usize == WM_SYSKEYDOWN as usize {
+            let combo_code = crate::ACTIVE_HOTKEY_COMBO.load(Ordering::Relaxed);
+            let is_toggle_mode = crate::ACTIVE_HOTKEY_MODE.load(Ordering::Relaxed) == 1;
+            let req_modifiers = combo_code & 0xFFFF;
+            let req_vk = (combo_code >> 16) as u32;
+
+            let wparam_usize = wparam as usize;
+            let is_down = wparam_usize == WM_KEYDOWN as usize || wparam_usize == WM_SYSKEYDOWN as usize;
+            let is_up = wparam_usize == WM_KEYUP as usize || wparam_usize == WM_SYSKEYUP as usize;
+
+            if is_down {
+                let mod_mask = get_active_modifier_mask(vk_code, true);
+                let modifiers_match = (mod_mask & req_modifiers) == req_modifiers;
+                let trigger_match = if req_vk != 0 {
+                    vk_code == req_vk && modifiers_match
+                } else {
+                    mod_mask == req_modifiers && is_key_part_of_combo(vk_code, req_modifiers, req_vk)
+                };
+
+                if trigger_match {
                     let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                    if !state.is_key_held {
-                        let has_token = crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::Relaxed);
-                        if !has_token {
-                            unsafe {
-                                windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x00000010);
+                    if is_toggle_mode {
+                        if state.is_key_held {
+                            // Stop recording in toggle mode
+                            state.is_key_held = false;
+                            state.press_time = None;
+                            if let Some(mut last_release) = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().ok() {
+                                *last_release = Some(std::time::Instant::now());
                             }
-                            println!("Please log in from SpeekTo.Me Settings before dictating!");
-                            return 1;
-                        }
-                        
-                        state.is_key_held = true;
-                        state.press_time = Some(std::time::Instant::now());
-                        
-                        if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
-                            ShowWindow(send_hwnd.0, SW_SHOWNA);
-                        }
-                        
-                        let consecutive = if let Some(last) = *crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()) {
-                            std::time::Instant::now().duration_since(last) < std::time::Duration::from_secs(5)
+                            if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+                                ShowWindow(send_hwnd.0, SW_HIDE);
+                            }
+                            play_chime(false);
+                            if let Some(tx) = state.stop_tx.take() {
+                                let _ = tx.send(true);
+                            }
+                            crate::keyboard::release_modifier_keys();
                         } else {
-                            false
-                        };
-                        crate::IS_CONSECUTIVE.store(consecutive, Ordering::SeqCst);
-                        
-                        play_chime(true);
-                        crate::keyboard::release_modifier_keys();
-                        
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        state.stop_tx = Some(tx);
-                        thread::spawn(move || {
-                            crate::audio::recording_thread(rx);
-                        });
+                            // Start recording in toggle mode
+                            let has_token = crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::Relaxed);
+                            if !has_token {
+                                windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x00000010);
+                                println!("Please log in from SpeekTo.Me Settings before dictating!");
+                                return 1;
+                            }
+                            state.is_key_held = true;
+                            state.press_time = Some(std::time::Instant::now());
+                            if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+                                ShowWindow(send_hwnd.0, SW_SHOWNA);
+                            }
+                            play_chime(true);
+                            crate::keyboard::release_modifier_keys();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            state.stop_tx = Some(tx);
+                            thread::spawn(move || {
+                                crate::audio::recording_thread(rx);
+                            });
+                        }
+                    } else {
+                        // Hold Mode (push-to-talk)
+                        if !state.is_key_held {
+                            let has_token = crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::Relaxed);
+                            if !has_token {
+                                windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x00000010);
+                                println!("Please log in from SpeekTo.Me Settings before dictating!");
+                                return 1;
+                            }
+                            state.is_key_held = true;
+                            state.press_time = Some(std::time::Instant::now());
+                            if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+                                ShowWindow(send_hwnd.0, SW_SHOWNA);
+                            }
+                            play_chime(true);
+                            crate::keyboard::release_modifier_keys();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            state.stop_tx = Some(tx);
+                            thread::spawn(move || {
+                                crate::audio::recording_thread(rx);
+                            });
+                        }
                     }
                     return 1;
-                } else if wparam_usize == WM_KEYUP as usize || wparam_usize == WM_SYSKEYUP as usize {
+                }
+            } else if is_up {
+                if !is_toggle_mode {
+                    // Hold Mode: stop recording on release of combination key
                     let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                    if state.is_key_held {
+                    if state.is_key_held && is_key_part_of_combo(vk_code, req_modifiers, req_vk) {
                         state.is_key_held = false;
-                        
-                        let mut last_release = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-                        *last_release = Some(std::time::Instant::now());
-                        
+                        if let Some(mut last_release) = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().ok() {
+                            *last_release = Some(std::time::Instant::now());
+                        }
                         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
                             ShowWindow(send_hwnd.0, SW_HIDE);
                         }
-                        
                         play_chime(false);
-                        
-                        let is_short_tap = if let Some(press_time) = state.press_time.take() {
-                            press_time.elapsed() < Duration::from_millis(350)
-                        } else {
-                            false
-                        };
-                        
                         if let Some(tx) = state.stop_tx.take() {
                             let _ = tx.send(true);
                         }
-                        
-                        // Ensure OS modifier states are released
                         crate::keyboard::release_modifier_keys();
-                        
-                        if is_short_tap {
-                            thread::spawn(move || {
-                                thread::sleep(Duration::from_millis(20));
-                                crate::keyboard::simulate_single_key(hotkey_vk);
-                            });
-                        }
                         return 1;
-                    }
-                }
-            } else {
-                let wparam_usize = wparam as usize;
-                if wparam_usize == WM_KEYDOWN as usize || wparam_usize == WM_SYSKEYDOWN as usize {
-                    let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                    if state.is_key_held {
-                        state.is_key_held = false;
-                        state.press_time = None;
-                        if let Some(tx) = state.stop_tx.take() {
-                            let _ = tx.send(false);
-                        }
-                        if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
-                            ShowWindow(send_hwnd.0, SW_HIDE);
-                        }
-                        play_chime(false);
-                        crate::keyboard::release_modifier_keys();
                     }
                 }
             }

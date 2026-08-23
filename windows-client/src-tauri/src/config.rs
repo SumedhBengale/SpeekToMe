@@ -22,11 +22,28 @@ fn default_pill_wave_color() -> u32 {
 fn default_transcription_mode() -> String {
     "stream".to_string()
 }
+fn default_hotkey() -> String {
+    "Ctrl + Shift".to_string()
+}
+fn default_hotkey_mode() -> String {
+    "hold".to_string()
+}
+
+pub const HOTKEY_CTRL: u32 = 0x01;
+pub const HOTKEY_SHIFT: u32 = 0x02;
+pub const HOTKEY_ALT: u32 = 0x04;
+pub const HOTKEY_WIN: u32 = 0x08;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub api_url: Option<String>,
-    pub hotkey: String,       // "Right Control", "Left Control", "Caps Lock", "Right Alt", "Left Alt", "Space"
+    
+    #[serde(default = "default_hotkey")]
+    pub hotkey: String,       // "Ctrl + Shift", "Ctrl + Space", "Ctrl + Win", "Alt + Space", "Ctrl + Alt", "Shift + Space"
+    
+    #[serde(default = "default_hotkey_mode")]
+    pub hotkey_mode: String,  // "hold" | "toggle"
+
     pub model: String,        // "whisper-large-v3-turbo", "whisper-large-v3"
     pub enhance: bool,        // true/false
     pub typing_mode: bool,    // true/false
@@ -66,7 +83,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             api_url: Some("https://api.speekto.me".to_string()),
-            hotkey: "Right Control".to_string(),
+            hotkey: default_hotkey(),
+            hotkey_mode: default_hotkey_mode(),
             model: "whisper-large-v3-turbo".to_string(),
             enhance: false,
             typing_mode: false,
@@ -124,13 +142,31 @@ pub fn save_config(config: &AppConfig) {
     }
 }
 
-pub fn hotkey_name_to_vk(name: &str) -> u32 {
-    match name {
-        "Left Control" => 0xA2,
-        "Caps Lock" => 0x14,
-        "Right Alt" => 0xA5,
-        "Left Alt" => 0xA4,
-        "Space" => 0x20,
-        _ => 0xA3, // Right Control
+pub fn parse_hotkey_combo(name: &str) -> u32 {
+    let lower = name.to_lowercase();
+    let mut mask: u32 = 0;
+    let mut vk: u32 = 0;
+
+    if lower.contains("ctrl") || lower.contains("control") {
+        mask |= HOTKEY_CTRL;
     }
+    if lower.contains("shift") {
+        mask |= HOTKEY_SHIFT;
+    }
+    if lower.contains("alt") {
+        mask |= HOTKEY_ALT;
+    }
+    if lower.contains("win") {
+        mask |= HOTKEY_WIN;
+    }
+    if lower.contains("space") {
+        vk = 0x20; // VK_SPACE
+    }
+
+    if mask == 0 && vk == 0 {
+        // Fallback default: Ctrl + Shift
+        mask = HOTKEY_CTRL | HOTKEY_SHIFT;
+    }
+
+    (vk << 16) | (mask & 0xFFFF)
 }

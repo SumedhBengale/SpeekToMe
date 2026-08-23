@@ -78,6 +78,7 @@ const tabPanes = document.querySelectorAll('.tab-pane');
 
 // Dashboard Input Elements
 const hotkeySelect = document.getElementById('hotkey-select');
+const hotkeyModeSelect = document.getElementById('hotkey-mode-select');
 const autostartCheck = document.getElementById('autostart-check');
 const typingModeCheck = document.getElementById('typing-mode-check');
 const soundFeedbackCheck = document.getElementById('sound-feedback-check');
@@ -130,6 +131,7 @@ const onboardUserEmailEl = document.getElementById('onboard-user-email');
 
 // Onboarding Inputs
 const onboardHotkeySelect = document.getElementById('onboard-hotkey-select');
+const onboardHotkeyModeSelect = document.getElementById('onboard-hotkey-mode-select');
 const onboardAutostartCheck = document.getElementById('onboard-autostart-check');
 const onboardStreamingModeCheck = document.getElementById('onboard-streaming-mode-check');
 const onboardTypingModeCheck = document.getElementById('onboard-typing-mode-check');
@@ -495,7 +497,8 @@ async function init() {
 
 function applyConfigToUI(config) {
   // Dashboard inputs
-  hotkeySelect.value = config.hotkey;
+  if (hotkeySelect) hotkeySelect.value = config.hotkey || 'Ctrl + Shift';
+  if (hotkeyModeSelect) hotkeyModeSelect.value = config.hotkey_mode || 'hold';
   autostartCheck.checked = config.autostart;
   typingModeCheck.checked = config.typing_mode;
   soundFeedbackCheck.checked = config.sound_feedback;
@@ -530,7 +533,8 @@ function applyConfigToUI(config) {
   }
 
   // Onboarding inputs
-  onboardHotkeySelect.value = config.hotkey;
+  if (onboardHotkeySelect) onboardHotkeySelect.value = config.hotkey || 'Ctrl + Shift';
+  if (onboardHotkeyModeSelect) onboardHotkeyModeSelect.value = config.hotkey_mode || 'hold';
   onboardAutostartCheck.checked = config.autostart;
   if (onboardStreamingModeCheck) {
     onboardStreamingModeCheck.checked = (config.transcription_mode === 'stream');
@@ -600,7 +604,8 @@ function gatherConfigFromUI(isOnboarding) {
     const colors = getPillColorsForTheme(themeName);
     return {
       api_url: api_url,
-      hotkey: onboardHotkeySelect.value,
+      hotkey: onboardHotkeySelect ? onboardHotkeySelect.value : 'Ctrl + Shift',
+      hotkey_mode: onboardHotkeyModeSelect ? onboardHotkeyModeSelect.value : 'hold',
       autostart: onboardAutostartCheck.checked,
       typing_mode: onboardTypingModeCheck.checked,
       sound_feedback: onboardSoundFeedbackCheck.checked,
@@ -623,7 +628,8 @@ function gatherConfigFromUI(isOnboarding) {
     const colors = getPillColorsForTheme(themeName);
     return {
       api_url: api_url,
-      hotkey: hotkeySelect.value,
+      hotkey: hotkeySelect ? hotkeySelect.value : 'Ctrl + Shift',
+      hotkey_mode: hotkeyModeSelect ? hotkeyModeSelect.value : 'hold',
       autostart: autostartCheck.checked,
       typing_mode: typingModeCheck.checked,
       sound_feedback: soundFeedbackCheck.checked,

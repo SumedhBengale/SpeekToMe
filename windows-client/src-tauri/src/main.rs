@@ -31,14 +31,17 @@ pub static IS_CONSECUTIVE: AtomicBool = AtomicBool::new(false);
 pub static LAST_WINDOW_POSITION: OnceLock<Mutex<Option<PhysicalPosition<i32>>>> = OnceLock::new();
 pub static LAST_WINDOW_SIZE: OnceLock<Mutex<Option<PhysicalSize<u32>>>> = OnceLock::new();
 
-pub static ACTIVE_HOTKEY_VK: AtomicU32 = AtomicU32::new(0x77); // VK_F8 default
+pub static ACTIVE_HOTKEY_COMBO: AtomicU32 = AtomicU32::new(0x00000003); // Ctrl + Shift default
+pub static ACTIVE_HOTKEY_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0); // 0 = hold, 1 = toggle
 pub static ACTIVE_PILL_BG_COLOR: AtomicU32 = AtomicU32::new(0x27221F);
 pub static ACTIVE_PILL_WAVE_COLOR: AtomicU32 = AtomicU32::new(0x57BF7C);
 pub static ACTIVE_SOUND_FEEDBACK: AtomicBool = AtomicBool::new(true);
 pub static ACTIVE_HAS_SESSION_TOKEN: AtomicBool = AtomicBool::new(false);
 
 pub fn sync_active_config_atomics(config: &AppConfig) {
-    ACTIVE_HOTKEY_VK.store(config::hotkey_name_to_vk(&config.hotkey), Ordering::SeqCst);
+    ACTIVE_HOTKEY_COMBO.store(config::parse_hotkey_combo(&config.hotkey), Ordering::SeqCst);
+    let mode_byte = if config.hotkey_mode == "toggle" { 1 } else { 0 };
+    ACTIVE_HOTKEY_MODE.store(mode_byte, Ordering::SeqCst);
     ACTIVE_PILL_BG_COLOR.store(config.pill_bg_color, Ordering::SeqCst);
     ACTIVE_PILL_WAVE_COLOR.store(config.pill_wave_color, Ordering::SeqCst);
     ACTIVE_SOUND_FEEDBACK.store(config.sound_feedback, Ordering::SeqCst);
