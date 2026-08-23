@@ -243,7 +243,7 @@ pub fn start_streaming_session(
                                     tauri::async_runtime::spawn_blocking(move || {
                                         crate::keyboard::simulate_typing(&type_text);
                                     });
-                                    emitted_text.push_str(&delta);
+                                    emitted_text = event.text.clone();
                                 }
                             } else if event.event_type == "final" {
                                 let delta = compute_text_delta(&emitted_text, &event.text);
@@ -254,7 +254,6 @@ pub fn start_streaming_session(
                                     tauri::async_runtime::spawn_blocking(move || {
                                         crate::keyboard::simulate_typing(&type_text);
                                     });
-                                    emitted_text.push_str(&delta);
                                 }
 
                                 final_res = Some(StreamFinalResult {
