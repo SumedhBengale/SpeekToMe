@@ -148,10 +148,10 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
     match stream_res {
         Ok(s) => {
             if let Err(e) = s.play() {
-                eprintln!("Failed to play stream: {:?}", e);
+                eprintln!("[AUDIO ERROR] Failed to play stream: {:?}", e);
                 return;
             }
-            println!("Recording started...");
+            println!("[AUDIO] Recording started...");
             
             let (is_stream_mode, api_url, token, enhance, custom_prompt) = {
                 let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
@@ -163,6 +163,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     cfg.custom_prompt.clone(),
                 )
             };
+            println!("[AUDIO] Active transcription mode: {}", if is_stream_mode { "STREAM" } else { "BATCH" });
 
             if is_stream_mode {
                 let stream_handle = match crate::stream::start_streaming_session(

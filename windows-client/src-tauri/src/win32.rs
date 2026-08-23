@@ -96,11 +96,7 @@ mod win32_impl {
     }
 
     pub fn play_chime(start: bool) {
-        let play_enabled = {
-            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-            config.sound_feedback
-        };
-        if !play_enabled {
+        if !crate::ACTIVE_SOUND_FEEDBACK.load(Ordering::Relaxed) {
             return;
         }
 
@@ -176,10 +172,8 @@ mod win32_impl {
                 *pixel = 0;
             }
 
-            let (bg_color, wave_color) = {
-                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                (config.pill_bg_color, config.pill_wave_color)
-            };
+            let bg_color = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed);
+            let wave_color = crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed);
 
             let r = height as f32 / 2.0;
             let c1_x = r;
@@ -390,20 +384,14 @@ mod win32_impl {
             let kb_struct = *(lparam as *const KBDLLHOOKSTRUCT);
             let vk_code = kb_struct.vkCode;
             
-            let hotkey_vk = {
-                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                crate::config::hotkey_name_to_vk(&config.hotkey)
-            };
+            let hotkey_vk = crate::ACTIVE_HOTKEY_VK.load(Ordering::Relaxed);
             
             if vk_code == hotkey_vk {
                 let wparam_usize = wparam as usize;
                 if wparam_usize == WM_KEYDOWN as usize || wparam_usize == WM_SYSKEYDOWN as usize {
                     let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
                     if !state.is_key_held {
-                        let has_token = {
-                            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                            config.session_token.is_some()
-                        };
+                        let has_token = crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::Relaxed);
                         if !has_token {
                             unsafe {
                                 windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x00000010);
@@ -416,7 +404,6 @@ mod win32_impl {
                         state.press_time = Some(std::time::Instant::now());
                         
                         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
-                            update_layered_overlay(send_hwnd.0);
                             ShowWindow(send_hwnd.0, SW_SHOWNA);
                         }
                         

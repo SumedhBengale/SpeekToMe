@@ -10,7 +10,7 @@ pub mod vocab;
 pub mod stream;
 
 use std::sync::{Mutex, OnceLock};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 use zeroize::Zeroize;
 
@@ -31,6 +31,20 @@ pub static IS_CONSECUTIVE: AtomicBool = AtomicBool::new(false);
 pub static LAST_WINDOW_POSITION: OnceLock<Mutex<Option<PhysicalPosition<i32>>>> = OnceLock::new();
 pub static LAST_WINDOW_SIZE: OnceLock<Mutex<Option<PhysicalSize<u32>>>> = OnceLock::new();
 
+pub static ACTIVE_HOTKEY_VK: AtomicU32 = AtomicU32::new(0x77); // VK_F8 default
+pub static ACTIVE_PILL_BG_COLOR: AtomicU32 = AtomicU32::new(0x27221F);
+pub static ACTIVE_PILL_WAVE_COLOR: AtomicU32 = AtomicU32::new(0x57BF7C);
+pub static ACTIVE_SOUND_FEEDBACK: AtomicBool = AtomicBool::new(true);
+pub static ACTIVE_HAS_SESSION_TOKEN: AtomicBool = AtomicBool::new(false);
+
+pub fn sync_active_config_atomics(config: &AppConfig) {
+    ACTIVE_HOTKEY_VK.store(config::hotkey_name_to_vk(&config.hotkey), Ordering::SeqCst);
+    ACTIVE_PILL_BG_COLOR.store(config.pill_bg_color, Ordering::SeqCst);
+    ACTIVE_PILL_WAVE_COLOR.store(config.pill_wave_color, Ordering::SeqCst);
+    ACTIVE_SOUND_FEEDBACK.store(config.sound_feedback, Ordering::SeqCst);
+    ACTIVE_HAS_SESSION_TOKEN.store(config.session_token.is_some(), Ordering::SeqCst);
+}
+
 pub struct RecordingState {
     pub is_key_held: bool,
     pub press_time: Option<std::time::Instant>,
@@ -48,7 +62,11 @@ pub fn get_state() -> &'static Mutex<RecordingState> {
 }
 
 pub fn get_active_config() -> &'static Mutex<AppConfig> {
-    ACTIVE_CONFIG.get_or_init(|| Mutex::new(config::load_config()))
+    ACTIVE_CONFIG.get_or_init(|| {
+        let loaded = config::load_config();
+        sync_active_config_atomics(&loaded);
+        Mutex::new(loaded)
+    })
 }
 
 // ==========================================
@@ -62,6 +80,7 @@ fn get_config() -> AppConfig {
 
 #[tauri::command]
 fn save_config(config: AppConfig) {
+    sync_active_config_atomics(&config);
     {
         let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         *active = config.clone();
@@ -82,6 +101,7 @@ fn start_login(window: tauri::WebviewWindow) {
             {
                 let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                 active.session_token = Some(token.clone());
+                sync_active_config_atomics(&active);
                 config::save_config(&active);
             }
             
@@ -127,6 +147,7 @@ fn logout() {
     }
     let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
     active.session_token = None;
+    sync_active_config_atomics(&active);
     config::save_config(&active);
 }
 
@@ -156,6 +177,7 @@ async fn login_with_credentials(email: String, mut password: String) -> Result<a
             });
             let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
             active.session_token = Some(token);
+            sync_active_config_atomics(&active);
             config::save_config(&active);
             Ok(user_info)
         }
