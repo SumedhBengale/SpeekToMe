@@ -126,6 +126,10 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 
 	var lastEmittedInterim string
 	lastInterimTime := time.Now()
+	var interimSeq uint64
+	var latestEmittedSeq uint64
+	var interimInProgress bool
+	var interimMu sync.Mutex
 
 	// Read audio loop
 	for {
@@ -159,11 +163,28 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 
-			// Periodically perform interim transcription if enough audio is buffered
-			if audioAccumulator.Len() >= 16000 && time.Since(lastInterimTime) >= 350*time.Millisecond {
-				currentBytes := audioAccumulator.Bytes()
+			// Periodically perform interim transcription if enough audio is buffered and no request is in flight
+			interimMu.Lock()
+			shouldRunInterim := audioAccumulator.Len() >= 16000 &&
+				time.Since(lastInterimTime) >= 400*time.Millisecond &&
+				!interimInProgress
+			if shouldRunInterim {
+				interimInProgress = true
+				interimSeq++
+				currentSeq := interimSeq
+				lastInterimTime = time.Now()
+				currentBytes := make([]byte, audioAccumulator.Len())
+				copy(currentBytes, audioAccumulator.Bytes())
 				format := startPayload.Format
-				go func(audioSnap []byte, fmtStr string) {
+				interimMu.Unlock()
+
+				go func(audioSnap []byte, fmtStr string, seq uint64) {
+					defer func() {
+						interimMu.Lock()
+						interimInProgress = false
+						interimMu.Unlock()
+					}()
+
 					var toTranscribe []byte
 					if fmtStr == "pcm" {
 						toTranscribe = utils.EncodePCMToWAV(audioSnap, 16000, 1)
@@ -171,15 +192,23 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 						toTranscribe = audioSnap
 					}
 					interimText, _, _, _, err := services.RunStreamingTranscribe(ctx, toTranscribe, user.Languages)
-					if err == nil && interimText != "" && interimText != lastEmittedInterim {
-						lastEmittedInterim = interimText
-						_ = writeStreamJSON(ctx, conn, StreamEventMessage{
-							Type: "interim",
-							Text: interimText,
-						})
+					if err == nil && interimText != "" {
+						interimMu.Lock()
+						if seq >= latestEmittedSeq && interimText != lastEmittedInterim {
+							latestEmittedSeq = seq
+							lastEmittedInterim = interimText
+							interimMu.Unlock()
+							_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+								Type: "interim",
+								Text: interimText,
+							})
+						} else {
+							interimMu.Unlock()
+						}
 					}
-				}(currentBytes, format)
-				lastInterimTime = time.Now()
+				}(currentBytes, format, currentSeq)
+			} else {
+				interimMu.Unlock()
 			}
 		}
 	}

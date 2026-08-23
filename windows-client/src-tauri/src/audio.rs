@@ -180,7 +180,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                 };
 
                 if let Some(handle) = stream_handle {
-                    let mut last_sent_sample_idx = 0;
+                    let mut last_sent_16k_len = 0;
                     let mut is_aborted = false;
 
                     loop {
@@ -195,17 +195,17 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                 break;
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                // Periodic tick: extract new samples and stream as PCM bytes
+                                // Periodic tick: extract new samples from contiguous resampled audio
                                 let current_samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                                if current_samples.len() > last_sent_sample_idx + 2400 { // at least 150ms of new audio
-                                    let new_slice = &current_samples[last_sent_sample_idx..];
-                                    let resampled_16k = resample_to_16k_mono(new_slice, sample_rate, channels);
-                                    let mut pcm_bytes = Vec::with_capacity(resampled_16k.len() * 2);
-                                    for sample in resampled_16k {
+                                let all_16k = resample_to_16k_mono(&current_samples, sample_rate, channels);
+                                if all_16k.len() > last_sent_16k_len + 1600 { // at least 100ms of new 16k audio
+                                    let new_16k_slice = &all_16k[last_sent_16k_len..];
+                                    let mut pcm_bytes = Vec::with_capacity(new_16k_slice.len() * 2);
+                                    for sample in new_16k_slice {
                                         pcm_bytes.extend_from_slice(&sample.to_le_bytes());
                                     }
                                     let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
-                                    last_sent_sample_idx = current_samples.len();
+                                    last_sent_16k_len = all_16k.len();
                                 }
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -221,11 +221,11 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
 
                     if !is_aborted {
                         let final_samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        if final_samples.len() > last_sent_sample_idx {
-                            let new_slice = &final_samples[last_sent_sample_idx..];
-                            let resampled_16k = resample_to_16k_mono(new_slice, sample_rate, channels);
-                            let mut pcm_bytes = Vec::with_capacity(resampled_16k.len() * 2);
-                            for sample in resampled_16k {
+                        let all_16k = resample_to_16k_mono(&final_samples, sample_rate, channels);
+                        if all_16k.len() > last_sent_16k_len {
+                            let new_16k_slice = &all_16k[last_sent_16k_len..];
+                            let mut pcm_bytes = Vec::with_capacity(new_16k_slice.len() * 2);
+                            for sample in new_16k_slice {
                                 pcm_bytes.extend_from_slice(&sample.to_le_bytes());
                             }
                             let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
