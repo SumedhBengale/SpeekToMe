@@ -12,6 +12,13 @@ let unlistenLoginFailed = null;
 let currentStep = 1;
 let API_URL = "https://api.speekto.me";
 
+function isUserPro(info) {
+  if (!info) return false;
+  const active = (info.plan_active === true || info.plan_active === 1 || info.plan_active === 'true' || info.plan_active === '1');
+  const tier = (info.plan_tier || '').toLowerCase();
+  return Boolean(active && tier === 'pro');
+}
+
 function showToast(message, title = "Notification", type = "error") {
   let container = document.querySelector('.custom-toast-container');
   if (!container) {
@@ -314,6 +321,7 @@ async function init() {
 
     // 3. Fetch user information status & update dashboard UI
     const userInfo = await invoke('get_user_info');
+    currentUserInfo = userInfo;
     updateAuthUI(userInfo);
     updateOnboardAuthUI(userInfo);
 
@@ -327,6 +335,7 @@ async function init() {
         
         try {
           const freshInfo = await invoke('get_user_info');
+          currentUserInfo = freshInfo;
           if (freshInfo) {
             updateAuthUI(freshInfo);
             updateOnboardAuthUI(freshInfo);
@@ -380,7 +389,7 @@ async function init() {
     }
 
     const handleStreamingToggleChange = (checkbox) => {
-      const isPaid = currentUserInfo && currentUserInfo.plan_active === 1 && currentUserInfo.plan_tier === 'pro';
+      const isPaid = isUserPro(currentUserInfo);
       if (!isPaid && checkbox.checked) {
         checkbox.checked = false;
         if (streamingProHint) streamingProHint.style.display = 'block';
@@ -914,7 +923,7 @@ function updateAuthUI(userInfo) {
     currentUserInfo = userInfo;
 
     // Calculate quota limits and display used/total fraction
-    const isPaid = Boolean(userInfo.plan_active && userInfo.plan_tier === 'pro');
+    const isPaid = isUserPro(userInfo);
     if (streamingModeCheck) {
       if (!isPaid) {
         streamingModeCheck.checked = false;
@@ -1022,6 +1031,7 @@ async function triggerLogout() {
     if (currentConfig) {
       currentConfig.session_token = null;
     }
+    currentUserInfo = null;
     updateAuthUI(null);
     updateOnboardAuthUI(null);
   } catch (err) {
@@ -1033,6 +1043,7 @@ async function setupOAuthListeners() {
   // Listen for login-success emitted by Rust thread
   unlistenLoginSuccess = await listen('login-success', (event) => {
     const userInfo = event.payload;
+    currentUserInfo = userInfo;
     
     // Automatically retrieve session token locally
     invoke('get_config').then(cfg => {
@@ -1124,6 +1135,7 @@ function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId,
         nameInput.value = '';
       } else {
         const userInfo = await invoke('login_with_credentials', { email, password });
+        currentUserInfo = userInfo;
         
         // Fetch updated config so we have the new session token
         currentConfig = await invoke('get_config');
