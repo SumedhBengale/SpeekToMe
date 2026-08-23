@@ -4328,6 +4328,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
  "tokio-tungstenite",
  "window-vibrancy 0.5.3",
  "windows-sys 0.59.0",

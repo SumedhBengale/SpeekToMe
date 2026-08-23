@@ -1,6 +1,7 @@
-use std::sync::mpsc::{Sender, Receiver, channel};
+use std::sync::mpsc::{Receiver, channel};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Serialize, Deserialize};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::connect_async;
 
@@ -35,7 +36,7 @@ pub enum StreamAudioMessage {
 }
 
 pub struct StreamSessionHandle {
-    pub tx: Sender<StreamAudioMessage>,
+    pub tx: UnboundedSender<StreamAudioMessage>,
     pub rx_final: Receiver<Result<StreamFinalResult, String>>,
 }
 
@@ -101,7 +102,7 @@ pub fn start_streaming_session(
     enhance: bool,
     custom_prompt: String,
 ) -> Result<StreamSessionHandle, String> {
-    let (audio_tx, audio_rx) = channel::<StreamAudioMessage>();
+    let (audio_tx, mut audio_rx) = unbounded_channel::<StreamAudioMessage>();
     let (final_tx, final_rx) = channel::<Result<StreamFinalResult, String>>();
 
     let ws_url = get_stream_ws_url(&api_url, &token);
@@ -134,7 +135,7 @@ pub fn start_streaming_session(
 
         // 2. Stream audio frames from channel
         let write_task = async move {
-            while let Ok(msg) = audio_rx.recv() {
+            while let Some(msg) = audio_rx.recv().await {
                 match msg {
                     StreamAudioMessage::AudioChunk(bytes) => {
                         if write.send(Message::Binary(bytes)).await.is_err() {
@@ -161,7 +162,10 @@ pub fn start_streaming_session(
                                 if !delta.is_empty() {
                                     let normalized_delta = crate::vocab::get_vocab_manager().process_text(&delta);
                                     println!("[STREAM INTERIM] Emitting live text delta: {:?}", normalized_delta);
-                                    crate::keyboard::simulate_typing(&normalized_delta);
+                                    let type_text = normalized_delta.clone();
+                                    tauri::async_runtime::spawn_blocking(move || {
+                                        crate::keyboard::simulate_typing(&type_text);
+                                    });
                                     emitted_text.push_str(&delta);
                                 }
                             } else if event.event_type == "final" {
@@ -169,7 +173,10 @@ pub fn start_streaming_session(
                                 if !delta.is_empty() {
                                     let normalized_delta = crate::vocab::get_vocab_manager().process_text(&delta);
                                     println!("[STREAM FINAL] Emitting final remaining delta: {:?}", normalized_delta);
-                                    crate::keyboard::simulate_typing(&normalized_delta);
+                                    let type_text = normalized_delta.clone();
+                                    tauri::async_runtime::spawn_blocking(move || {
+                                        crate::keyboard::simulate_typing(&type_text);
+                                    });
                                     emitted_text.push_str(&delta);
                                 }
 
