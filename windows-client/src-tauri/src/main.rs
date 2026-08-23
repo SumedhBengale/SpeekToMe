@@ -377,19 +377,29 @@ fn main() {
     println!("[STARTUP 6] Building Tauri application...");
     let app = tauri::Builder::default()
         .setup(|app| {
-            println!("[STARTUP 7] Inside tauri setup callback!");
+            println!("[STARTUP 7a] Setting TAURI_APP handle...");
             let handle = app.handle().clone();
             let _ = TAURI_APP.set(handle.clone());
+            println!("[STARTUP 7b] TAURI_APP set.");
 
-            if let Some(token) = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).session_token.clone() {
+            let token_opt = {
+                let conf = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                conf.session_token.clone()
+            };
+            println!("[STARTUP 7c] Session token present: {}", token_opt.is_some());
+
+            if let Some(token) = token_opt {
                 let api_url = api::get_api_url();
-                tauri::async_runtime::spawn(async move {
-                    println!("[STARTUP] Syncing vocabulary from server...");
-                    let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token).await;
+                std::thread::spawn(move || {
+                    tauri::async_runtime::block_on(async move {
+                        println!("[STARTUP] Syncing vocabulary from server in background thread...");
+                        let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token).await;
+                        println!("[STARTUP] Vocabulary sync finished.");
+                    });
                 });
             }
 
-            println!("[STARTUP 8] Setup completed.");
+            println!("[STARTUP 8] Setup completed successfully!");
             Ok(())
         })
         .on_window_event(|window, event| {
