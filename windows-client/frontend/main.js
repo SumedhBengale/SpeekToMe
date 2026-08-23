@@ -1716,4 +1716,8 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
