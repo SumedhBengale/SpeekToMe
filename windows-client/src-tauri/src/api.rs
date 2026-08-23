@@ -146,7 +146,7 @@ pub fn listen_for_token() -> Option<String> {
 }
 
 pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
-    let (token_opt, model, enhance, custom_prompt, transcription_mode) = {
+    let (token_opt, model, enhance, custom_prompt, transcription_mode, api_url) = {
         let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         (
             config.session_token.clone(),
@@ -154,6 +154,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
             config.enhance,
             config.custom_prompt.clone(),
             config.transcription_mode.clone(),
+            config.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
         )
     };
 
@@ -174,7 +175,6 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
     };
 
     tauri::async_runtime::spawn(async move {
-        let api_url = get_api_url();
         let transcript_result = if transcription_mode == "stream" {
             match stream_transcribe_audio(&api_url, &token, ogg_opus_bytes.clone(), enhance, &custom_prompt).await {
                 Ok(res) => Ok(res),

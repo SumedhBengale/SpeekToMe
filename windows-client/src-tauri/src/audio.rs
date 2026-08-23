@@ -157,7 +157,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                 let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                 (
                     cfg.transcription_mode == "stream" && cfg.session_token.is_some(),
-                    crate::api::get_api_url(),
+                    cfg.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
                     cfg.session_token.clone().unwrap_or_default(),
                     cfg.enhance,
                     cfg.custom_prompt.clone(),
