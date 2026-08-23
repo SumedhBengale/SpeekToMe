@@ -6,6 +6,7 @@ const { listen } = window.__TAURI__.event;
 
 // State variables
 let currentConfig = null;
+let currentUserInfo = null;
 let unlistenLoginSuccess = null;
 let unlistenLoginFailed = null;
 let currentStep = 1;
@@ -69,6 +70,8 @@ const soundFeedbackCheck = document.getElementById('sound-feedback-check');
 const smartSpacingCheck = document.getElementById('smart-spacing-check');
 const modelSelect = document.getElementById('model-select');
 const enhanceCheck = document.getElementById('enhance-check');
+const streamingModeCheck = document.getElementById('streaming-mode-check');
+const streamingProHint = document.getElementById('streaming-pro-hint');
 const customPromptText = document.getElementById('custom-prompt-text');
 const promptValidationBanner = document.getElementById('prompt-validation-banner');
 const themeSelect = document.getElementById('theme-select');
@@ -368,6 +371,19 @@ async function init() {
       });
     }
 
+    if (streamingModeCheck) {
+      streamingModeCheck.addEventListener('change', () => {
+        const isPaid = currentUserInfo && currentUserInfo.plan_active === 1 && currentUserInfo.plan_tier === 'pro';
+        if (!isPaid && streamingModeCheck.checked) {
+          streamingModeCheck.checked = false;
+          if (streamingProHint) streamingProHint.style.display = 'block';
+          showToast("Ultra-Fast Streaming ASR is an exclusive Pro feature. Upgrade your subscription on your Web Dashboard to unlock it!", "Pro Subscription Required", "warning");
+        } else if (isPaid) {
+          if (streamingProHint) streamingProHint.style.display = 'none';
+        }
+      });
+    }
+
     // 4. Setup Onboarding flow state
     if (!currentConfig.session_token) {
       // User is logged out / first run: Show Onboarding Flow
@@ -462,6 +478,9 @@ function applyConfigToUI(config) {
   smartSpacingCheck.checked = config.smart_spacing;
   modelSelect.value = config.model;
   enhanceCheck.checked = config.enhance;
+  if (streamingModeCheck) {
+    streamingModeCheck.checked = (config.transcription_mode === 'stream');
+  }
   customPromptText.value = config.custom_prompt;
   if (themeSelect) themeSelect.value = config.theme || 'forest';
 
@@ -583,6 +602,7 @@ function gatherConfigFromUI(isOnboarding) {
       smart_spacing: smartSpacingCheck.checked,
       model: modelSelect.value,
       enhance: enhanceCheck.checked,
+      transcription_mode: (streamingModeCheck && streamingModeCheck.checked) ? "stream" : "batch",
       custom_prompt: customPromptText.value,
       session_token: currentConfig ? currentConfig.session_token : null,
       theme: themeName,
@@ -866,8 +886,18 @@ function updateAuthUI(userInfo) {
     if (subActivated) subActivated.textContent = formatDate(userInfo.plan_activated_at);
     if (subUsage) subUsage.textContent = formatDuration(userInfo.duration_seconds);
 
+    currentUserInfo = userInfo;
+
     // Calculate quota limits and display used/total fraction
     const isPaid = userInfo.plan_active && userInfo.plan_tier === 'pro';
+    if (streamingModeCheck) {
+      if (!isPaid) {
+        streamingModeCheck.checked = false;
+        if (streamingProHint) streamingProHint.style.display = 'block';
+      } else {
+        if (streamingProHint) streamingProHint.style.display = 'none';
+      }
+    }
     const maxSeconds = userInfo.monthly_limit_seconds || (isPaid ? 180000.0 : 3600.0);
     const usageSeconds = userInfo.duration_seconds || 0.0;
     const percent = Math.min(100.0, (usageSeconds / maxSeconds) * 100.0);

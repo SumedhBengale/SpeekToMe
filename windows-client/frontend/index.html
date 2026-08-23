@@ -344,6 +344,23 @@
 
         <input type="hidden" id="model-select" value="whisper-large-v3-turbo">
 
+        <div class="setting-group" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color, rgba(255,255,255,0.12)); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+            <label class="fluent-checkbox-container" style="margin-bottom: 0; font-weight: 600;">
+              <input type="checkbox" id="streaming-mode-check">
+              <span class="checkmark"></span>
+              Ultra-Fast Streaming Engine (Nemotron 3.5 ASR)
+            </label>
+            <span style="background: linear-gradient(135deg, #FFD700, #FFA500); color: #000; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 4px; letter-spacing: 0.5px;">PRO</span>
+          </div>
+          <span class="setting-hint" style="display: block; line-height: 1.45; font-size: 12px; margin-top: 4px;">
+            Next-generation FastConformer streaming model with real-time token emission. Delivers up to <strong>3× lower latency</strong>, sharper conversational intelligence, and instantaneous word pasting. <em>Requires an active Pro subscription.</em>
+          </span>
+          <div id="streaming-pro-hint" style="display: none; margin-top: 6px; color: #ffb74d; font-size: 11.5px;">
+            ⭐ Pro plan required. Upgrade on your Web Dashboard to unlock streaming dictation.
+          </div>
+        </div>
+
         <div class="setting-group checkbox-group">
           <label class="fluent-checkbox-container">
             <input type="checkbox" id="enhance-check">

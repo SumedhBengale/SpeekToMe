@@ -83,32 +83,26 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 
 	// Rate limiting & quota check
 	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
-	rpmLimit := 3
-	monthlyLimitSeconds := 3600.0
+	if !isPaid {
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+			Type:  "error",
+			Error: "Ultra-Fast Streaming ASR is an exclusive Pro feature. Please upgrade your plan in settings.",
+		})
+		conn.Close(websocket.StatusPolicyViolation, "Pro plan required")
+		return
+	}
+
+	rpmLimit := 15
+	monthlyLimitSeconds := 180000.0
 	cfg := config.ConfigManager.GetRawAll()
-	if isPaid {
-		rpmLimit = 15
-		monthlyLimitSeconds = 180000.0
-		if val, ok := cfg["ratelimit_paid_rpm"]; ok {
-			if limit, err := strconv.Atoi(val); err == nil {
-				rpmLimit = limit
-			}
+	if val, ok := cfg["ratelimit_paid_rpm"]; ok {
+		if limit, err := strconv.Atoi(val); err == nil {
+			rpmLimit = limit
 		}
-		if val, ok := cfg["quota_paid_monthly_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		}
-	} else {
-		if val, ok := cfg["ratelimit_free_rpm"]; ok {
-			if limit, err := strconv.Atoi(val); err == nil {
-				rpmLimit = limit
-			}
-		}
-		if val, ok := cfg["quota_free_monthly_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
+	}
+	if val, ok := cfg["quota_paid_monthly_seconds"]; ok {
+		if limit, err := strconv.ParseFloat(val, 64); err == nil {
+			monthlyLimitSeconds = limit
 		}
 	}
 

@@ -29,6 +29,7 @@ keyring = "2.1.2"
 zeroize = { version = "1.8.1", features = ["derive"] }
 rand = "0.8"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util = "0.3"
 
 [build-dependencies]

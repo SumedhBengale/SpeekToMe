@@ -353,6 +353,9 @@ fn cleanup_old_recordings() {
 fn main() {
     println!("[STARTUP] Starting SpeekTo.Me Windows Client...");
 
+    // Install process-level default CryptoProvider for rustls / tokio-tungstenite TLS
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // 0. Ensure only one instance of the app is running
     win32::ensure_single_instance();
 
