@@ -346,20 +346,24 @@ fn cleanup_old_recordings() {
 }
 
 fn main() {
-    println!("[STARTUP] Starting SpeekTo.Me Windows Client...");
+    println!("[STARTUP 1] Starting SpeekTo.Me Windows Client...");
 
     // Install process-level default CryptoProvider for rustls / tokio-tungstenite TLS
     let _ = rustls::crypto::ring::default_provider().install_default();
+    println!("[STARTUP 2] CryptoProvider installed.");
 
     // 0. Ensure only one instance of the app is running
     win32::ensure_single_instance();
+    println!("[STARTUP 3] Single instance check passed.");
 
     // 1. Initialize global loaded config
     let _ = get_active_config();
     let _ = crate::vocab::get_vocab_manager();
+    println!("[STARTUP 4] Active config & Vocab manager initialized.");
 
     // 2. Cleanup old meeting recordings from previous runs (if older than 24 hours)
     cleanup_old_recordings();
+    println!("[STARTUP 5] Cleanup recordings completed.");
     
     // 3. Spawn Keyboard Hook & System Tray Worker Thread
     thread::spawn(|| {
@@ -370,18 +374,22 @@ fn main() {
     });
     
     // 4. Launch Tauri app
-    tauri::Builder::default()
+    println!("[STARTUP 6] Building Tauri application...");
+    let app = tauri::Builder::default()
         .setup(|app| {
+            println!("[STARTUP 7] Inside tauri setup callback!");
             let handle = app.handle().clone();
             let _ = TAURI_APP.set(handle.clone());
 
             if let Some(token) = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).session_token.clone() {
                 let api_url = api::get_api_url();
                 tauri::async_runtime::spawn(async move {
+                    println!("[STARTUP] Syncing vocabulary from server...");
                     let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token).await;
                 });
             }
 
+            println!("[STARTUP 8] Setup completed.");
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -422,20 +430,11 @@ fn main() {
             get_api_url,
             open_external_url,
             validate_prompt
-        ])
-        .build(tauri::generate_context!())
-        .expect("error while running tauri application")
-        .run(|app_handle, event| {
-            match event {
-                tauri::RunEvent::Ready => {
-                    let _ = TAURI_APP.set(app_handle.clone());
-                }
-                tauri::RunEvent::ExitRequested { api, .. } => {
-                    api.prevent_exit();
-                }
-                _ => {}
-            }
-        });
+        ]);
+
+    println!("[STARTUP 9] Running Tauri event loop...");
+    app.run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
 
 pub static CURRENT_MEETING_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
