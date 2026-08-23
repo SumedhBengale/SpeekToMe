@@ -872,16 +872,13 @@ export default function App() {
     return `${hours.toFixed(1)}h`;
   };
 
-  const formatUsageParts = (usedSec, totalSec) => {
-    const safeUsed = Number(usedSec) || 0;
-    const rawTotal = Number(totalSec) || 3600;
+  const formatUsageParts = (usedSec, totalSec, isPaid = false) => {
+    const safeUsed = Math.max(0, Number(usedSec) || 0);
+    const rawTotalSec = Math.max(0, Number(totalSec) || 3600);
     
-    let totalHours = rawTotal / 3600;
-    if (rawTotal >= 730 && rawTotal <= 10000) {
-      totalHours = rawTotal;
-    }
+    const totalHours = rawTotalSec / 3600;
 
-    let usedStr = '0m';
+    let usedStr = '0s';
     if (safeUsed < 60) {
       usedStr = `${Math.round(safeUsed)}s`;
     } else if (safeUsed < 3600) {
@@ -890,13 +887,20 @@ export default function App() {
       usedStr = `${(safeUsed / 3600).toFixed(1)}h`;
     }
 
-    const isUnlimited = totalHours >= 730 || rawTotal >= 730 * 3600;
-    const totalStr = isUnlimited ? 'Unlimited' : (Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`);
-
-    let fupHours = Math.round(totalHours);
-    if (rawTotal >= 730 * 3600) {
-      fupHours = Math.round(rawTotal / 3600);
+    const isUnlimited = isPaid && (totalHours >= 730);
+    let totalStr = '1h';
+    if (isUnlimited) {
+      totalStr = 'Unlimited';
+    } else if (totalHours < 1.0) {
+      const totalMins = Math.round(rawTotalSec / 60);
+      totalStr = totalMins > 0 ? `${totalMins}m` : `${Math.round(rawTotalSec)}s`;
+    } else if (Number.isInteger(totalHours)) {
+      totalStr = `${Math.round(totalHours)}h`;
+    } else {
+      totalStr = `${totalHours.toFixed(1)}h`;
     }
+
+    const fupHours = Math.round(totalHours);
     const fupTooltip = `Fair Usage Limit: ${fupHours.toLocaleString()} hours / month.`;
 
     return { usedStr, totalStr, isUnlimited, fupTooltip, display: `${usedStr} / ${totalStr}` };
@@ -1387,7 +1391,8 @@ export default function App() {
                     <div className="usage-stats">
                       <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
                       {(() => {
-                        const usage = formatUsageParts(user.duration_seconds, user.monthly_limit_seconds || 3600);
+                        const isPaid = Boolean(user.plan_active && user.plan_tier === 'pro');
+                        const usage = formatUsageParts(user.duration_seconds, user.monthly_limit_seconds || (isPaid ? 180000 : 3600), isPaid);
                         return (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', paddingBottom:'2px' }}>
                             {usage.usedStr} / {usage.totalStr}
@@ -2040,7 +2045,8 @@ export default function App() {
                   <div className="usage-stats" style={{ marginBottom: '8px' }}>
                     <span>Current Month Usage Quota</span>
                     {(() => {
-                      const usage = formatUsageParts(user.duration_seconds, user.monthly_limit_seconds || 3600);
+                      const isPaid = Boolean(user.plan_active && user.plan_tier === 'pro');
+                      const usage = formatUsageParts(user.duration_seconds, user.monthly_limit_seconds || (isPaid ? 180000 : 3600), isPaid);
                       return (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                           {usage.usedStr} / {usage.totalStr}

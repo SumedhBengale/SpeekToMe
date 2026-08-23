@@ -831,15 +831,12 @@ function formatDuration(seconds) {
 }
 
 function formatUsageParts(usedSec, totalSec, isPaid = false) {
-  const safeUsed = Number(usedSec) || 0.0;
-  const rawTotal = Number(totalSec) || 3600.0;
+  const safeUsed = Math.max(0, Number(usedSec) || 0.0);
+  const rawTotalSec = Math.max(0, Number(totalSec) || 3600.0);
   
-  let totalHours = rawTotal / 3600.0;
-  if (rawTotal >= 730 && rawTotal <= 10000) {
-    totalHours = rawTotal;
-  }
+  const totalHours = rawTotalSec / 3600.0;
 
-  let usedStr = '0m';
+  let usedStr = '0s';
   if (safeUsed < 60) {
     usedStr = `${Math.round(safeUsed)}s`;
   } else if (safeUsed < 3600) {
@@ -848,24 +845,22 @@ function formatUsageParts(usedSec, totalSec, isPaid = false) {
     usedStr = `${(safeUsed / 3600.0).toFixed(1)}h`;
   }
 
-  // Free tier users are never shown as unlimited
-  const isUnlimited = isPaid && (totalHours >= 730 || rawTotal >= 730 * 3600.0);
+  // Strictly check if user is on a paid/pro plan and quota >= 730 hours before showing unlimited
+  const isUnlimited = isPaid && (totalHours >= 730.0);
   
   let totalStr = '1h';
   if (isUnlimited) {
     totalStr = 'Unlimited';
   } else if (totalHours < 1.0) {
-    totalStr = `${Math.round(rawTotal / 60)}m`;
+    const totalMins = Math.round(rawTotalSec / 60.0);
+    totalStr = totalMins > 0 ? `${totalMins}m` : `${Math.round(rawTotalSec)}s`;
   } else if (Number.isInteger(totalHours)) {
-    totalStr = `${totalHours}h`;
+    totalStr = `${Math.round(totalHours)}h`;
   } else {
     totalStr = `${totalHours.toFixed(1)}h`;
   }
 
-  let fupHours = Math.round(totalHours);
-  if (rawTotal >= 730 * 3600.0) {
-    fupHours = Math.round(rawTotal / 3600.0);
-  }
+  const fupHours = Math.round(totalHours);
   const fupTooltip = `Fair Usage Limit: ${fupHours.toLocaleString()} hours / month.`;
 
   return { usedStr, totalStr, isUnlimited, fupTooltip, display: `${usedStr} / ${totalStr}` };
