@@ -115,7 +115,39 @@ pub fn simulate_key_up(vk: u32) {
 }
 
 #[cfg(target_os = "windows")]
+pub fn release_modifier_keys() {
+    unsafe {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY};
+        
+        crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Generic Control
+        keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0);
+        // Left Control
+        keybd_event(0xA2, 0, KEYEVENTF_KEYUP, 0);
+        // Right Control (Extended)
+        keybd_event(0xA3, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(0xA3, 0, KEYEVENTF_KEYUP, 0);
+        // Generic Alt
+        keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0);
+        // Left Alt
+        keybd_event(0xA4, 0, KEYEVENTF_KEYUP, 0);
+        // Right Alt (Extended)
+        keybd_event(0xA5, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(0xA5, 0, KEYEVENTF_KEYUP, 0);
+        // Shift
+        keybd_event(0x10, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(0xA0, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(0xA1, 0, KEYEVENTF_KEYUP, 0);
+        // Windows Key
+        keybd_event(0x5B, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(0x5C, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
+        crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub fn simulate_typing(text: &str) {
+    release_modifier_keys();
     unsafe {
         let utf16_chars: Vec<u16> = text.encode_utf16().collect();
         for &c in &utf16_chars {
@@ -141,27 +173,6 @@ pub fn simulate_typing(text: &str) {
 
             thread::sleep(Duration::from_millis(2));
         }
-    }
-}
-
-// ==========================================
-// Non-Windows Stubs (macOS, iOS, Android)
-// ==========================================
-#[cfg(target_os = "windows")]
-pub fn release_modifier_keys() {
-    unsafe {
-        let mut inputs = [std::mem::zeroed::<INPUT>(); 6];
-        let vks = [0x11, 0xA2, 0xA3, 0x12, 0xA4, 0xA5]; // VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU
-
-        for (i, &vk) in vks.iter().enumerate() {
-            inputs[i].r#type = INPUT_KEYBOARD;
-            let mut ki: KEYBDINPUT = std::mem::zeroed();
-            ki.wVk = vk;
-            ki.dwFlags = KEYEVENTF_KEYUP;
-            inputs[i].Anonymous.ki = ki;
-        }
-
-        send_inputs(&inputs);
     }
 }
 

@@ -415,6 +415,7 @@ mod win32_impl {
                         crate::IS_CONSECUTIVE.store(consecutive, Ordering::SeqCst);
                         
                         play_chime(true);
+                        crate::keyboard::release_modifier_keys();
                         
                         let (tx, rx) = std::sync::mpsc::channel();
                         state.stop_tx = Some(tx);
