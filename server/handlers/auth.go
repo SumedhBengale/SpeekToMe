@@ -20,15 +20,13 @@ import (
 	"speektome-server/auth"
 	"speektome-server/config"
 	"speektome-server/db"
-	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
 	"speektome-server/utils"
 )
 
 type App struct {
-	DB         *db.Database
-	VocabCache *pipeline.VocabularyCache
+	DB *db.Database
 }
 
 func (a *App) HandleAuthLogin(w http.ResponseWriter, r *http.Request) {

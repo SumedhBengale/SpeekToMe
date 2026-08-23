@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"net/url"
@@ -14,12 +13,10 @@ import (
 	"speektome-server/config"
 	"speektome-server/db"
 	"speektome-server/handlers"
-	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 )
 
 func main() {
-	vocabCache := pipeline.NewVocabularyCache()
 	_ = godotenv.Load()
 	if os.Getenv("GROQ_API_KEY") == "" && os.Getenv("DEEPINFRA_API_KEY") == "" {
 		_ = godotenv.Load("server/.env")
@@ -47,8 +44,7 @@ func main() {
 	}
 
 	app := &handlers.App{
-		DB:         database,
-		VocabCache: vocabCache,
+		DB: database,
 	}
 
 	config.SyncConfigsFromDB(database, ratelimit.GroqRateLimiter.SetLimit)
@@ -99,6 +95,8 @@ func main() {
 	mux.HandleFunc("GET /usage/history", app.HandleGetUserHistory)
 	mux.HandleFunc("POST /auth/logout", app.HandleAuthLogout)
 	mux.HandleFunc("POST /generate", app.HandleGenerate)
+	mux.HandleFunc("GET /v1/stream", app.HandleStreamTranscribe)
+	mux.HandleFunc("POST /v1/transcribe/ack", app.HandleTranscribeAck)
 	mux.HandleFunc("POST /validate-prompt", app.HandleValidatePrompt)
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("POST /newsletter/subscribe", app.HandleNewsletterSubscribe)
@@ -123,8 +121,6 @@ func main() {
 	mux.HandleFunc("GET /admin/webhook-logs", app.HandleAdminGetWebhookLogs)
 	mux.HandleFunc("GET /admin/cache/rate-limits", app.HandleAdminGetRateLimits)
 	mux.HandleFunc("DELETE /admin/cache/rate-limits", app.HandleAdminDeleteRateLimits)
-	mux.HandleFunc("GET /admin/cache/vocabulary", app.HandleAdminGetVocabCache)
-	mux.HandleFunc("DELETE /admin/cache/vocabulary", app.HandleAdminDeleteVocabCache)
 
 	handler := corsMiddleware(mux)
 
@@ -140,18 +136,9 @@ func isAllowedOrigin(origin string) bool {
 	if err != nil {
 		return false
 	}
-	hostname := strings.ToLower(u.Hostname())
-	if hostname == "localhost" || hostname == "127.0.0.1" || strings.HasSuffix(hostname, ".pages.dev") || strings.HasSuffix(hostname, ".speekto.me") || hostname == "speekto.me" {
+	hostname := u.Hostname()
+	if hostname == "localhost" || hostname == "127.0.0.1" || strings.HasSuffix(hostname, ".speektome.com") || hostname == "speektome.com" {
 		return true
-	}
-	if strings.ToLower(u.Scheme) == "tauri" {
-		return true
-	}
-	frontend := os.Getenv("FRONTEND_URL")
-	if frontend != "" {
-		if fu, err := url.Parse(frontend); err == nil && strings.EqualFold(fu.Hostname(), hostname) {
-			return true
-		}
 	}
 	return false
 }
@@ -161,30 +148,22 @@ func corsMiddleware(next http.Handler) http.Handler {
 		origin := r.Header.Get("Origin")
 		if origin != "" && isAllowedOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Vary", "Origin")
-		} else if origin == "" {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
-
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE, PUT")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin, X-Razorpay-Event-Id, X-Razorpay-Signature")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":                   "ok",
-		"groq_key_configured":      config.GroqAPIKey != "",
-		"deepinfra_key_configured": config.DeepInfraAPIKey != "",
-		"deepseek_key_configured":  config.DeepSeekAPIKey != "",
-		"google_auth_mock":         false,
-	})
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }

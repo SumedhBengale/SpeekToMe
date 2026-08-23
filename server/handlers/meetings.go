@@ -23,25 +23,6 @@ import (
 	"speektome-server/utils"
 )
 
-func (a *App) getOrCompileUserVocabulary(userID int64) (*pipeline.UserVocabulary, error) {
-	if a.VocabCache != nil {
-		vocab := a.VocabCache.Get(userID)
-		if vocab != nil {
-			return vocab, nil
-		}
-	}
-
-	terms, err := a.DB.GetVocabularyTerms(userID)
-	if err != nil {
-		return nil, err
-	}
-
-	vocab := pipeline.CompileUserVocabulary(terms)
-	if a.VocabCache != nil {
-		a.VocabCache.Set(userID, vocab)
-	}
-	return vocab, nil
-}
 
 func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
@@ -189,27 +170,16 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	vocab, err := a.getOrCompileUserVocabulary(user.ID)
-	if err != nil {
-		vocab = &pipeline.UserVocabulary{
-			NormalizedLookup: make(map[string]string),
-			TermsByCount:     make(map[int][]pipeline.CompiledTerm),
-		}
-	}
-
-	pctx := pipeline.NewPipelineContext(user.ID, vocab)
-	normalizer := pipeline.NewVocabNormalizerTransform("Vocab Normalizer Pass 1", true, 0.88)
-	normalizedTranscript, _ := normalizer.Transform(r.Context(), rawText, pctx)
-
-	var polished string = normalizedTranscript
+	pctx := pipeline.NewPipelineContext(user.ID)
+	var polished string = rawText
 	var summary string = "AI Summary not available (DeepSeek key missing or request failed)."
 	var actionItems string = "No action items extracted."
 
-	if config.DeepSeekAPIKey != "" && normalizedTranscript != "" {
-		polished, summary, actionItems, err = generateMeetingAIAnalysis(r.Context(), normalizedTranscript, pctx)
+	if config.DeepSeekAPIKey != "" && rawText != "" {
+		polished, summary, actionItems, err = generateMeetingAIAnalysis(r.Context(), rawText, pctx)
 		if err != nil {
 			log.Printf("[DEEPSEEK ERROR] Failed to generate AI analysis: %v", err)
-			polished = normalizedTranscript
+			polished = rawText
 		}
 	}
 
@@ -219,7 +189,7 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[MEETING UPLOAD ROUTING] Transcription routing: %s | LLM routing: %s", whisperRouting, pctx.LLMRouting)
-	_ = a.DB.LogUsageAndUpdateQuota(user.ID, duration, 0, 0, 0, false, "meeting-whisper", rawText, polished, "success", audioSizeBytes, whisperProvider, pctx.LLMProvider)
+	_, _ = a.DB.LogUsageAndUpdateQuota(user.ID, duration, 0, 0, 0, false, "meeting-whisper", rawText, polished, "success", audioSizeBytes, whisperProvider, pctx.LLMProvider)
 
 	updatedMeeting, err := a.DB.GetMeeting(meetingID)
 	if err != nil {
@@ -372,23 +342,6 @@ You must return your response in JSON format with exactly three fields:
 
 Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" + `json) or conversational text outside the JSON structure.`
 
-	var matchedTerms []string
-	uniqueMatched := make(map[string]bool)
-	for _, m := range pctx.Matches {
-		uniqueMatched[m.Canonical] = true
-	}
-	for term := range uniqueMatched {
-		matchedTerms = append(matchedTerms, term)
-	}
-	sort.Strings(matchedTerms)
-
-	if len(matchedTerms) > 0 {
-		vocabLines := make([]string, len(matchedTerms))
-		for i, term := range matchedTerms {
-			vocabLines[i] = fmt.Sprintf("- %s", term)
-		}
-		systemPrompt += "\n\nThe following user-specific vocabulary terms are present in the text and MUST remain unchanged and spelled exactly as shown:\n" + strings.Join(vocabLines, "\n")
-	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	content, err := pipeline.RunDeepSeekChatCompletion(ctx, client, "deepseek-v4-flash", systemPrompt, transcript, pctx)

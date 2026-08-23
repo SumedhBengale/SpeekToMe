@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +22,7 @@ import (
 )
 
 func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
-	user, vocabTerms, authErr := auth.AuthenticateWithVocab(r, a.DB)
+	user, authErr := auth.Authenticate(r, a.DB)
 	if authErr != nil {
 		http.Error(w, authErr.Error(), http.StatusUnauthorized)
 		return
@@ -111,7 +110,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	if !ratelimit.GlobalUserRateLimiter.Allow(user.ID, rpmLimit) {
 		log.Printf("[RATE LIMIT] Request from %s denied: Exceeded limit (%d requests per minute allowed)", user.Email, rpmLimit)
 		go func() {
-			_ = a.DB.LogUsageAndUpdateQuota(user.ID, 0, 0, 0, 0, false, "", "", "", "failed_rate_limit", audioSizeBytes, "", "")
+			_, _ = a.DB.LogUsageAndUpdateQuota(user.ID, 0, 0, 0, 0, false, "", "", "", "failed_rate_limit", audioSizeBytes, "", "")
 		}()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -128,7 +127,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	if user.MonthlyUsageSeconds+audioDuration > monthlyLimitSeconds {
 		log.Printf("[MONTHLY LIMIT] Request from %s denied: Exceeded monthly limit (%.1f + %.1f > %.1f seconds)", user.Email, user.MonthlyUsageSeconds, audioDuration, monthlyLimitSeconds)
 		go func() {
-			_ = a.DB.LogUsageAndUpdateQuota(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_monthly_limit", audioSizeBytes, "", "")
+			_, _ = a.DB.LogUsageAndUpdateQuota(user.ID, audioDuration, 0, 0, 0, false, "", "", "", "failed_monthly_limit", audioSizeBytes, "", "")
 		}()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
@@ -163,58 +162,20 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[TRANSCRIBE ERROR] Transcription failed: %v", whisperErr)
 	}
 
-	vocab := pipeline.CompileUserVocabulary(vocabTerms)
-
-	var textPipeline []pipeline.TextTransform
-	if enhance {
-		textPipeline = []pipeline.TextTransform{
-			pipeline.NewVocabNormalizerTransform("Vocab Normalizer Pass 1", false, 0.0),
-			pipeline.NewAIEnhancementTransform(prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL),
-			pipeline.NewVocabNormalizerTransform("Vocab Verification Pass 2", true, 0.88),
-		}
-	} else {
-		textPipeline = []pipeline.TextTransform{
-			pipeline.NewVocabNormalizerTransform("Vocab Normalizer Pass 1", true, 0.88),
-		}
-	}
-
-	pctx := pipeline.NewPipelineContext(user.ID, vocab)
-	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true" || os.Getenv("SPEEKTOME_DEBUG_VOCAB") == "true"
+	pctx := pipeline.NewPipelineContext(user.ID)
+	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true"
 	currentText := rawText
 
-	type transformTime struct {
-		name     string
-		duration time.Duration
-	}
-	var transformTimes []transformTime
-
-	pipelineStart := time.Now()
-	for _, transform := range textPipeline {
-		if currentText == "" {
-			continue
-		}
-
+	if enhance && rawText != "" {
+		enhancer := pipeline.NewAIEnhancementTransform(prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		tstart := time.Now()
-		var terr error
-		currentText, terr = transform.Transform(ctx, currentText, pctx)
+		enhancedText, terr := enhancer.Transform(ctx, rawText, pctx)
 		if terr != nil {
-			log.Printf("[PIPELINE ERROR] Transform %s failed: %v", transform.Name(), terr)
-			if transform.Name() == "AI Enhancement" {
-				currentText = rawText
-			}
+			log.Printf("[PIPELINE ERROR] AI Enhancement failed: %v", terr)
+		} else if enhancedText != "" {
+			currentText = enhancedText
 		}
-
-		transformTimes = append(transformTimes, transformTime{
-			name:     transform.Name(),
-			duration: time.Since(tstart),
-		})
-	}
-	pipelineDuration := time.Since(pipelineStart)
-
-	for _, tTime := range transformTimes {
-		if tTime.name == "AI Enhancement" {
-			dsLatency = tTime.duration.Seconds()
-		}
+		dsLatency = time.Since(tstart).Seconds()
 	}
 
 	totalLatency := time.Since(totalStart).Seconds()
@@ -238,12 +199,12 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	if enhance {
 		loggedModel = "deepseek-v4-flash"
 	}
-	go func() {
-		err := a.DB.LogUsageAndUpdateQuota(user.ID, audioDuration, groqLatency, dsLatency, totalLatency, enhance, loggedModel, rawText, finalOutput, status, audioSizeBytes, whisperProvider, pctx.LLMProvider)
-		if err != nil {
-			log.Printf("[ASYNC LOG ERROR] Failed to update usage log/quota: %v", err)
-		}
-	}()
+	logID, err := a.DB.LogUsageAndUpdateQuota(user.ID, audioDuration, groqLatency, dsLatency, totalLatency, enhance, loggedModel, rawText, finalOutput, status, audioSizeBytes, whisperProvider, pctx.LLMProvider)
+	if err != nil {
+		log.Printf("[LOG ERROR] Failed to log usage: %v", err)
+	}
+
+	ackToken := auth.GenerateLogAckToken(user.ID, logID)
 
 	fmt.Println("\n" + strings.Repeat("=", 55))
 	fmt.Println("                SPEEKTOME ANALYTICS (GO)")
@@ -257,40 +218,6 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("LLM (%s):         %.3f seconds [Routing: %s]\n", pctx.LLMProvider, dsLatency, pctx.LLMRouting)
 	}
 
-	fmt.Println("\n--- Pipeline Transforms & Latencies ---")
-	for _, tTime := range transformTimes {
-		fmt.Printf("  * %-25s: %.3f seconds (%.2f ms)\n",
-			tTime.name,
-			tTime.duration.Seconds(),
-			float64(tTime.duration.Nanoseconds())/1e6,
-		)
-	}
-	fmt.Printf("  Total Pipeline:           %.3f seconds (%.2f ms)\n",
-		pipelineDuration.Seconds(),
-		float64(pipelineDuration.Nanoseconds())/1e6,
-	)
-
-	fmt.Println("\n--- Vocabulary Engine Metrics ---")
-	vocabSize := 0
-	if vocab != nil && vocab.Terms != nil {
-		vocabSize = len(vocab.Terms)
-	}
-	fmt.Printf("  Vocabulary Size:          %d terms\n", vocabSize)
-	fmt.Printf("  Exact Matches:            %d\n", pctx.Metrics.ExactMatches)
-	fmt.Printf("  Normalized Matches:       %d\n", pctx.Metrics.NormalizedMatches)
-	fmt.Printf("  Fuzzy Matches:            %d\n", pctx.Metrics.FuzzyMatches)
-
-	var matchedList []string
-	uniqueMatched := make(map[string]bool)
-	for _, m := range pctx.Matches {
-		uniqueMatched[m.Canonical] = true
-	}
-	for term := range uniqueMatched {
-		matchedList = append(matchedList, term)
-	}
-	sort.Strings(matchedList)
-	fmt.Printf("  Matched Terms:            %v\n", matchedList)
-
 	fmt.Println("\n--- Final Text Output ---")
 	fmt.Printf("  Raw Transcript:           %s\n", rawText)
 	fmt.Printf("  Final Output:             %s\n", finalOutput)
@@ -298,8 +225,89 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	fmt.Println(strings.Repeat("=", 55) + "\n")
 
 	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"text":      finalOutput,
+		"log_id":    logID,
+		"ack_token": ackToken,
+	})
+}
+
+type TranscribeAckRequest struct {
+	LogID       int64  `json:"log_id"`
+	AckToken    string `json:"ack_token"`
+	FinalOutput string `json:"final_output"`
+}
+
+func (a *App) HandleTranscribeAck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, authErr := auth.Authenticate(r, a.DB)
+	if authErr != nil {
+		http.Error(w, authErr.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var req TranscribeAckRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request: invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if req.LogID <= 0 || req.AckToken == "" {
+		http.Error(w, "Bad request: missing log_id or ack_token", http.StatusBadRequest)
+		return
+	}
+
+	// 1. Verify HMAC Token
+	if !auth.VerifyLogAckToken(user.ID, req.LogID, req.AckToken) {
+		log.Printf("[SECURITY WARNING] Invalid ack_token for user %d and log_id %d", user.ID, req.LogID)
+		http.Error(w, "Forbidden: invalid signature token", http.StatusForbidden)
+		return
+	}
+
+	// 2. Fetch existing log record
+	existingLog, err := a.DB.GetUsageLogByID(req.LogID, user.ID)
+	if err != nil || existingLog == nil {
+		http.Error(w, "Not found: usage log not found", http.StatusNotFound)
+		return
+	}
+
+	// 3. Check expiration window (5 minutes)
+	if t, parseErr := time.Parse("2006-01-02 15:04:05", existingLog.Timestamp); parseErr == nil {
+		if time.Since(t) > 5*time.Minute {
+			http.Error(w, "Bad request: ACK update window expired", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// 4. Sanity check to prevent arbitrary text injection
+	trimmedOutput := strings.TrimSpace(req.FinalOutput)
+	if len(trimmedOutput) > 10000 {
+		http.Error(w, "Bad request: payload too large", http.StatusBadRequest)
+		return
+	}
+
+	maxAllowedLen := len(existingLog.FinalOutput)*2 + 256
+	if len(trimmedOutput) > maxAllowedLen {
+		log.Printf("[SECURITY WARNING] Rejected oversized vocabulary ACK from user %d: len %d vs max %d", user.ID, len(trimmedOutput), maxAllowedLen)
+		http.Error(w, "Bad request: payload length exceeds allowable threshold", http.StatusBadRequest)
+		return
+	}
+
+	// 5. Update usage log final output
+	if err := a.DB.UpdateUsageFinalOutput(req.LogID, user.ID, trimmedOutput); err != nil {
+		log.Printf("[DB ERROR] Failed to update usage log final_output for user %d: %v", user.ID, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"text": finalOutput,
+		"status": "success",
 	})
 }
 

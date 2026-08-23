@@ -11,7 +11,6 @@ import (
 	"speektome-server/auth"
 	"speektome-server/db"
 	"speektome-server/handlers"
-	"speektome-server/pipeline"
 )
 
 func setupTestServer(t *testing.T) (*httptest.Server, func()) {
@@ -23,11 +22,8 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 		t.Fatalf("Failed to initialize test database: %v", err)
 	}
 
-	vocabCache := pipeline.NewVocabularyCache()
-
 	app := &handlers.App{
-		DB:         database,
-		VocabCache: vocabCache,
+		DB: database,
 	}
 
 	mux := http.NewServeMux()
@@ -42,6 +38,8 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 	mux.HandleFunc("GET /usage/history", app.HandleGetUserHistory)
 	mux.HandleFunc("POST /auth/logout", app.HandleAuthLogout)
 	mux.HandleFunc("POST /generate", app.HandleGenerate)
+	mux.HandleFunc("GET /v1/stream", app.HandleStreamTranscribe)
+	mux.HandleFunc("POST /v1/transcribe/ack", app.HandleTranscribeAck)
 	mux.HandleFunc("POST /validate-prompt", app.HandleValidatePrompt)
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /auth/vocabulary", app.HandleGetVocabulary)
@@ -65,8 +63,6 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 	mux.HandleFunc("GET /admin/webhook-logs", app.HandleAdminGetWebhookLogs)
 	mux.HandleFunc("GET /admin/cache/rate-limits", app.HandleAdminGetRateLimits)
 	mux.HandleFunc("DELETE /admin/cache/rate-limits", app.HandleAdminDeleteRateLimits)
-	mux.HandleFunc("GET /admin/cache/vocabulary", app.HandleAdminGetVocabCache)
-	mux.HandleFunc("DELETE /admin/cache/vocabulary", app.HandleAdminDeleteVocabCache)
 
 	handler := corsMiddleware(mux)
 	ts := httptest.NewServer(handler)
@@ -101,6 +97,8 @@ func TestAllRouteRegistrations(t *testing.T) {
 		{"GET", "/usage/history"},
 		{"POST", "/auth/logout"},
 		{"POST", "/generate"},
+		{"GET", "/v1/stream"},
+		{"POST", "/v1/transcribe/ack"},
 		{"POST", "/validate-prompt"},
 		{"GET", "/auth/vocabulary"},
 		{"POST", "/auth/vocabulary"},
@@ -122,8 +120,6 @@ func TestAllRouteRegistrations(t *testing.T) {
 		{"GET", "/admin/webhook-logs"},
 		{"GET", "/admin/cache/rate-limits"},
 		{"DELETE", "/admin/cache/rate-limits"},
-		{"GET", "/admin/cache/vocabulary"},
-		{"DELETE", "/admin/cache/vocabulary"},
 	}
 
 	for _, r := range routes {

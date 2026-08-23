@@ -234,22 +234,40 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_subscription_payments_user ON subscription_payments(user_id)")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_subscription_payments_subscription ON subscription_payments(subscription_id)")
 
+	defaultModelsJSON := `{
+  "default_batch_provider": "groq_whisper",
+  "default_streaming_provider": "deepinfra_nemotron",
+  "default_llm_provider": "deepseek_v4",
+  "batch_providers": {
+    "groq_whisper": { "enabled": true, "model": "whisper-large-v3-turbo", "base_url": "https://api.groq.com/openai/v1/audio/transcriptions", "timeout_ms": 10000 },
+    "deepinfra_whisper": { "enabled": true, "model": "openai/whisper-large-v3-turbo", "base_url": "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo", "timeout_ms": 10000 },
+    "cloudflare_whisper": { "enabled": true, "model": "@cf/openai/whisper-large-v3-turbo", "timeout_ms": 15000 },
+    "custom_batch": { "enabled": false, "model": "", "base_url": "", "api_key": "", "timeout_ms": 10000 }
+  },
+  "streaming_providers": {
+    "deepinfra_nemotron": { "enabled": true, "model": "nvidia/nemotron-3.5-asr-streaming-0.6b", "base_url": "https://api.deepinfra.com/v1/inference/nvidia/nemotron-3.5-asr-streaming-0.6b", "timeout_ms": 15000 },
+    "custom_streaming": { "enabled": false, "model": "", "base_url": "", "api_key": "", "timeout_ms": 15000 }
+  },
+  "llm_providers": {
+    "deepseek_v4": { "enabled": true, "model": "deepseek-v4-flash", "base_url": "https://api.deepseek.com/chat/completions", "timeout_ms": 30000 },
+    "deepinfra_deepseek": { "enabled": true, "model": "deepseek-ai/DeepSeek-V4-Flash", "base_url": "https://api.deepinfra.com/v1/openai/chat/completions", "timeout_ms": 30000 },
+    "custom_llm": { "enabled": false, "model": "", "base_url": "", "api_key": "", "timeout_ms": 30000 }
+  }
+}`
+
 	// Set default configurations
 	configs := map[string]string{
-		"ratelimit_free_rpm":            "3",
-		"ratelimit_paid_rpm":            "15",
-		"quota_free_daily_fup_seconds":  "3600",
-		"quota_paid_daily_fup_seconds":  "86400",
-		"quota_free_monthly_seconds":    "3600",
-		"quota_paid_monthly_seconds":    "2700000",
-		"provider_default_stt":          "deepinfra",
-		"provider_groq_enabled":         "false",
-		"provider_deepinfra_enabled":    "true",
-		"provider_cloudflare_enabled":   "false",
-		"ratelimit_groq_rpm":            "20",
-		"ratelimit_default_user_rpm":    "10",
-		"notification":                  "",
-		"whisper_base_prompt":           "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
+		"models_config_json":           defaultModelsJSON,
+		"ratelimit_free_rpm":           "3",
+		"ratelimit_paid_rpm":           "15",
+		"quota_free_daily_fup_seconds": "3600",
+		"quota_paid_daily_fup_seconds": "86400",
+		"quota_free_monthly_seconds":   "3600",
+		"quota_paid_monthly_seconds":   "2700000",
+		"ratelimit_groq_rpm":           "20",
+		"ratelimit_default_user_rpm":   "10",
+		"notification":                 "",
+		"whisper_base_prompt":          "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
 	}
 	for k, v := range configs {
 		_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
@@ -407,7 +425,16 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 	return &u, terms, nil
 }
 
-func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int, transcriptionProvider, llmProvider string) error {
+type UsageLogRecord struct {
+	ID              int64
+	UserID          int64
+	Timestamp       string
+	InputTranscript string
+	FinalOutput     string
+	Status          string
+}
+
+func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int, transcriptionProvider, llmProvider string) (int64, error) {
 	enhanceVal := 0
 	if enhanceEnabled {
 		enhanceVal = 1
@@ -415,11 +442,11 @@ func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, l
 
 	tx, err := d.db.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`
+	res, err := tx.Exec(`
 		INSERT INTO usage_logs (
 			user_id, audio_duration, whisper_time, llm_time, total_time, 
 			enhance_enabled, enhance_model, input_transcript, final_output, status, audio_size_bytes,
@@ -427,7 +454,12 @@ func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, l
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, userID, duration, whisperTime, llmTime, totalTime, enhanceVal, model, input, output, status, audioSizeBytes, transcriptionProvider, llmProvider)
 	if err != nil {
-		return err
+		return 0, err
+	}
+
+	var logID int64
+	if res != nil {
+		logID, _ = res.LastInsertId()
 	}
 
 	_, err = tx.Exec(`
@@ -436,10 +468,32 @@ func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, l
 		WHERE id = ?
 	`, duration, userID)
 	if err != nil {
-		return err
+		return logID, err
 	}
 
-	return tx.Commit()
+	return logID, tx.Commit()
+}
+
+func (d *Database) UpdateUsageFinalOutput(logID int64, userID int64, finalOutput string) error {
+	_, err := d.db.Exec(`
+		UPDATE usage_logs 
+		SET final_output = ? 
+		WHERE id = ? AND user_id = ?
+	`, finalOutput, logID, userID)
+	return err
+}
+
+func (d *Database) GetUsageLogByID(logID int64, userID int64) (*UsageLogRecord, error) {
+	var rec UsageLogRecord
+	err := d.db.QueryRow(`
+		SELECT id, user_id, timestamp, input_transcript, final_output, status
+		FROM usage_logs
+		WHERE id = ? AND user_id = ?
+	`, logID, userID).Scan(&rec.ID, &rec.UserID, &rec.Timestamp, &rec.InputTranscript, &rec.FinalOutput, &rec.Status)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
 }
 
 func (d *Database) UpdateUserLanguages(userID int64, languages []string) error {

@@ -27,9 +27,22 @@ pub struct PromptValidationResult {
     pub explanation: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TranscribeResult {
+    pub text: String,
+    #[serde(default)]
+    pub log_id: Option<i64>,
+    #[serde(default)]
+    pub ack_token: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct TranscriptResponse {
     text: String,
+    #[serde(default)]
+    log_id: Option<i64>,
+    #[serde(default)]
+    ack_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -133,13 +146,14 @@ pub fn listen_for_token() -> Option<String> {
 }
 
 pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
-    let (token_opt, model, enhance, custom_prompt) = {
+    let (token_opt, model, enhance, custom_prompt, transcription_mode) = {
         let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         (
             config.session_token.clone(),
             config.model.clone(),
             config.enhance,
             config.custom_prompt.clone(),
+            config.transcription_mode.clone(),
         )
     };
 
@@ -160,22 +174,111 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
     };
 
     tauri::async_runtime::spawn(async move {
-        match transcribe_audio(&get_api_url(), &token, ogg_opus_bytes, &model, enhance, &custom_prompt).await {
-            Ok(text) => {
-                let trimmed = text.trim();
+        let api_url = get_api_url();
+        let transcript_result = if transcription_mode == "stream" {
+            match stream_transcribe_audio(&api_url, &token, ogg_opus_bytes.clone(), enhance, &custom_prompt).await {
+                Ok(res) => Ok(res),
+                Err(err) => {
+                    println!("[STREAM WARNING] Streaming transcription failed ({}), falling back to batch API...", err);
+                    transcribe_audio(&api_url, &token, ogg_opus_bytes, &model, enhance, &custom_prompt).await
+                }
+            }
+        } else {
+            transcribe_audio(&api_url, &token, ogg_opus_bytes, &model, enhance, &custom_prompt).await
+        };
+
+        match transcript_result {
+            Ok(result) => {
+                let trimmed = result.text.trim();
                 if !trimmed.is_empty() {
-                    println!("Transcribed Text: {}", trimmed);
+                    let normalized = crate::vocab::get_vocab_manager().process_text(trimmed);
+                    println!("Transcribed & Normalized Text: {}", normalized);
                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        let _ = clipboard.set_text(trimmed.to_string());
+                        let _ = clipboard.set_text(normalized.clone());
                         crate::keyboard::simulate_paste();
+                    }
+
+                    // If vocabulary modified the text and we have log_id + ack_token, send asynchronous ACK
+                    if let (Some(log_id), Some(ack_token)) = (result.log_id, result.ack_token) {
+                        if normalized != trimmed {
+                            let ack_api_url = api_url.clone();
+                            let ack_token_auth = token.clone();
+                            let ack_final = normalized.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) = send_transcribe_ack(&ack_api_url, &ack_token_auth, log_id, &ack_token, &ack_final).await {
+                                    eprintln!("[ACK ERROR] Failed to send vocabulary update ACK to server: {}", e);
+                                }
+                            });
+                        }
                     }
                 }
             }
             Err(err) => {
-                eprintln!("Transcription API failed: {}", err);
+                eprintln!("Transcription failed: {}", err);
             }
         }
     });
+}
+
+pub async fn stream_transcribe_audio(
+    api_url: &str,
+    token: &str,
+    ogg_opus_bytes: Vec<u8>,
+    enhance: bool,
+    custom_prompt: &str,
+) -> Result<TranscribeResult, String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::connect_async;
+
+    let ws_url = crate::stream::get_stream_ws_url(api_url, token);
+    let (ws_stream, _) = connect_async(&ws_url).await
+        .map_err(|e| format!("WebSocket stream connection error: {}", e))?;
+
+    let (mut write, mut read) = ws_stream.split();
+
+    let start_payload = serde_json::json!({
+        "type": "start",
+        "format": "opus",
+        "sample_rate": 16000,
+        "channels": 1,
+        "enhance": enhance,
+        "prompt": custom_prompt,
+    });
+
+    write.send(Message::Text(start_payload.to_string())).await
+        .map_err(|e| format!("Failed to send stream handshake: {}", e))?;
+
+    for chunk in ogg_opus_bytes.chunks(4096) {
+        write.send(Message::Binary(chunk.to_vec())).await
+            .map_err(|e| format!("Failed to send audio chunk: {}", e))?;
+    }
+
+    write.send(Message::Text(r#"{"type":"end_of_stream"}"#.to_string())).await
+        .map_err(|e| format!("Failed to send end_of_stream: {}", e))?;
+
+    while let Some(msg_res) = read.next().await {
+        match msg_res {
+            Ok(Message::Text(text)) => {
+                if let Ok(event) = serde_json::from_str::<crate::stream::StreamEventResponse>(&text) {
+                    if event.event_type == "final" {
+                        return Ok(TranscribeResult {
+                            text: event.text,
+                            log_id: event.log_id,
+                            ack_token: event.ack_token,
+                        });
+                    } else if event.event_type == "error" {
+                        return Err(event.error.unwrap_or_else(|| "Server streaming transcription error".to_string()));
+                    }
+                }
+            }
+            Ok(Message::Close(_)) => break,
+            Err(e) => return Err(format!("Stream read error: {}", e)),
+            _ => {}
+        }
+    }
+
+    Err("Stream closed before receiving final transcription".to_string())
 }
 
 pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, String> {
@@ -349,7 +452,7 @@ pub async fn transcribe_audio(
     model: &str,
     enhance: bool,
     custom_prompt: &str,
-) -> Result<String, String> {
+) -> Result<TranscribeResult, String> {
     let client = create_client();
     let part = reqwest::multipart::Part::bytes(ogg_opus_bytes)
         .file_name("recording.ogg")
@@ -374,9 +477,44 @@ pub async fn transcribe_audio(
     if status.is_success() {
         let resp: TranscriptResponse = serde_json::from_str(&body_text)
             .map_err(|e| format!("Failed to parse response: {}", e))?;
-        Ok(resp.text)
+        Ok(TranscribeResult {
+            text: resp.text,
+            log_id: resp.log_id,
+            ack_token: resp.ack_token,
+        })
     } else {
         Err(body_text)
+    }
+}
+
+pub async fn send_transcribe_ack(
+    api_url: &str,
+    token: &str,
+    log_id: i64,
+    ack_token: &str,
+    final_output: &str,
+) -> Result<(), String> {
+    let client = create_client();
+    let payload = serde_json::json!({
+        "log_id": log_id,
+        "ack_token": ack_token,
+        "final_output": final_output,
+    });
+
+    let res = client
+        .post(format!("{}/v1/transcribe/ack", api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Network error sending transcribe ack: {}", e))?;
+
+    let status = res.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        let err_text = res.text().await.unwrap_or_default();
+        Err(format!("Transcribe ack failed ({}): {}", status, err_text))
     }
 }
 

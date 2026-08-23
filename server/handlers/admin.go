@@ -103,65 +103,13 @@ func (a *App) HandleAdminDeleteRateLimits(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
 }
 
-func (a *App) HandleAdminGetVocabCache(w http.ResponseWriter, r *http.Request) {
-	_, err := auth.AuthenticateAdmin(r, a.DB)
-	if err != nil {
-		if strings.Contains(err.Error(), "Forbidden") {
-			http.Error(w, err.Error(), http.StatusForbidden)
-		} else {
-			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
-		}
-		return
-	}
-	var keys []int64
-	if a.VocabCache != nil {
-		keys = a.VocabCache.GetKeys()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"cached_user_ids": keys,
-		"total_cached":    len(keys),
-	})
-}
-
-func (a *App) HandleAdminDeleteVocabCache(w http.ResponseWriter, r *http.Request) {
-	_, err := auth.AuthenticateAdmin(r, a.DB)
-	if err != nil {
-		if strings.Contains(err.Error(), "Forbidden") {
-			http.Error(w, err.Error(), http.StatusForbidden)
-		} else {
-			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
-		}
-		return
-	}
-	userIDStr := r.URL.Query().Get("user_id")
-	if userIDStr != "" {
-		userID, err := strconv.ParseInt(userIDStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid user_id parameter", http.StatusBadRequest)
-			return
-		}
-		if a.VocabCache != nil {
-			a.VocabCache.Invalidate(userID)
-		}
-		log.Printf("[ADMIN ACTION] Invalidated vocabulary cache for user %d", userID)
-	} else {
-		if a.VocabCache != nil {
-			a.VocabCache.InvalidateAll()
-		}
-		log.Println("[ADMIN ACTION] Invalidated vocabulary cache globally")
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "invalidated"})
-}
-
 func (a *App) HandleAdminGetUsers(w http.ResponseWriter, r *http.Request) {
 	_, err := auth.AuthenticateAdmin(r, a.DB)
 	if err != nil {
 		if strings.Contains(err.Error(), "Forbidden") {
 			http.Error(w, err.Error(), http.StatusForbidden)
 		} else {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
 		}
 		return
 	}
@@ -183,7 +131,7 @@ func (a *App) HandleAdminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "Forbidden") {
 			http.Error(w, err.Error(), http.StatusForbidden)
 		} else {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
 		}
 		return
 	}
@@ -221,7 +169,7 @@ func (a *App) HandleAdminUpdateRateLimit(w http.ResponseWriter, r *http.Request)
 		if strings.Contains(err.Error(), "Forbidden") {
 			http.Error(w, err.Error(), http.StatusForbidden)
 		} else {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
 		}
 		return
 	}
@@ -258,7 +206,7 @@ func (a *App) HandleAdminGetWebhookLogs(w http.ResponseWriter, r *http.Request) 
 		if strings.Contains(err.Error(), "Forbidden") {
 			http.Error(w, err.Error(), http.StatusForbidden)
 		} else {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
 		}
 		return
 	}

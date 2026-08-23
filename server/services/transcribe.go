@@ -407,26 +407,106 @@ func RunGroqTranscribe(ctx context.Context, audioBytes []byte, model string, lan
 	return rawText, result.Segments, routingLoc, nil
 }
 
+func RunCustomBatchTranscribe(ctx context.Context, audioBytes []byte, baseURL, apiKey, model, langParam, promptStr string) (string, []WhisperSegment, string, error) {
+	if baseURL == "" {
+		return "", nil, "", fmt.Errorf("custom batch URL is not configured")
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if model != "" {
+		_ = writer.WriteField("model", model)
+	}
+	_ = writer.WriteField("response_format", "verbose_json")
+	if langParam != "" {
+		_ = writer.WriteField("language", langParam)
+	}
+	if promptStr != "" {
+		_ = writer.WriteField("prompt", promptStr)
+	}
+	filePart, err := writer.CreateFormFile("file", "recording.ogg")
+	if err != nil {
+		return "", nil, "", err
+	}
+	_, _ = filePart.Write(audioBytes)
+	_ = writer.Close()
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var remoteIP string
+	trace := &httptrace.ClientTrace{
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			addr := connInfo.Conn.RemoteAddr().String()
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				remoteIP = host
+			} else {
+				remoteIP = addr
+			}
+		},
+	}
+	ctxTrace := httptrace.WithClientTrace(ctxTimeout, trace)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequestWithContext(ctxTrace, "POST", baseURL, body)
+	if err != nil {
+		return "", nil, "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, "", err
+	}
+	defer resp.Body.Close()
+
+	routingLoc := GetHTTPResponseRouting(resp, remoteIP)
+
+	if resp.StatusCode != http.StatusOK {
+		bodyB, _ := io.ReadAll(resp.Body)
+		return "", nil, "", fmt.Errorf("custom batch provider failed (%d): %s", resp.StatusCode, string(bodyB))
+	}
+
+	var result struct {
+		Text     string           `json:"text"`
+		Segments []WhisperSegment `json:"segments"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", nil, "", err
+	}
+
+	rawText := strings.TrimSpace(result.Text)
+	if result.Segments == nil {
+		result.Segments = make([]WhisperSegment, 0)
+	}
+	return rawText, result.Segments, routingLoc, nil
+}
+
 func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string, userLanguages []string) (string, []WhisperSegment, string, string, error) {
 	cfg := config.ConfigManager.Get()
 	langParam, promptStr := BuildWhisperPrompt(userLanguages)
 
-	providers := []string{cfg.DefaultProvider}
-	allProviders := []string{"groq", "deepinfra", "cloudflare"}
-	for _, p := range allProviders {
-		if p != cfg.DefaultProvider {
-			providers = append(providers, p)
-		}
+	fallbackOrder := cfg.GetActiveBatchFallbackOrder()
+	if len(fallbackOrder) == 0 {
+		return "", nil, "", "", fmt.Errorf("no batch transcription providers are enabled or configured")
 	}
 
 	var lastErr error
-	for _, provider := range providers {
+	for _, provider := range fallbackOrder {
 		switch provider {
-		case "groq":
-			if cfg.GroqEnabled && config.GroqAPIKey != "" {
+		case "groq_whisper", "groq":
+			if config.GroqAPIKey != "" {
 				if ratelimit.GroqRateLimiter.Allow() {
-					log.Printf("[GROQ] Attempting transcription using model %s (lang: %q)", model, langParam)
-					text, segments, loc, err := RunGroqTranscribe(ctx, audioBytes, model, langParam, promptStr)
+					provCfg := cfg.Models.BatchProviders["groq_whisper"]
+					useModel := model
+					if provCfg.Model != "" && model == "whisper-large-v3-turbo" {
+						useModel = provCfg.Model
+					}
+					log.Printf("[GROQ] Attempting transcription using model %s (lang: %q)", useModel, langParam)
+					text, segments, loc, err := RunGroqTranscribe(ctx, audioBytes, useModel, langParam, promptStr)
 					if err == nil {
 						return text, segments, "groq", loc, nil
 					}
@@ -437,13 +517,19 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 					lastErr = fmt.Errorf("groq rate limit reached")
 				}
 			}
-		case "deepinfra":
-			if cfg.DeepInfraEnabled && config.DeepInfraAPIKey != "" {
+		case "deepinfra_whisper", "deepinfra":
+			if config.DeepInfraAPIKey != "" {
+				provCfg := cfg.Models.BatchProviders["deepinfra_whisper"]
 				diModel := "openai/whisper-large-v3-turbo"
-				if model == "whisper-large-v3" {
+				if provCfg.Model != "" {
+					diModel = provCfg.Model
+				} else if model == "whisper-large-v3" {
 					diModel = "openai/whisper-large-v3"
 				}
 				diURL := config.DeepInfraBaseURL + diModel
+				if provCfg.BaseURL != "" {
+					diURL = provCfg.BaseURL
+				}
 
 				log.Printf("[DI INFRA] Attempting transcription using model %s (lang: %q)", diModel, langParam)
 				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr)
@@ -453,10 +539,13 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 				log.Printf("[DI INFRA ERROR] Transcription failed: %v. Trying fallback.", err)
 				lastErr = err
 			}
-		case "cloudflare":
-			if cfg.CloudflareEnabled && config.CloudflareAPIToken != "" && config.CloudflareAccountID != "" {
+		case "cloudflare_whisper", "cloudflare":
+			if config.CloudflareAPIToken != "" && config.CloudflareAccountID != "" {
+				provCfg := cfg.Models.BatchProviders["cloudflare_whisper"]
 				cfModel := "@cf/openai/whisper-large-v3-turbo"
-				if model == "whisper-large-v3" {
+				if provCfg.Model != "" {
+					cfModel = provCfg.Model
+				} else if model == "whisper-large-v3" {
 					cfModel = "@cf/openai/whisper"
 				}
 				log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s (lang: %q)", cfModel, langParam)
@@ -467,6 +556,17 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 				log.Printf("[CLOUDFLARE AI ERROR] Transcription failed: %v. Trying fallback.", err)
 				lastErr = err
 			}
+		case "custom_batch", "custom":
+			provCfg := cfg.Models.BatchProviders["custom_batch"]
+			if provCfg.BaseURL != "" {
+				log.Printf("[CUSTOM BATCH] Attempting transcription on custom server: %s (model: %s)", provCfg.BaseURL, provCfg.Model)
+				text, segments, loc, err := RunCustomBatchTranscribe(ctx, audioBytes, provCfg.BaseURL, provCfg.APIKey, provCfg.Model, langParam, promptStr)
+				if err == nil {
+					return text, segments, "custom_batch", loc, nil
+				}
+				log.Printf("[CUSTOM BATCH ERROR] Transcription failed: %v. Trying fallback.", err)
+				lastErr = err
+			}
 		}
 	}
 
@@ -474,6 +574,58 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 		return "", nil, "", "", fmt.Errorf("all enabled transcription providers failed. Last error: %v", lastErr)
 	}
 	return "", nil, "", "", fmt.Errorf("no transcription providers are enabled or configured")
+}
+
+func RunStreamingTranscribe(ctx context.Context, audioBytes []byte, userLanguages []string) (string, []WhisperSegment, string, string, error) {
+	cfg := config.ConfigManager.Get()
+	langParam, promptStr := BuildWhisperPrompt(userLanguages)
+
+	fallbackOrder := cfg.GetActiveStreamingFallbackOrder()
+	var lastErr error
+
+	for _, provider := range fallbackOrder {
+		switch provider {
+		case "deepinfra_nemotron", "nemotron":
+			if config.DeepInfraAPIKey != "" {
+				provCfg := cfg.Models.StreamingProviders["deepinfra_nemotron"]
+				diModel := "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b"
+				if provCfg.Model != "" {
+					diModel = provCfg.Model
+				}
+				diURL := config.DeepInfraBaseURL + diModel
+				if provCfg.BaseURL != "" {
+					diURL = provCfg.BaseURL
+				}
+
+				log.Printf("[DEEPINFRA NEMOTRON] Attempting streaming transcription using %s (lang: %q)", diModel, langParam)
+				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr)
+				if err == nil {
+					return text, segments, "deepinfra_nemotron", loc, nil
+				}
+				log.Printf("[DEEPINFRA NEMOTRON ERROR] %v. Trying fallback.", err)
+				lastErr = err
+			}
+		case "custom_streaming":
+			provCfg := cfg.Models.StreamingProviders["custom_streaming"]
+			if provCfg.BaseURL != "" {
+				log.Printf("[CUSTOM STREAMING] Attempting transcription on custom streaming server: %s", provCfg.BaseURL)
+				text, segments, loc, err := RunCustomBatchTranscribe(ctx, audioBytes, provCfg.BaseURL, provCfg.APIKey, provCfg.Model, langParam, promptStr)
+				if err == nil {
+					return text, segments, "custom_streaming", loc, nil
+				}
+				log.Printf("[CUSTOM STREAMING ERROR] %v. Trying fallback.", err)
+				lastErr = err
+			}
+		}
+	}
+
+	// Fallback to active batch STT providers if streaming endpoints fail
+	if lastErr != nil {
+		log.Printf("[STREAMING FALLBACK] Streaming providers failed (%v). Falling back to batch STT...", lastErr)
+	} else {
+		log.Printf("[STREAMING FALLBACK] Streaming providers unconfigured. Falling back to batch STT...")
+	}
+	return RunWhisperTranscribeWithModel(ctx, audioBytes, "whisper-large-v3-turbo", userLanguages)
 }
 
 func RunWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {

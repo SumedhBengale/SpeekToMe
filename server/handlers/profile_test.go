@@ -27,7 +27,7 @@ func TestProfileSummaryAndLifecycle(t *testing.T) {
 	}
 
 	// 2. Add some usage logs
-	err = database.LogUsageAndUpdateQuota(userID, 45.0, 1.2, 0.5, 1.7, true, "llama-3-8b", "hello world testing", "Hello, world! Testing.", "success", 1024, "groq", "groq")
+	_, err = database.LogUsageAndUpdateQuota(userID, 45.0, 1.2, 0.5, 1.7, true, "llama-3-8b", "hello world testing", "Hello, world! Testing.", "success", 1024, "groq", "groq")
 	if err != nil {
 		t.Fatalf("LogUsageAndUpdateQuota: %v", err)
 	}

@@ -19,6 +19,10 @@ fn default_pill_wave_color() -> u32 {
     0x120A24 // default to burgundy (forest theme)
 }
 
+fn default_transcription_mode() -> String {
+    "stream".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub api_url: Option<String>,
@@ -32,6 +36,9 @@ pub struct AppConfig {
     pub session_token: Option<String>,
     pub autostart: bool,      // true/false
     pub theme: String,        // "forest", "lavender", "mint", "classic_dark"
+    
+    #[serde(default = "default_transcription_mode")]
+    pub transcription_mode: String, // "stream" | "batch"
     
     #[serde(default)]
     pub languages: Option<Vec<String>>,
@@ -69,6 +76,7 @@ impl Default for AppConfig {
             session_token: None,
             autostart: false,
             theme: "forest".to_string(),
+            transcription_mode: default_transcription_mode(),
             languages: Some(vec!["en".to_string()]),
             pill_position_mode: default_pill_position_mode(),
             pill_predefined_position: default_pill_predefined_position(),

@@ -47,6 +47,34 @@ func HashSecurityToken(token string) string {
 	return fmt.Sprintf("%x", h)
 }
 
+func getAckSecret() []byte {
+	secret := os.Getenv("SPEEKTOME_ACK_SECRET")
+	if secret == "" {
+		secret = os.Getenv("SESSION_SECRET")
+	}
+	if secret == "" {
+		secret = "speektome-secure-transcription-ack-secret-key"
+	}
+	return []byte(secret)
+}
+
+// GenerateLogAckToken generates a cryptographic HMAC-SHA256 signature for a transcription log
+func GenerateLogAckToken(userID, logID int64) string {
+	h := hmac.New(sha256.New, getAckSecret())
+	msg := fmt.Sprintf("speektome:ack:%d:%d", userID, logID)
+	h.Write([]byte(msg))
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// VerifyLogAckToken verifies that an ack token matches the given userID and logID
+func VerifyLogAckToken(userID, logID int64, token string) bool {
+	if token == "" || userID <= 0 || logID <= 0 {
+		return false
+	}
+	expected := GenerateLogAckToken(userID, logID)
+	return hmac.Equal([]byte(expected), []byte(token))
+}
+
 // Extract bearer token and retrieve user
 func Authenticate(r *http.Request, database *db.Database) (*db.UserProfile, error) {
 	authHeader := r.Header.Get("Authorization")

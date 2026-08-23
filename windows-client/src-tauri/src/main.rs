@@ -6,6 +6,8 @@ pub mod audio_processing;
 pub mod api;
 pub mod keyboard;
 pub mod win32;
+pub mod vocab;
+pub mod stream;
 
 use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::AtomicBool;
@@ -84,6 +86,11 @@ fn start_login(window: tauri::WebviewWindow) {
             }
             
             if let Ok(user_info) = tauri::async_runtime::block_on(api::fetch_user_info(&api::get_api_url(), &token)) {
+                let token_clone = token.clone();
+                let api_url = api::get_api_url();
+                tauri::async_runtime::spawn(async move {
+                    let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token_clone).await;
+                });
                 let _ = window.emit("login-success", user_info);
             } else {
                 let _ = window.emit("login-failed", "Failed to retrieve user info.");
@@ -142,6 +149,11 @@ async fn login_with_credentials(email: String, mut password: String) -> Result<a
     password.zeroize();
     match res {
         Ok((token, user_info)) => {
+            let token_clone = token.clone();
+            let api_url = api::get_api_url();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token_clone).await;
+            });
             let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
             active.session_token = Some(token);
             config::save_config(&active);
@@ -164,7 +176,10 @@ async fn get_vocabulary() -> Result<Vec<api::ClientVocabularyTerm>, String> {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    api::fetch_vocabulary(&api::get_api_url(), &token).await
+    let terms = api::fetch_vocabulary(&api::get_api_url(), &token).await?;
+    let canonical_list: Vec<String> = terms.iter().map(|t| t.canonical.clone()).collect();
+    crate::vocab::get_vocab_manager().set_terms(canonical_list);
+    Ok(terms)
 }
 
 #[tauri::command]
@@ -173,6 +188,7 @@ async fn add_vocabulary_term(term: String) -> Result<(), String> {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
+    crate::vocab::get_vocab_manager().add_term(&term);
     api::add_vocab_term(&api::get_api_url(), &token, &term).await
 }
 
@@ -182,6 +198,7 @@ async fn delete_vocabulary_term(term: String) -> Result<(), String> {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
+    crate::vocab::get_vocab_manager().delete_term(&term);
     api::delete_vocab_term(&api::get_api_url(), &token, &term).await
 }
 
@@ -236,18 +253,88 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
     }
 }
 
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LocalMeetingRecord {
+    pub id: String,
+    pub title: String,
+    pub created_at: u64,
+    pub filepath: String,
+    pub status: String, // "recording" | "recorded" | "uploaded" | "failed"
+    pub error: Option<String>,
+}
+
+fn get_meeting_index_path() -> Option<std::path::PathBuf> {
+    config::get_config_path().parent().map(|p| p.join("recordings").join("meetings_index.json"))
+}
+
+fn load_meeting_index() -> Vec<LocalMeetingRecord> {
+    if let Some(path) = get_meeting_index_path() {
+        if let Ok(data) = std::fs::read_to_string(path) {
+            if let Ok(records) = serde_json::from_str::<Vec<LocalMeetingRecord>>(&data) {
+                return records;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn save_meeting_index(records: &[LocalMeetingRecord]) {
+    if let Some(path) = get_meeting_index_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(data) = serde_json::to_string_pretty(records) {
+            let _ = std::fs::write(path, data);
+        }
+    }
+}
+
+fn update_meeting_status(filepath: &str, status: &str, err: Option<String>) {
+    let mut records = load_meeting_index();
+    for r in &mut records {
+        if r.filepath == filepath {
+            r.status = status.to_string();
+            r.error = err.clone();
+            break;
+        }
+    }
+    save_meeting_index(&records);
+}
+
 fn cleanup_old_recordings() {
     let config_path = config::get_config_path();
     if let Some(parent) = config_path.parent() {
         let rec_dir = parent.join("recordings");
+        let records = load_meeting_index();
+        let uploaded_set: std::collections::HashSet<String> = records
+            .iter()
+            .filter(|r| r.status == "uploaded")
+            .map(|r| r.filepath.clone())
+            .collect();
+        let protected_set: std::collections::HashSet<String> = records
+            .iter()
+            .filter(|r| r.status == "failed" || r.status == "recorded" || r.status == "recording")
+            .map(|r| r.filepath.clone())
+            .collect();
+
         if let Ok(entries) = std::fs::read_dir(rec_dir) {
             let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
             for entry in entries.flatten() {
+                let path = entry.path();
+                let path_str = path.to_string_lossy().to_string();
+
+                // Do not delete failed or un-uploaded recordings
+                if protected_set.contains(&path_str) {
+                    continue;
+                }
+
                 if let Ok(metadata) = entry.metadata() {
                     if metadata.is_file() {
                         if let Ok(modified) = metadata.modified() {
-                            if modified < cutoff {
-                                let _ = std::fs::remove_file(entry.path());
+                            if modified < cutoff && (uploaded_set.contains(&path_str) || !path_str.ends_with(".json")) {
+                                let _ = std::fs::remove_file(&path);
                             }
                         }
                     }
@@ -263,6 +350,14 @@ fn main() {
 
     // 1. Initialize global loaded config
     let _ = get_active_config();
+    let _ = crate::vocab::get_vocab_manager();
+
+    if let Some(token) = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).session_token.clone() {
+        let api_url = api::get_api_url();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token).await;
+        });
+    }
 
     // 2. Cleanup old meeting recordings from previous runs (if older than 24 hours)
     cleanup_old_recordings();
@@ -317,6 +412,9 @@ fn main() {
             cancel_meeting,
             get_meeting_levels,
             upload_meeting,
+            list_local_meetings,
+            retry_upload_meeting,
+            delete_local_meeting,
             get_api_url,
             open_external_url,
             validate_prompt
@@ -347,12 +445,14 @@ fn start_meeting(title: String) -> Result<String, String> {
         .ok_or("Unable to determine SpeekTo.Me data directory")?
         .join("recordings");
     std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create recordings directory: {}", e))?;
-    let nonce = std::time::SystemTime::now()
+    let now = std::time::SystemTime::now();
+    let nonce = now
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| "System clock is before the Unix epoch")?
         .as_nanos();
     let filename = format!("meeting-{}-{}.ogg", std::process::id(), nonce);
     let path = temp_dir.join(filename);
+    let path_str = path.to_string_lossy().to_string();
     
     if let Err(e) = crate::audio::start_meeting_recording(path.clone()) {
         return Err(format!("Failed to start recording: {}", e));
@@ -361,7 +461,18 @@ fn start_meeting(title: String) -> Result<String, String> {
     let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
     *path_lock = Some(path.clone());
     
-    Ok(path.to_string_lossy().to_string())
+    let mut records = load_meeting_index();
+    records.push(LocalMeetingRecord {
+        id: format!("meeting-{}-{}", std::process::id(), nonce),
+        title: title.clone(),
+        created_at: now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        filepath: path_str.clone(),
+        status: "recording".to_string(),
+        error: None,
+    });
+    save_meeting_index(&records);
+
+    Ok(path_str)
 }
 
 #[tauri::command]
@@ -371,7 +482,9 @@ fn stop_meeting() -> Result<String, String> {
     
     let path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref path) = *path_lock {
-        Ok(path.to_string_lossy().to_string())
+        let path_str = path.to_string_lossy().to_string();
+        update_meeting_status(&path_str, "recorded", None);
+        Ok(path_str)
     } else {
         Err("No active meeting recording found".to_string())
     }
@@ -384,9 +497,15 @@ fn cancel_meeting() -> Result<(), String> {
     
     let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(path) = path_lock.take() {
+        let path_str = path.to_string_lossy().to_string();
+        let mut records = load_meeting_index();
+        records.retain(|r| r.filepath != path_str);
+        save_meeting_index(&records);
+
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("mic.ogg"));
         let _ = std::fs::remove_file(path.with_extension("loopback.ogg"));
+        let _ = std::fs::remove_file(path.with_extension("energy.json"));
     }
     Ok(())
 }
@@ -405,19 +524,58 @@ async fn upload_meeting(title: String, filepath: String) -> Result<String, Strin
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    let expected_path = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone()
-        .ok_or("No active meeting recording found")?;
-    if std::path::Path::new(&filepath) != expected_path {
-        return Err("Refusing to upload a file that was not created by SpeekTo.Me".to_string());
+
+    let path = std::path::PathBuf::from(&filepath);
+    if !path.exists() {
+        return Err(format!("Meeting audio file not found on disk: {}", filepath));
     }
 
-    let mixed_bytes = std::fs::read(&expected_path)
+    let mixed_bytes = std::fs::read(&path)
         .map_err(|e| format!("Failed to read meeting audio: {}", e))?;
-    let mic_bytes = std::fs::read(expected_path.with_extension("mic.ogg")).ok();
-    let loopback_bytes = std::fs::read(expected_path.with_extension("loopback.ogg")).ok();
-    let energy_json = std::fs::read_to_string(expected_path.with_extension("energy.json")).ok();
+    let mic_bytes = std::fs::read(path.with_extension("mic.ogg")).ok();
+    let loopback_bytes = std::fs::read(path.with_extension("loopback.ogg")).ok();
+    let energy_json = std::fs::read_to_string(path.with_extension("energy.json")).ok();
 
-    crate::api::upload_meeting(&api::get_api_url(), &token, &title, mixed_bytes, mic_bytes, loopback_bytes, energy_json).await
+    match crate::api::upload_meeting(&api::get_api_url(), &token, &title, mixed_bytes, mic_bytes, loopback_bytes, energy_json).await {
+        Ok(res) => {
+            update_meeting_status(&filepath, "uploaded", None);
+            Ok(res)
+        }
+        Err(e) => {
+            eprintln!("[MEETING UPLOAD FAILED] Audio safely preserved at {}. Error: {}", filepath, e);
+            update_meeting_status(&filepath, "failed", Some(e.clone()));
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+fn list_local_meetings() -> Result<Vec<LocalMeetingRecord>, String> {
+    Ok(load_meeting_index())
+}
+
+#[tauri::command]
+async fn retry_upload_meeting(filepath: String) -> Result<String, String> {
+    let records = load_meeting_index();
+    let record = records.iter().find(|r| r.filepath == filepath)
+        .cloned()
+        .ok_or_else(|| format!("No local meeting record found for: {}", filepath))?;
+
+    upload_meeting(record.title, filepath).await
+}
+
+#[tauri::command]
+fn delete_local_meeting(filepath: String) -> Result<(), String> {
+    let mut records = load_meeting_index();
+    records.retain(|r| r.filepath != filepath);
+    save_meeting_index(&records);
+
+    let path = std::path::PathBuf::from(&filepath);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("mic.ogg"));
+    let _ = std::fs::remove_file(path.with_extension("loopback.ogg"));
+    let _ = std::fs::remove_file(path.with_extension("energy.json"));
+    Ok(())
 }
 
 #[tauri::command]
