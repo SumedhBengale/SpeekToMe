@@ -237,12 +237,15 @@ pub fn start_streaming_session(
                             if event.event_type == "interim" {
                                 let delta = compute_text_delta(&emitted_text, &event.text);
                                 if !delta.is_empty() {
-                                    let normalized_delta = crate::vocab::get_vocab_manager().process_text(&delta);
-                                    println!("[STREAM INTERIM] Emitting live text delta: {:?}", normalized_delta);
-                                    let type_text = normalized_delta.clone();
-                                    tauri::async_runtime::spawn_blocking(move || {
-                                        crate::keyboard::simulate_typing(&type_text);
-                                    });
+                                    let clean_delta = delta.trim_end_matches(|c: char| c == '.' || c == ',' || c == '?' || c == '!' || c == ';' || c == ':');
+                                    if !clean_delta.is_empty() {
+                                        let normalized_delta = crate::vocab::get_vocab_manager().process_text(clean_delta);
+                                        println!("[STREAM INTERIM] Emitting live text delta: {:?}", normalized_delta);
+                                        let type_text = normalized_delta.clone();
+                                        tauri::async_runtime::spawn_blocking(move || {
+                                            crate::keyboard::simulate_typing(&type_text);
+                                        });
+                                    }
                                     emitted_text = event.text.clone();
                                 }
                             } else if event.event_type == "final" {

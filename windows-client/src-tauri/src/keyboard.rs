@@ -134,20 +134,12 @@ pub fn release_modifier_keys() {
         // Right Alt (Extended)
         keybd_event(0xA5, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
         keybd_event(0xA5, 0, KEYEVENTF_KEYUP, 0);
-        // Shift
-        keybd_event(0x10, 0, KEYEVENTF_KEYUP, 0);
-        keybd_event(0xA0, 0, KEYEVENTF_KEYUP, 0);
-        keybd_event(0xA1, 0, KEYEVENTF_KEYUP, 0);
-        // Windows Key
-        keybd_event(0x5B, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
-        keybd_event(0x5C, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
         crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
 #[cfg(target_os = "windows")]
 pub fn simulate_typing(text: &str) {
-    release_modifier_keys();
     unsafe {
         let utf16_chars: Vec<u16> = text.encode_utf16().collect();
         for &c in &utf16_chars {

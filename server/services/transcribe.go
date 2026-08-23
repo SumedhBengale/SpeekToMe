@@ -248,7 +248,11 @@ func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model strin
 func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string, langParam, promptStr string) (string, []WhisperSegment, string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	filePart, err := writer.CreateFormFile("audio", "recording.ogg")
+	filename := "recording.wav"
+	if len(audioBytes) >= 4 && string(audioBytes[:4]) == "OggS" {
+		filename = "recording.ogg"
+	}
+	filePart, err := writer.CreateFormFile("audio", filename)
 	if err != nil {
 		return "", nil, "", err
 	}
