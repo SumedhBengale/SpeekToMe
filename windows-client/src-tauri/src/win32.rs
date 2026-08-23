@@ -447,10 +447,12 @@ mod win32_impl {
                             let _ = tx.send(true);
                         }
                         
+                        // Ensure OS modifier states are released
+                        crate::keyboard::release_modifier_keys();
+                        
                         if is_short_tap {
                             thread::spawn(move || {
                                 thread::sleep(Duration::from_millis(20));
-                                // simulate_single_key now manages SIMULATING_KEY internally.
                                 crate::keyboard::simulate_single_key(hotkey_vk);
                             });
                         }
@@ -471,9 +473,7 @@ mod win32_impl {
                             ShowWindow(send_hwnd.0, SW_HIDE);
                         }
                         play_chime(false);
-                        
-                        // simulate_key_down now manages SIMULATING_KEY internally.
-                        crate::keyboard::simulate_key_down(hotkey_vk);
+                        crate::keyboard::release_modifier_keys();
                     }
                 }
             }

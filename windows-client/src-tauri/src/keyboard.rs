@@ -147,10 +147,31 @@ pub fn simulate_typing(text: &str) {
 // ==========================================
 // Non-Windows Stubs (macOS, iOS, Android)
 // ==========================================
+#[cfg(target_os = "windows")]
+pub fn release_modifier_keys() {
+    unsafe {
+        let mut inputs = [std::mem::zeroed::<INPUT>(); 6];
+        let vks = [0x11, 0xA2, 0xA3, 0x12, 0xA4, 0xA5]; // VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU
+
+        for (i, &vk) in vks.iter().enumerate() {
+            inputs[i].r#type = INPUT_KEYBOARD;
+            let mut ki: KEYBDINPUT = std::mem::zeroed();
+            ki.wVk = vk;
+            ki.dwFlags = KEYEVENTF_KEYUP;
+            inputs[i].Anonymous.ki = ki;
+        }
+
+        send_inputs(&inputs);
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn simulate_paste() {
     println!("[KEYBOARD] simulate_paste is not supported on this platform.");
 }
+
+#[cfg(not(target_os = "windows"))]
+pub fn release_modifier_keys() {}
 
 #[cfg(not(target_os = "windows"))]
 pub fn simulate_single_key(_vk: u32) {
