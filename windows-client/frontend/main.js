@@ -20,12 +20,19 @@ function showToast(message, title = "Notification", type = "error") {
     document.body.appendChild(container);
   }
 
-  const icon = type === 'error' ? '🔒' : type === 'warning' ? '⚠️' : 'ℹ️';
+  let iconSvg = '';
+  if (type === 'warning') {
+    iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+  } else if (type === 'info') {
+    iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color, #00e676)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+  } else {
+    iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff5252" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+  }
   
   const toast = document.createElement('div');
   toast.className = `custom-toast ${type}`;
   toast.innerHTML = `
-    <div class="custom-toast-icon">${icon}</div>
+    <div class="custom-toast-icon">${iconSvg}</div>
     <div class="custom-toast-body">
       <div class="custom-toast-title">${escapeHtml(title)}</div>
       <div class="custom-toast-msg">${escapeHtml(message)}</div>
@@ -117,6 +124,7 @@ const onboardUserEmailEl = document.getElementById('onboard-user-email');
 // Onboarding Inputs
 const onboardHotkeySelect = document.getElementById('onboard-hotkey-select');
 const onboardAutostartCheck = document.getElementById('onboard-autostart-check');
+const onboardStreamingModeCheck = document.getElementById('onboard-streaming-mode-check');
 const onboardTypingModeCheck = document.getElementById('onboard-typing-mode-check');
 const onboardSoundFeedbackCheck = document.getElementById('onboard-sound-feedback-check');
 const onboardModelSelect = document.getElementById('onboard-model-select');
@@ -371,17 +379,24 @@ async function init() {
       });
     }
 
+    const handleStreamingToggleChange = (checkbox) => {
+      const isPaid = currentUserInfo && currentUserInfo.plan_active === 1 && currentUserInfo.plan_tier === 'pro';
+      if (!isPaid && checkbox.checked) {
+        checkbox.checked = false;
+        if (streamingProHint) streamingProHint.style.display = 'block';
+        showToast("Real-Time Streaming Dictation is an exclusive Pro feature. Upgrade your subscription on your Web Dashboard to unlock it!", "Pro Subscription Required", "warning");
+      } else if (isPaid) {
+        if (streamingProHint) streamingProHint.style.display = 'none';
+        if (streamingModeCheck) streamingModeCheck.checked = checkbox.checked;
+        if (onboardStreamingModeCheck) onboardStreamingModeCheck.checked = checkbox.checked;
+      }
+    };
+
     if (streamingModeCheck) {
-      streamingModeCheck.addEventListener('change', () => {
-        const isPaid = currentUserInfo && currentUserInfo.plan_active === 1 && currentUserInfo.plan_tier === 'pro';
-        if (!isPaid && streamingModeCheck.checked) {
-          streamingModeCheck.checked = false;
-          if (streamingProHint) streamingProHint.style.display = 'block';
-          showToast("Ultra-Fast Streaming ASR is an exclusive Pro feature. Upgrade your subscription on your Web Dashboard to unlock it!", "Pro Subscription Required", "warning");
-        } else if (isPaid) {
-          if (streamingProHint) streamingProHint.style.display = 'none';
-        }
-      });
+      streamingModeCheck.addEventListener('change', () => handleStreamingToggleChange(streamingModeCheck));
+    }
+    if (onboardStreamingModeCheck) {
+      onboardStreamingModeCheck.addEventListener('change', () => handleStreamingToggleChange(onboardStreamingModeCheck));
     }
 
     // 4. Setup Onboarding flow state
@@ -508,6 +523,9 @@ function applyConfigToUI(config) {
   // Onboarding inputs
   onboardHotkeySelect.value = config.hotkey;
   onboardAutostartCheck.checked = config.autostart;
+  if (onboardStreamingModeCheck) {
+    onboardStreamingModeCheck.checked = (config.transcription_mode === 'stream');
+  }
   onboardTypingModeCheck.checked = config.typing_mode;
   onboardSoundFeedbackCheck.checked = config.sound_feedback;
   onboardModelSelect.value = config.model;
@@ -580,6 +598,7 @@ function gatherConfigFromUI(isOnboarding) {
       smart_spacing: smartSpacingCheck.checked, // Kept same as current
       model: onboardModelSelect.value,
       enhance: onboardEnhanceCheck.checked,
+      transcription_mode: (onboardStreamingModeCheck && onboardStreamingModeCheck.checked) ? "stream" : "batch",
       custom_prompt: onboardCustomPromptText.value,
       session_token: currentConfig ? currentConfig.session_token : null,
       theme: themeName,
@@ -811,7 +830,7 @@ function formatDuration(seconds) {
   return `${m}m ${s}s`;
 }
 
-function formatUsageParts(usedSec, totalSec) {
+function formatUsageParts(usedSec, totalSec, isPaid = false) {
   const safeUsed = Number(usedSec) || 0.0;
   const rawTotal = Number(totalSec) || 3600.0;
   
@@ -829,8 +848,19 @@ function formatUsageParts(usedSec, totalSec) {
     usedStr = `${(safeUsed / 3600.0).toFixed(1)}h`;
   }
 
-  const isUnlimited = totalHours >= 730 || rawTotal >= 730 * 3600.0;
-  const totalStr = isUnlimited ? 'Unlimited' : (Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`);
+  // Free tier users are never shown as unlimited
+  const isUnlimited = isPaid && (totalHours >= 730 || rawTotal >= 730 * 3600.0);
+  
+  let totalStr = '1h';
+  if (isUnlimited) {
+    totalStr = 'Unlimited';
+  } else if (totalHours < 1.0) {
+    totalStr = `${Math.round(rawTotal / 60)}m`;
+  } else if (Number.isInteger(totalHours)) {
+    totalStr = `${totalHours}h`;
+  } else {
+    totalStr = `${totalHours.toFixed(1)}h`;
+  }
 
   let fupHours = Math.round(totalHours);
   if (rawTotal >= 730 * 3600.0) {
@@ -889,7 +919,7 @@ function updateAuthUI(userInfo) {
     currentUserInfo = userInfo;
 
     // Calculate quota limits and display used/total fraction
-    const isPaid = userInfo.plan_active && userInfo.plan_tier === 'pro';
+    const isPaid = Boolean(userInfo.plan_active && userInfo.plan_tier === 'pro');
     if (streamingModeCheck) {
       if (!isPaid) {
         streamingModeCheck.checked = false;
@@ -898,7 +928,10 @@ function updateAuthUI(userInfo) {
         if (streamingProHint) streamingProHint.style.display = 'none';
       }
     }
-    const maxSeconds = userInfo.monthly_limit_seconds || (isPaid ? 180000.0 : 3600.0);
+    if (onboardStreamingModeCheck && !isPaid) {
+      onboardStreamingModeCheck.checked = false;
+    }
+    const maxSeconds = isPaid ? (userInfo.monthly_limit_seconds || 180000.0) : (userInfo.monthly_limit_seconds || 3600.0);
     const usageSeconds = userInfo.duration_seconds || 0.0;
     const percent = Math.min(100.0, (usageSeconds / maxSeconds) * 100.0);
     
@@ -906,7 +939,7 @@ function updateAuthUI(userInfo) {
     const subUsageBar = document.getElementById('sub-usage-bar');
     
     if (subUsagePercent) {
-      const usage = formatUsageParts(usageSeconds, maxSeconds);
+      const usage = formatUsageParts(usageSeconds, maxSeconds, isPaid);
       if (usage.isUnlimited) {
         subUsagePercent.innerHTML = `${usage.usedStr} / ${usage.totalStr} <span class="fup-tooltip-badge" title="${usage.fupTooltip}" aria-label="${usage.fupTooltip}"><svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>`;
       } else {

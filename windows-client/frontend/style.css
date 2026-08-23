@@ -6,7 +6,6 @@
   --bg-content: rgba(28, 28, 30, 0.65);
   --border-color: rgba(255, 255, 255, 0.08);
   --accent-color: #00e676;
-  /* SpeekTo.Me Neon Green */
   --accent-hover: #00c853;
   --text-primary: #ffffff;
   --text-secondary: #aaaaac;
@@ -14,6 +13,78 @@
   --input-border: rgba(255, 255, 255, 0.12);
   --input-focus-border: #00e676;
   --onboard-bg: rgba(28, 28, 30, 0.75);
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --avatar-bg: rgba(255, 255, 255, 0.08);
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
+}
+
+body[data-theme="forest"] {
+  --bg-sidebar: #F7F4EE;
+  --bg-content: #FAF9FF;
+  --border-color: rgba(18, 10, 36, 0.12);
+  --accent-color: #2E7D32;
+  --accent-hover: #1B5E20;
+  --text-primary: #181224;
+  --text-secondary: #6B6578;
+  --input-bg: rgba(0, 0, 0, 0.04);
+  --input-border: rgba(18, 10, 36, 0.15);
+  --input-focus-border: #2E7D32;
+  --onboard-bg: #FAF9FF;
+  --card-bg: rgba(0, 0, 0, 0.03);
+  --avatar-bg: rgba(18, 10, 36, 0.08);
+  --progress-bg: rgba(18, 10, 36, 0.08);
+  --scroll-thumb: rgba(18, 10, 36, 0.15);
+}
+
+body[data-theme="lavender"] {
+  --bg-sidebar: #161124;
+  --bg-content: #1F1735;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --accent-color: #B388FF;
+  --accent-hover: #9C64FF;
+  --text-primary: #FFFFFF;
+  --text-secondary: #B8AFD0;
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --input-focus-border: #B388FF;
+  --onboard-bg: #1F1735;
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --avatar-bg: rgba(255, 255, 255, 0.08);
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
+}
+
+body[data-theme="mint"] {
+  --bg-sidebar: #0F1E19;
+  --bg-content: #142822;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --accent-color: #00E676;
+  --accent-hover: #00C853;
+  --text-primary: #FFFFFF;
+  --text-secondary: #A2C0B7;
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --input-focus-border: #00E676;
+  --onboard-bg: #142822;
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --avatar-bg: rgba(255, 255, 255, 0.08);
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --scroll-thumb: rgba(255, 255, 255, 0.12);
+}
+
+body[data-theme="classic_dark"] {
+  --bg-sidebar: #141416;
+  --bg-content: #1C1C1E;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --accent-color: #00E676;
+  --accent-hover: #00C853;
+  --text-primary: #FFFFFF;
+  --text-secondary: #AAAAAC;
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --input-focus-border: #00E676;
+  --onboard-bg: #1C1C1E;
   --card-bg: rgba(255, 255, 255, 0.04);
   --avatar-bg: rgba(255, 255, 255, 0.08);
   --progress-bg: rgba(255, 255, 255, 0.08);
@@ -1418,13 +1489,11 @@ body[data-theme="forest"] .validation-banner.info {
   align-items: flex-start;
   gap: 12px;
   padding: 12px 16px;
-  background: rgba(24, 24, 28, 0.95);
-  backdrop-filter: blur(25px) saturate(1.8);
-  -webkit-backdrop-filter: blur(25px) saturate(1.8);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--bg-content, #1C1C1E);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
   border-left: 4px solid var(--accent-color);
   border-radius: 8px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
   color: var(--text-primary);
   font-family: 'Figtree', 'Inter', sans-serif;
   animation: toastSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1436,16 +1505,19 @@ body[data-theme="forest"] .validation-banner.info {
 }
 
 .custom-toast.warning {
-  border-left-color: #ffb74d;
+  border-left-color: #FFD700;
 }
 
 .custom-toast.info {
-  border-left-color: #29b6f6;
+  border-left-color: var(--accent-color);
 }
 
 .custom-toast-icon {
-  font-size: 18px;
-  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 2px;
+  line-height: 1;
 }
 
 .custom-toast-body {
@@ -1456,7 +1528,7 @@ body[data-theme="forest"] .validation-banner.info {
   font-weight: 600;
   font-size: 13.5px;
   margin-bottom: 2px;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .custom-toast-msg {
@@ -1478,7 +1550,7 @@ body[data-theme="forest"] .validation-banner.info {
 }
 
 .custom-toast-close:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 @keyframes toastSlideIn {
