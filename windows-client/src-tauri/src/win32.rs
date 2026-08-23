@@ -618,13 +618,15 @@ mod win32_impl {
         use windows_sys::Win32::Foundation::ERROR_ALREADY_EXISTS;
         use windows_sys::Win32::System::Threading::CreateMutexW;
 
-        let mutex_name = encode_wide("Global\\SpeekToMeSingleInstanceMutex");
+        static SINGLE_INSTANCE_MUTEX: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+        let mutex_name = encode_wide("Local\\SpeekToMeSingleInstanceMutex");
         unsafe {
             let h_mutex = CreateMutexW(std::ptr::null(), 1, mutex_name.as_ptr());
             if h_mutex.is_null() || GetLastError() == ERROR_ALREADY_EXISTS {
-                // Another instance is already running! Exit immediately.
+                eprintln!("[SpeekTo.Me] Another instance is already running. Exiting.");
                 windows_sys::Win32::System::Threading::ExitProcess(0);
             }
+            SINGLE_INSTANCE_MUTEX.store(h_mutex as isize, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }

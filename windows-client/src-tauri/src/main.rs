@@ -372,14 +372,7 @@ fn main() {
     // 4. Launch Tauri app
     tauri::Builder::default()
         .setup(|app| {
-            // Apply Mica vibrancy effect in Windows 11
-            #[cfg(target_os = "windows")]
-            {
-                use window_vibrancy::apply_mica;
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = apply_mica(&window, None);
-                }
-            }
+            show_or_create_settings_window(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
