@@ -243,11 +243,6 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
 
         match builder.build() {
             Ok(window) => {
-                #[cfg(target_os = "windows")]
-                {
-                    use window_vibrancy::apply_mica;
-                    let _ = apply_mica(&window, None);
-                }
                 let _ = window.show();
                 let _ = window.set_focus();
                 println!("[WINDOW] Settings window built and displayed successfully.");
@@ -379,14 +374,6 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = TAURI_APP.set(handle.clone());
-
-            #[cfg(target_os = "windows")]
-            {
-                use window_vibrancy::apply_mica;
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = apply_mica(&window, None);
-                }
-            }
 
             if let Some(token) = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).session_token.clone() {
                 let api_url = api::get_api_url();
