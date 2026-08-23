@@ -377,6 +377,14 @@ fn main() {
             let handle = app.handle().clone();
             let _ = TAURI_APP.set(handle.clone());
 
+            #[cfg(target_os = "windows")]
+            {
+                use window_vibrancy::apply_mica;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = apply_mica(&window, None);
+                }
+            }
+
             if let Some(token) = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).session_token.clone() {
                 let api_url = api::get_api_url();
                 tauri::async_runtime::spawn(async move {
@@ -384,11 +392,11 @@ fn main() {
                 });
             }
 
-            show_or_create_settings_window(&handle);
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
                 if let Ok(pos) = window.outer_position() {
                     let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *pos_lock = Some(pos);
@@ -397,6 +405,7 @@ fn main() {
                     let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *size_lock = Some(size);
                 }
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
