@@ -184,7 +184,6 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     let mut vad_processed_16k_len = 0;
                     let mut pre_speech_ring = std::collections::VecDeque::<i16>::with_capacity(4000);
                     let mut active_phrase_samples = Vec::<i16>::new();
-                    let mut last_interim_sent = std::time::Instant::now();
                     let mut is_in_speech = false;
                     let mut is_aborted = false;
 
@@ -230,43 +229,31 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                             }
                                         }
 
-                                        if pause_detected {
+                                        let should_commit = pause_detected || active_phrase_samples.len() >= 80000; // max 5s chunk
+                                        if should_commit && active_phrase_samples.len() >= 4800 { // >= 300ms of audio
                                             is_in_speech = false;
-                                            if active_phrase_samples.len() >= 4800 { // >= 300ms of audio
-                                                let mut pcm_bytes = Vec::with_capacity(active_phrase_samples.len() * 2);
-                                                for &sample in &active_phrase_samples {
-                                                    pcm_bytes.extend_from_slice(&sample.to_le_bytes());
-                                                }
-                                                let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
-                                                let _ = handle.tx.send(crate::stream::StreamAudioMessage::CommitChunk);
-
-                                                // Retain trailing 200ms (3200 samples) for acoustic continuity
-                                                let overlap_samples = 3200;
-                                                let retained = if active_phrase_samples.len() > overlap_samples {
-                                                    active_phrase_samples[active_phrase_samples.len() - overlap_samples..].to_vec()
-                                                } else {
-                                                    active_phrase_samples.clone()
-                                                };
-                                                active_phrase_samples = retained;
+                                            let mut pcm_bytes = Vec::with_capacity(active_phrase_samples.len() * 2);
+                                            for &sample in &active_phrase_samples {
+                                                pcm_bytes.extend_from_slice(&sample.to_le_bytes());
                                             }
+                                            let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
+
+                                            // Retain trailing 200ms (3200 samples) for acoustic continuity
+                                            let overlap_samples = 3200;
+                                            let retained = if active_phrase_samples.len() > overlap_samples {
+                                                active_phrase_samples[active_phrase_samples.len() - overlap_samples..].to_vec()
+                                            } else {
+                                                Vec::new()
+                                            };
+                                            active_phrase_samples = retained;
                                             vad_inst.reset();
                                         }
 
                                         vad_processed_16k_len += 512;
                                     }
-
-                                    // Send periodic live interim snapshot while actively speaking
-                                    if is_in_speech && last_interim_sent.elapsed() >= std::time::Duration::from_millis(350) && active_phrase_samples.len() >= 5600 {
-                                        let mut pcm_bytes = Vec::with_capacity(active_phrase_samples.len() * 2);
-                                        for &sample in &active_phrase_samples {
-                                            pcm_bytes.extend_from_slice(&sample.to_le_bytes());
-                                        }
-                                        let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
-                                        last_interim_sent = std::time::Instant::now();
-                                    }
                                 } else {
-                                    // Fallback if VAD failed to init: simple periodic chunking
-                                    if all_16k.len() > vad_processed_16k_len + 1600 {
+                                    // Fallback if VAD failed to init: 2-second periodic chunking
+                                    if all_16k.len() > vad_processed_16k_len + 32000 {
                                         let new_slice = &all_16k[vad_processed_16k_len..];
                                         let mut pcm_bytes = Vec::with_capacity(new_slice.len() * 2);
                                         for sample in new_slice {
@@ -296,7 +283,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                 pcm_bytes.extend_from_slice(&sample.to_le_bytes());
                             }
                             let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
-                            let _ = handle.tx.send(crate::stream::StreamAudioMessage::CommitChunk);
+                            active_phrase_samples.clear();
                         }
                         let _ = handle.tx.send(crate::stream::StreamAudioMessage::EndOfStream);
 

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -126,11 +125,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	customPrompt := ""
 
 	var committedText string
-	var lastChunkText string
-	var lastEmittedFullText string
-	var interimSeq uint64
-	var latestEmittedSeq uint64
-	var interimMu sync.Mutex
+	var chunkCount int
 
 	// Read audio and control loop
 	for {
@@ -155,15 +150,6 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[STREAM START] Session initialized | User ID: %d | Lang: %v | Enhance: %v | Prompt: %q",
 						user.ID, user.Languages, enhance, customPrompt)
 					continue
-				} else if t == "commit" {
-					interimMu.Lock()
-					if lastChunkText != "" {
-						committedText = utils.MergeTranscripts(committedText, lastChunkText)
-						log.Printf("[STREAM COMMIT] Phrase committed to base: %q | Full committed: %q", lastChunkText, committedText)
-						lastChunkText = ""
-					}
-					interimMu.Unlock()
-					continue
 				} else if t == "end_of_stream" || t == "stop" {
 					log.Printf("[STREAM CLIENT] Received %s signal from user ID: %d", t, user.ID)
 					break
@@ -176,57 +162,39 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 
-			// The client sends the full active phrase snapshot
-			interimMu.Lock()
-			interimSeq++
-			currentSeq := interimSeq
-			committedSnapshot := committedText
-			interimMu.Unlock()
+			chunkCount++
+			currentChunk := chunkCount
 
-			go func(audioSnap []byte, fmtStr string, seq uint64, committedBase string) {
-				var toTranscribe []byte
-				if fmtStr == "pcm" || fmtStr == "" {
-					toTranscribe = utils.EncodePCMToWAV(audioSnap, 16000, 1)
-				} else {
-					toTranscribe = audioSnap
-				}
+			var toTranscribe []byte
+			if startPayload.Format == "pcm" || startPayload.Format == "" {
+				toTranscribe = utils.EncodePCMToWAV(data, 16000, 1)
+			} else {
+				toTranscribe = data
+			}
 
-				promptCtx := utils.GetPromptContext(committedBase, 150)
-				startASR := time.Now()
-				rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, promptCtx)
-				asrDuration := time.Since(startASR)
+			promptCtx := utils.GetPromptContext(committedText, 150)
+			startASR := time.Now()
+			rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, promptCtx)
+			asrDuration := time.Since(startASR)
 
-				if err != nil {
-					log.Printf("[STREAM ASR ERROR] Seq: %d | User ID: %d | Error: %v | Latency: %v", seq, user.ID, err, asrDuration)
-					return
-				}
+			if err != nil {
+				log.Printf("[STREAM ASR ERROR] Chunk: %d | User ID: %d | Error: %v | Latency: %v", currentChunk, user.ID, err, asrDuration)
+				continue
+			}
 
-				rawChunkText = strings.TrimSpace(rawChunkText)
-				audioDurationSec := float64(len(audioSnap)) / 32000.0
+			rawChunkText = strings.TrimSpace(rawChunkText)
+			audioDurationSec := float64(len(data)) / 32000.0
 
-				log.Printf("[STREAM ASR LOG] Seq: %d | User ID: %d | Audio: %d bytes (%.2fs) | Prompt: %q | Result: %q | Latency: %v | Provider: %s",
-					seq, user.ID, len(audioSnap), audioDurationSec, promptCtx, rawChunkText, asrDuration, usedProvider)
+			log.Printf("[STREAM ASR LOG] Chunk: %d | User ID: %d | Audio: %d bytes (%.2fs) | Prompt: %q | Result: %q | Latency: %v | Provider: %s",
+				currentChunk, user.ID, len(data), audioDurationSec, promptCtx, rawChunkText, asrDuration, usedProvider)
 
-				interimMu.Lock()
-				if seq >= latestEmittedSeq {
-					latestEmittedSeq = seq
-					lastChunkText = rawChunkText
-					fullText := utils.MergeTranscripts(committedBase, rawChunkText)
-
-					if fullText != lastEmittedFullText && fullText != "" {
-						lastEmittedFullText = fullText
-						interimMu.Unlock()
-						_ = writeStreamJSON(ctx, conn, StreamEventMessage{
-							Type: "interim",
-							Text: fullText,
-						})
-					} else {
-						interimMu.Unlock()
-					}
-				} else {
-					interimMu.Unlock()
-				}
-			}(data, startPayload.Format, currentSeq, committedSnapshot)
+			if rawChunkText != "" {
+				committedText = utils.MergeTranscripts(committedText, rawChunkText)
+				_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+					Type: "interim",
+					Text: committedText,
+				})
+			}
 		}
 	}
 
@@ -246,12 +214,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	whisperStart := time.Now()
 
-	interimMu.Lock()
 	finalRawTranscript := committedText
-	if lastChunkText != "" {
-		finalRawTranscript = utils.MergeTranscripts(finalRawTranscript, lastChunkText)
-	}
-	interimMu.Unlock()
 
 	activeConfig := config.ConfigManager.Get()
 	streamOrder := activeConfig.GetActiveStreamingFallbackOrder()
