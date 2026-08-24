@@ -11,8 +11,8 @@ import (
 func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 	cfg := DefaultModelsConfig()
 
-	if cfg.DefaultBatchProvider != "groq_whisper" {
-		t.Errorf("Expected default batch provider 'groq_whisper'; got %s", cfg.DefaultBatchProvider)
+	if cfg.DefaultBatchProvider != "deepinfra_whisper" {
+		t.Errorf("Expected default batch provider 'deepinfra_whisper'; got %s", cfg.DefaultBatchProvider)
 	}
 	if cfg.DefaultStreamingProvider != "deepinfra_nemotron" {
 		t.Errorf("Expected default streaming provider 'deepinfra_nemotron'; got %s", cfg.DefaultStreamingProvider)
@@ -23,8 +23,8 @@ func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 
 	pCfg := ProviderConfig{Models: cfg}
 	batchOrder := pCfg.GetActiveBatchFallbackOrder()
-	if len(batchOrder) < 3 || batchOrder[0] != "groq_whisper" {
-		t.Errorf("Expected batch order to start with 'groq_whisper'; got %v", batchOrder)
+	if len(batchOrder) < 3 || batchOrder[0] != "deepinfra_whisper" {
+		t.Errorf("Expected batch order to start with 'deepinfra_whisper'; got %v", batchOrder)
 	}
 
 	streamingOrder := pCfg.GetActiveStreamingFallbackOrder()

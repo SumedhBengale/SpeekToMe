@@ -28,27 +28,30 @@ var (
 
 // Provider descriptor structs
 type BatchProviderConfig struct {
-	Enabled   bool   `json:"enabled"`
-	Model     string `json:"model"`
-	BaseURL   string `json:"base_url,omitempty"`
-	APIKey    string `json:"api_key,omitempty"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	Model         string `json:"model"`
+	BaseURL       string `json:"base_url,omitempty"`
+	APIKey        string `json:"api_key,omitempty"`
+	TimeoutMs     int    `json:"timeout_ms,omitempty"`
+	InitialPrompt string `json:"initial_prompt,omitempty"`
 }
 
 type StreamingProviderConfig struct {
-	Enabled   bool   `json:"enabled"`
-	Model     string `json:"model"`
-	BaseURL   string `json:"base_url,omitempty"`
-	APIKey    string `json:"api_key,omitempty"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	Model         string `json:"model"`
+	BaseURL       string `json:"base_url,omitempty"`
+	APIKey        string `json:"api_key,omitempty"`
+	TimeoutMs     int    `json:"timeout_ms,omitempty"`
+	InitialPrompt string `json:"initial_prompt,omitempty"`
 }
 
 type LLMProviderConfig struct {
-	Enabled   bool   `json:"enabled"`
-	Model     string `json:"model"`
-	BaseURL   string `json:"base_url,omitempty"`
-	APIKey    string `json:"api_key,omitempty"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Enabled      bool   `json:"enabled"`
+	Model        string `json:"model"`
+	BaseURL      string `json:"base_url,omitempty"`
+	APIKey       string `json:"api_key,omitempty"`
+	TimeoutMs    int    `json:"timeout_ms,omitempty"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
 }
 
 type ModelsConfig struct {
@@ -68,71 +71,85 @@ type ProviderConfig struct {
 	WhisperBasePrompt       string
 }
 
+const DefaultUniversalLLMSystemPrompt = "You are an expert speech-to-text post-processor and formatter. The input is a raw phonetic transcription of spoken speech that may contain verbal dictation commands, spoken punctuation, programming syntax, mathematical operators, and technical symbols. Intelligently detect and convert all spoken descriptions of symbols, punctuation, code constructs, and layout cues into their exact typographical characters and syntax (e.g. math expressions, brackets, delimiters, operators, emails, currencies, code blocks) based on the speaker's context, while preserving the natural words of their message."
+
 func DefaultModelsConfig() ModelsConfig {
+	defaultSTTPrompt := "Transcribe the spoken audio accurately with correct grammar, spelling, punctuation, and typographical symbols."
+	defaultStreamingPrompt := "Transcribe the spoken speech clearly, preserving sentence continuity, punctuation, and exact terminology."
+
 	return ModelsConfig{
-		DefaultBatchProvider:     "groq_whisper",
+		DefaultBatchProvider:     "deepinfra_whisper",
 		DefaultStreamingProvider: "deepinfra_nemotron",
 		DefaultLLMProvider:       "deepseek_v4",
 		BatchProviders: map[string]BatchProviderConfig{
-			"groq_whisper": {
-				Enabled:   true,
-				Model:     "whisper-large-v3-turbo",
-				BaseURL:   GroqAPIURL,
-				TimeoutMs: 10000,
-			},
 			"deepinfra_whisper": {
-				Enabled:   true,
-				Model:     "openai/whisper-large-v3-turbo",
-				BaseURL:   DeepInfraBaseURL + "openai/whisper-large-v3-turbo",
-				TimeoutMs: 10000,
+				Enabled:       true,
+				Model:         "openai/whisper-large-v3-turbo",
+				BaseURL:       DeepInfraBaseURL + "openai/whisper-large-v3-turbo",
+				TimeoutMs:     10000,
+				InitialPrompt: defaultSTTPrompt,
+			},
+			"groq_whisper": {
+				Enabled:       true,
+				Model:         "whisper-large-v3-turbo",
+				BaseURL:       GroqAPIURL,
+				TimeoutMs:     10000,
+				InitialPrompt: defaultSTTPrompt,
 			},
 			"cloudflare_whisper": {
-				Enabled:   true,
-				Model:     "@cf/openai/whisper-large-v3-turbo",
-				TimeoutMs: 15000,
+				Enabled:       true,
+				Model:         "@cf/openai/whisper-large-v3-turbo",
+				TimeoutMs:     15000,
+				InitialPrompt: defaultSTTPrompt,
 			},
 			"custom_batch": {
-				Enabled:   false,
-				Model:     "",
-				BaseURL:   "",
-				APIKey:    "",
-				TimeoutMs: 10000,
+				Enabled:       false,
+				Model:         "",
+				BaseURL:       "",
+				APIKey:        "",
+				TimeoutMs:     10000,
+				InitialPrompt: "",
 			},
 		},
 		StreamingProviders: map[string]StreamingProviderConfig{
 			"deepinfra_nemotron": {
-				Enabled:   true,
-				Model:     "nvidia/nemotron-3.5-asr-streaming-0.6b",
-				BaseURL:   DeepInfraBaseURL + "nvidia/nemotron-3.5-asr-streaming-0.6b",
-				TimeoutMs: 15000,
+				Enabled:       true,
+				Model:         "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
+				BaseURL:       DeepInfraBaseURL + "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
+				TimeoutMs:     15000,
+				InitialPrompt: defaultStreamingPrompt,
 			},
 			"custom_streaming": {
-				Enabled:   false,
-				Model:     "",
-				BaseURL:   "",
-				APIKey:    "",
-				TimeoutMs: 15000,
+				Enabled:       false,
+				Model:         "",
+				BaseURL:       "",
+				APIKey:        "",
+				TimeoutMs:     15000,
+				InitialPrompt: "",
 			},
 		},
 		LLMProviders: map[string]LLMProviderConfig{
 			"deepseek_v4": {
-				Enabled:   true,
-				Model:     "deepseek-v4-flash",
-				BaseURL:   DeepSeekAPIURL,
-				TimeoutMs: 30000,
+				Enabled:      true,
+				Model:        "deepseek-v4-flash",
+				BaseURL:      DeepSeekAPIURL,
+				TimeoutMs:    30000,
+				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
 			"deepinfra_deepseek": {
-				Enabled:   true,
-				Model:     "deepseek-ai/DeepSeek-V4-Flash",
-				BaseURL:   "https://api.deepinfra.com/v1/openai/chat/completions",
-				TimeoutMs: 30000,
+				Enabled:      true,
+				Model:        "deepseek-ai/DeepSeek-V4-Flash",
+				BaseURL:      "https://api.deepinfra.com/v1/openai/chat/completions",
+				TimeoutMs:    30000,
+				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
 			"custom_llm": {
-				Enabled:   false,
-				Model:     "",
-				BaseURL:   "",
-				APIKey:    "",
-				TimeoutMs: 30000,
+				Enabled:      false,
+				Model:        "",
+				BaseURL:      "",
+				APIKey:       "",
+				TimeoutMs:    30000,
+				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
 		},
 	}

@@ -133,8 +133,13 @@ func BuildWhisperPrompt(userLanguages []string) (string, string) {
 	langParam := ""
 	cfg := config.ConfigManager.Get()
 	basePrompt := cfg.WhisperBasePrompt
+	defaultProv := cfg.Models.DefaultBatchProvider
+	if provCfg, ok := cfg.Models.BatchProviders[defaultProv]; ok && strings.TrimSpace(provCfg.InitialPrompt) != "" {
+		basePrompt = strings.TrimSpace(provCfg.InitialPrompt)
+	}
+
 	if strings.TrimSpace(basePrompt) == "" {
-		basePrompt = "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation."
+		basePrompt = "Transcribe the spoken audio accurately with correct grammar, spelling, punctuation, and typographical symbols."
 	}
 	basePrompt = strings.TrimSpace(basePrompt)
 
@@ -587,6 +592,12 @@ func RunStreamingTranscribe(ctx context.Context, audioBytes []byte, userLanguage
 func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, userLanguages []string, promptContext string) (string, []WhisperSegment, string, string, error) {
 	cfg := config.ConfigManager.Get()
 	langParam, promptStr := BuildWhisperPrompt(userLanguages)
+
+	defaultStreamProv := cfg.Models.DefaultStreamingProvider
+	if provCfg, ok := cfg.Models.StreamingProviders[defaultStreamProv]; ok && strings.TrimSpace(provCfg.InitialPrompt) != "" {
+		promptStr = strings.TrimSpace(provCfg.InitialPrompt)
+	}
+
 	if promptContext != "" {
 		trimmedContext := strings.TrimSpace(promptContext)
 		if promptStr != "" {

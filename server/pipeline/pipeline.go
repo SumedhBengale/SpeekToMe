@@ -234,10 +234,18 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 		return "", nil
 	}
 
-	systemPrompt := "You are an expert transcription editor. Refine the provided voice transcription by fixing grammar, punctuation (adding missing commas, periods, and question marks), and capitalization. Remove verbal disfluencies (such as 'uh', 'um', stutters, and repeated filler words). Preserve all technical terms, proper names, and original meaning intact. Do not translate into other languages. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text."
+	cfg := config.ConfigManager.Get()
+	baseSystemPrompt := config.DefaultUniversalLLMSystemPrompt
+	defaultProv := cfg.Models.DefaultLLMProvider
+	if provCfg, ok := cfg.Models.LLMProviders[defaultProv]; ok && strings.TrimSpace(provCfg.SystemPrompt) != "" {
+		baseSystemPrompt = strings.TrimSpace(provCfg.SystemPrompt)
+	}
+
+	systemPrompt := baseSystemPrompt + " Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text."
 	if strings.TrimSpace(t.customPrompt) != "" {
 		systemPrompt = fmt.Sprintf(
-			"You are an expert transcription editor. Enhance the provided transcription according to these custom instructions:\n%s\n\nFix grammar, punctuation, and remove verbal disfluencies while preserving original meaning unless instructed otherwise. Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text.",
+			"%s\n\nAdditional User Instructions:\n%s\n\nDo not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text.",
+			baseSystemPrompt,
 			strings.TrimSpace(t.customPrompt),
 		)
 	}
