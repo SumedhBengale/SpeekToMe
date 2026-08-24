@@ -128,11 +128,12 @@ func IsSilencePCM(pcmData []byte, thresholdRMS float64) bool {
 	return CalculateRMS(pcmData) < thresholdRMS
 }
 
-// AudioChunkTracker tracks real-time Voice Activity Detection (VAD) and sliding chunk boundaries
+// AudioChunkTracker tracks real-time Voice Activity Detection (VAD) and natural voice pause boundaries
 type AudioChunkTracker struct {
 	SampleRate               int
 	Channels                 int
 	ThresholdRMS             float64
+	NoiseFloorRMS            float64
 	SilenceDurationThreshold time.Duration
 	MaxChunkDuration         time.Duration
 	MinSpeechDuration        time.Duration
@@ -141,7 +142,7 @@ type AudioChunkTracker struct {
 	totalChunkBytes          int
 }
 
-// NewAudioChunkTracker creates a new VAD audio chunk tracker with sensible streaming defaults
+// NewAudioChunkTracker creates a new VAD audio chunk tracker with natural speech pause defaults
 func NewAudioChunkTracker(sampleRate int, thresholdRMS float64) *AudioChunkTracker {
 	if sampleRate <= 0 {
 		sampleRate = 16000
@@ -153,13 +154,14 @@ func NewAudioChunkTracker(sampleRate int, thresholdRMS float64) *AudioChunkTrack
 		SampleRate:               sampleRate,
 		Channels:                 1,
 		ThresholdRMS:             thresholdRMS,
+		NoiseFloorRMS:            120.0,
 		SilenceDurationThreshold: 450 * time.Millisecond,
-		MaxChunkDuration:         3500 * time.Millisecond,
-		MinSpeechDuration:        600 * time.Millisecond,
+		MaxChunkDuration:         10000 * time.Millisecond, // 10s max window before safety commit
+		MinSpeechDuration:        500 * time.Millisecond,
 	}
 }
 
-// ProcessChunk evaluates incoming PCM data, updates internal state, and signals if the chunk should be committed
+// ProcessChunk evaluates incoming PCM data, updates internal state, and signals if a natural voice break occurred
 func (t *AudioChunkTracker) ProcessChunk(pcmChunk []byte) (isSilence bool, shouldCommit bool) {
 	if len(pcmChunk) == 0 {
 		return true, false
@@ -168,25 +170,29 @@ func (t *AudioChunkTracker) ProcessChunk(pcmChunk []byte) (isSilence bool, shoul
 	bytesPerSec := t.SampleRate * t.Channels * 2 // 16-bit = 2 bytes per sample
 
 	rms := CalculateRMS(pcmChunk)
-	isSilence = rms < t.ThresholdRMS
+	dynamicThreshold := math.Max(t.ThresholdRMS, t.NoiseFloorRMS*2.0)
+	isSilence = rms < dynamicThreshold
 
 	if !isSilence {
 		t.hasActiveSpeech = true
 		t.consecutiveSilenceBytes = 0
 	} else {
 		t.consecutiveSilenceBytes += len(pcmChunk)
+		if rms > 10.0 && rms < t.ThresholdRMS {
+			t.NoiseFloorRMS = 0.95*t.NoiseFloorRMS + 0.05*rms
+		}
 	}
 
 	chunkDuration := time.Duration(float64(t.totalChunkBytes)/float64(bytesPerSec)*1000) * time.Millisecond
 	silenceDuration := time.Duration(float64(t.consecutiveSilenceBytes)/float64(bytesPerSec)*1000) * time.Millisecond
 
-	// Trigger commit condition:
-	// 1. We had active speech, minimum speech threshold reached, followed by significant silence gap
+	// Trigger commit condition ONLY on true voice breaks/pauses:
+	// Had active speech of >= 500ms, followed by >= 450ms silence pause
 	if t.hasActiveSpeech && chunkDuration >= t.MinSpeechDuration && silenceDuration >= t.SilenceDurationThreshold {
 		return isSilence, true
 	}
 
-	// 2. Maximum sliding chunk duration exceeded to prevent memory/latency bloat
+	// Safety fallback if someone speaks for 10s without any pause
 	if chunkDuration >= t.MaxChunkDuration {
 		return isSilence, true
 	}

@@ -179,10 +179,10 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 				_, shouldCommitByVAD = vadTracker.ProcessChunk(data)
 			}
 
-			// Periodically perform interim transcription if 560ms of audio is buffered in the active chunk
+			// Periodically perform interim transcription if audio is buffered in the active chunk
 			chunkLen := activeChunkAudio.Len()
-			shouldRunInterim := chunkLen >= 17920 && // 560ms at 16kHz 16-bit mono (8960 samples * 2 bytes = 17920)
-				time.Since(lastInterimTime) >= 480*time.Millisecond &&
+			shouldRunInterim := chunkLen >= 12800 && // ~400ms at 16kHz 16-bit mono
+				time.Since(lastInterimTime) >= 380*time.Millisecond &&
 				!interimInProgress
 
 			if shouldRunInterim {
@@ -222,12 +222,9 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 							latestEmittedSeq = seq
 
 							// Check if this chunk should be committed:
-							// 1. VAD detected silence pause after speech
-							// 2. Or chunk text ends with sentence boundary punctuation (. ! ?) and audio is >= 1.5s (48000 bytes)
-							// 3. Or chunk duration is >= 3.5s (112000 bytes)
-							isSentenceEnd := utils.EndsWithSentenceBoundary(rawChunkText)
+							// ONLY commit when a natural VAD silence pause is detected or continuous speech reaches 10s (320000 bytes)
 							hasEnoughSpeech := len(rawChunkText) > 0
-							shouldCommit := hasEnoughSpeech && (vadCommitFlag || (isSentenceEnd && len(audioSnap) >= 48000) || len(audioSnap) >= 112000)
+							shouldCommit := hasEnoughSpeech && (vadCommitFlag || len(audioSnap) >= 320000)
 
 							var fullText string
 							if shouldCommit {
@@ -249,9 +246,8 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 								vadTracker.Reset()
 								fullText = committedText
 							} else {
-								// During continuous speech, hold back unstable trailing word(s) to avoid hypothesis flapping
-								stabilizedChunk := utils.ExtractStabilizedText(rawChunkText, false)
-								fullText = utils.MergeTranscripts(committedBase, stabilizedChunk)
+								// During continuous speech, emit full active transcript; client diffing handles real-time live typing
+								fullText = utils.MergeTranscripts(committedBase, rawChunkText)
 							}
 
 							if fullText != lastEmittedFullText && fullText != "" {
