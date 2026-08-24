@@ -32,6 +32,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["sync", "rt"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util = "0.3"
+silero-vad-crs = { version = "0.4.0", features = ["auto"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0.3", features = [] }

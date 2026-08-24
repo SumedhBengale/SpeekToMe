@@ -120,22 +120,19 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var fullAudioAccumulator bytes.Buffer
-	var activeChunkAudio bytes.Buffer
 	var startPayload StreamStartPayload
 	streamStartTime := time.Now()
 	enhance := false
 	customPrompt := ""
 
-	vadTracker := utils.NewAudioChunkTracker(16000, 280.0)
 	var committedText string
+	var lastChunkText string
 	var lastEmittedFullText string
-	lastInterimTime := time.Now()
 	var interimSeq uint64
 	var latestEmittedSeq uint64
-	var interimInProgress bool
 	var interimMu sync.Mutex
 
-	// Read audio loop
+	// Read audio and control loop
 	for {
 		msgType, data, err := conn.Read(ctx)
 		if err != nil {
@@ -155,11 +152,20 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 					_ = json.Unmarshal(data, &startPayload)
 					enhance = startPayload.Enhance
 					customPrompt = startPayload.Prompt
-					if startPayload.SampleRate > 0 {
-						vadTracker.SampleRate = startPayload.SampleRate
+					log.Printf("[STREAM START] Session initialized | User ID: %d | Lang: %v | Enhance: %v | Prompt: %q",
+						user.ID, user.Languages, enhance, customPrompt)
+					continue
+				} else if t == "commit" {
+					interimMu.Lock()
+					if lastChunkText != "" {
+						committedText = utils.MergeTranscripts(committedText, lastChunkText)
+						log.Printf("[STREAM COMMIT] Phrase committed to base: %q | Full committed: %q", lastChunkText, committedText)
+						lastChunkText = ""
 					}
+					interimMu.Unlock()
 					continue
 				} else if t == "end_of_stream" || t == "stop" {
+					log.Printf("[STREAM CLIENT] Received %s signal from user ID: %d", t, user.ID)
 					break
 				}
 			}
@@ -170,104 +176,57 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 
+			// The client sends the full active phrase snapshot
 			interimMu.Lock()
-			activeChunkAudio.Write(data)
+			interimSeq++
+			currentSeq := interimSeq
+			committedSnapshot := committedText
+			interimMu.Unlock()
 
-			// Update VAD tracker if format is PCM
-			_, shouldCommitByVAD := false, false
-			if startPayload.Format == "pcm" || startPayload.Format == "" {
-				_, shouldCommitByVAD = vadTracker.ProcessChunk(data)
-			}
+			go func(audioSnap []byte, fmtStr string, seq uint64, committedBase string) {
+				var toTranscribe []byte
+				if fmtStr == "pcm" || fmtStr == "" {
+					toTranscribe = utils.EncodePCMToWAV(audioSnap, 16000, 1)
+				} else {
+					toTranscribe = audioSnap
+				}
 
-			// Periodically perform interim transcription if audio is buffered in the active chunk
-			chunkLen := activeChunkAudio.Len()
-			shouldRunInterim := chunkLen >= 12800 && // ~400ms at 16kHz 16-bit mono
-				time.Since(lastInterimTime) >= 380*time.Millisecond &&
-				!interimInProgress
+				promptCtx := utils.GetPromptContext(committedBase, 150)
+				startASR := time.Now()
+				rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, promptCtx)
+				asrDuration := time.Since(startASR)
 
-			if shouldRunInterim {
-				interimInProgress = true
-				interimSeq++
-				currentSeq := interimSeq
-				lastInterimTime = time.Now()
+				if err != nil {
+					log.Printf("[STREAM ASR ERROR] Seq: %d | User ID: %d | Error: %v | Latency: %v", seq, user.ID, err, asrDuration)
+					return
+				}
 
-				// Take a snapshot of the active chunk audio only
-				currentChunkBytes := make([]byte, chunkLen)
-				copy(currentChunkBytes, activeChunkAudio.Bytes())
-				format := startPayload.Format
-				committedSnapshot := committedText
-				interimMu.Unlock()
+				rawChunkText = strings.TrimSpace(rawChunkText)
+				audioDurationSec := float64(len(audioSnap)) / 32000.0
 
-				go func(audioSnap []byte, fmtStr string, seq uint64, committedBase string, vadCommitFlag bool) {
-					defer func() {
-						interimMu.Lock()
-						interimInProgress = false
+				log.Printf("[STREAM ASR LOG] Seq: %d | User ID: %d | Audio: %d bytes (%.2fs) | Prompt: %q | Result: %q | Latency: %v | Provider: %s",
+					seq, user.ID, len(audioSnap), audioDurationSec, promptCtx, rawChunkText, asrDuration, usedProvider)
+
+				interimMu.Lock()
+				if seq >= latestEmittedSeq {
+					latestEmittedSeq = seq
+					lastChunkText = rawChunkText
+					fullText := utils.MergeTranscripts(committedBase, rawChunkText)
+
+					if fullText != lastEmittedFullText && fullText != "" {
+						lastEmittedFullText = fullText
 						interimMu.Unlock()
-					}()
-
-					var toTranscribe []byte
-					if fmtStr == "pcm" || fmtStr == "" {
-						toTranscribe = utils.EncodePCMToWAV(audioSnap, 16000, 1)
+						_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+							Type: "interim",
+							Text: fullText,
+						})
 					} else {
-						toTranscribe = audioSnap
+						interimMu.Unlock()
 					}
-
-					promptCtx := utils.GetPromptContext(committedBase, 150)
-					rawChunkText, _, _, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, promptCtx)
-					if err == nil {
-						rawChunkText = strings.TrimSpace(rawChunkText)
-
-						interimMu.Lock()
-						if seq >= latestEmittedSeq {
-							latestEmittedSeq = seq
-
-							// Check if this chunk should be committed:
-							// ONLY commit when a natural VAD silence pause is detected or continuous speech reaches 10s (320000 bytes)
-							hasEnoughSpeech := len(rawChunkText) > 0
-							shouldCommit := hasEnoughSpeech && (vadCommitFlag || len(audioSnap) >= 320000)
-
-							var fullText string
-							if shouldCommit {
-								committedText = utils.MergeTranscripts(committedText, rawChunkText)
-
-								// Retain trailing 200ms (6400 bytes at 16kHz 16-bit PCM) for acoustic lead-in continuity
-								overlapBytes := 6400
-								activeBytes := activeChunkAudio.Bytes()
-								var retained []byte
-								if len(activeBytes) > overlapBytes {
-									retained = make([]byte, overlapBytes)
-									copy(retained, activeBytes[len(activeBytes)-overlapBytes:])
-								} else {
-									retained = make([]byte, len(activeBytes))
-									copy(retained, activeBytes)
-								}
-								activeChunkAudio.Reset()
-								activeChunkAudio.Write(retained)
-								vadTracker.Reset()
-								fullText = committedText
-							} else {
-								// During continuous speech, emit full active transcript; client diffing handles real-time live typing
-								fullText = utils.MergeTranscripts(committedBase, rawChunkText)
-							}
-
-							if fullText != lastEmittedFullText && fullText != "" {
-								lastEmittedFullText = fullText
-								interimMu.Unlock()
-								_ = writeStreamJSON(ctx, conn, StreamEventMessage{
-									Type: "interim",
-									Text: fullText,
-								})
-							} else {
-								interimMu.Unlock()
-							}
-						} else {
-							interimMu.Unlock()
-						}
-					}
-				}(currentChunkBytes, format, currentSeq, committedSnapshot, shouldCommitByVAD)
-			} else {
-				interimMu.Unlock()
-			}
+				} else {
+					interimMu.Unlock()
+				}
+			}(data, startPayload.Format, currentSeq, committedSnapshot)
 		}
 	}
 
@@ -287,11 +246,11 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	whisperStart := time.Now()
 
-	// Transcribe any remaining tail audio in activeChunkAudio
 	interimMu.Lock()
-	tailChunkBytes := make([]byte, activeChunkAudio.Len())
-	copy(tailChunkBytes, activeChunkAudio.Bytes())
-	baseCommitted := committedText
+	finalRawTranscript := committedText
+	if lastChunkText != "" {
+		finalRawTranscript = utils.MergeTranscripts(finalRawTranscript, lastChunkText)
+	}
 	interimMu.Unlock()
 
 	activeConfig := config.ConfigManager.Get()
@@ -301,29 +260,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		selectedStreamingProvider = streamOrder[0]
 	}
 
-	var finalRawTranscript string
-	var asrProvider string
-	var asrRouting string
-	var asrErr error
-
-	if len(tailChunkBytes) >= 3200 { // At least 100ms of audio
-		var toTranscribe []byte
-		if startPayload.Format == "pcm" || startPayload.Format == "" {
-			toTranscribe = utils.EncodePCMToWAV(tailChunkBytes, 16000, 1)
-		} else {
-			toTranscribe = tailChunkBytes
-		}
-		var tailText string
-		tailPromptCtx := utils.GetPromptContext(baseCommitted, 150)
-		tailText, _, asrProvider, asrRouting, asrErr = services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, tailPromptCtx)
-		if asrErr == nil {
-			finalRawTranscript = utils.MergeTranscripts(baseCommitted, tailText)
-		} else {
-			finalRawTranscript = baseCommitted
-		}
-	} else {
-		finalRawTranscript = baseCommitted
-	}
+	var asrProvider string = selectedStreamingProvider
 
 	// Fallback to full audio if no committed text was produced
 	if finalRawTranscript == "" {
@@ -333,6 +270,8 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		} else {
 			toTranscribe = audioRaw
 		}
+		var asrRouting string
+		var asrErr error
 		finalRawTranscript, _, asrProvider, asrRouting, asrErr = services.RunStreamingTranscribe(ctx, toTranscribe, user.Languages)
 		if asrErr != nil {
 			log.Printf("[STREAM TRANSCRIBE ERROR] %v (routing: %s)", asrErr, asrRouting)

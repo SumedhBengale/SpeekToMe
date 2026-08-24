@@ -32,6 +32,7 @@ pub struct StreamFinalResult {
 
 pub enum StreamAudioMessage {
     AudioChunk(Vec<u8>),
+    CommitChunk,
     EndOfStream,
 }
 
@@ -176,6 +177,9 @@ pub fn start_streaming_session(
                         if write.send(Message::Binary(bytes)).await.is_err() {
                             break;
                         }
+                    }
+                    StreamAudioMessage::CommitChunk => {
+                        let _ = write.send(Message::Text(r#"{"type":"commit"}"#.to_string())).await;
                     }
                     StreamAudioMessage::EndOfStream => {
                         println!("[STREAM CLIENT] Sending end_of_stream message to server.");
