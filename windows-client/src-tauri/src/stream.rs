@@ -65,6 +65,30 @@ pub fn compute_stream_diff(currently_typed: &str, incoming_text: &str) -> (usize
     (backspaces, new_suffix)
 }
 
+/// Converts raw 16kHz 16-bit mono PCM bytes to valid WAV file bytes
+pub fn pcm_16k_to_wav(pcm_bytes: &[u8]) -> Vec<u8> {
+    let mut header = Vec::with_capacity(44 + pcm_bytes.len());
+    let data_len = pcm_bytes.len() as u32;
+    let total_len = 36 + data_len;
+
+    header.extend_from_slice(b"RIFF");
+    header.extend_from_slice(&total_len.to_le_bytes());
+    header.extend_from_slice(b"WAVE");
+    header.extend_from_slice(b"fmt ");
+    header.extend_from_slice(&16u32.to_le_bytes()); // Subchunk1Size
+    header.extend_from_slice(&1u16.to_le_bytes());  // AudioFormat (PCM = 1)
+    header.extend_from_slice(&1u16.to_le_bytes());  // Channels (1 = Mono)
+    header.extend_from_slice(&16000u32.to_le_bytes()); // SampleRate (16000)
+    header.extend_from_slice(&32000u32.to_le_bytes()); // ByteRate (16000 * 1 * 2)
+    header.extend_from_slice(&2u16.to_le_bytes());  // BlockAlign (1 * 2)
+    header.extend_from_slice(&16u16.to_le_bytes()); // BitsPerSample (16)
+    header.extend_from_slice(b"data");
+    header.extend_from_slice(&data_len.to_le_bytes());
+    header.extend_from_slice(pcm_bytes);
+
+    header
+}
+
 /// Converts HTTP/HTTPS API URL to WS/WSS URL
 pub fn get_stream_ws_url(api_url: &str, token: &str) -> String {
     let base = api_url.trim_end_matches('/');
@@ -122,17 +146,44 @@ pub fn start_streaming_session(
             return;
         }
 
+        // Create debug recordings folder for testing
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let debug_dir = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join("debug_stream_recordings")
+            .join(format!("session_{}", timestamp));
+        let _ = std::fs::create_dir_all(&debug_dir);
+        println!("[STREAM DEBUG RECORDINGS] Saving live chunk recordings to: {}", debug_dir.display());
+
+        let mut chunk_index: usize = 0;
+        let mut full_session_pcm = Vec::new();
+
         // 2. Stream audio frames from channel
         let write_task = async move {
             while let Some(msg) = audio_rx.recv().await {
                 match msg {
                     StreamAudioMessage::AudioChunk(bytes) => {
+                        chunk_index += 1;
+                        let chunk_wav = pcm_16k_to_wav(&bytes);
+                        let chunk_path = debug_dir.join(format!("chunk_{:03}.wav", chunk_index));
+                        let _ = std::fs::write(&chunk_path, &chunk_wav);
+
+                        full_session_pcm.extend_from_slice(&bytes);
+
                         if write.send(Message::Binary(bytes)).await.is_err() {
                             break;
                         }
                     }
                     StreamAudioMessage::EndOfStream => {
                         println!("[STREAM CLIENT] Sending end_of_stream message to server.");
+                        let full_wav = pcm_16k_to_wav(&full_session_pcm);
+                        let full_path = debug_dir.join("full_session.wav");
+                        let _ = std::fs::write(&full_path, &full_wav);
+                        println!("[STREAM DEBUG SUCCESS] Full session WAV saved to: {}", full_path.display());
+
                         let _ = write.send(Message::Text(r#"{"type":"end_of_stream"}"#.to_string())).await;
                         break;
                     }
