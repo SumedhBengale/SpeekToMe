@@ -195,7 +195,8 @@ pub fn start_streaming_session(
                         if let Ok(event) = serde_json::from_str::<StreamEventResponse>(&text) {
                             if event.event_type == "interim" {
                                 if !event.text.is_empty() {
-                                    let normalized_text = crate::vocab::get_vocab_manager().process_text(&event.text);
+                                    let punctuated_text = crate::punct::restore_punctuation(&event.text);
+                                    let normalized_text = crate::vocab::get_vocab_manager().process_text(&punctuated_text);
                                     let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &normalized_text);
                                     if backspaces > 0 || !new_suffix.is_empty() {
                                         currently_typed = normalized_text.clone();
@@ -213,7 +214,8 @@ pub fn start_streaming_session(
                                 }
                             } else if event.event_type == "final" {
                                 if !event.text.is_empty() {
-                                    let normalized_text = crate::vocab::get_vocab_manager().process_text(&event.text);
+                                    let punctuated_text = crate::punct::restore_punctuation(&event.text);
+                                    let normalized_text = crate::vocab::get_vocab_manager().process_text(&punctuated_text);
                                     let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &normalized_text);
                                     if backspaces > 0 || !new_suffix.is_empty() {
                                         let type_text = new_suffix.clone();
