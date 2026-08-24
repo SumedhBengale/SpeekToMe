@@ -137,3 +137,20 @@ func TestExtractStabilizedText(t *testing.T) {
 		t.Errorf("Expected 'Natural fast and completely', got '%s'", res)
 	}
 }
+
+func TestGetPromptContext(t *testing.T) {
+	// Short text within maxChars
+	if res := GetPromptContext("Hello world", 150); res != "Hello world" {
+		t.Errorf("Expected 'Hello world', got '%s'", res)
+	}
+
+	// Long text sliced at word boundary
+	longText := "This is a long sentence with many words that exceeds the character limit for prompt context"
+	res := GetPromptContext(longText, 30)
+	if len(res) > 30 {
+		t.Errorf("Expected length <= 30, got %d ('%s')", len(res), res)
+	}
+	if res == "" {
+		t.Errorf("Expected non-empty prompt context")
+	}
+}

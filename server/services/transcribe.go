@@ -581,8 +581,20 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 }
 
 func RunStreamingTranscribe(ctx context.Context, audioBytes []byte, userLanguages []string) (string, []WhisperSegment, string, string, error) {
+	return RunStreamingTranscribeWithPrompt(ctx, audioBytes, userLanguages, "")
+}
+
+func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, userLanguages []string, promptContext string) (string, []WhisperSegment, string, string, error) {
 	cfg := config.ConfigManager.Get()
 	langParam, promptStr := BuildWhisperPrompt(userLanguages)
+	if promptContext != "" {
+		trimmedContext := strings.TrimSpace(promptContext)
+		if promptStr != "" {
+			promptStr = promptStr + " " + trimmedContext
+		} else {
+			promptStr = trimmedContext
+		}
+	}
 
 	fallbackOrder := cfg.GetActiveStreamingFallbackOrder()
 	var lastErr error

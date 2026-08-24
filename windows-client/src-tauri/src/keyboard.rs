@@ -168,6 +168,35 @@ pub fn simulate_typing(text: &str) {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn simulate_backspaces(count: usize) {
+    if count == 0 {
+        return;
+    }
+    unsafe {
+        for _ in 0..count {
+            let mut inputs = [std::mem::zeroed::<INPUT>(); 2];
+
+            // 1. VK_BACK Down
+            inputs[0].r#type = INPUT_KEYBOARD;
+            let mut ki0: KEYBDINPUT = std::mem::zeroed();
+            ki0.wVk = 0x08; // VK_BACK
+            inputs[0].Anonymous.ki = ki0;
+
+            // 2. VK_BACK Up
+            inputs[1].r#type = INPUT_KEYBOARD;
+            let mut ki1: KEYBDINPUT = std::mem::zeroed();
+            ki1.wVk = 0x08;
+            ki1.dwFlags = KEYEVENTF_KEYUP;
+            inputs[1].Anonymous.ki = ki1;
+
+            send_inputs(&inputs);
+
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn simulate_paste() {
     println!("[KEYBOARD] simulate_paste is not supported on this platform.");
@@ -194,6 +223,11 @@ pub fn simulate_key_up(_vk: u32) {
 #[cfg(not(target_os = "windows"))]
 pub fn simulate_typing(text: &str) {
     println!("[KEYBOARD] simulate_typing: {}", text);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn simulate_backspaces(count: usize) {
+    println!("[KEYBOARD] simulate_backspaces: {}", count);
 }
 
 // ==========================================

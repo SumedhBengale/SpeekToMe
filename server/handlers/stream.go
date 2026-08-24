@@ -212,7 +212,8 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 						toTranscribe = audioSnap
 					}
 
-					rawChunkText, _, _, _, err := services.RunStreamingTranscribe(ctx, toTranscribe, user.Languages)
+					promptCtx := utils.GetPromptContext(committedBase, 150)
+					rawChunkText, _, _, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, promptCtx)
 					if err == nil {
 						rawChunkText = strings.TrimSpace(rawChunkText)
 
@@ -231,7 +232,20 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 							var fullText string
 							if shouldCommit {
 								committedText = utils.MergeTranscripts(committedText, rawChunkText)
+
+								// Retain trailing 200ms (6400 bytes at 16kHz 16-bit PCM) for acoustic lead-in continuity
+								overlapBytes := 6400
+								activeBytes := activeChunkAudio.Bytes()
+								var retained []byte
+								if len(activeBytes) > overlapBytes {
+									retained = make([]byte, overlapBytes)
+									copy(retained, activeBytes[len(activeBytes)-overlapBytes:])
+								} else {
+									retained = make([]byte, len(activeBytes))
+									copy(retained, activeBytes)
+								}
 								activeChunkAudio.Reset()
+								activeChunkAudio.Write(retained)
 								vadTracker.Reset()
 								fullText = committedText
 							} else {
@@ -304,7 +318,8 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			toTranscribe = tailChunkBytes
 		}
 		var tailText string
-		tailText, _, asrProvider, asrRouting, asrErr = services.RunStreamingTranscribe(ctx, toTranscribe, user.Languages)
+		tailPromptCtx := utils.GetPromptContext(baseCommitted, 150)
+		tailText, _, asrProvider, asrRouting, asrErr = services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, tailPromptCtx)
 		if asrErr == nil {
 			finalRawTranscript = utils.MergeTranscripts(baseCommitted, tailText)
 		} else {

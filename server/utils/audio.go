@@ -238,3 +238,20 @@ func ExtractStabilizedText(rawText string, isFinalOrPaused bool) string {
 	// Hold back the trailing 1 word while speech is still active
 	return strings.Join(words[:len(words)-1], " ")
 }
+
+// GetPromptContext extracts the trailing character context (up to maxChars) from committed text
+// aligned to a clean word boundary for ASR model prompt conditioning.
+func GetPromptContext(committedText string, maxChars int) string {
+	c := strings.TrimSpace(committedText)
+	if maxChars <= 0 {
+		maxChars = 150
+	}
+	if len(c) <= maxChars {
+		return c
+	}
+	sub := c[len(c)-maxChars:]
+	if idx := strings.Index(sub, " "); idx != -1 {
+		return strings.TrimSpace(sub[idx+1:])
+	}
+	return strings.TrimSpace(sub)
+}

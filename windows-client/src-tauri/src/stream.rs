@@ -40,116 +40,29 @@ pub struct StreamSessionHandle {
     pub rx_final: Receiver<Result<StreamFinalResult, String>>,
 }
 
-fn normalize_word(w: &str) -> String {
-    w.chars()
-        .filter(|c| c.is_alphanumeric())
-        .collect::<String>()
-        .to_lowercase()
-}
-
-pub fn compute_text_delta(previous: &str, incoming: &str) -> String {
-    let prev_trimmed = previous.trim();
-    let inc_trimmed = incoming.trim();
-    if prev_trimmed.is_empty() {
-        return incoming.to_string();
+/// Computes the diff between what is currently on screen (`currently_typed`) and `incoming_text`,
+/// and returns the number of backspaces needed followed by the new text suffix to type.
+pub fn compute_stream_diff(currently_typed: &str, incoming_text: &str) -> (usize, String) {
+    if currently_typed.is_empty() {
+        return (0, incoming_text.to_string());
     }
-    if inc_trimmed.len() <= prev_trimmed.len() && !inc_trimmed.starts_with(prev_trimmed) {
-        return String::new();
+    if incoming_text.is_empty() {
+        return (0, String::new());
     }
 
-    if inc_trimmed.starts_with(prev_trimmed) {
-        let prev_char_count = prev_trimmed.chars().count();
-        let delta: String = inc_trimmed.chars().skip(prev_char_count).collect();
-        return delta;
+    let cur_chars: Vec<char> = currently_typed.chars().collect();
+    let inc_chars: Vec<char> = incoming_text.chars().collect();
+
+    // Find Longest Common Prefix (LCP)
+    let mut lcp_len = 0;
+    while lcp_len < cur_chars.len() && lcp_len < inc_chars.len() && cur_chars[lcp_len] == inc_chars[lcp_len] {
+        lcp_len += 1;
     }
 
-    let prev_words: Vec<&str> = prev_trimmed.split_whitespace().collect();
-    let inc_words: Vec<&str> = inc_trimmed.split_whitespace().collect();
+    let backspaces = cur_chars.len() - lcp_len;
+    let new_suffix: String = inc_chars[lcp_len..].iter().collect();
 
-    if inc_words.is_empty() {
-        return String::new();
-    }
-
-    let norm_prev: Vec<String> = prev_words.iter().map(|w| normalize_word(w)).collect();
-    let norm_inc: Vec<String> = inc_words.iter().map(|w| normalize_word(w)).collect();
-
-    let mut best_inc_idx = None;
-
-    // 1. Try 3-word suffix match
-    if norm_prev.len() >= 3 {
-        let target = (&norm_prev[norm_prev.len() - 3], &norm_prev[norm_prev.len() - 2], &norm_prev[norm_prev.len() - 1]);
-        for i in 0..norm_inc.len().saturating_sub(2) {
-            if (&norm_inc[i], &norm_inc[i + 1], &norm_inc[i + 2]) == target {
-                best_inc_idx = Some(i + 3);
-                break;
-            }
-        }
-    }
-
-    // 2. Try 2-word suffix match
-    if best_inc_idx.is_none() && norm_prev.len() >= 2 {
-        let target = (&norm_prev[norm_prev.len() - 2], &norm_prev[norm_prev.len() - 1]);
-        for i in 0..norm_inc.len().saturating_sub(1) {
-            if (&norm_inc[i], &norm_inc[i + 1]) == target {
-                best_inc_idx = Some(i + 2);
-                break;
-            }
-        }
-    }
-
-    // 3. Try 1-word suffix match closest to expected position
-    if best_inc_idx.is_none() {
-        if let Some(last_prev_word) = norm_prev.last() {
-            let expected_idx = norm_prev.len().saturating_sub(1) as isize;
-            let mut min_distance = isize::MAX;
-            for (i, iw) in norm_inc.iter().enumerate() {
-                if iw == last_prev_word {
-                    let distance = (i as isize - expected_idx).abs();
-                    if distance < min_distance {
-                        min_distance = distance;
-                        best_inc_idx = Some(i + 1);
-                    }
-                }
-            }
-        }
-    }
-
-    if best_inc_idx.is_none() {
-        let mut match_count = 0;
-        for (pw, iw) in norm_prev.iter().zip(norm_inc.iter()) {
-            if pw == iw || pw.contains(iw) || iw.contains(pw) {
-                match_count += 1;
-            } else {
-                break;
-            }
-        }
-        if match_count > 0 && match_count < inc_words.len() {
-            best_inc_idx = Some(match_count);
-        }
-    }
-
-    if let Some(idx) = best_inc_idx {
-        if idx < inc_words.len() {
-            let mut res = String::new();
-            for word in &inc_words[idx..] {
-                res.push(' ');
-                res.push_str(word);
-            }
-            return res;
-        }
-    }
-
-    if inc_words.len() > prev_words.len() {
-        let skip = prev_words.len();
-        let mut res = String::new();
-        for word in &inc_words[skip..] {
-            res.push(' ');
-            res.push_str(word);
-        }
-        return res;
-    }
-
-    String::new()
+    (backspaces, new_suffix)
 }
 
 /// Converts HTTP/HTTPS API URL to WS/WSS URL
@@ -228,32 +141,46 @@ pub fn start_streaming_session(
         };
 
         let read_task = async move {
-            let mut emitted_text = String::new();
+            let mut currently_typed = String::new();
             let mut final_res: Option<StreamFinalResult> = None;
             while let Some(msg_res) = read.next().await {
                 match msg_res {
                     Ok(Message::Text(text)) => {
                         if let Ok(event) = serde_json::from_str::<StreamEventResponse>(&text) {
                             if event.event_type == "interim" {
-                                let delta = compute_text_delta(&emitted_text, &event.text);
-                                if !delta.is_empty() {
-                                    let clean_delta = delta.trim_end_matches(|c: char| c == '.' || c == ',' || c == '?' || c == '!' || c == ';' || c == ':');
-                                    if !clean_delta.is_empty() {
-                                        let normalized_delta = crate::vocab::get_vocab_manager().process_text(clean_delta);
-                                        println!("[STREAM INTERIM] Emitting live text delta: {:?}", normalized_delta);
-                                        let type_text = normalized_delta.clone();
+                                if !event.text.is_empty() {
+                                    let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &event.text);
+                                    if backspaces > 0 || !new_suffix.is_empty() {
+                                        let normalized_suffix = crate::vocab::get_vocab_manager().process_text(&new_suffix);
+                                        let type_text = normalized_suffix.clone();
+                                        currently_typed = event.text.clone();
+                                        println!("[STREAM INTERIM] Backspaces: {}, Typing: {:?}", backspaces, type_text);
                                         tauri::async_runtime::spawn_blocking(move || {
-                                            crate::keyboard::simulate_typing(&type_text);
+                                            if backspaces > 0 {
+                                                crate::keyboard::simulate_backspaces(backspaces);
+                                            }
+                                            if !type_text.is_empty() {
+                                                crate::keyboard::simulate_typing(&type_text);
+                                            }
                                         });
                                     }
-                                    emitted_text = event.text.clone();
                                 }
                             } else if event.event_type == "final" {
-                                let delta = compute_text_delta(&emitted_text, &event.text);
-                                if !delta.is_empty() {
-                                    let normalized_delta = crate::vocab::get_vocab_manager().process_text(&delta);
-                                    println!("[STREAM FINAL] Emitting final remaining delta: {:?}", normalized_delta);
-                                    crate::keyboard::simulate_typing(&normalized_delta);
+                                if !event.text.is_empty() {
+                                    let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &event.text);
+                                    if backspaces > 0 || !new_suffix.is_empty() {
+                                        let normalized_suffix = crate::vocab::get_vocab_manager().process_text(&new_suffix);
+                                        let type_text = normalized_suffix.clone();
+                                        println!("[STREAM FINAL] Backspaces: {}, Final typing: {:?}", backspaces, type_text);
+                                        tauri::async_runtime::spawn_blocking(move || {
+                                            if backspaces > 0 {
+                                                crate::keyboard::simulate_backspaces(backspaces);
+                                            }
+                                            if !type_text.is_empty() {
+                                                crate::keyboard::simulate_typing(&type_text);
+                                            }
+                                        });
+                                    }
                                 }
 
                                 final_res = Some(StreamFinalResult {
@@ -291,17 +218,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_compute_text_delta() {
-        assert_eq!(compute_text_delta("", "Hello"), "Hello");
-        assert_eq!(compute_text_delta("Hello", "Hello world"), " world");
-        assert_eq!(compute_text_delta("Hello world", "Hello world this is a test"), " this is a test");
-        assert_eq!(compute_text_delta("Hello world", "Hello world"), "");
-        assert_eq!(compute_text_delta("Hello world", "Hello"), "");
+    fn test_compute_stream_diff() {
+        // 1. Initial text typing
+        let (bs, to_type) = compute_stream_diff("", "Welcome");
+        assert_eq!(bs, 0);
+        assert_eq!(to_type, "Welcome");
 
-        // Contraction and punctuation variations
-        let prev = "Hello, I am trying to.";
-        let inc = "Hello, I'm trying to speak to this speak to my application amadible. I do not think so.";
-        let delta = compute_text_delta(prev, inc);
-        assert_eq!(delta, " speak to this speak to my application amadible. I do not think so.");
+        // 2. Normal forward append
+        let (bs, to_type) = compute_stream_diff("Welcome", "Welcome to the live");
+        assert_eq!(bs, 0);
+        assert_eq!(to_type, " to the live");
+
+        // 3. Trailing word revision
+        let (bs, to_type) = compute_stream_diff("Welcome stand", "Welcome fast and completely");
+        assert_eq!(bs, 5); // Deletes "stand" (5 chars)
+        assert_eq!(to_type, "fast and completely");
+
+        // 4. Identical text (no-op)
+        let (bs, to_type) = compute_stream_diff("Welcome to the live", "Welcome to the live");
+        assert_eq!(bs, 0);
+        assert_eq!(to_type, "");
+
+        // 5. Punctuation addition
+        let (bs, to_type) = compute_stream_diff("Welcome to the live", "Welcome to the live.");
+        assert_eq!(bs, 0);
+        assert_eq!(to_type, ".");
+
+        // 6. Final LLM capital polish
+        let (bs, to_type) = compute_stream_diff("welcome to the live", "Welcome to the live.");
+        assert_eq!(bs, 19);
+        assert_eq!(to_type, "Welcome to the live.");
     }
 }
