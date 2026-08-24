@@ -195,9 +195,25 @@ pub fn start_streaming_session(
                         if let Ok(event) = serde_json::from_str::<StreamEventResponse>(&text) {
                             if event.event_type == "interim" {
                                 if !event.text.is_empty() {
+                                    let t_proc = std::time::Instant::now();
+
+                                    let t_punct = std::time::Instant::now();
                                     let punctuated_text = crate::punct::restore_punctuation(&event.text);
+                                    let punct_dur = t_punct.elapsed();
+
+                                    let t_vocab = std::time::Instant::now();
                                     let normalized_text = crate::vocab::get_vocab_manager().process_text(&punctuated_text);
+                                    let vocab_dur = t_vocab.elapsed();
+
+                                    let t_diff = std::time::Instant::now();
                                     let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &normalized_text);
+                                    let diff_dur = t_diff.elapsed();
+
+                                    let total_dur = t_proc.elapsed();
+
+                                    println!("[CLIENT BENCHMARK] Interim Chunk Processed in {:.2?} (Punct: {:.2?} | Vocab: {:.2?} | Diff: {:.2?})",
+                                        total_dur, punct_dur, vocab_dur, diff_dur);
+
                                     if backspaces > 0 || !new_suffix.is_empty() {
                                         currently_typed = normalized_text.clone();
                                         let type_text = new_suffix.clone();
@@ -214,9 +230,25 @@ pub fn start_streaming_session(
                                 }
                             } else if event.event_type == "final" {
                                 if !event.text.is_empty() {
+                                    let t_proc = std::time::Instant::now();
+
+                                    let t_punct = std::time::Instant::now();
                                     let punctuated_text = crate::punct::restore_punctuation(&event.text);
+                                    let punct_dur = t_punct.elapsed();
+
+                                    let t_vocab = std::time::Instant::now();
                                     let normalized_text = crate::vocab::get_vocab_manager().process_text(&punctuated_text);
+                                    let vocab_dur = t_vocab.elapsed();
+
+                                    let t_diff = std::time::Instant::now();
                                     let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &normalized_text);
+                                    let diff_dur = t_diff.elapsed();
+
+                                    let total_dur = t_proc.elapsed();
+
+                                    println!("[CLIENT BENCHMARK] Final Chunk Processed in {:.2?} (Punct: {:.2?} | Vocab: {:.2?} | Diff: {:.2?})",
+                                        total_dur, punct_dur, vocab_dur, diff_dur);
+
                                     if backspaces > 0 || !new_suffix.is_empty() {
                                         let type_text = new_suffix.clone();
                                         println!("[STREAM FINAL] Backspaces: {}, Final typing: {:?}", backspaces, type_text);

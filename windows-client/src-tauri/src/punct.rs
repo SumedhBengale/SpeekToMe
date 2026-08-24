@@ -45,9 +45,11 @@ fn init_punct_engine() -> Option<OnlinePunctuation> {
         },
     };
 
+    let t_load = std::time::Instant::now();
     match OnlinePunctuation::create(&config) {
         Some(punct) => {
-            println!("[PUNCT SUCCESS] Neural punctuation engine loaded successfully!");
+            let load_dur = t_load.elapsed();
+            println!("[CLIENT BENCHMARK] Neural Punctuation model loaded into RAM in {:.2?} (~7.2 MB)", load_dur);
             Some(punct)
         }
         None => {
@@ -77,9 +79,13 @@ pub fn restore_punctuation(text: &str) -> String {
     if let Some(ref punct) = *guard {
         // Strip trailing premature periods from in-flight text
         let clean_input = trimmed.trim_end_matches('.');
+        let t_infer = std::time::Instant::now();
         if let Some(punctuated) = punct.add_punctuation(clean_input) {
+            let infer_dur = t_infer.elapsed();
             let res = punctuated.trim();
             if !res.is_empty() {
+                println!("[CLIENT BENCHMARK] Neural Punctuation inference: {:.2?} (in: {} chars -> out: {} chars)",
+                    infer_dur, clean_input.len(), res.len());
                 return res.to_string();
             }
         }

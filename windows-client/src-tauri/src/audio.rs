@@ -233,8 +233,16 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                         let should_commit = pause_detected || active_phrase_samples.len() >= 80000; // max 5s chunk
                                         if should_commit && active_phrase_samples.len() >= 4800 { // >= 300ms of audio
                                             is_in_speech = false;
+                                            let t_enc = std::time::Instant::now();
                                             match encode_opus_ogg(&active_phrase_samples, 16000, 1) {
                                                 Ok(ogg_bytes) => {
+                                                    let enc_dur = t_enc.elapsed();
+                                                    let pcm_len = active_phrase_samples.len() * 2;
+                                                    let ogg_len = ogg_bytes.len();
+                                                    let ratio = if ogg_len > 0 { pcm_len as f64 / ogg_len as f64 } else { 1.0 };
+                                                    let audio_sec = active_phrase_samples.len() as f64 / 16000.0;
+                                                    println!("[CLIENT BENCHMARK] Opus Ogg encode: {:.2?} (Audio: {:.2}s | Raw PCM: {} B -> Opus Ogg: {} B | {:.1}x compression)",
+                                                        enc_dur, audio_sec, pcm_len, ogg_len, ratio);
                                                     let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
                                                 }
                                                 Err(e) => {
@@ -259,7 +267,10 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                     // Fallback if VAD failed to init: 2-second periodic chunking
                                     if all_16k.len() > vad_processed_16k_len + 32000 {
                                         let new_slice = &all_16k[vad_processed_16k_len..vad_processed_16k_len + 32000];
+                                        let t_enc = std::time::Instant::now();
                                         if let Ok(ogg_bytes) = encode_opus_ogg(new_slice, 16000, 1) {
+                                            let enc_dur = t_enc.elapsed();
+                                            println!("[CLIENT BENCHMARK] Opus Ogg fallback encode: {:.2?}", enc_dur);
                                             let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
                                         }
                                         vad_processed_16k_len += 32000;
@@ -288,7 +299,15 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
 
                         // Send any remaining active phrase audio on key release
                         if active_phrase_samples.len() >= 2400 { // >= 150ms of audio
+                            let t_enc = std::time::Instant::now();
                             if let Ok(ogg_bytes) = encode_opus_ogg(&active_phrase_samples, 16000, 1) {
+                                let enc_dur = t_enc.elapsed();
+                                let pcm_len = active_phrase_samples.len() * 2;
+                                let ogg_len = ogg_bytes.len();
+                                let ratio = if ogg_len > 0 { pcm_len as f64 / ogg_len as f64 } else { 1.0 };
+                                let audio_sec = active_phrase_samples.len() as f64 / 16000.0;
+                                println!("[CLIENT BENCHMARK] Tail Opus Ogg encode: {:.2?} (Audio: {:.2}s | Raw PCM: {} B -> Opus Ogg: {} B | {:.1}x compression)",
+                                    enc_dur, audio_sec, pcm_len, ogg_len, ratio);
                                 let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
                             }
                             active_phrase_samples.clear();
