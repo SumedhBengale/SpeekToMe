@@ -223,3 +223,18 @@ func EndsWithSentenceBoundary(text string) bool {
 	lastChar := t[len(t)-1]
 	return lastChar == '.' || lastChar == '?' || lastChar == '!' || lastChar == ';'
 }
+
+// ExtractStabilizedText holds back tentative in-flight trailing words during active continuous speech
+// to prevent premature output of half-baked phonetic hypotheses.
+func ExtractStabilizedText(rawText string, isFinalOrPaused bool) string {
+	raw := strings.TrimSpace(rawText)
+	if raw == "" || isFinalOrPaused {
+		return raw
+	}
+	words := strings.Fields(raw)
+	if len(words) <= 1 {
+		return ""
+	}
+	// Hold back the trailing 1 word while speech is still active
+	return strings.Join(words[:len(words)-1], " ")
+}

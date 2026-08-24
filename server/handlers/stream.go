@@ -179,10 +179,10 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 				_, shouldCommitByVAD = vadTracker.ProcessChunk(data)
 			}
 
-			// Periodically perform interim transcription if enough audio is buffered in the active chunk
+			// Periodically perform interim transcription if 560ms of audio is buffered in the active chunk
 			chunkLen := activeChunkAudio.Len()
-			shouldRunInterim := chunkLen >= 12800 && // ~400ms at 16kHz 16-bit mono
-				time.Since(lastInterimTime) >= 350*time.Millisecond &&
+			shouldRunInterim := chunkLen >= 17920 && // 560ms at 16kHz 16-bit mono (8960 samples * 2 bytes = 17920)
+				time.Since(lastInterimTime) >= 480*time.Millisecond &&
 				!interimInProgress
 
 			if shouldRunInterim {
@@ -215,7 +215,6 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 					rawChunkText, _, _, _, err := services.RunStreamingTranscribe(ctx, toTranscribe, user.Languages)
 					if err == nil {
 						rawChunkText = strings.TrimSpace(rawChunkText)
-						fullText := utils.MergeTranscripts(committedBase, rawChunkText)
 
 						interimMu.Lock()
 						if seq >= latestEmittedSeq {
@@ -229,11 +228,16 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 							hasEnoughSpeech := len(rawChunkText) > 0
 							shouldCommit := hasEnoughSpeech && (vadCommitFlag || (isSentenceEnd && len(audioSnap) >= 48000) || len(audioSnap) >= 112000)
 
+							var fullText string
 							if shouldCommit {
 								committedText = utils.MergeTranscripts(committedText, rawChunkText)
 								activeChunkAudio.Reset()
 								vadTracker.Reset()
 								fullText = committedText
+							} else {
+								// During continuous speech, hold back unstable trailing word(s) to avoid hypothesis flapping
+								stabilizedChunk := utils.ExtractStabilizedText(rawChunkText, false)
+								fullText = utils.MergeTranscripts(committedBase, stabilizedChunk)
 							}
 
 							if fullText != lastEmittedFullText && fullText != "" {

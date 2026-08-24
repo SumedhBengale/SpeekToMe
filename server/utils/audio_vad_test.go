@@ -116,3 +116,24 @@ func TestEndsWithSentenceBoundary(t *testing.T) {
 		t.Errorf("Expected 'Hello world' without punctuation to NOT be sentence boundary")
 	}
 }
+
+func TestExtractStabilizedText(t *testing.T) {
+	// If final or paused, full text is returned
+	if res := ExtractStabilizedText("Welcome to the live", true); res != "Welcome to the live" {
+		t.Errorf("Expected full text when isFinalOrPaused=true, got '%s'", res)
+	}
+
+	// Single word while active should hold back
+	if res := ExtractStabilizedText("Welcome", false); res != "" {
+		t.Errorf("Expected empty string for single word active speech, got '%s'", res)
+	}
+
+	// Multi-word active speech should hold back last word
+	if res := ExtractStabilizedText("Welcome to the live", false); res != "Welcome to the" {
+		t.Errorf("Expected 'Welcome to the', got '%s'", res)
+	}
+
+	if res := ExtractStabilizedText("Natural fast and completely effortless", false); res != "Natural fast and completely" {
+		t.Errorf("Expected 'Natural fast and completely', got '%s'", res)
+	}
+}
