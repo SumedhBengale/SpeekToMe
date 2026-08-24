@@ -244,8 +244,9 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 520px;
+  max-width: 480px;
   width: 100%;
+  box-sizing: border-box;
 }
 
 .setting-group label {
@@ -271,6 +272,7 @@ h2 {
   position: relative;
   width: 100%;
   max-width: 480px;
+  box-sizing: border-box;
 }
 
 .fluent-select {
@@ -285,6 +287,7 @@ h2 {
   outline: none;
   cursor: pointer;
   appearance: none;
+  box-sizing: border-box;
   transition: border-color 0.15s ease;
 }
 
@@ -370,7 +373,7 @@ h2 {
   outline: none;
   resize: vertical;
   height: 75px;
-  max-width: 520px;
+  max-width: 480px;
   width: 100%;
   box-sizing: border-box;
   font-family: inherit;
@@ -379,6 +382,57 @@ h2 {
 
 .fluent-textarea:focus {
   border-color: var(--input-focus-border);
+}
+
+/* Streaming Feature Card */
+.streaming-feature-card {
+  background: var(--card-bg, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  max-width: 480px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.streaming-feature-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.streaming-feature-header .fluent-checkbox-container {
+  margin-bottom: 0;
+  font-weight: 500;
+}
+
+.streaming-feature-card .setting-hint {
+  display: block;
+  line-height: 1.45;
+  margin-top: 4px;
+  margin-left: 24px;
+}
+
+.streaming-pro-hint {
+  margin-top: 6px;
+  margin-left: 24px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.pro-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: var(--input-bg, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  padding: 2px 8px;
+  border-radius: 4px;
 }
 
 /* Buttons */
@@ -546,7 +600,7 @@ h2 {
   border-radius: 6px;
   padding: 14px 20px;
   width: 100%;
-  max-width: 520px;
+  max-width: 480px;
   box-sizing: border-box;
   margin-bottom: 16px;
 }
@@ -647,6 +701,8 @@ h2 {
 
 .onboarding-card {
   width: 500px;
+  max-width: 100%;
+  box-sizing: border-box;
   background: var(--card-bg, var(--onboard-bg));
   border: 1px solid var(--border-color);
   border-radius: 12px;
@@ -761,7 +817,7 @@ h2 {
   border-radius: 6px;
   padding: 16px;
   width: 100%;
-  max-width: 520px;
+  max-width: 480px;
   box-sizing: border-box;
   margin: 0 0 20px 0;
   display: flex;
@@ -994,8 +1050,9 @@ body[data-theme="classic_dark"] #app {
   display: flex;
   gap: 10px;
   margin-bottom: 16px;
-  max-width: 520px;
+  max-width: 480px;
   width: 100%;
+  box-sizing: border-box;
 }
 
 .fluent-input {
@@ -1021,7 +1078,7 @@ body[data-theme="classic_dark"] #app {
   border-radius: 6px;
   background: var(--card-bg);
   max-height: 260px;
-  max-width: 520px;
+  max-width: 480px;
   width: 100%;
   box-sizing: border-box;
   overflow-y: auto;
@@ -1096,7 +1153,8 @@ body[data-theme="classic_dark"] #app {
   border-radius: 4px;
   margin-bottom: 12px;
   font-size: 12px;
-  max-width: 520px;
+  max-width: 480px;
+  width: 100%;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -1410,7 +1468,8 @@ body[data-theme="forest"] .meeting-speaker-text {
   border-radius: 6px;
   margin-top: 10px;
   font-size: 13px;
-  max-width: 520px;
+  max-width: 480px;
+  width: 100%;
   box-sizing: border-box;
   display: flex;
   align-items: center;

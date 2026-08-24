@@ -67,6 +67,25 @@
           <h2>Core Preferences</h2>
           <p class="step-desc">Configure your trigger hotkey and system behavior.</p>
 
+          <div class="setting-group streaming-feature-card">
+            <div class="streaming-feature-header">
+              <label class="fluent-checkbox-container">
+                <input type="checkbox" id="onboard-streaming-mode-check">
+                <span class="checkmark"></span>
+                Real-Time Streaming Dictation
+              </label>
+              <span class="pro-tag">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                </svg>
+                PRO
+              </span>
+            </div>
+            <span class="setting-hint">
+              Dictate with near-zero latency and instantaneous word-by-word typing for a fluid experience.
+            </span>
+          </div>
+
           <div class="setting-group">
             <label for="onboard-hotkey-select">Trigger Hotkey</label>
             <div class="select-wrapper">
@@ -110,25 +129,6 @@
               Start SpeekTo.Me on system startup
             </label>
             <span class="setting-hint">Launches SpeekTo.Me in your system tray automatically.</span>
-          </div>
-
-          <div class="setting-group" style="background: var(--card-bg, rgba(255, 255, 255, 0.03)); border: 1px solid var(--border-color, rgba(255,255,255,0.12)); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-              <label class="fluent-checkbox-container" style="margin-bottom: 0; font-weight: 500;">
-                <input type="checkbox" id="onboard-streaming-mode-check">
-                <span class="checkmark"></span>
-                Real-Time Streaming Dictation
-              </label>
-              <span class="pro-tag" style="display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--text-primary); background: var(--input-bg, rgba(255,255,255,0.06)); border: 1px solid var(--border-color, rgba(255,255,255,0.12)); padding: 2px 8px; border-radius: 4px;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-                </svg>
-                PRO
-              </span>
-            </div>
-            <span class="setting-hint" style="display: block; line-height: 1.45; margin-top: 4px;">
-              Dictate with near-zero latency and instantaneous word-by-word typing for a fluid experience.
-            </span>
           </div>
 
           <div class="setting-group checkbox-group">
@@ -263,6 +263,31 @@
         <h2>General Settings</h2>
         <p class="section-desc">Configure core keyboard and feedback behavior.</p>
 
+        <div class="setting-group streaming-feature-card">
+          <div class="streaming-feature-header">
+            <label class="fluent-checkbox-container">
+              <input type="checkbox" id="streaming-mode-check">
+              <span class="checkmark"></span>
+              Real-Time Streaming Dictation
+            </label>
+            <span class="pro-tag">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              </svg>
+              PRO
+            </span>
+          </div>
+          <span class="setting-hint">
+            Dictate with near-zero latency and instantaneous word-by-word pasting for a fast, responsive dictation experience.
+          </span>
+          <div id="streaming-pro-hint" class="streaming-pro-hint" style="display: none;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-right: 2px;">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+            Pro plan feature. Upgrade on your Web Dashboard to unlock streaming dictation.
+          </div>
+        </div>
+
         <div class="setting-group">
           <label for="hotkey-select">Trigger Hotkey</label>
           <div class="select-wrapper">
@@ -296,31 +321,6 @@
               <option value="mint">Dark Mint</option>
               <option value="classic_dark">Classic Dark</option>
             </select>
-          </div>
-        </div>
-
-        <div class="setting-group" style="background: var(--card-bg, rgba(255, 255, 255, 0.03)); border: 1px solid var(--border-color, rgba(255,255,255,0.12)); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-            <label class="fluent-checkbox-container" style="margin-bottom: 0; font-weight: 500;">
-              <input type="checkbox" id="streaming-mode-check">
-              <span class="checkmark"></span>
-              Real-Time Streaming Dictation
-            </label>
-            <span class="pro-tag" style="display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--text-primary); background: var(--input-bg, rgba(255,255,255,0.06)); border: 1px solid var(--border-color, rgba(255,255,255,0.12)); padding: 2px 8px; border-radius: 4px;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-              </svg>
-              PRO
-            </span>
-          </div>
-          <span class="setting-hint" style="display: block; line-height: 1.45; margin-top: 4px;">
-            Dictate with near-zero latency and instantaneous word-by-word pasting for a fast, responsive dictation experience.
-          </span>
-          <div id="streaming-pro-hint" style="display: none; margin-top: 6px; color: var(--text-secondary); font-size: 12px;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-right: 2px;">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-            </svg>
-            Pro plan feature. Upgrade on your Web Dashboard to unlock streaming dictation.
           </div>
         </div>
 

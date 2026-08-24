@@ -3,6 +3,9 @@ package utils
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
+	"strings"
+	"time"
 )
 
 // Calculate audio duration from standard WAV header
@@ -98,4 +101,125 @@ func EncodePCMToWAV(pcmData []byte, sampleRate int, channels int) []byte {
 	binary.LittleEndian.PutUint32(header[40:44], uint32(dataSize))
 
 	return append(header, pcmData...)
+}
+
+// CalculateRMS computes the Root Mean Square energy level for 16-bit signed PCM audio samples
+func CalculateRMS(pcmData []byte) float64 {
+	if len(pcmData) < 2 {
+		return 0
+	}
+	var sumSquares float64
+	sampleCount := len(pcmData) / 2
+	for i := 0; i < len(pcmData)-1; i += 2 {
+		sample := int16(binary.LittleEndian.Uint16(pcmData[i : i+2]))
+		sumSquares += float64(sample) * float64(sample)
+	}
+	if sampleCount == 0 {
+		return 0
+	}
+	return math.Sqrt(sumSquares / float64(sampleCount))
+}
+
+// IsSilencePCM determines whether a PCM audio slice is silence based on an RMS threshold
+func IsSilencePCM(pcmData []byte, thresholdRMS float64) bool {
+	if thresholdRMS <= 0 {
+		thresholdRMS = 250.0 // Default baseline silence threshold for 16-bit PCM
+	}
+	return CalculateRMS(pcmData) < thresholdRMS
+}
+
+// AudioChunkTracker tracks real-time Voice Activity Detection (VAD) and sliding chunk boundaries
+type AudioChunkTracker struct {
+	SampleRate               int
+	Channels                 int
+	ThresholdRMS             float64
+	SilenceDurationThreshold time.Duration
+	MaxChunkDuration         time.Duration
+	MinSpeechDuration        time.Duration
+	hasActiveSpeech          bool
+	consecutiveSilenceBytes  int
+	totalChunkBytes          int
+}
+
+// NewAudioChunkTracker creates a new VAD audio chunk tracker with sensible streaming defaults
+func NewAudioChunkTracker(sampleRate int, thresholdRMS float64) *AudioChunkTracker {
+	if sampleRate <= 0 {
+		sampleRate = 16000
+	}
+	if thresholdRMS <= 0 {
+		thresholdRMS = 280.0
+	}
+	return &AudioChunkTracker{
+		SampleRate:               sampleRate,
+		Channels:                 1,
+		ThresholdRMS:             thresholdRMS,
+		SilenceDurationThreshold: 450 * time.Millisecond,
+		MaxChunkDuration:         3500 * time.Millisecond,
+		MinSpeechDuration:        600 * time.Millisecond,
+	}
+}
+
+// ProcessChunk evaluates incoming PCM data, updates internal state, and signals if the chunk should be committed
+func (t *AudioChunkTracker) ProcessChunk(pcmChunk []byte) (isSilence bool, shouldCommit bool) {
+	if len(pcmChunk) == 0 {
+		return true, false
+	}
+	t.totalChunkBytes += len(pcmChunk)
+	bytesPerSec := t.SampleRate * t.Channels * 2 // 16-bit = 2 bytes per sample
+
+	rms := CalculateRMS(pcmChunk)
+	isSilence = rms < t.ThresholdRMS
+
+	if !isSilence {
+		t.hasActiveSpeech = true
+		t.consecutiveSilenceBytes = 0
+	} else {
+		t.consecutiveSilenceBytes += len(pcmChunk)
+	}
+
+	chunkDuration := time.Duration(float64(t.totalChunkBytes)/float64(bytesPerSec)*1000) * time.Millisecond
+	silenceDuration := time.Duration(float64(t.consecutiveSilenceBytes)/float64(bytesPerSec)*1000) * time.Millisecond
+
+	// Trigger commit condition:
+	// 1. We had active speech, minimum speech threshold reached, followed by significant silence gap
+	if t.hasActiveSpeech && chunkDuration >= t.MinSpeechDuration && silenceDuration >= t.SilenceDurationThreshold {
+		return isSilence, true
+	}
+
+	// 2. Maximum sliding chunk duration exceeded to prevent memory/latency bloat
+	if chunkDuration >= t.MaxChunkDuration {
+		return isSilence, true
+	}
+
+	return isSilence, false
+}
+
+// Reset clears the active chunk VAD state for the next chunk
+func (t *AudioChunkTracker) Reset() {
+	t.hasActiveSpeech = false
+	t.consecutiveSilenceBytes = 0
+	t.totalChunkBytes = 0
+}
+
+// MergeTranscripts combines committed text with current active chunk transcript cleanly
+func MergeTranscripts(committed, current string) string {
+	cTrimmed := strings.TrimSpace(committed)
+	curTrimmed := strings.TrimSpace(current)
+	if cTrimmed == "" {
+		return curTrimmed
+	}
+	if curTrimmed == "" {
+		return cTrimmed
+	}
+	return cTrimmed + " " + curTrimmed
+}
+
+// EndsWithSentenceBoundary checks if a transcript ends with definitive sentence punctuation
+func EndsWithSentenceBoundary(text string) bool {
+	t := strings.TrimSpace(text)
+	if len(t) == 0 {
+		return false
+	}
+	lastChar := t[len(t)-1]
+	return lastChar == '.' || lastChar == '?' || lastChar == '!' || lastChar == ';'
 }
