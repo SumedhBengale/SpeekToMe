@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Calculate audio duration from standard WAV header
@@ -207,7 +208,77 @@ func (t *AudioChunkTracker) Reset() {
 	t.totalChunkBytes = 0
 }
 
-// MergeTranscripts combines committed text with current active chunk transcript cleanly
+var continuationWords = map[string]bool{
+	// Coordinating and subordinating conjunctions
+	"and": true, "but": true, "or": true, "nor": true, "so": true, "because": true,
+	"which": true, "that": true, "while": true, "as": true, "although": true,
+	"since": true, "though": true, "unless": true, "whereas": true, "if": true,
+	"when": true, "where": true, "after": true, "before": true,
+
+	// Prepositions and continuation particles
+	"to": true, "into": true, "onto": true, "for": true, "from": true, "with": true,
+	"without": true, "about": true, "between": true, "through": true, "under": true,
+	"over": true, "by": true, "at": true, "in": true, "on": true, "of": true,
+	"out": true, "off": true, "up": true, "down": true,
+
+	// Determiners, pronouns, and adverbs continuing a clause
+	"my": true, "your": true, "our": true, "their": true, "his": true, "her": true,
+	"its": true, "the": true, "a": true, "an": true, "this": true, "these": true,
+	"those": true, "me": true, "him": true, "them": true, "us": true, "you": true,
+	"also": true, "even": true, "just": true, "only": true, "already": true,
+	"still": true, "then": true, "too": true, "automatically": true, "completely": true,
+	"really": true, "actually": true, "simply": true,
+
+	// Auxiliary / modal verbs
+	"is": true, "are": true, "was": true, "were": true, "be": true, "been": true,
+	"being": true, "have": true, "has": true, "had": true, "do": true, "does": true,
+	"did": true, "can": true, "could": true, "will": true, "would": true, "shall": true,
+	"should": true, "may": true, "might": true, "must": true,
+}
+
+var incompleteEndings = map[string]bool{
+	"to": true, "into": true, "onto": true, "for": true, "from": true, "with": true,
+	"without": true, "about": true, "at": true, "in": true, "on": true, "of": true,
+	"by": true, "and": true, "or": true, "but": true, "that": true, "which": true,
+	"because": true, "as": true, "while": true, "organizes": true, "captures": true,
+	"is": true, "are": true, "was": true, "were": true, "have": true, "has": true,
+	"had": true, "makes": true, "takes": true, "gives": true, "includes": true,
+	"requires": true, "contains": true, "shows": true, "connect": true, "connects": true,
+	"integrate": true, "integrates": true, "build": true, "builds": true,
+	"create": true, "creates": true, "handle": true, "handles": true,
+	"support": true, "supports": true, "provide": true, "provides": true,
+	"allow": true, "allows": true, "need": true, "needs": true,
+	"want": true, "wants": true, "like": true, "likes": true,
+}
+
+// isProperOrAcronym checks if a word should preserve uppercase (e.g. "I", "I'm", "API", "SpeekTo.Me")
+func isProperOrAcronym(word string) bool {
+	if word == "I" || strings.HasPrefix(word, "I'") || word == "I’m" || word == "I’ve" || word == "I’ll" || word == "I’d" {
+		return true
+	}
+	// Check if all uppercase acronym (len >= 2)
+	allUpper := true
+	hasLetter := false
+	for _, r := range word {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+			if !unicode.IsUpper(r) {
+				allUpper = false
+				break
+			}
+		}
+	}
+	if hasLetter && allUpper && len(word) >= 2 {
+		return true
+	}
+	// Check if PascalCase or contains internal dots
+	if strings.Contains(word, ".") || strings.Contains(word, "-") {
+		return true
+	}
+	return false
+}
+
+// MergeTranscripts combines committed text with current active chunk transcript cleanly using seam stitching
 func MergeTranscripts(committed, current string) string {
 	cTrimmed := strings.TrimSpace(committed)
 	curTrimmed := strings.TrimSpace(current)
@@ -217,6 +288,38 @@ func MergeTranscripts(committed, current string) string {
 	if curTrimmed == "" {
 		return cTrimmed
 	}
+
+	// Extract first word of current chunk
+	curWords := strings.Fields(curTrimmed)
+	if len(curWords) == 0 {
+		return cTrimmed
+	}
+	firstWordClean := strings.ToLower(strings.Trim(curWords[0], ".,!?:;\"'()[]{}"))
+
+	// Extract last word of committed text
+	cWords := strings.Fields(cTrimmed)
+	lastWordClean := ""
+	if len(cWords) > 0 {
+		lastWordClean = strings.ToLower(strings.Trim(cWords[len(cWords)-1], ".,!?:;\"'()[]{}"))
+	}
+
+	isContinuation := continuationWords[firstWordClean]
+	isIncomplete := incompleteEndings[lastWordClean]
+
+	// If the seam represents a continuation or connects an incomplete predicate
+	if isContinuation || isIncomplete {
+		// Strip trailing punctuation from committed text
+		cTrimmed = strings.TrimRight(cTrimmed, ".,;:!?")
+
+		// Adjust casing of first word if not a proper noun / acronym
+		if !isProperOrAcronym(curWords[0]) && len(curWords[0]) > 0 {
+			runes := []rune(curWords[0])
+			runes[0] = unicode.ToLower(runes[0])
+			curWords[0] = string(runes)
+			curTrimmed = strings.Join(curWords, " ")
+		}
+	}
+
 	return cTrimmed + " " + curTrimmed
 }
 

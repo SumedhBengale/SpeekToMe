@@ -180,7 +180,6 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                 };
 
                 if let Some(handle) = stream_handle {
-                    crate::punct::prewarm_punct_engine();
                     let mut vad = crate::vad::SileroVadSession::new().ok();
                     let mut vad_processed_16k_len = 0;
                     let mut pre_speech_ring = std::collections::VecDeque::<i16>::with_capacity(4000);

@@ -174,8 +174,25 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			}
 
 			promptCtx := utils.GetPromptContext(committedText, 150)
+			effectivePrompt := promptCtx
+			if customPrompt != "" {
+				if promptCtx != "" {
+					effectivePrompt = customPrompt + " " + promptCtx
+				} else {
+					effectivePrompt = customPrompt
+				}
+			}
+
+			audioDurationSec := utils.GetOggOpusDuration(toTranscribe)
+			if audioDurationSec <= 0 && (startPayload.Format == "pcm" || startPayload.Format == "") {
+				audioDurationSec = float64(len(data)) / 32000.0
+			}
+
+			log.Printf("[STREAM ASR REQUEST] Chunk: %d | User ID: %d | Audio: %d bytes (%.2fs) | Prompt: %q",
+				currentChunk, user.ID, len(data), audioDurationSec, effectivePrompt)
+
 			startASR := time.Now()
-			rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, promptCtx)
+			rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, effectivePrompt)
 			asrDuration := time.Since(startASR)
 
 			if err != nil {
@@ -184,16 +201,15 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			}
 
 			rawChunkText = strings.TrimSpace(rawChunkText)
-			audioDurationSec := utils.GetOggOpusDuration(toTranscribe)
-			if audioDurationSec <= 0 && (startPayload.Format == "pcm" || startPayload.Format == "") {
-				audioDurationSec = float64(len(data)) / 32000.0
-			}
-
-			log.Printf("[STREAM ASR LOG] Chunk: %d | User ID: %d | Audio: %d bytes (%.2fs) | Prompt: %q | Result: %q | Latency: %v | Provider: %s",
-				currentChunk, user.ID, len(data), audioDurationSec, promptCtx, rawChunkText, asrDuration, usedProvider)
+			log.Printf("[STREAM ASR RESPONSE] Chunk: %d | User ID: %d | Provider: %s | Result: %q | Latency: %v",
+				currentChunk, user.ID, usedProvider, rawChunkText, asrDuration)
 
 			if rawChunkText != "" {
+				previousCommitted := committedText
 				committedText = utils.MergeTranscripts(committedText, rawChunkText)
+				log.Printf("[STREAM ASR MERGE] Chunk: %d | Prev: %q | New: %q -> Merged: %q",
+					currentChunk, previousCommitted, rawChunkText, committedText)
+
 				_ = writeStreamJSON(ctx, conn, StreamEventMessage{
 					Type: "interim",
 					Text: committedText,
