@@ -3,9 +3,7 @@ package utils
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
 	"strings"
-	"time"
 	"unicode"
 )
 
@@ -102,110 +100,6 @@ func EncodePCMToWAV(pcmData []byte, sampleRate int, channels int) []byte {
 	binary.LittleEndian.PutUint32(header[40:44], uint32(dataSize))
 
 	return append(header, pcmData...)
-}
-
-// CalculateRMS computes the Root Mean Square energy level for 16-bit signed PCM audio samples
-func CalculateRMS(pcmData []byte) float64 {
-	if len(pcmData) < 2 {
-		return 0
-	}
-	var sumSquares float64
-	sampleCount := len(pcmData) / 2
-	for i := 0; i < len(pcmData)-1; i += 2 {
-		sample := int16(binary.LittleEndian.Uint16(pcmData[i : i+2]))
-		sumSquares += float64(sample) * float64(sample)
-	}
-	if sampleCount == 0 {
-		return 0
-	}
-	return math.Sqrt(sumSquares / float64(sampleCount))
-}
-
-// IsSilencePCM determines whether a PCM audio slice is silence based on an RMS threshold
-func IsSilencePCM(pcmData []byte, thresholdRMS float64) bool {
-	if thresholdRMS <= 0 {
-		thresholdRMS = 250.0 // Default baseline silence threshold for 16-bit PCM
-	}
-	return CalculateRMS(pcmData) < thresholdRMS
-}
-
-// AudioChunkTracker tracks real-time Voice Activity Detection (VAD) and natural voice pause boundaries
-type AudioChunkTracker struct {
-	SampleRate               int
-	Channels                 int
-	ThresholdRMS             float64
-	NoiseFloorRMS            float64
-	SilenceDurationThreshold time.Duration
-	MaxChunkDuration         time.Duration
-	MinSpeechDuration        time.Duration
-	hasActiveSpeech          bool
-	consecutiveSilenceBytes  int
-	totalChunkBytes          int
-}
-
-// NewAudioChunkTracker creates a new VAD audio chunk tracker with natural speech pause defaults
-func NewAudioChunkTracker(sampleRate int, thresholdRMS float64) *AudioChunkTracker {
-	if sampleRate <= 0 {
-		sampleRate = 16000
-	}
-	if thresholdRMS <= 0 {
-		thresholdRMS = 280.0
-	}
-	return &AudioChunkTracker{
-		SampleRate:               sampleRate,
-		Channels:                 1,
-		ThresholdRMS:             thresholdRMS,
-		NoiseFloorRMS:            120.0,
-		SilenceDurationThreshold: 450 * time.Millisecond,
-		MaxChunkDuration:         10000 * time.Millisecond, // 10s max window before safety commit
-		MinSpeechDuration:        500 * time.Millisecond,
-	}
-}
-
-// ProcessChunk evaluates incoming PCM data, updates internal state, and signals if a natural voice break occurred
-func (t *AudioChunkTracker) ProcessChunk(pcmChunk []byte) (isSilence bool, shouldCommit bool) {
-	if len(pcmChunk) == 0 {
-		return true, false
-	}
-	t.totalChunkBytes += len(pcmChunk)
-	bytesPerSec := t.SampleRate * t.Channels * 2 // 16-bit = 2 bytes per sample
-
-	rms := CalculateRMS(pcmChunk)
-	dynamicThreshold := math.Max(t.ThresholdRMS, t.NoiseFloorRMS*2.0)
-	isSilence = rms < dynamicThreshold
-
-	if !isSilence {
-		t.hasActiveSpeech = true
-		t.consecutiveSilenceBytes = 0
-	} else {
-		t.consecutiveSilenceBytes += len(pcmChunk)
-		if rms > 10.0 && rms < t.ThresholdRMS {
-			t.NoiseFloorRMS = 0.95*t.NoiseFloorRMS + 0.05*rms
-		}
-	}
-
-	chunkDuration := time.Duration(float64(t.totalChunkBytes)/float64(bytesPerSec)*1000) * time.Millisecond
-	silenceDuration := time.Duration(float64(t.consecutiveSilenceBytes)/float64(bytesPerSec)*1000) * time.Millisecond
-
-	// Trigger commit condition ONLY on true voice breaks/pauses:
-	// Had active speech of >= 500ms, followed by >= 450ms silence pause
-	if t.hasActiveSpeech && chunkDuration >= t.MinSpeechDuration && silenceDuration >= t.SilenceDurationThreshold {
-		return isSilence, true
-	}
-
-	// Safety fallback if someone speaks for 10s without any pause
-	if chunkDuration >= t.MaxChunkDuration {
-		return isSilence, true
-	}
-
-	return isSilence, false
-}
-
-// Reset clears the active chunk VAD state for the next chunk
-func (t *AudioChunkTracker) Reset() {
-	t.hasActiveSpeech = false
-	t.consecutiveSilenceBytes = 0
-	t.totalChunkBytes = 0
 }
 
 var continuationWords = map[string]bool{
@@ -331,21 +225,6 @@ func EndsWithSentenceBoundary(text string) bool {
 	}
 	lastChar := t[len(t)-1]
 	return lastChar == '.' || lastChar == '?' || lastChar == '!' || lastChar == ';'
-}
-
-// ExtractStabilizedText holds back tentative in-flight trailing words during active continuous speech
-// to prevent premature output of half-baked phonetic hypotheses.
-func ExtractStabilizedText(rawText string, isFinalOrPaused bool) string {
-	raw := strings.TrimSpace(rawText)
-	if raw == "" || isFinalOrPaused {
-		return raw
-	}
-	words := strings.Fields(raw)
-	if len(words) <= 1 {
-		return ""
-	}
-	// Hold back the trailing 1 word while speech is still active
-	return strings.Join(words[:len(words)-1], " ")
 }
 
 // GetPromptContext extracts the trailing character context (up to maxChars) from committed text
