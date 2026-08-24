@@ -276,8 +276,16 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     println!("Recording stopped.");
 
                     if !is_aborted {
+                        // Drain any remaining tail audio samples sitting in buffer
+                        let final_samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        let all_16k = resample_to_16k_mono(&final_samples, sample_rate, channels);
+                        if all_16k.len() > vad_processed_16k_len {
+                            let tail = &all_16k[vad_processed_16k_len..];
+                            active_phrase_samples.extend_from_slice(tail);
+                        }
+
                         // Send any remaining active phrase audio on key release
-                        if active_phrase_samples.len() >= 3200 {
+                        if active_phrase_samples.len() >= 2400 { // >= 150ms of audio
                             let mut pcm_bytes = Vec::with_capacity(active_phrase_samples.len() * 2);
                             for &sample in &active_phrase_samples {
                                 pcm_bytes.extend_from_slice(&sample.to_le_bytes());

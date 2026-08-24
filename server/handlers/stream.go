@@ -50,6 +50,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(websocket.StatusInternalError, "the session terminated")
+	conn.SetReadLimit(32 << 20) // Allow reading up to 32MB frames (default was 32KB)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
