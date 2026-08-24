@@ -184,7 +184,10 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			}
 
 			rawChunkText = strings.TrimSpace(rawChunkText)
-			audioDurationSec := float64(len(data)) / 32000.0
+			audioDurationSec := utils.GetOggOpusDuration(toTranscribe)
+			if audioDurationSec <= 0 && (startPayload.Format == "pcm" || startPayload.Format == "") {
+				audioDurationSec = float64(len(data)) / 32000.0
+			}
 
 			log.Printf("[STREAM ASR LOG] Chunk: %d | User ID: %d | Audio: %d bytes (%.2fs) | Prompt: %q | Result: %q | Latency: %v | Provider: %s",
 				currentChunk, user.ID, len(data), audioDurationSec, promptCtx, rawChunkText, asrDuration, usedProvider)

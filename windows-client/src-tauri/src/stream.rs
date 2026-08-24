@@ -134,7 +134,7 @@ pub fn start_streaming_session(
         // 1. Send start handshake frame
         let start_payload = serde_json::json!({
             "type": "start",
-            "format": "pcm",
+            "format": "ogg_opus",
             "sample_rate": 16000,
             "channels": 1,
             "enhance": enhance,
@@ -160,7 +160,6 @@ pub fn start_streaming_session(
         println!("[STREAM DEBUG RECORDINGS] Saving live chunk recordings to: {}", debug_dir.display());
 
         let mut chunk_index: usize = 0;
-        let mut full_session_pcm = Vec::new();
 
         // 2. Stream audio frames from channel
         let write_task = async move {
@@ -168,11 +167,8 @@ pub fn start_streaming_session(
                 match msg {
                     StreamAudioMessage::AudioChunk(bytes) => {
                         chunk_index += 1;
-                        let chunk_wav = pcm_16k_to_wav(&bytes);
-                        let chunk_path = debug_dir.join(format!("chunk_{:03}.wav", chunk_index));
-                        let _ = std::fs::write(&chunk_path, &chunk_wav);
-
-                        full_session_pcm.extend_from_slice(&bytes);
+                        let chunk_path = debug_dir.join(format!("chunk_{:03}.ogg", chunk_index));
+                        let _ = std::fs::write(&chunk_path, &bytes);
 
                         if write.send(Message::Binary(bytes)).await.is_err() {
                             break;
@@ -183,11 +179,6 @@ pub fn start_streaming_session(
                     }
                     StreamAudioMessage::EndOfStream => {
                         println!("[STREAM CLIENT] Sending end_of_stream message to server.");
-                        let full_wav = pcm_16k_to_wav(&full_session_pcm);
-                        let full_path = debug_dir.join("full_session.wav");
-                        let _ = std::fs::write(&full_path, &full_wav);
-                        println!("[STREAM DEBUG SUCCESS] Full session WAV saved to: {}", full_path.display());
-
                         let _ = write.send(Message::Text(r#"{"type":"end_of_stream"}"#.to_string())).await;
                         break;
                     }

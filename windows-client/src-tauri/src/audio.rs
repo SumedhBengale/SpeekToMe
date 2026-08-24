@@ -232,11 +232,14 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                         let should_commit = pause_detected || active_phrase_samples.len() >= 80000; // max 5s chunk
                                         if should_commit && active_phrase_samples.len() >= 4800 { // >= 300ms of audio
                                             is_in_speech = false;
-                                            let mut pcm_bytes = Vec::with_capacity(active_phrase_samples.len() * 2);
-                                            for &sample in &active_phrase_samples {
-                                                pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+                                            match encode_opus_ogg(&active_phrase_samples, 16000, 1) {
+                                                Ok(ogg_bytes) => {
+                                                    let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("[STREAM ERROR] Failed to encode Opus Ogg: {}", e);
+                                                }
                                             }
-                                            let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
 
                                             // Retain trailing 200ms (3200 samples) for acoustic continuity
                                             let overlap_samples = 3200;
@@ -254,13 +257,11 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                 } else {
                                     // Fallback if VAD failed to init: 2-second periodic chunking
                                     if all_16k.len() > vad_processed_16k_len + 32000 {
-                                        let new_slice = &all_16k[vad_processed_16k_len..];
-                                        let mut pcm_bytes = Vec::with_capacity(new_slice.len() * 2);
-                                        for sample in new_slice {
-                                            pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+                                        let new_slice = &all_16k[vad_processed_16k_len..vad_processed_16k_len + 32000];
+                                        if let Ok(ogg_bytes) = encode_opus_ogg(new_slice, 16000, 1) {
+                                            let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
                                         }
-                                        let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
-                                        vad_processed_16k_len = all_16k.len();
+                                        vad_processed_16k_len += 32000;
                                     }
                                 }
                             }
@@ -286,11 +287,9 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
 
                         // Send any remaining active phrase audio on key release
                         if active_phrase_samples.len() >= 2400 { // >= 150ms of audio
-                            let mut pcm_bytes = Vec::with_capacity(active_phrase_samples.len() * 2);
-                            for &sample in &active_phrase_samples {
-                                pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+                            if let Ok(ogg_bytes) = encode_opus_ogg(&active_phrase_samples, 16000, 1) {
+                                let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
                             }
-                            let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(pcm_bytes));
                             active_phrase_samples.clear();
                         }
                         let _ = handle.tx.send(crate::stream::StreamAudioMessage::EndOfStream);
