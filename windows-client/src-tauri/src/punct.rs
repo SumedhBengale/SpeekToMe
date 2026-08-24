@@ -1,8 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
 use sherpa_onnx::{OnlinePunctuation, OnlinePunctuationConfig, OnlinePunctuationModelConfig};
-
-static PUNCT_ENGINE: OnceLock<Arc<Mutex<Option<OnlinePunctuation>>>> = OnceLock::new();
 
 fn get_model_paths() -> (PathBuf, PathBuf) {
     let mut model_path = PathBuf::from("models/punct-en/model.int8.onnx");
@@ -22,16 +19,9 @@ fn get_model_paths() -> (PathBuf, PathBuf) {
     (model_path, vocab_path)
 }
 
-pub fn get_punct_engine() -> Arc<Mutex<Option<OnlinePunctuation>>> {
-    PUNCT_ENGINE.get_or_init(|| {
-        Arc::new(Mutex::new(init_punct_engine()))
-    }).clone()
-}
-
-fn init_punct_engine() -> Option<OnlinePunctuation> {
+fn create_punct_instance() -> Option<OnlinePunctuation> {
     let (model_path, vocab_path) = get_model_paths();
     if !model_path.exists() || !vocab_path.exists() {
-        eprintln!("[PUNCT WARN] Neural punctuation model files not found: {:?}, {:?}", model_path, vocab_path);
         return None;
     }
 
@@ -45,25 +35,35 @@ fn init_punct_engine() -> Option<OnlinePunctuation> {
         },
     };
 
-    let t_load = std::time::Instant::now();
-    match OnlinePunctuation::create(&config) {
-        Some(punct) => {
-            let load_dur = t_load.elapsed();
-            println!("[CLIENT BENCHMARK] Neural Punctuation model loaded into RAM in {:.2?} (~7.2 MB)", load_dur);
-            Some(punct)
-        }
-        None => {
-            eprintln!("[PUNCT ERROR] Failed to initialize neural punctuation model with config");
-            None
-        }
-    }
+    OnlinePunctuation::create(&config)
 }
 
 /// Pre-warms the neural punctuation model asynchronously in memory
 pub fn prewarm_punct_engine() {
     tauri::async_runtime::spawn_blocking(|| {
-        let _ = get_punct_engine();
+        let _ = create_punct_instance();
     });
+}
+
+/// Cleans duplicate punctuation marks (e.g. `,,`, `..`, `,.`)
+fn sanitize_punctuation(s: &str) -> String {
+    let mut out = s.to_string();
+    while out.contains(",,") {
+        out = out.replace(",,", ",");
+    }
+    while out.contains("..") {
+        out = out.replace("..", ".");
+    }
+    while out.contains(",.") {
+        out = out.replace(",.", ".");
+    }
+    while out.contains(".,") {
+        out = out.replace(".,", ".");
+    }
+    while out.contains("  ") {
+        out = out.replace("  ", " ");
+    }
+    out
 }
 
 /// Restores punctuation and capitalization on raw or semi-punctuated transcript text.
@@ -73,26 +73,22 @@ pub fn restore_punctuation(text: &str) -> String {
         return String::new();
     }
 
-    let engine_lock = get_punct_engine();
-    let guard = engine_lock.lock().unwrap_or_else(|e| e.into_inner());
-
-    if let Some(ref punct) = *guard {
-        // Strip trailing premature periods from in-flight text
+    let t_start = std::time::Instant::now();
+    if let Some(punct) = create_punct_instance() {
+        // Strip trailing premature periods from in-flight phrases so the neural model can link clauses
         let clean_input = trimmed.trim_end_matches('.');
-        let t_infer = std::time::Instant::now();
         if let Some(punctuated) = punct.add_punctuation(clean_input) {
-            let infer_dur = t_infer.elapsed();
-            let res = punctuated.trim();
+            let res = sanitize_punctuation(punctuated.trim());
             if !res.is_empty() {
+                let dur = t_start.elapsed();
                 println!("[CLIENT BENCHMARK] Neural Punctuation inference: {:.2?} (in: {} chars -> out: {} chars)",
-                    infer_dur, clean_input.len(), res.len());
-                return res.to_string();
+                    dur, clean_input.len(), res.len());
+                return res;
             }
         }
     }
 
-    // Fallback: return original trimmed text
-    trimmed.to_string()
+    sanitize_punctuation(trimmed)
 }
 
 #[cfg(test)]
@@ -100,10 +96,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_neural_punctuation_restoration() {
+    fn test_stateless_punctuation() {
         let (model_path, _) = get_model_paths();
         if !model_path.exists() {
-            println!("Model not found at {:?}, skipping test", model_path);
             return;
         }
 
@@ -113,5 +108,7 @@ mod tests {
         println!("Output: {}", result);
         assert!(!result.is_empty());
         assert!(result.contains('.'));
+        assert!(!result.contains(",,"));
+        assert!(!result.contains(".."));
     }
 }
