@@ -272,14 +272,16 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 
 	if enhance && finalRawTranscript != "" {
 		tstart := time.Now()
+		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Prompt: %q | Raw Input: %q", user.ID, customPrompt, finalRawTranscript)
 		enhancer := pipeline.NewAIEnhancementTransform(customPrompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
+		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
-			log.Printf("[STREAM LLM ERROR] %v", terr)
+			log.Printf("[STREAM AI ENHANCE ERROR] User ID: %d | Error: %v | Latency: %.2fs", user.ID, terr, dsLatency)
 		} else if enhancedText != "" {
+			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Enhanced: %q | Latency: %.2fs", user.ID, enhancedText, dsLatency)
 			currentText = enhancedText
 		}
-		dsLatency = time.Since(tstart).Seconds()
 	}
 
 	totalLatencyMs := time.Since(streamStartTime).Milliseconds()
