@@ -195,11 +195,11 @@ pub fn start_streaming_session(
                         if let Ok(event) = serde_json::from_str::<StreamEventResponse>(&text) {
                             if event.event_type == "interim" {
                                 if !event.text.is_empty() {
-                                    let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &event.text);
+                                    let normalized_text = crate::vocab::get_vocab_manager().process_text(&event.text);
+                                    let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &normalized_text);
                                     if backspaces > 0 || !new_suffix.is_empty() {
-                                        let normalized_suffix = crate::vocab::get_vocab_manager().process_text(&new_suffix);
-                                        let type_text = normalized_suffix.clone();
-                                        currently_typed = event.text.clone();
+                                        currently_typed = normalized_text.clone();
+                                        let type_text = new_suffix.clone();
                                         println!("[STREAM INTERIM] Backspaces: {}, Typing: {:?}", backspaces, type_text);
                                         tauri::async_runtime::spawn_blocking(move || {
                                             if backspaces > 0 {
@@ -213,10 +213,10 @@ pub fn start_streaming_session(
                                 }
                             } else if event.event_type == "final" {
                                 if !event.text.is_empty() {
-                                    let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &event.text);
+                                    let normalized_text = crate::vocab::get_vocab_manager().process_text(&event.text);
+                                    let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &normalized_text);
                                     if backspaces > 0 || !new_suffix.is_empty() {
-                                        let normalized_suffix = crate::vocab::get_vocab_manager().process_text(&new_suffix);
-                                        let type_text = normalized_suffix.clone();
+                                        let type_text = new_suffix.clone();
                                         println!("[STREAM FINAL] Backspaces: {}, Final typing: {:?}", backspaces, type_text);
                                         tauri::async_runtime::spawn_blocking(move || {
                                             if backspaces > 0 {

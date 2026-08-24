@@ -642,17 +642,24 @@ pub fn normalize_with_vocabulary(text: &str, vocab: &CompiledVocabulary) -> Stri
                             false
                         };
 
-                        let mut sub_token_match = true;
-                        if k >= 2 && term.sub_tokens.len() == k {
-                            for j in 0..k {
-                                let tok_sim = jaro_winkler(&tokens[i + j].normalized, &term.sub_tokens[j]);
-                                let min_tok_sim = if term.sub_tokens[j].len() <= 2 { 0.85 } else { 0.65 };
-                                if tok_sim < min_tok_sim {
-                                    sub_token_match = false;
-                                    break;
+                        let sub_token_match = if k >= 2 {
+                            if term.sub_tokens.len() == k {
+                                let mut all_match = true;
+                                for j in 0..k {
+                                    let tok_sim = jaro_winkler(&tokens[i + j].normalized, &term.sub_tokens[j]);
+                                    let min_tok_sim = if term.sub_tokens[j].len() <= 2 { 0.88 } else { 0.70 };
+                                    if tok_sim < min_tok_sim {
+                                        all_match = false;
+                                        break;
+                                    }
                                 }
+                                all_match
+                            } else {
+                                false
                             }
-                        }
+                        } else {
+                            term.token_count == 1
+                        };
 
                         if len_diff <= 2 * k && match_prefix && sub_token_match {
                             let sim = jaro_winkler(&joined_norm, &term.normalized);
@@ -688,17 +695,24 @@ pub fn normalize_with_vocabulary(text: &str, vocab: &CompiledVocabulary) -> Stri
                                     false
                                 };
 
-                                let mut sub_token_match = true;
-                                if k >= 2 && term.sub_tokens.len() == k {
-                                    for j in 0..k {
-                                        let tok_sim = jaro_winkler(&tokens[i + j].normalized, &term.sub_tokens[j]);
-                                        let min_tok_sim = if term.sub_tokens[j].len() <= 2 { 0.85 } else { 0.65 };
-                                        if tok_sim < min_tok_sim {
-                                            sub_token_match = false;
-                                            break;
+                                let sub_token_match = if k >= 2 {
+                                    if term.sub_tokens.len() == k {
+                                        let mut all_match = true;
+                                        for j in 0..k {
+                                            let tok_sim = jaro_winkler(&tokens[i + j].normalized, &term.sub_tokens[j]);
+                                            let min_tok_sim = if term.sub_tokens[j].len() <= 2 { 0.88 } else { 0.70 };
+                                            if tok_sim < min_tok_sim {
+                                                all_match = false;
+                                                break;
+                                            }
                                         }
+                                        all_match
+                                    } else {
+                                        false
                                     }
-                                }
+                                } else {
+                                    term.token_count == 1
+                                };
 
                                 if match_prefix && len_diff_ratio <= 0.15 && sub_token_match {
                                     let sim = jaro_winkler(&joined_norm, &term.normalized);
@@ -732,17 +746,24 @@ pub fn normalize_with_vocabulary(text: &str, vocab: &CompiledVocabulary) -> Stri
                                     false
                                 };
 
-                                let mut sub_token_match = true;
-                                if k >= 2 && term.sub_tokens.len() == k {
-                                    for j in 0..k {
-                                        let tok_sim = jaro_winkler(&tokens[i + j].normalized, &term.sub_tokens[j]);
-                                        let min_tok_sim = if term.sub_tokens[j].len() <= 2 { 0.85 } else { 0.65 };
-                                        if tok_sim < min_tok_sim {
-                                            sub_token_match = false;
-                                            break;
+                                let sub_token_match = if k >= 2 {
+                                    if term.sub_tokens.len() == k {
+                                        let mut all_match = true;
+                                        for j in 0..k {
+                                            let tok_sim = jaro_winkler(&tokens[i + j].normalized, &term.sub_tokens[j]);
+                                            let min_tok_sim = if term.sub_tokens[j].len() <= 2 { 0.88 } else { 0.70 };
+                                            if tok_sim < min_tok_sim {
+                                                all_match = false;
+                                                break;
+                                            }
                                         }
+                                        all_match
+                                    } else {
+                                        false
                                     }
-                                }
+                                } else {
+                                    term.token_count == 1
+                                };
 
                                 if match_prefix && len_diff_ratio <= 0.15 && sub_token_match {
                                     let sim = jaro_winkler(&joined_norm, &term.normalized);
