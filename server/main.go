@@ -14,6 +14,7 @@ import (
 	"speektome-server/db"
 	"speektome-server/handlers"
 	"speektome-server/ratelimit"
+	"speektome-server/services"
 )
 
 func main() {
@@ -31,6 +32,7 @@ func main() {
 	config.GoogleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
 	config.BackendURL = os.Getenv("BACKEND_URL")
 	config.DatabaseURL = os.Getenv("DATABASE_URL")
+	config.FrontendURL = os.Getenv("FRONTEND_URL")
 	if config.DatabaseURL == "" {
 		config.DatabaseURL = "speektome.db"
 	}
@@ -56,23 +58,28 @@ func main() {
 		}
 	}()
 
+	// Hydrate and schedule GeoIP database-backed cache
+	services.SetGeoDatabase(database)
+	services.SyncGeoCacheFromDB(database)
 	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
-		var lastResetMonth time.Month = time.Now().Month()
 		for range ticker.C {
-			now := time.Now()
-			if now.Month() != lastResetMonth && now.Day() == 1 {
-				log.Printf("[MONTHLY QUOTA RESET] First day of new month (%s). Resetting free tier and inactive user quotas...", now.Month().String())
-				err := database.ResetAllFreeUserQuotas()
-				if err != nil {
-					log.Printf("[MONTHLY QUOTA RESET ERROR] Failed to reset free quotas: %v", err)
-				} else {
-					log.Printf("[MONTHLY QUOTA RESET SUCCESS] Successfully reset all free/non-active user quotas.")
-					lastResetMonth = now.Month()
-				}
-			} else if now.Month() != lastResetMonth {
-				lastResetMonth = now.Month()
+			services.SyncGeoCacheFromDB(database)
+		}
+	}()
+
+	// Check and execute free-tier monthly quota reset if month rolled over
+	if _, err := database.CheckAndResetFreeUserMonthlyQuotas(); err != nil {
+		log.Printf("[FREE QUOTA RESET ERROR] Startup check failed: %v", err)
+	}
+
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if _, err := database.CheckAndResetFreeUserMonthlyQuotas(); err != nil {
+				log.Printf("[FREE QUOTA RESET ERROR] Periodic check failed: %v", err)
 			}
 		}
 	}()
@@ -97,6 +104,8 @@ func main() {
 	mux.HandleFunc("POST /generate", app.HandleGenerate)
 	mux.HandleFunc("GET /v1/stream", app.HandleStreamTranscribe)
 	mux.HandleFunc("POST /v1/transcribe/ack", app.HandleTranscribeAck)
+	mux.HandleFunc("GET /v1/languages", handlers.HandleGetLanguages)
+	mux.HandleFunc("GET /languages", handlers.HandleGetLanguages)
 	mux.HandleFunc("POST /validate-prompt", app.HandleValidatePrompt)
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("POST /newsletter/subscribe", app.HandleNewsletterSubscribe)

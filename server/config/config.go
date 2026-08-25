@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"speektome-server/db"
+	"speektome-server/utils"
 )
 
 var (
@@ -20,6 +21,7 @@ var (
 	GoogleClientSecret  string
 	BackendURL          string
 	DatabaseURL         string
+	FrontendURL         string
 
 	GroqAPIURL       = "https://api.groq.com/openai/v1/audio/transcriptions"
 	DeepInfraBaseURL = "https://api.deepinfra.com/v1/inference/"
@@ -28,21 +30,23 @@ var (
 
 // Provider descriptor structs
 type BatchProviderConfig struct {
-	Enabled       bool   `json:"enabled"`
-	Model         string `json:"model"`
-	BaseURL       string `json:"base_url,omitempty"`
-	APIKey        string `json:"api_key,omitempty"`
-	TimeoutMs     int    `json:"timeout_ms,omitempty"`
-	InitialPrompt string `json:"initial_prompt,omitempty"`
+	Enabled            bool     `json:"enabled"`
+	Model              string   `json:"model"`
+	BaseURL            string   `json:"base_url,omitempty"`
+	APIKey             string   `json:"api_key,omitempty"`
+	TimeoutMs          int      `json:"timeout_ms,omitempty"`
+	InitialPrompt      string   `json:"initial_prompt,omitempty"`
+	SupportedLanguages []string `json:"supported_languages,omitempty"`
 }
 
 type StreamingProviderConfig struct {
-	Enabled       bool   `json:"enabled"`
-	Model         string `json:"model"`
-	BaseURL       string `json:"base_url,omitempty"`
-	APIKey        string `json:"api_key,omitempty"`
-	TimeoutMs     int    `json:"timeout_ms,omitempty"`
-	InitialPrompt string `json:"initial_prompt,omitempty"`
+	Enabled            bool     `json:"enabled"`
+	Model              string   `json:"model"`
+	BaseURL            string   `json:"base_url,omitempty"`
+	APIKey             string   `json:"api_key,omitempty"`
+	TimeoutMs          int      `json:"timeout_ms,omitempty"`
+	InitialPrompt      string   `json:"initial_prompt,omitempty"`
+	SupportedLanguages []string `json:"supported_languages,omitempty"`
 }
 
 type LLMProviderConfig struct {
@@ -65,6 +69,7 @@ type ModelsConfig struct {
 
 type ProviderConfig struct {
 	Models                  ModelsConfig
+	Languages               []utils.Language
 	GroqRateLimitRPM        int
 	DefaultUserRateLimitRPM int
 	Notification            string
@@ -83,49 +88,55 @@ func DefaultModelsConfig() ModelsConfig {
 		DefaultLLMProvider:       "deepseek_v4",
 		BatchProviders: map[string]BatchProviderConfig{
 			"deepinfra_whisper": {
-				Enabled:       true,
-				Model:         "openai/whisper-large-v3-turbo",
-				BaseURL:       DeepInfraBaseURL + "openai/whisper-large-v3-turbo",
-				TimeoutMs:     10000,
-				InitialPrompt: defaultSTTPrompt,
+				Enabled:            true,
+				Model:              "openai/whisper-large-v3-turbo",
+				BaseURL:            DeepInfraBaseURL + "openai/whisper-large-v3-turbo",
+				TimeoutMs:          10000,
+				InitialPrompt:      defaultSTTPrompt,
+				SupportedLanguages: []string{"*"},
 			},
 			"groq_whisper": {
-				Enabled:       true,
-				Model:         "whisper-large-v3-turbo",
-				BaseURL:       GroqAPIURL,
-				TimeoutMs:     10000,
-				InitialPrompt: defaultSTTPrompt,
+				Enabled:            true,
+				Model:              "whisper-large-v3-turbo",
+				BaseURL:            GroqAPIURL,
+				TimeoutMs:          10000,
+				InitialPrompt:      defaultSTTPrompt,
+				SupportedLanguages: []string{"*"},
 			},
 			"cloudflare_whisper": {
-				Enabled:       true,
-				Model:         "@cf/openai/whisper-large-v3-turbo",
-				TimeoutMs:     15000,
-				InitialPrompt: defaultSTTPrompt,
+				Enabled:            true,
+				Model:              "@cf/openai/whisper-large-v3-turbo",
+				TimeoutMs:          15000,
+				InitialPrompt:      defaultSTTPrompt,
+				SupportedLanguages: []string{"*"},
 			},
 			"custom_batch": {
-				Enabled:       false,
-				Model:         "",
-				BaseURL:       "",
-				APIKey:        "",
-				TimeoutMs:     10000,
-				InitialPrompt: "",
+				Enabled:            false,
+				Model:              "",
+				BaseURL:            "",
+				APIKey:             "",
+				TimeoutMs:          10000,
+				InitialPrompt:      "",
+				SupportedLanguages: []string{"*"},
 			},
 		},
 		StreamingProviders: map[string]StreamingProviderConfig{
 			"deepinfra_nemotron": {
-				Enabled:       true,
-				Model:         "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
-				BaseURL:       DeepInfraBaseURL + "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
-				TimeoutMs:     15000,
-				InitialPrompt: defaultStreamingPrompt,
+				Enabled:            true,
+				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
+				BaseURL:            DeepInfraBaseURL + "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
+				TimeoutMs:          15000,
+				InitialPrompt:      defaultStreamingPrompt,
+				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
 			},
 			"custom_streaming": {
-				Enabled:       false,
-				Model:         "",
-				BaseURL:       "",
-				APIKey:        "",
-				TimeoutMs:     15000,
-				InitialPrompt: "",
+				Enabled:            false,
+				Model:              "",
+				BaseURL:            "",
+				APIKey:             "",
+				TimeoutMs:          15000,
+				InitialPrompt:      "",
+				SupportedLanguages: []string{"*"},
 			},
 		},
 		LLMProviders: map[string]LLMProviderConfig{
@@ -219,6 +230,44 @@ func (p *ProviderConfig) GetActiveLLMFallbackOrder() []string {
 	return order
 }
 
+func (p *ProviderConfig) IsStreamingLanguageSupported(providerName, langCode string) bool {
+	if langCode == "" {
+		return true
+	}
+	prov, ok := p.Models.StreamingProviders[providerName]
+	if !ok {
+		return false
+	}
+	if len(prov.SupportedLanguages) == 0 {
+		return true
+	}
+	for _, l := range prov.SupportedLanguages {
+		if l == "*" || strings.EqualFold(l, langCode) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *ProviderConfig) IsBatchLanguageSupported(providerName, langCode string) bool {
+	if langCode == "" {
+		return true
+	}
+	prov, ok := p.Models.BatchProviders[providerName]
+	if !ok {
+		return false
+	}
+	if len(prov.SupportedLanguages) == 0 {
+		return true
+	}
+	for _, l := range prov.SupportedLanguages {
+		if l == "*" || strings.EqualFold(l, langCode) {
+			return true
+		}
+	}
+	return false
+}
+
 type CachedConfigManager struct {
 	mu         sync.RWMutex
 	config     ProviderConfig
@@ -251,6 +300,7 @@ func (m *CachedConfigManager) Set(c ProviderConfig, raw map[string]string) {
 var ConfigManager = &CachedConfigManager{
 	config: ProviderConfig{
 		Models:                  DefaultModelsConfig(),
+		Languages:               utils.SupportedLanguages,
 		GroqRateLimitRPM:        20,
 		DefaultUserRateLimitRPM: 10,
 		Notification:            "",
@@ -300,9 +350,21 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 
 	newConfig := ProviderConfig{
 		Models:                  models,
+		Languages:               utils.GetSupportedLanguages(),
 		GroqRateLimitRPM:        20,
 		DefaultUserRateLimitRPM: 10,
 		WhisperBasePrompt:       "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
+	}
+
+	// Parse JSON languages_config_json if present in saas_config
+	if jsonStr, ok := dbConfigs["languages_config_json"]; ok && strings.TrimSpace(jsonStr) != "" {
+		var customLangs []utils.Language
+		if err := json.Unmarshal([]byte(jsonStr), &customLangs); err == nil && len(customLangs) > 0 {
+			utils.SetDynamicLanguages(customLangs)
+			newConfig.Languages = customLangs
+		} else {
+			log.Printf("[CONFIG SYNC WARNING] Failed to parse languages_config_json: %v", err)
+		}
 	}
 
 	// Rate Limits

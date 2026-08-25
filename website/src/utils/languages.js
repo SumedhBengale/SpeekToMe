@@ -105,3 +105,18 @@ export const getLanguageName = (code) => {
   const found = SUPPORTED_LANGUAGES.find(l => l.code === code);
   return found ? found.name : code;
 };
+
+export async function fetchDynamicLanguages(apiBaseUrl = '') {
+  try {
+    const res = await fetch(`${apiBaseUrl}/v1/languages`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.languages && data.languages.length > 0) {
+        return data.languages;
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to fetch dynamic languages on website:", e);
+  }
+  return SUPPORTED_LANGUAGES;
+}

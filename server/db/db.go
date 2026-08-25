@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -190,6 +192,11 @@ func NewDatabase(connStr string) (*Database, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_subscription_payments_user ON subscription_payments(user_id);
 		CREATE INDEX IF NOT EXISTS idx_subscription_payments_subscription ON subscription_payments(subscription_id);
+		CREATE TABLE IF NOT EXISTS geoip_cache (
+			ip TEXT PRIMARY KEY,
+			location TEXT NOT NULL,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
 	`)
 	if err != nil {
 		dbConn.Close()
@@ -239,14 +246,14 @@ func NewDatabase(connStr string) (*Database, error) {
   "default_streaming_provider": "deepinfra_nemotron",
   "default_llm_provider": "deepseek_v4",
   "batch_providers": {
-    "groq_whisper": { "enabled": true, "model": "whisper-large-v3-turbo", "base_url": "https://api.groq.com/openai/v1/audio/transcriptions", "timeout_ms": 10000 },
-    "deepinfra_whisper": { "enabled": true, "model": "openai/whisper-large-v3-turbo", "base_url": "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo", "timeout_ms": 10000 },
-    "cloudflare_whisper": { "enabled": true, "model": "@cf/openai/whisper-large-v3-turbo", "timeout_ms": 15000 },
-    "custom_batch": { "enabled": false, "model": "", "base_url": "", "api_key": "", "timeout_ms": 10000 }
+    "groq_whisper": { "enabled": true, "model": "whisper-large-v3-turbo", "base_url": "https://api.groq.com/openai/v1/audio/transcriptions", "timeout_ms": 10000, "supported_languages": ["*"] },
+    "deepinfra_whisper": { "enabled": true, "model": "openai/whisper-large-v3-turbo", "base_url": "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo", "timeout_ms": 10000, "supported_languages": ["*"] },
+    "cloudflare_whisper": { "enabled": true, "model": "@cf/openai/whisper-large-v3-turbo", "timeout_ms": 15000, "supported_languages": ["*"] },
+    "custom_batch": { "enabled": false, "model": "", "base_url": "", "api_key": "", "timeout_ms": 10000, "supported_languages": ["*"] }
   },
   "streaming_providers": {
-    "deepinfra_nemotron": { "enabled": true, "model": "nvidia/nemotron-3.5-asr-streaming-0.6b", "base_url": "https://api.deepinfra.com/v1/inference/nvidia/nemotron-3.5-asr-streaming-0.6b", "timeout_ms": 15000 },
-    "custom_streaming": { "enabled": false, "model": "", "base_url": "", "api_key": "", "timeout_ms": 15000 }
+    "deepinfra_nemotron": { "enabled": true, "model": "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "base_url": "https://api.deepinfra.com/v1/inference/nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "timeout_ms": 15000, "supported_languages": ["en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"] },
+    "custom_streaming": { "enabled": false, "model": "", "base_url": "", "api_key": "", "timeout_ms": 15000, "supported_languages": ["*"] }
   },
   "llm_providers": {
     "deepseek_v4": { "enabled": true, "model": "deepseek-v4-flash", "base_url": "https://api.deepseek.com/chat/completions", "timeout_ms": 30000 },
@@ -255,9 +262,13 @@ func NewDatabase(connStr string) (*Database, error) {
   }
 }`
 
+	defaultLanguagesBytes, _ := json.MarshalIndent(utils.SupportedLanguages, "", "  ")
+	defaultLanguagesJSON := string(defaultLanguagesBytes)
+
 	// Set default configurations
 	configs := map[string]string{
 		"models_config_json":           defaultModelsJSON,
+		"languages_config_json":        defaultLanguagesJSON,
 		"ratelimit_free_rpm":           "3",
 		"ratelimit_paid_rpm":           "15",
 		"quota_free_daily_fup_seconds": "3600",
@@ -268,6 +279,7 @@ func NewDatabase(connStr string) (*Database, error) {
 		"ratelimit_default_user_rpm":   "10",
 		"notification":                 "",
 		"whisper_base_prompt":          "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
+		"last_free_tier_quota_reset_month": time.Now().Format("2006-01"),
 	}
 	for k, v := range configs {
 		_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
@@ -1158,6 +1170,34 @@ func (d *Database) ResetAllFreeUserQuotas() error {
 	return err
 }
 
+func (d *Database) CheckAndResetFreeUserMonthlyQuotas() (bool, error) {
+	currentMonth := time.Now().Format("2006-01")
+
+	var lastReset string
+	err := d.db.QueryRow("SELECT value FROM saas_config WHERE \"key\" = 'last_free_tier_quota_reset_month'").Scan(&lastReset)
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+
+	lastReset = strings.TrimSpace(lastReset)
+	if lastReset == currentMonth {
+		return false, nil
+	}
+
+	if lastReset != "" {
+		log.Printf("[FREE QUOTA RESET] Month rollover detected (%s -> %s). Resetting free & inactive user quotas...", lastReset, currentMonth)
+		if err := d.ResetAllFreeUserQuotas(); err != nil {
+			return false, err
+		}
+		log.Printf("[FREE QUOTA RESET SUCCESS] Successfully reset free tier monthly usage to 0.0 for %s.", currentMonth)
+	} else {
+		log.Printf("[FREE QUOTA RESET] Initializing last_free_tier_quota_reset_month to %s in saas_config.", currentMonth)
+	}
+
+	_, err = d.db.Exec("INSERT INTO saas_config (\"key\", value) VALUES ('last_free_tier_quota_reset_month', ?) ON CONFLICT(\"key\") DO UPDATE SET value = excluded.value", currentMonth)
+	return true, err
+}
+
 func (d *Database) IsUserLocked(userID int64) (bool, error) {
 	var isLocked int
 	err := d.db.QueryRow("SELECT is_locked FROM users WHERE id = ?", userID).Scan(&isLocked)
@@ -1475,4 +1515,30 @@ func (d *Database) DeleteUserAccount(userID int64) error {
 	}
 
 	return tx.Commit()
+}
+
+func (d *Database) SaveGeoIP(ip, location string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO geoip_cache (ip, location, updated_at) 
+		VALUES (?, ?, CURRENT_TIMESTAMP) 
+		ON CONFLICT(ip) DO UPDATE SET location = excluded.location, updated_at = CURRENT_TIMESTAMP
+	`, ip, location)
+	return err
+}
+
+func (d *Database) GetAllGeoIP() (map[string]string, error) {
+	rows, err := d.db.Query("SELECT ip, location FROM geoip_cache")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var ip, loc string
+		if err := rows.Scan(&ip, &loc); err == nil && ip != "" {
+			result[ip] = loc
+		}
+	}
+	return result, nil
 }

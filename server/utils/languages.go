@@ -3,11 +3,13 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 type Language struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
+	Tier string `json:"tier,omitempty"`
 }
 
 var SupportedLanguages = []Language{
@@ -113,16 +115,47 @@ var SupportedLanguages = []Language{
 	{Code: "zh", Name: "Chinese"},
 }
 
-var languageCodeMap map[string]string
+var (
+	langMu          sync.RWMutex
+	currentLangs    = SupportedLanguages
+	languageCodeMap = make(map[string]string)
+)
 
 func init() {
-	languageCodeMap = make(map[string]string, len(SupportedLanguages))
-	for _, l := range SupportedLanguages {
+	rebuildLanguageMap(SupportedLanguages)
+}
+
+func rebuildLanguageMap(langs []Language) {
+	langMu.Lock()
+	defer langMu.Unlock()
+	currentLangs = make([]Language, len(langs))
+	copy(currentLangs, langs)
+	languageCodeMap = make(map[string]string, len(langs))
+	for _, l := range langs {
 		languageCodeMap[l.Code] = l.Name
 	}
 }
 
+// SetDynamicLanguages updates the in-memory master language registry dynamically from saas_config
+func SetDynamicLanguages(langs []Language) {
+	if len(langs) == 0 {
+		return
+	}
+	rebuildLanguageMap(langs)
+}
+
+// GetSupportedLanguages returns the currently active list of languages
+func GetSupportedLanguages() []Language {
+	langMu.RLock()
+	defer langMu.RUnlock()
+	res := make([]Language, len(currentLangs))
+	copy(res, currentLangs)
+	return res
+}
+
 func GetLanguageName(code string) string {
+	langMu.RLock()
+	defer langMu.RUnlock()
 	if name, ok := languageCodeMap[code]; ok {
 		return name
 	}
@@ -136,6 +169,8 @@ func ValidateLanguages(input []string) ([]string, error) {
 	if len(input) > 5 {
 		return nil, fmt.Errorf("a maximum of 5 languages can be selected")
 	}
+	langMu.RLock()
+	defer langMu.RUnlock()
 	var validated []string
 	seen := make(map[string]bool)
 	for _, code := range input {

@@ -8,20 +8,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "title": "SpeekTo.Me Settings",
-        "label": "main",
-        "url": "index.html",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "visible": true,
-        "transparent": false,
-        "decorations": true,
-        "skipTaskbar": false
-      }
-    ]
+    "windows": []
   },
   "bundle": {
     "active": true,

@@ -473,9 +473,6 @@ mod win32_impl {
                             // Stop recording in toggle mode (audio thread will hide overlay when done typing)
                             state.is_key_held = false;
                             state.press_time = None;
-                            if let Some(mut last_release) = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().ok() {
-                                *last_release = Some(std::time::Instant::now());
-                            }
                             if let Some(tx) = state.stop_tx.take() {
                                 let _ = tx.send(true);
                             }
@@ -528,9 +525,6 @@ mod win32_impl {
                     let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
                     if state.is_key_held && is_key_part_of_combo(vk_code, req_modifiers, req_vk) {
                         state.is_key_held = false;
-                        if let Some(mut last_release) = crate::LAST_RELEASE_TIME.get_or_init(|| std::sync::Mutex::new(None)).lock().ok() {
-                            *last_release = Some(std::time::Instant::now());
-                        }
                         if let Some(tx) = state.stop_tx.take() {
                             let _ = tx.send(true);
                         }

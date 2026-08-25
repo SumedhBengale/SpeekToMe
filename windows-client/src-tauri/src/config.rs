@@ -48,7 +48,6 @@ pub struct AppConfig {
     pub enhance: bool,        // true/false
     pub typing_mode: bool,    // true/false
     pub sound_feedback: bool, // true/false
-    pub smart_spacing: bool,  // true/false
     pub custom_prompt: String,// String prompt instructions
     pub session_token: Option<String>,
     pub autostart: bool,      // true/false
@@ -89,7 +88,6 @@ impl Default for AppConfig {
             enhance: false,
             typing_mode: false,
             sound_feedback: true,
-            smart_spacing: true,
             custom_prompt: "".to_string(),
             session_token: None,
             autostart: false,

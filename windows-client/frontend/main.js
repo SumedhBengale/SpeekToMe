@@ -82,7 +82,6 @@ const hotkeyModeSelect = document.getElementById('hotkey-mode-select');
 const autostartCheck = document.getElementById('autostart-check');
 const typingModeCheck = document.getElementById('typing-mode-check');
 const soundFeedbackCheck = document.getElementById('sound-feedback-check');
-const smartSpacingCheck = document.getElementById('smart-spacing-check');
 const modelSelect = document.getElementById('model-select');
 const enhanceCheck = document.getElementById('enhance-check');
 const streamingModeCheck = document.getElementById('streaming-mode-check');
@@ -146,7 +145,7 @@ const onboardThemeSelect = document.getElementById('onboard-theme-select');
 // Initialization & Config Binding
 // ==========================================
 
-const SUPPORTED_LANGUAGES = [
+let SUPPORTED_LANGUAGES = [
   { code: "af", name: "Afrikaans" }, { code: "am", name: "Amharic" }, { code: "ar", name: "Arabic" },
   { code: "as", name: "Assamese" }, { code: "az", name: "Azerbaijani" }, { code: "ba", name: "Bashkir" },
   { code: "be", name: "Belarusian" }, { code: "bg", name: "Bulgarian" }, { code: "bn", name: "Bengali" },
@@ -192,12 +191,15 @@ function getLanguageName(code) {
 
 function renderClientLanguageUI() {
   const containers = [
-    { chips: document.getElementById('client-lang-chips'), select: document.getElementById('client-lang-select') },
-    { chips: document.getElementById('onboard-lang-chips'), select: document.getElementById('onboard-lang-select') }
+    { chips: document.getElementById('client-lang-chips'), count: document.getElementById('client-lang-count') },
+    { chips: document.getElementById('onboard-lang-chips'), count: document.getElementById('onboard-lang-count') }
   ];
 
-  containers.forEach(({ chips: chipsContainer, select: selectEl }) => {
-    if (!chipsContainer || !selectEl) return;
+  containers.forEach(({ chips: chipsContainer, count: countEl }) => {
+    if (countEl) {
+      countEl.textContent = `${selectedLanguages.length}/5`;
+    }
+    if (!chipsContainer) return;
 
     chipsContainer.innerHTML = '';
     selectedLanguages.forEach(code => {
@@ -216,26 +218,143 @@ function renderClientLanguageUI() {
       });
       chipsContainer.appendChild(chip);
     });
+  });
+}
 
-    selectEl.innerHTML = '';
-    
-    // Add placeholder default option
-    const placeholderOpt = document.createElement('option');
-    placeholderOpt.value = '';
-    placeholderOpt.textContent = '-- Click to select language --';
-    placeholderOpt.disabled = true;
-    placeholderOpt.selected = true;
-    selectEl.appendChild(placeholderOpt);
+function setupLanguageCombobox(inputId, dropdownId, addBtnId) {
+  const inputEl = document.getElementById(inputId);
+  const dropdownEl = document.getElementById(dropdownId);
+  const addBtn = document.getElementById(addBtnId);
 
-    SUPPORTED_LANGUAGES.forEach(lang => {
-      if (!selectedLanguages.includes(lang.code)) {
-        const opt = document.createElement('option');
-        opt.value = lang.code;
-        opt.textContent = lang.name;
-        selectEl.appendChild(opt);
+  if (!inputEl || !dropdownEl) return;
+
+  let highlightedIndex = -1;
+  let currentMatches = [];
+
+  function filterLanguages(query) {
+    const q = (query || '').trim().toLowerCase();
+    const available = SUPPORTED_LANGUAGES.filter(lang => !selectedLanguages.includes(lang.code));
+    if (!q) {
+      return available.slice(0, 15);
+    }
+    return available.filter(lang => 
+      lang.name.toLowerCase().includes(q) || lang.code.toLowerCase().includes(q)
+    ).slice(0, 20);
+  }
+
+  function renderDropdown(matches) {
+    currentMatches = matches;
+    highlightedIndex = -1;
+    dropdownEl.innerHTML = '';
+
+    if (matches.length === 0) {
+      dropdownEl.innerHTML = '<div class="lang-dropdown-empty">No matching languages found</div>';
+      dropdownEl.classList.remove('hidden');
+      return;
+    }
+
+    matches.forEach((lang, idx) => {
+      const item = document.createElement('div');
+      item.className = 'lang-dropdown-item';
+      item.dataset.index = idx;
+      item.innerHTML = `<span>${escapeHtml(lang.name)}</span><span class="lang-code">${escapeHtml(lang.code)}</span>`;
+      
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // Prevent blur
+        addSelectedLanguage(lang.code);
+      });
+      dropdownEl.appendChild(item);
+    });
+
+    dropdownEl.classList.remove('hidden');
+  }
+
+  function addSelectedLanguage(code) {
+    if (!code) return;
+    if (selectedLanguages.length >= 5) {
+      showToast("You can select at most 5 spoken languages.", "Languages", "warning");
+      dropdownEl.classList.add('hidden');
+      inputEl.value = '';
+      return;
+    }
+    if (!selectedLanguages.includes(code)) {
+      selectedLanguages.push(code);
+      saveLanguagesToBackend();
+    }
+    inputEl.value = '';
+    dropdownEl.classList.add('hidden');
+  }
+
+  inputEl.addEventListener('focus', () => {
+    renderDropdown(filterLanguages(inputEl.value));
+  });
+
+  inputEl.addEventListener('input', () => {
+    renderDropdown(filterLanguages(inputEl.value));
+  });
+
+  inputEl.addEventListener('keydown', (e) => {
+    if (dropdownEl.classList.contains('hidden')) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') {
+        renderDropdown(filterLanguages(inputEl.value));
+      }
+      return;
+    }
+
+    const items = dropdownEl.querySelectorAll('.lang-dropdown-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      highlightedIndex = Math.min(highlightedIndex + 1, items.length - 1);
+      updateHighlight(items);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      highlightedIndex = Math.max(highlightedIndex - 1, 0);
+      updateHighlight(items);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (highlightedIndex >= 0 && currentMatches[highlightedIndex]) {
+        addSelectedLanguage(currentMatches[highlightedIndex].code);
+      } else if (currentMatches.length > 0) {
+        addSelectedLanguage(currentMatches[0].code);
+      }
+    } else if (e.key === 'Escape') {
+      dropdownEl.classList.add('hidden');
+    }
+  });
+
+  function updateHighlight(items) {
+    items.forEach((item, idx) => {
+      if (idx === highlightedIndex) {
+        item.classList.add('active');
+        item.scrollIntoView({ block: 'nearest' });
+      } else {
+        item.classList.remove('active');
       }
     });
+  }
+
+  inputEl.addEventListener('blur', () => {
+    setTimeout(() => {
+      dropdownEl.classList.add('hidden');
+    }, 200);
   });
+
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      const q = inputEl.value.trim().toLowerCase();
+      const match = SUPPORTED_LANGUAGES.find(l => 
+        !selectedLanguages.includes(l.code) && 
+        (l.name.toLowerCase() === q || l.code.toLowerCase() === q)
+      );
+      if (match) {
+        addSelectedLanguage(match.code);
+      } else if (currentMatches.length > 0) {
+        addSelectedLanguage(currentMatches[0].code);
+      } else {
+        showToast("Please search and select a language from the list.", "Languages", "warning");
+      }
+    });
+  }
 }
 
 async function saveLanguagesToBackend() {
@@ -258,39 +377,18 @@ async function init() {
       console.error("Failed to load API URL from backend:", err);
     }
 
-    const addLangBtn = document.getElementById('client-add-lang-btn');
-    if (addLangBtn) {
-      addLangBtn.addEventListener('click', () => {
-        const selectEl = document.getElementById('client-lang-select');
-        if (!selectEl || !selectEl.value) {
-          showToast("Please select a language from the dropdown.", "Languages", "warning");
-          return;
-        }
-        if (selectedLanguages.length >= 5) {
-          showToast("You can select at most 5 spoken languages.", "Languages", "warning");
-          return;
-        }
-        selectedLanguages.push(selectEl.value);
-        saveLanguagesToBackend();
-      });
+    try {
+      const dynamicLangs = await invoke('get_supported_languages');
+      if (dynamicLangs && dynamicLangs.length > 0) {
+        SUPPORTED_LANGUAGES = dynamicLangs;
+        console.log(`[LANGUAGES] Loaded ${dynamicLangs.length} dynamic languages from backend.`);
+      }
+    } catch (err) {
+      console.warn("Could not load dynamic languages list from backend, using defaults:", err);
     }
 
-    const onboardAddLangBtn = document.getElementById('onboard-add-lang-btn');
-    if (onboardAddLangBtn) {
-      onboardAddLangBtn.addEventListener('click', () => {
-        const selectEl = document.getElementById('onboard-lang-select');
-        if (!selectEl || !selectEl.value) {
-          showToast("Please select a language from the dropdown.", "Languages", "warning");
-          return;
-        }
-        if (selectedLanguages.length >= 5) {
-          showToast("You can select at most 5 spoken languages.", "Languages", "warning");
-          return;
-        }
-        selectedLanguages.push(selectEl.value);
-        saveLanguagesToBackend();
-      });
-    }
+    setupLanguageCombobox('client-lang-search-input', 'client-lang-dropdown-list', 'client-add-lang-btn');
+    setupLanguageCombobox('onboard-lang-search-input', 'onboard-lang-dropdown-list', 'onboard-add-lang-btn');
 
     // 1. Tab selection setup (Dashboard)
     tabItems.forEach(item => {
@@ -502,7 +600,6 @@ function applyConfigToUI(config) {
   autostartCheck.checked = config.autostart;
   typingModeCheck.checked = config.typing_mode;
   soundFeedbackCheck.checked = config.sound_feedback;
-  smartSpacingCheck.checked = config.smart_spacing;
   modelSelect.value = config.model;
   enhanceCheck.checked = config.enhance;
   if (streamingModeCheck) {
@@ -548,6 +645,11 @@ function applyConfigToUI(config) {
 
   // Apply theme class to document body
   document.body.setAttribute('data-theme', config.theme || 'forest');
+
+  if (config.languages && Array.isArray(config.languages) && config.languages.length > 0) {
+    selectedLanguages = config.languages;
+    renderClientLanguageUI();
+  }
 }
 
 function cssColorToBgr(colorStr) {
@@ -609,7 +711,6 @@ function gatherConfigFromUI(isOnboarding) {
       autostart: onboardAutostartCheck.checked,
       typing_mode: onboardTypingModeCheck.checked,
       sound_feedback: onboardSoundFeedbackCheck.checked,
-      smart_spacing: smartSpacingCheck.checked, // Kept same as current
       model: onboardModelSelect.value,
       enhance: onboardEnhanceCheck.checked,
       transcription_mode: (onboardStreamingModeCheck && onboardStreamingModeCheck.checked) ? "stream" : "batch",
@@ -633,7 +734,6 @@ function gatherConfigFromUI(isOnboarding) {
       autostart: autostartCheck.checked,
       typing_mode: typingModeCheck.checked,
       sound_feedback: soundFeedbackCheck.checked,
-      smart_spacing: smartSpacingCheck.checked,
       model: modelSelect.value,
       enhance: enhanceCheck.checked,
       transcription_mode: (streamingModeCheck && streamingModeCheck.checked) ? "stream" : "batch",

@@ -9,6 +9,7 @@ pub mod win32;
 pub mod vocab;
 pub mod stream;
 pub mod vad;
+pub mod lang;
 
 use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -27,8 +28,6 @@ pub static STATE: OnceLock<Mutex<RecordingState>> = OnceLock::new();
 pub static OVERLAY_HWND: OnceLock<SendHWND> = OnceLock::new();
 pub static ACTIVE_CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
 pub static SIMULATING_KEY: AtomicBool = AtomicBool::new(false);
-pub static LAST_RELEASE_TIME: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
-pub static IS_CONSECUTIVE: AtomicBool = AtomicBool::new(false);
 pub static LAST_WINDOW_POSITION: OnceLock<Mutex<Option<PhysicalPosition<i32>>>> = OnceLock::new();
 pub static LAST_WINDOW_SIZE: OnceLock<Mutex<Option<PhysicalSize<u32>>>> = OnceLock::new();
 
@@ -95,7 +94,15 @@ fn save_config(config: AppConfig) {
 
 #[tauri::command]
 fn hide_window(window: tauri::WebviewWindow) {
-    let _ = window.close();
+    if let Ok(pos) = window.outer_position() {
+        let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+        *pos_lock = Some(pos);
+    }
+    if let Ok(size) = window.inner_size() {
+        let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+        *size_lock = Some(size);
+    }
+    let _ = window.destroy();
 }
 
 #[tauri::command]
@@ -243,6 +250,11 @@ async fn update_languages(languages: Vec<String>) -> Result<Vec<String>, String>
     Ok(res)
 }
 
+#[tauri::command]
+fn get_supported_languages() -> Vec<lang::LanguageItem> {
+    lang::get_language_manager().get_languages()
+}
+
 pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -251,7 +263,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
             .title("SpeekTo.Me Settings")
             .resizable(true)
-            .transparent(true)
+            .transparent(false)
             .decorations(true)
             .skip_taskbar(false);
 
@@ -414,8 +426,17 @@ fn main() {
             };
             println!("[STARTUP 7c] Session token present: {}", token_opt.is_some());
 
+            let api_url = api::get_api_url();
+            let api_url_lang = api_url.clone();
+            std::thread::spawn(move || {
+                tauri::async_runtime::block_on(async move {
+                    println!("[STARTUP] Syncing languages catalog from server in background thread...");
+                    let _ = crate::lang::get_language_manager().sync_from_server(&api_url_lang).await;
+                    println!("[STARTUP] Languages sync finished.");
+                });
+            });
+
             if let Some(token) = token_opt {
-                let api_url = api::get_api_url();
                 std::thread::spawn(move || {
                     tauri::async_runtime::block_on(async move {
                         println!("[STARTUP] Syncing vocabulary from server in background thread...");
@@ -423,14 +444,16 @@ fn main() {
                         println!("[STARTUP] Vocabulary sync finished.");
                     });
                 });
+            } else {
+                println!("[STARTUP] No session token found. Displaying onboarding settings window...");
+                show_or_create_settings_window(&handle);
             }
 
             println!("[STARTUP 8] Setup completed successfully!");
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Ok(pos) = window.outer_position() {
                     let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *pos_lock = Some(pos);
@@ -439,7 +462,7 @@ fn main() {
                     let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *size_lock = Some(size);
                 }
-                let _ = window.hide();
+                let _ = window.destroy();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -455,6 +478,7 @@ fn main() {
             add_vocabulary_term,
             delete_vocabulary_term,
             update_languages,
+            get_supported_languages,
             start_meeting,
             stop_meeting,
             cancel_meeting,
@@ -469,8 +493,15 @@ fn main() {
         ]);
 
     println!("[STARTUP 9] Running Tauri event loop...");
-    app.run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let app = app
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            api.prevent_exit();
+        }
+    });
 }
 
 pub static CURRENT_MEETING_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);

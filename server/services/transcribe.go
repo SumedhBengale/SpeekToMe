@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"speektome-server/config"
+	"speektome-server/db"
 	"speektome-server/ratelimit"
 	"speektome-server/utils"
 )
@@ -24,7 +25,34 @@ import (
 var (
 	geoCache = make(map[string]string)
 	geoMutex sync.RWMutex
+	geoDB    *db.Database
+	geoDBMu  sync.RWMutex
 )
+
+func SetGeoDatabase(d *db.Database) {
+	geoDBMu.Lock()
+	defer geoDBMu.Unlock()
+	geoDB = d
+}
+
+func SyncGeoCacheFromDB(d *db.Database) {
+	if d == nil {
+		return
+	}
+	entries, err := d.GetAllGeoIP()
+	if err != nil {
+		log.Printf("[GEOIP CACHE] Failed to load GeoIP entries from DB: %v", err)
+		return
+	}
+	if len(entries) > 0 {
+		geoMutex.Lock()
+		for ip, loc := range entries {
+			geoCache[ip] = loc
+		}
+		geoMutex.Unlock()
+		log.Printf("[GEOIP CACHE] Synchronized %d GeoIP locations from database into memory.", len(entries))
+	}
+}
 
 func GetGeoIPLocation(ip string) string {
 	if ip == "" {
@@ -83,6 +111,19 @@ func GetGeoIPLocation(ip string) string {
 			geoMutex.Lock()
 			geoCache[ip] = locStr
 			geoMutex.Unlock()
+
+			geoDBMu.RLock()
+			database := geoDB
+			geoDBMu.RUnlock()
+
+			if database != nil {
+				go func(targetIP, targetLoc string) {
+					if err := database.SaveGeoIP(targetIP, targetLoc); err != nil {
+						log.Printf("[GEOIP CACHE ERROR] Failed to persist %s -> %s: %v", targetIP, targetLoc, err)
+					}
+				}(ip, locStr)
+			}
+
 			return locStr
 		}
 	}
@@ -508,6 +549,10 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 		switch provider {
 		case "groq_whisper", "groq":
 			if config.GroqAPIKey != "" {
+				if langParam != "" && !cfg.IsBatchLanguageSupported("groq_whisper", langParam) {
+					log.Printf("[GROQ SKIP] Language %q not in groq_whisper capabilities. Trying fallback.", langParam)
+					continue
+				}
 				if ratelimit.GroqRateLimiter.Allow() {
 					provCfg := cfg.Models.BatchProviders["groq_whisper"]
 					useModel := model
@@ -614,6 +659,10 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 		switch provider {
 		case "deepinfra_nemotron", "nemotron":
 			if config.DeepInfraAPIKey != "" {
+				if langParam != "" && !cfg.IsStreamingLanguageSupported("deepinfra_nemotron", langParam) {
+					log.Printf("[NEMOTRON SKIP] Language %q not in Nemotron 40 supported languages. Auto-routing to full Whisper engine.", langParam)
+					continue
+				}
 				provCfg := cfg.Models.StreamingProviders["deepinfra_nemotron"]
 				diModel := "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b"
 				if provCfg.Model != "" {

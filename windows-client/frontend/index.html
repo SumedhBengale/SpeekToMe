@@ -72,7 +72,7 @@
               <label class="fluent-checkbox-container">
                 <input type="checkbox" id="onboard-streaming-mode-check">
                 <span class="checkmark"></span>
-                Real-Time Streaming Dictation
+                Real-Time Streaming
               </label>
               <span class="pro-tag">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -104,8 +104,8 @@
             <label for="onboard-hotkey-mode-select">Trigger Mode</label>
             <div class="select-wrapper">
               <select id="onboard-hotkey-mode-select" class="fluent-select">
-                <option value="hold">Push to Talk (Hold combination)</option>
-                <option value="toggle">Hands-Free (Tap to start / Tap to stop)</option>
+                <option value="hold">Push to Talk</option>
+                <option value="toggle">Hands-Free Toggle</option>
               </select>
             </div>
           </div>
@@ -174,16 +174,20 @@
 
           <div class="setting-group"
             style="margin-top: 14px; border-top: 1px solid var(--border-color, rgba(255,255,255,0.1)); padding-top: 14px;">
-            <label class="accent-label">Spoken Languages (Select up to 5)</label>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label class="accent-label" style="margin-bottom: 0;">Spoken Languages</label>
+              <span id="onboard-lang-count" class="lang-count-badge">1/5</span>
+            </div>
             <span class="setting-hint" style="margin-bottom: 8px; margin-left: 0; display: block;">1 language locks Whisper for max speed. Multiple languages guide multi-lingual detection.</span>
             <div id="onboard-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
               <!-- Rendered dynamically -->
             </div>
-            <div style="display: flex; gap: 8px;">
-              <select id="onboard-lang-select" class="fluent-select" style="flex: 1;">
-                <!-- Options populated dynamically -->
-              </select>
-              <button type="button" id="onboard-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add Language</button>
+            <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
+              <div style="position: relative; flex: 1;">
+                <input type="text" id="onboard-lang-search-input" class="fluent-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
+                <div id="onboard-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
+              </div>
+              <button type="button" id="onboard-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add</button>
             </div>
           </div>
 
@@ -222,6 +226,9 @@
       <nav class="nav-links">
         <a href="#" class="nav-item active" data-tab="general">
           <img src="assets/icons/general.svg" class="icon" alt=""> General
+        </a>
+        <a href="#" class="nav-item" data-tab="languages">
+          <img src="assets/icons/languages.svg" class="icon" alt=""> Languages
         </a>
         <a href="#" class="nav-item" data-tab="ai">
           <img src="assets/icons/ai.svg" class="icon" alt=""> AI Assistant
@@ -262,31 +269,6 @@
       <div class="tab-pane active" id="tab-general">
         <h2>General Settings</h2>
         <p class="section-desc">Configure core keyboard and feedback behavior.</p>
-
-        <div class="setting-group streaming-feature-card">
-          <div class="streaming-feature-header">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="streaming-mode-check">
-              <span class="checkmark"></span>
-              Real-Time Streaming Dictation
-            </label>
-            <span class="pro-tag">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-              </svg>
-              PRO
-            </span>
-          </div>
-          <span class="setting-hint">
-            Dictate with near-zero latency and instantaneous word-by-word pasting for a fast, responsive dictation experience.
-          </span>
-          <div id="streaming-pro-hint" class="streaming-pro-hint" style="display: none;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-right: 2px;">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-            </svg>
-            Pro plan feature. Upgrade on your Web Dashboard to unlock streaming dictation.
-          </div>
-        </div>
 
         <div class="setting-group">
           <label for="hotkey-select">Trigger Hotkey</label>
@@ -379,7 +361,7 @@
             <span class="checkmark"></span>
             Use keystroke simulation (typing)
           </label>
-          <span class="setting-hint">Simulates character-by-character keyboard input instead of pasting.</span>
+          <span class="setting-hint">Simulates typing to circumvent anti-paste mechanisms.</span>
         </div>
 
         <div class="setting-group checkbox-group">
@@ -390,14 +372,56 @@
           </label>
           <span class="setting-hint">Plays a sound when you start and stop recording.</span>
         </div>
+      </div>
 
-        <div class="setting-group checkbox-group">
-          <label class="fluent-checkbox-container">
-            <input type="checkbox" id="smart-spacing-check">
-            <span class="checkmark"></span>
-            Enable smart spacing on consecutive runs
-          </label>
-          <span class="setting-hint">Prepends a space if you dictate again within 5 seconds.</span>
+      <!-- Languages Tab -->
+      <div class="tab-pane" id="tab-languages">
+        <h2>Languages & Dictation</h2>
+        <p class="section-desc">Configure spoken languages and real-time streaming preferences.</p>
+
+        <div class="setting-group streaming-feature-card">
+          <div class="streaming-feature-header">
+            <label class="fluent-checkbox-container">
+              <input type="checkbox" id="streaming-mode-check">
+              <span class="checkmark"></span>
+              Real-Time Streaming Dictation
+            </label>
+            <span class="pro-tag">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              </svg>
+              PRO
+            </span>
+          </div>
+          <span class="setting-hint">
+            Dictate with near-zero latency and instantaneous word-by-word pasting for a fast, responsive dictation experience.
+          </span>
+          <div id="streaming-pro-hint" class="streaming-pro-hint" style="display: none;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-right: 2px;">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+            Pro plan feature. Upgrade on your Web Dashboard to unlock streaming dictation.
+          </div>
+        </div>
+
+        <div class="setting-group"
+          style="margin-top: 20px; border-top: 1px solid var(--border-color, rgba(255,255,255,0.1)); padding-top: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label class="accent-label" style="margin-bottom: 0;">Spoken Language Preferences</label>
+            <span id="client-lang-count" class="lang-count-badge">1/5</span>
+          </div>
+          <span class="setting-hint" style="margin-bottom: 10px; display: block;">1 language locks Whisper for max speed
+            & accuracy. Multiple languages guide Whisper multi-lingual detection without translating.</span>
+          <div id="client-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;">
+            <!-- Rendered dynamically -->
+          </div>
+          <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
+            <div style="position: relative; flex: 1;">
+              <input type="text" id="client-lang-search-input" class="fluent-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
+              <div id="client-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
+            </div>
+            <button type="button" id="client-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add</button>
+          </div>
         </div>
       </div>
 
@@ -422,22 +446,6 @@
           <textarea id="custom-prompt-text" class="fluent-textarea"
             placeholder="e.g. Translate to French, rewrite as email..."></textarea>
           <div id="prompt-validation-banner" class="validation-banner hidden"></div>
-        </div>
-
-        <div class="setting-group"
-          style="margin-top: 20px; border-top: 1px solid var(--border-color, rgba(255,255,255,0.1)); padding-top: 16px;">
-          <label class="accent-label">Spoken Language Preferences (Select up to 5)</label>
-          <span class="setting-hint" style="margin-bottom: 10px; display: block;">1 language locks Whisper for max speed
-            & accuracy. Multiple languages guide Whisper multi-lingual detection without translating.</span>
-          <div id="client-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;">
-            <!-- Rendered dynamically -->
-          </div>
-          <div style="display: flex; gap: 8px;">
-            <select id="client-lang-select" class="fluent-select" style="flex: 1;">
-              <!-- Options populated dynamically -->
-            </select>
-            <button id="client-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add Language</button>
-          </div>
         </div>
       </div>
 
