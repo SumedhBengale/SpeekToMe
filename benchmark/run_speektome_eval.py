@@ -8,77 +8,63 @@ import json
 import time
 import glob
 import shutil
-import concurrent.futures
-from tqdm import tqdm
-
-def get_error_rate(refs, preds):
-    \"\"\"Calculates WER cleanly with or without kaldialign batch_error_rate.\"\"\"
-    try:
-        from kaldialign import batch_error_rate
-        refs_split = [tuple(r.split()) for r in refs]
-        preds_split = [tuple(p.split()) for p in preds]
-        return round(100 * batch_error_rate(refs_split, preds_split, merge_compounds=True)[\"err_rate\"], 2)
-    except Exception:
-        import evaluate
-        wer_metric = evaluate.load(\"wer\")
-        return round(100 * wer_metric.compute(references=refs, predictions=preds), 2)
 
 def test_connection(server_url: str, session_token: str):
-    print(f\"Testing connection to {server_url} with provided session token...\")
-    headers = {\"Authorization\": f\"Bearer {session_token}\"}
+    print(f"Testing connection to {server_url} with provided session token...")
+    headers = {"Authorization": f"Bearer {session_token}"}
     try:
-        r = requests.get(f\"{server_url}/health\", timeout=5)
-        print(f\"Health check status: {r.status_code} ({r.text.strip()})\")
+        r = requests.get(f"{server_url}/health", timeout=5)
+        print(f"Health check status: {r.status_code} ({r.text.strip()})")
     except Exception as e:
-        print(f\"Note: Health check request: {e}\")
+        print(f"Note: Health check request: {e}")
 
     try:
-        r = requests.get(f\"{server_url}/auth/me\", headers=headers, timeout=5)
+        r = requests.get(f"{server_url}/auth/me", headers=headers, timeout=5)
         if r.status_code == 200:
             user_data = r.json()
-            print(f\"Authentication SUCCESS! User: {user_data.get('email', 'Unknown')} (Plan: {user_data.get('plan_tier', 'free')})\")
+            print(f"Authentication SUCCESS! User: {user_data.get('email', 'Unknown')} (Plan: {user_data.get('plan_tier', 'free')})")
             return True
         else:
-            print(f\"Authentication FAILED: Status {r.status_code} - {r.text}\")
+            print(f"Authentication FAILED: Status {r.status_code} - {r.text}")
             return False
     except Exception as e:
-        print(f\"Auth request error: {e}\")
+        print(f"Auth request error: {e}")
         return False
 
 def main():
-    parser = argparse.ArgumentParser(description=\"SpeekTo.Me Open ASR Leaderboard Runner\")
-    parser.add_argument(\"--server-url\", default=os.environ.get(\"SPEEKTOME_SERVER_URL\", \"http://127.0.0.1:8000\"), help=\"SpeekTo.Me Server Base URL\")
-    parser.add_argument(\"--token\", default=os.environ.get(\"SPEEKTOME_SESSION_TOKEN\", \"\"), help=\"Session Token for SpeekTo.Me\")
-    parser.add_argument(\"--dataset\", default=\"librispeech\", help=\"Dataset name, e.g., librispeech, ami_cleaned\")
-    parser.add_argument(\"--split\", default=\"test.clean\", help=\"Split name, e.g., test.clean, test\")
-    parser.add_argument(\"--dataset-path\", default=\"hf-audio/open-asr-leaderboard\", help=\"Dataset repo on Hugging Face\")
-    parser.add_argument(\"--model-variant\", default=\"full-pipeline\", choices=[\"full-pipeline\", \"raw-asr\"], help=\"speektome variant: full-pipeline or raw-asr\")
-    parser.add_argument(\"--max-samples\", type=int, default=None, help=\"Limit number of evaluation samples\")
-    parser.add_argument(\"--max-workers\", type=int, default=4, help=\"Concurrent workers for evaluation\")
-    parser.add_argument(\"--test-auth\", action=\"store_true\", help=\"Only test authentication and connection\")
+    parser = argparse.ArgumentParser(description="SpeekTo.Me Open ASR Leaderboard Runner")
+    parser.add_argument("--server-url", default=os.environ.get("SPEEKTOME_SERVER_URL", "http://127.0.0.1:8000"), help="SpeekTo.Me Server Base URL")
+    parser.add_argument("--token", default=os.environ.get("SPEEKTOME_SESSION_TOKEN", ""), help="Session Token for SpeekTo.Me")
+    parser.add_argument("--dataset", default="librispeech", help="Dataset name, e.g., librispeech, ami_cleaned")
+    parser.add_argument("--split", default="test.clean", help="Split name, e.g., test.clean, test")
+    parser.add_argument("--dataset-path", default="hf-audio/open-asr-leaderboard", help="Dataset repo on Hugging Face")
+    parser.add_argument("--model-variant", default="full-pipeline", choices=["full-pipeline", "raw-asr"], help="speektome variant: full-pipeline or raw-asr")
+    parser.add_argument("--max-samples", type=int, default=None, help="Limit number of evaluation samples")
+    parser.add_argument("--max-workers", type=int, default=4, help="Concurrent workers for evaluation")
+    parser.add_argument("--test-auth", action="store_true", help="Only test authentication and connection")
 
     args = parser.parse_args()
 
     if not args.token:
-        print(\"ERROR: Session token not provided. Pass --token or set SPEEKTOME_SESSION_TOKEN environment variable.\")
+        print("ERROR: Session token not provided. Pass --token or set SPEEKTOME_SESSION_TOKEN environment variable.")
         sys.exit(1)
 
-    os.environ[\"SPEEKTOME_SERVER_URL\"] = args.server_url
-    os.environ[\"SPEEKTOME_SESSION_TOKEN\"] = args.token
+    os.environ["SPEEKTOME_SERVER_URL"] = args.server_url
+    os.environ["SPEEKTOME_SESSION_TOKEN"] = args.token
 
     if args.test_auth:
         ok = test_connection(args.server_url, args.token)
         sys.exit(0 if ok else 1)
 
     if not test_connection(args.server_url, args.token):
-        print(\"Proceeding with benchmark run...\")
+        print("Proceeding with benchmark run...")
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_api_dir = os.path.join(base_dir, \"open_asr_leaderboard\", \"api\")
-    repo_root = os.path.join(base_dir, \"open_asr_leaderboard\")
+    repo_api_dir = os.path.join(base_dir, "open_asr_leaderboard", "api")
+    repo_root = os.path.join(base_dir, "open_asr_leaderboard")
 
     if not os.path.exists(repo_api_dir):
-        print(f\"ERROR: open_asr_leaderboard directory not found at {repo_api_dir}\")
+        print(f"ERROR: open_asr_leaderboard directory not found at {repo_api_dir}")
         sys.exit(1)
 
     sys.path.insert(0, repo_api_dir)
@@ -87,27 +73,27 @@ def main():
     # Monkey patch batch_error_rate if older kaldialign is installed
     try:
         import kaldialign
-        if not hasattr(kaldialign, \"batch_error_rate\"):
+        if not hasattr(kaldialign, "batch_error_rate"):
             def _fallback_batch_error_rate(refs, preds, **kwargs):
                 import evaluate
-                wer_metric = evaluate.load(\"wer\")
-                flat_refs = [\" \".join(r) if isinstance(r, (list, tuple)) else str(r) for r in refs]
-                flat_preds = [\" \".join(p) if isinstance(p, (list, tuple)) else str(p) for p in preds]
+                wer_metric = evaluate.load("wer")
+                flat_refs = [" ".join(r) if isinstance(r, (list, tuple)) else str(r) for r in refs]
+                flat_preds = [" ".join(p) if isinstance(p, (list, tuple)) else str(p) for p in preds]
                 err = wer_metric.compute(references=flat_refs, predictions=flat_preds)
-                return {\"err_rate\": err}
+                return {"err_rate": err}
             kaldialign.batch_error_rate = _fallback_batch_error_rate
     except Exception:
         pass
 
-    model_name = f\"speektome/{args.model_variant}\"
-    print(f\"\\n==========================================\")
-    print(f\"Starting Open ASR Leaderboard Benchmark\")
-    print(f\"Model:          {model_name}\")
-    print(f\"Dataset:        {args.dataset} ({args.split})\")
-    print(f\"Dataset Path:   {args.dataset_path}\")
-    print(f\"Max Samples:    {args.max_samples or 'ALL'}\")
-    print(f\"Workers:        {args.max_workers}\")
-    print(f\"==========================================\\n\")
+    model_name = f"speektome/{args.model_variant}"
+    print(f"\n==========================================")
+    print(f"Starting Open ASR Leaderboard Benchmark")
+    print(f"Model:          {model_name}")
+    print(f"Dataset:        {args.dataset} ({args.split})")
+    print(f"Dataset Path:   {args.dataset_path}")
+    print(f"Max Samples:    {args.max_samples or 'ALL'}")
+    print(f"Workers:        {args.max_workers}")
+    print(f"==========================================\n")
 
     from run_eval import transcribe_dataset
     from normalizer.eval_utils import score_results
@@ -122,16 +108,24 @@ def main():
         max_workers=args.max_workers,
     )
 
-    results_dir = os.path.join(repo_api_dir, \"results\", model_name.replace(\"/\", \"-\"))
+    # Check multiple possible results output locations
+    model_folder = model_name.replace("/", "-")
+    results_dir = os.path.join(repo_api_dir, "results", model_folder)
     os.makedirs(results_dir, exist_ok=True)
     
-    raw_results = glob.glob(os.path.join(repo_api_dir, \"results\", f\"MODEL_{model_name.replace('/', '-')}_DATASET_*.jsonl\"))
-    for f in raw_results:
-        dest = os.path.join(results_dir, os.path.basename(f))
-        shutil.move(f, dest)
+    search_patterns = [
+        os.path.join(".", "results", f"MODEL_{model_folder}_DATASET_*.jsonl"),
+        os.path.join(repo_api_dir, "results", f"MODEL_{model_folder}_DATASET_*.jsonl"),
+        os.path.join(base_dir, "results", f"MODEL_{model_folder}_DATASET_*.jsonl"),
+    ]
+    for pattern in search_patterns:
+        for f in glob.glob(pattern):
+            dest = os.path.join(results_dir, os.path.basename(f))
+            if os.path.abspath(f) != os.path.abspath(dest):
+                shutil.move(f, dest)
 
-    print(\"\\n--- Scoring Benchmark Results ---\")
+    print("\n--- Summary Benchmark Results ---")
     score_results(results_dir, model_name)
 
-if __name__ == \"__main__\":
+if __name__ == "__main__":
     main()
