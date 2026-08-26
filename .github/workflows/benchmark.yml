@@ -32,14 +32,14 @@ on:
           - full-pipeline
           - raw-asr
       max_samples:
-        description: "Max samples to evaluate (e.g. 5 for small test, or empty for full dataset)"
+        description: "Max samples to evaluate (e.g. 20 for test, or empty for full dataset)"
         required: false
-        default: "5"
+        default: "20"
         type: string
       workers:
         description: "Concurrent workers"
         required: true
-        default: "4"
+        default: "16"
         type: string
 
 jobs:
@@ -63,7 +63,7 @@ jobs:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "benchmark/run_speektome_eval.py,benchmark/setup_and_run_ec2.sh,benchmark/speektome_provider.py"
+          source: "benchmark/run_speektome_eval.py,benchmark/setup_and_run_ec2.sh,benchmark/speektome_provider.py,benchmark/providers_init.py"
           target: "speektome-benchmark"
           strip_components: 1
 

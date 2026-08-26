@@ -4,7 +4,6 @@ set -e
 echo "=== SpeekTo.Me EC2 Benchmark Setup & Execution ==="
 
 # 1. Install system prerequisites on Amazon Linux 2023
-# Note: AL2023 has Python 3.9 as system default. Python 3.11/3.12 can also be installed.
 sudo dnf install -y python3 python3-pip git tar xz gcc gcc-c++ make python3-devel || true
 
 # Install static ffmpeg binary if ffmpeg is not already installed
@@ -40,7 +39,7 @@ pip install --upgrade pip
 pip install --no-cache-dir \
     transformers \
     evaluate \
-    datasets \
+    "datasets<4.0.0" \
     jiwer \
     num2words \
     regex \
@@ -62,9 +61,14 @@ if [ -f "$BENCHMARK_DIR/speektome_provider.py" ]; then
     cp -f "$BENCHMARK_DIR/speektome_provider.py" open_asr_leaderboard/api/providers/
 fi
 
-# Ensure speektome_provider is imported in __init__.py
-if ! grep -q "speektome_provider" open_asr_leaderboard/api/providers/__init__.py; then
-    sed -i 's/from \. import (/from . import (\n    speektome_provider,/g' open_asr_leaderboard/api/providers/__init__.py
+# Overwrite providers/__init__.py with our resilient import version
+if [ -f "$BENCHMARK_DIR/providers_init.py" ]; then
+    cp -f "$BENCHMARK_DIR/providers_init.py" open_asr_leaderboard/api/providers/__init__.py
+fi
+
+# Make sure normalizer data_utils doesn't enforce mandatory HF_TOKEN
+if [ -f "open_asr_leaderboard/normalizer/data_utils.py" ]; then
+    sed -i 's/token=True/token=os.environ.get("HF_TOKEN", None)/g' open_asr_leaderboard/normalizer/data_utils.py 2>/dev/null || true
 fi
 
 echo "=== Environment Ready! ==="
