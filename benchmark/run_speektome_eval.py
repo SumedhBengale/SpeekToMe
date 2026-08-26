@@ -16,7 +16,6 @@ def test_connection(server_url: str, session_token: str):
     except Exception as e:
         print(f"Note: Health check request: {e}")
 
-    # Test auth
     try:
         r = requests.get(f"{server_url}/auth/me", headers=headers, timeout=5)
         if r.status_code == 200:
@@ -37,7 +36,7 @@ def main():
     parser.add_argument("--dataset", default="librispeech", help="Dataset name, e.g., librispeech, ami_cleaned")
     parser.add_argument("--split", default="test.clean", help="Split name, e.g., test.clean, test")
     parser.add_argument("--dataset-path", default="hf-audio/open-asr-leaderboard", help="Dataset repo on Hugging Face")
-    parser.add_argument("--model-variant", default="full-pipeline", choices=["full-pipeline", "raw-asr"], help="speektome variant: full-pipeline (speech + LLM) or raw-asr (speech only)")
+    parser.add_argument("--model-variant", default="full-pipeline", choices=["full-pipeline", "raw-asr"], help="speektome variant: full-pipeline or raw-asr")
     parser.add_argument("--max-samples", type=int, default=None, help="Limit number of evaluation samples")
     parser.add_argument("--max-workers", type=int, default=4, help="Concurrent workers for evaluation")
     parser.add_argument("--test-auth", action="store_true", help="Only test authentication and connection")
@@ -55,13 +54,17 @@ def main():
         ok = test_connection(args.server_url, args.token)
         sys.exit(0 if ok else 1)
 
-    # Test connection first
     if not test_connection(args.server_url, args.token):
         print("Proceeding with benchmark run...")
 
-    # Run leaderboard eval
-    repo_api_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "open_asr_leaderboard", "api"))
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "open_asr_leaderboard"))
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_api_dir = os.path.join(base_dir, "open_asr_leaderboard", "api")
+    repo_root = os.path.join(base_dir, "open_asr_leaderboard")
+
+    if not os.path.exists(repo_api_dir):
+        print(f"ERROR: open_asr_leaderboard directory not found at {repo_api_dir}")
+        sys.exit(1)
+
     sys.path.insert(0, repo_api_dir)
     sys.path.insert(0, repo_root)
 
@@ -75,7 +78,6 @@ def main():
     print(f"Workers:        {args.max_workers}")
     print(f"==========================================\n")
 
-    # Import run_eval functions
     from run_eval import transcribe_dataset
     import evaluate
     from normalizer.eval_utils import score_results
@@ -93,7 +95,6 @@ def main():
     results_dir = os.path.join(repo_api_dir, "results", model_name.replace("/", "-"))
     os.makedirs(results_dir, exist_ok=True)
     
-    # Move results to model folder and score
     import glob, shutil
     raw_results = glob.glob(os.path.join(repo_api_dir, "results", f"MODEL_{model_name.replace('/', '-')}_DATASET_*.jsonl"))
     for f in raw_results:

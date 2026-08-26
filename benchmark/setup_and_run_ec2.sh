@@ -3,16 +3,24 @@ set -e
 
 echo "=== SpeekTo.Me EC2 Benchmark Setup & Execution ==="
 
-# 1. Install system prerequisites (ffmpeg, python3, pip, git)
-if command -v dnf &> /dev/null; then
-    sudo dnf update -y
-    sudo dnf install -y python3 python3-pip ffmpeg git
-elif command -v yum &> /dev/null; then
-    sudo yum update -y
-    sudo yum install -y python3 python3-pip ffmpeg git
-elif command -v apt-get &> /dev/null; then
-    sudo apt-get update -y
-    sudo apt-get install -y python3 python3-pip ffmpeg git
+# 1. Install system prerequisites on Amazon Linux 2023 (aarch64/x86_64)
+sudo dnf install -y python3 python3-pip git tar xz || true
+
+# Install static ffmpeg binary if ffmpeg is not already installed (AL2023 doesn't have ffmpeg in default repos)
+if ! command -v ffmpeg &> /dev/null; then
+    echo "Installing static FFmpeg build..."
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+        FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"
+    else
+        FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+    fi
+    curl -sL "$FFMPEG_URL" | tar -xJ -C /tmp/
+    sudo cp /tmp/ffmpeg-*-static/ffmpeg /usr/local/bin/
+    sudo cp /tmp/ffmpeg-*-static/ffprobe /usr/local/bin/
+    sudo chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+    rm -rf /tmp/ffmpeg-*-static
+    echo "FFmpeg installed successfully: $(ffmpeg -version | head -n 1)"
 fi
 
 # 2. Setup benchmark directory
@@ -45,8 +53,13 @@ if [ ! -d "open_asr_leaderboard" ]; then
     git clone https://github.com/huggingface/open_asr_leaderboard.git
 fi
 
-# Copy speektome provider and init into cloned leaderboard
+# Copy speektome provider and register it
 mkdir -p open_asr_leaderboard/api/providers
-cp "$BENCHMARK_DIR/speektome_provider.py" open_asr_leaderboard/api/providers/ 2>/dev/null || true
+cp -f "$BENCHMARK_DIR/speektome_provider.py" open_asr_leaderboard/api/providers/
+
+# Ensure speektome_provider is imported in __init__.py
+if ! grep -q "speektome_provider" open_asr_leaderboard/api/providers/__init__.py; then
+    sed -i 's/from \. import (/from . import (\n    speektome_provider,/g' open_asr_leaderboard/api/providers/__init__.py
+fi
 
 echo "=== Environment Ready! ==="
