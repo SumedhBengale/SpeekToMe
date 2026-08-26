@@ -1,0 +1,105 @@
+name: Run Open ASR Benchmark on EC2
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_token:
+        description: "SpeekTo.Me Session Token (optional if SPEEKTOME_SESSION_TOKEN secret is set)"
+        required: false
+        type: string
+      dataset:
+        description: "Dataset name"
+        required: true
+        default: "librispeech"
+        type: choice
+        options:
+          - librispeech
+          - ami_cleaned
+          - voxpopuli_cleaned_aa
+          - gigaspeech_cleaned
+          - spgispeech
+      split:
+        description: "Dataset split"
+        required: true
+        default: "test.clean"
+        type: string
+      model_variant:
+        description: "SpeekTo.Me Pipeline Variant"
+        required: true
+        default: "full-pipeline"
+        type: choice
+        options:
+          - full-pipeline
+          - raw-asr
+      max_samples:
+        description: "Max samples to evaluate (e.g. 5 for small test, or empty for full dataset)"
+        required: false
+        default: "5"
+        type: string
+      workers:
+        description: "Concurrent workers"
+        required: true
+        default: "4"
+        type: string
+
+jobs:
+  run-benchmark:
+    name: Execute Benchmark on EC2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Connect to Tailscale Network
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:speektome-server
+
+      - name: Copy Benchmark Suite to EC2
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "benchmark/run_speektome_eval.py,benchmark/setup_and_run_ec2.sh,benchmark/open_asr_leaderboard/api/providers/speektome_provider.py"
+          target: "speektome-benchmark"
+          strip_components: 1
+
+      - name: Run Benchmark on EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/ec2-user/speektome-benchmark
+            chmod +x setup_and_run_ec2.sh
+            ./setup_and_run_ec2.sh
+
+            source venv/bin/activate
+
+            TOKEN="${{ github.event.inputs.session_token }}"
+            if [ -z "$TOKEN" ]; then
+              TOKEN="${{ secrets.SPEEKTOME_SESSION_TOKEN }}"
+            fi
+
+            if [ -z "$TOKEN" ]; then
+              echo "ERROR: No session token provided in input or secret SPEEKTOME_SESSION_TOKEN."
+              exit 1
+            fi
+
+            MAX_SAMPLES_ARG=""
+            if [ -n "${{ github.event.inputs.max_samples }}" ]; then
+              MAX_SAMPLES_ARG="--max-samples ${{ github.event.inputs.max_samples }}"
+            fi
+
+            python3 run_speektome_eval.py \
+              --server-url "http://127.0.0.1:8000" \
+              --token "$TOKEN" \
+              --dataset "${{ github.event.inputs.dataset }}" \
+              --split "${{ github.event.inputs.split }}" \
+              --model-variant "${{ github.event.inputs.model_variant }}" \
+              --max-workers ${{ github.event.inputs.workers }} \
+              $MAX_SAMPLES_ARG

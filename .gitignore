@@ -38,3 +38,5 @@ desktop.ini
 *.userosscache
 *.sln.docstates
 debug_stream_recordings/
+benchmark/open_asr_leaderboard/
+benchmark/venv/
