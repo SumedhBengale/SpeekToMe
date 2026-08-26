@@ -26,6 +26,7 @@ func main() {
 	config.GroqAPIKey = os.Getenv("GROQ_API_KEY")
 	config.DeepInfraAPIKey = os.Getenv("DEEPINFRA_API_KEY")
 	config.DeepSeekAPIKey = os.Getenv("DEEPSEEK_API_KEY")
+	config.CerebrasAPIKey = os.Getenv("CEREBRAS_API_KEY")
 	config.CloudflareAPIToken = os.Getenv("CLOUDFLARE_API_TOKEN")
 	config.CloudflareAccountID = os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 	config.GoogleClientID = os.Getenv("GOOGLE_CLIENT_ID")

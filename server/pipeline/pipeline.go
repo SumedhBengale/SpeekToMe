@@ -156,12 +156,39 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 	cfg := config.ConfigManager.Get()
 	fallbackOrder := cfg.GetActiveLLMFallbackOrder()
 	if len(fallbackOrder) == 0 {
-		fallbackOrder = []string{"deepseek_v4", "deepinfra_deepseek"}
+		fallbackOrder = []string{"cerebras", "deepinfra_deepseek", "deepseek_v4"}
 	}
 
 	var lastErr error
 	for _, provider := range fallbackOrder {
 		switch provider {
+		case "cerebras":
+			if config.CerebrasAPIKey != "" {
+				provCfg := cfg.Models.LLMProviders["cerebras"]
+				cURL := config.CerebrasAPIURL
+				if provCfg.BaseURL != "" {
+					cURL = provCfg.BaseURL
+				}
+				cModel := "gpt-oss-120b"
+				if provCfg.Model != "" {
+					cModel = provCfg.Model
+				} else if model != "" && !strings.Contains(model, "deepseek") {
+					cModel = model
+				}
+				apiKey := config.CerebrasAPIKey
+				if provCfg.APIKey != "" {
+					apiKey = provCfg.APIKey
+				}
+				res, loc, err := callChatCompletionsAPI(ctx, client, cURL, apiKey, cModel, systemPrompt, userPrompt, false)
+				if err == nil {
+					if pctx != nil {
+						pctx.LLMProvider = "cerebras"
+						pctx.LLMRouting = loc
+					}
+					return res, nil
+				}
+				lastErr = err
+			}
 		case "deepseek_v4", "deepseek":
 			if config.DeepSeekAPIKey != "" {
 				provCfg := cfg.Models.LLMProviders["deepseek_v4"]
@@ -226,7 +253,7 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 	if lastErr != nil {
 		return "", fmt.Errorf("all enabled LLM providers failed. Last error: %w", lastErr)
 	}
-	return "", fmt.Errorf("neither DeepSeekAPIKey nor DeepInfraAPIKey is configured or enabled")
+	return "", fmt.Errorf("neither CerebrasAPIKey, DeepInfraAPIKey, nor DeepSeekAPIKey is configured or enabled")
 }
 
 func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pctx *PipelineContext) (string, error) {

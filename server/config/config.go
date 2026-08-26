@@ -15,6 +15,7 @@ var (
 	GroqAPIKey          string
 	DeepInfraAPIKey     string
 	DeepSeekAPIKey      string
+	CerebrasAPIKey      string
 	CloudflareAPIToken  string
 	CloudflareAccountID string
 	GoogleClientID      string
@@ -26,6 +27,7 @@ var (
 	GroqAPIURL       = "https://api.groq.com/openai/v1/audio/transcriptions"
 	DeepInfraBaseURL = "https://api.deepinfra.com/v1/inference/"
 	DeepSeekAPIURL   = "https://api.deepseek.com/chat/completions"
+	CerebrasAPIURL   = "https://api.cerebras.ai/v1/chat/completions"
 )
 
 // Provider descriptor structs
@@ -85,7 +87,7 @@ func DefaultModelsConfig() ModelsConfig {
 	return ModelsConfig{
 		DefaultBatchProvider:     "deepinfra_whisper",
 		DefaultStreamingProvider: "deepinfra_nemotron",
-		DefaultLLMProvider:       "deepseek_v4",
+		DefaultLLMProvider:       "cerebras",
 		BatchProviders: map[string]BatchProviderConfig{
 			"deepinfra_whisper": {
 				Enabled:            true,
@@ -140,17 +142,24 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 		},
 		LLMProviders: map[string]LLMProviderConfig{
-			"deepseek_v4": {
+			"cerebras": {
 				Enabled:      true,
-				Model:        "deepseek-v4-flash",
-				BaseURL:      DeepSeekAPIURL,
-				TimeoutMs:    30000,
+				Model:        "gpt-oss-120b",
+				BaseURL:      CerebrasAPIURL,
+				TimeoutMs:    15000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
 			"deepinfra_deepseek": {
 				Enabled:      true,
 				Model:        "deepseek-ai/DeepSeek-V4-Flash",
 				BaseURL:      "https://api.deepinfra.com/v1/openai/chat/completions",
+				TimeoutMs:    30000,
+				SystemPrompt: DefaultUniversalLLMSystemPrompt,
+			},
+			"deepseek_v4": {
+				Enabled:      true,
+				Model:        "deepseek-v4-flash",
+				BaseURL:      DeepSeekAPIURL,
 				TimeoutMs:    30000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
@@ -218,7 +227,7 @@ func (p *ProviderConfig) GetActiveLLMFallbackOrder() []string {
 		}
 	}
 
-	knownLLM := []string{"deepseek_v4", "deepinfra_deepseek", "custom_llm"}
+	knownLLM := []string{"cerebras", "deepinfra_deepseek", "deepseek_v4", "custom_llm"}
 	for _, name := range knownLLM {
 		if name == defaultProv {
 			continue
@@ -429,6 +438,8 @@ func normalizeProviderName(name string) string {
 		return "deepseek_v4"
 	case "deepinfra_deepseek":
 		return "deepinfra_deepseek"
+	case "cerebras", "cerebras_llama", "cerebras_llm":
+		return "cerebras"
 	case "custom_llm":
 		return "custom_llm"
 	default:

@@ -17,8 +17,8 @@ func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 	if cfg.DefaultStreamingProvider != "deepinfra_nemotron" {
 		t.Errorf("Expected default streaming provider 'deepinfra_nemotron'; got %s", cfg.DefaultStreamingProvider)
 	}
-	if cfg.DefaultLLMProvider != "deepseek_v4" {
-		t.Errorf("Expected default LLM provider 'deepseek_v4'; got %s", cfg.DefaultLLMProvider)
+	if cfg.DefaultLLMProvider != "cerebras" {
+		t.Errorf("Expected default LLM provider 'cerebras'; got %s", cfg.DefaultLLMProvider)
 	}
 
 	pCfg := ProviderConfig{Models: cfg}
@@ -33,8 +33,8 @@ func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 	}
 
 	llmOrder := pCfg.GetActiveLLMFallbackOrder()
-	if len(llmOrder) < 2 || llmOrder[0] != "deepseek_v4" {
-		t.Errorf("Expected LLM order to start with 'deepseek_v4'; got %v", llmOrder)
+	if len(llmOrder) < 3 || llmOrder[0] != "cerebras" {
+		t.Errorf("Expected LLM order to start with 'cerebras'; got %v", llmOrder)
 	}
 }
 
