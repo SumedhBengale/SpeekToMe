@@ -78,13 +78,25 @@ def main():
             def _fallback_batch_error_rate(refs, preds, **kwargs):
                 flat_refs = [" ".join(r) if isinstance(r, (list, tuple)) else str(r) for r in refs]
                 flat_preds = [" ".join(p) if isinstance(p, (list, tuple)) else str(p) for p in preds]
-                measures = jiwer.compute_measures(flat_refs, flat_preds)
-                return {
-                    "err_rate": measures["wer"],
-                    "ins": measures["insertions"],
-                    "del": measures["deletions"],
-                    "sub": measures["substitutions"],
-                }
+                if hasattr(jiwer, "process_words"):
+                    out = jiwer.process_words(flat_refs, flat_preds)
+                    return {
+                        "err_rate": out.wer,
+                        "ins": out.insertions,
+                        "del": out.deletions,
+                        "sub": out.substitutions,
+                    }
+                elif hasattr(jiwer, "compute_measures"):
+                    out = jiwer.compute_measures(flat_refs, flat_preds)
+                    return {
+                        "err_rate": out["wer"],
+                        "ins": out["insertions"],
+                        "del": out["deletions"],
+                        "sub": out["substitutions"],
+                    }
+                else:
+                    w = jiwer.wer(flat_refs, flat_preds)
+                    return {"err_rate": w, "ins": 0, "del": 0, "sub": 0}
             kaldialign.batch_error_rate = _fallback_batch_error_rate
     except Exception:
         pass
