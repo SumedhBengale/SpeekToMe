@@ -4,6 +4,7 @@ set -e
 echo "=== SpeekTo.Me EC2 Benchmark Setup & Execution ==="
 
 # 1. Install system prerequisites on Amazon Linux 2023
+# Note: AL2023 has Python 3.9 as system default. Python 3.11/3.12 can also be installed.
 sudo dnf install -y python3 python3-pip git tar xz gcc gcc-c++ make python3-devel || true
 
 # Install static ffmpeg binary if ffmpeg is not already installed
@@ -34,7 +35,7 @@ if [ ! -d "venv" ]; then
 fi
 source venv/bin/activate
 
-# 4. Upgrade pip and install pinned python dependencies
+# 4. Upgrade pip and install python dependencies
 pip install --upgrade pip
 pip install --no-cache-dir \
     transformers \
@@ -48,7 +49,7 @@ pip install --no-cache-dir \
     requests \
     tqdm \
     python-dotenv \
-    "kaldialign>=0.12.0"
+    kaldialign || true
 
 # 5. Clone open_asr_leaderboard if not present
 if [ ! -d "open_asr_leaderboard" ]; then
