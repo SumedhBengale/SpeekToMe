@@ -233,6 +233,33 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 				}
 				lastErr = err
 			}
+		case "wafer", "wafer_ai", "wafer_deepseek":
+			if config.WaferAPIKey != "" {
+				provCfg := cfg.Models.LLMProviders["wafer"]
+				wURL := config.WaferAPIURL
+				if provCfg.BaseURL != "" {
+					wURL = provCfg.BaseURL
+				}
+				wModel := "DeepSeek-V4-Flash-0731-Fast"
+				if provCfg.Model != "" {
+					wModel = provCfg.Model
+				} else if model != "" {
+					wModel = model
+				}
+				apiKey := config.WaferAPIKey
+				if provCfg.APIKey != "" {
+					apiKey = provCfg.APIKey
+				}
+				res, loc, err := callChatCompletionsAPI(ctx, client, wURL, apiKey, wModel, systemPrompt, userPrompt, true)
+				if err == nil {
+					if pctx != nil {
+						pctx.LLMProvider = "wafer"
+						pctx.LLMRouting = loc
+					}
+					return res, nil
+				}
+				lastErr = err
+			}
 		case "custom_llm", "custom":
 			provCfg := cfg.Models.LLMProviders["custom_llm"]
 			if provCfg.BaseURL != "" {
@@ -253,7 +280,7 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 	if lastErr != nil {
 		return "", fmt.Errorf("all enabled LLM providers failed. Last error: %w", lastErr)
 	}
-	return "", fmt.Errorf("neither CerebrasAPIKey, DeepInfraAPIKey, nor DeepSeekAPIKey is configured or enabled")
+	return "", fmt.Errorf("neither CerebrasAPIKey, DeepInfraAPIKey, WaferAPIKey, nor DeepSeekAPIKey is configured or enabled")
 }
 
 func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pctx *PipelineContext) (string, error) {

@@ -16,6 +16,7 @@ var (
 	DeepInfraAPIKey     string
 	DeepSeekAPIKey      string
 	CerebrasAPIKey      string
+	WaferAPIKey         string
 	CloudflareAPIToken  string
 	CloudflareAccountID string
 	GoogleClientID      string
@@ -28,6 +29,7 @@ var (
 	DeepInfraBaseURL = "https://api.deepinfra.com/v1/inference/"
 	DeepSeekAPIURL   = "https://api.deepseek.com/chat/completions"
 	CerebrasAPIURL   = "https://api.cerebras.ai/v1/chat/completions"
+	WaferAPIURL      = "https://pass.wafer.ai/v1/chat/completions"
 )
 
 // Provider descriptor structs
@@ -156,6 +158,13 @@ func DefaultModelsConfig() ModelsConfig {
 				TimeoutMs:    30000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
+			"wafer": {
+				Enabled:      false,
+				Model:        "DeepSeek-V4-Flash-0731-Fast",
+				BaseURL:      WaferAPIURL,
+				TimeoutMs:    15000,
+				SystemPrompt: DefaultUniversalLLMSystemPrompt,
+			},
 			"deepseek_v4": {
 				Enabled:      true,
 				Model:        "deepseek-v4-flash",
@@ -227,7 +236,7 @@ func (p *ProviderConfig) GetActiveLLMFallbackOrder() []string {
 		}
 	}
 
-	knownLLM := []string{"cerebras", "deepinfra_deepseek", "deepseek_v4", "custom_llm"}
+	knownLLM := []string{"cerebras", "deepinfra_deepseek", "wafer", "deepseek_v4", "custom_llm"}
 	for _, name := range knownLLM {
 		if name == defaultProv {
 			continue
@@ -440,6 +449,8 @@ func normalizeProviderName(name string) string {
 		return "deepinfra_deepseek"
 	case "cerebras", "cerebras_llama", "cerebras_llm":
 		return "cerebras"
+	case "wafer", "wafer_ai", "wafer_deepseek":
+		return "wafer"
 	case "custom_llm":
 		return "custom_llm"
 	default:
