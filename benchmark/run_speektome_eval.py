@@ -74,13 +74,17 @@ def main():
     try:
         import kaldialign
         if not hasattr(kaldialign, "batch_error_rate"):
+            import jiwer
             def _fallback_batch_error_rate(refs, preds, **kwargs):
-                import evaluate
-                wer_metric = evaluate.load("wer")
                 flat_refs = [" ".join(r) if isinstance(r, (list, tuple)) else str(r) for r in refs]
                 flat_preds = [" ".join(p) if isinstance(p, (list, tuple)) else str(p) for p in preds]
-                err = wer_metric.compute(references=flat_refs, predictions=flat_preds)
-                return {"err_rate": err}
+                measures = jiwer.compute_measures(flat_refs, flat_preds)
+                return {
+                    "err_rate": measures["wer"],
+                    "ins": measures["insertions"],
+                    "del": measures["deletions"],
+                    "sub": measures["substitutions"],
+                }
             kaldialign.batch_error_rate = _fallback_batch_error_rate
     except Exception:
         pass
