@@ -63,7 +63,7 @@ jobs:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "benchmark/run_speektome_eval.py,benchmark/setup_and_run_ec2.sh,benchmark/open_asr_leaderboard/api/providers/speektome_provider.py"
+          source: "benchmark/run_speektome_eval.py,benchmark/setup_and_run_ec2.sh,benchmark/speektome_provider.py"
           target: "speektome-benchmark"
           strip_components: 1
 
