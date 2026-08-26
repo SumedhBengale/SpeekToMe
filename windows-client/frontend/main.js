@@ -449,6 +449,32 @@ async function init() {
       });
     }
 
+    // 3.55. Listen for Session Expiration Event from Backend
+    try {
+      listen('auth-session-expired', () => {
+        console.warn("[AUTH] Session expired signal received from backend.");
+        currentUserInfo = null;
+        if (currentConfig) {
+          currentConfig.session_token = null;
+        }
+        updateAuthUI(null);
+        updateOnboardAuthUI(null);
+
+        // Switch to account tab
+        tabItems.forEach(nav => nav.classList.remove('active'));
+        tabPanes.forEach(pane => pane.classList.remove('active'));
+
+        const accountTabNav = document.querySelector('.nav-item[data-tab="account"]');
+        const accountTabPane = document.getElementById('tab-account');
+        if (accountTabNav) accountTabNav.classList.add('active');
+        if (accountTabPane) accountTabPane.classList.add('active');
+
+        showToast("Your session has expired. Please sign in again.", "Session Expired", "warning");
+      });
+    } catch (err) {
+      console.error("Failed to bind auth-session-expired listener:", err);
+    }
+
     // 3.6. Bind Open Web Dashboard Sidebar Button
     const openWebDashboardNavBtn = document.getElementById('open-web-dashboard-nav-btn');
     if (openWebDashboardNavBtn) {
@@ -595,7 +621,7 @@ async function init() {
 
 function applyConfigToUI(config) {
   // Dashboard inputs
-  if (hotkeySelect) hotkeySelect.value = config.hotkey || 'Ctrl + Shift';
+  if (hotkeySelect) hotkeySelect.value = config.hotkey || 'Ctrl + Win';
   if (hotkeyModeSelect) hotkeyModeSelect.value = config.hotkey_mode || 'hold';
   autostartCheck.checked = config.autostart;
   typingModeCheck.checked = config.typing_mode;
@@ -630,7 +656,7 @@ function applyConfigToUI(config) {
   }
 
   // Onboarding inputs
-  if (onboardHotkeySelect) onboardHotkeySelect.value = config.hotkey || 'Ctrl + Shift';
+  if (onboardHotkeySelect) onboardHotkeySelect.value = config.hotkey || 'Ctrl + Win';
   if (onboardHotkeyModeSelect) onboardHotkeyModeSelect.value = config.hotkey_mode || 'hold';
   onboardAutostartCheck.checked = config.autostart;
   if (onboardStreamingModeCheck) {
@@ -706,7 +732,7 @@ function gatherConfigFromUI(isOnboarding) {
     const colors = getPillColorsForTheme(themeName);
     return {
       api_url: api_url,
-      hotkey: onboardHotkeySelect ? onboardHotkeySelect.value : 'Ctrl + Shift',
+      hotkey: onboardHotkeySelect ? onboardHotkeySelect.value : 'Ctrl + Win',
       hotkey_mode: onboardHotkeyModeSelect ? onboardHotkeyModeSelect.value : 'hold',
       autostart: onboardAutostartCheck.checked,
       typing_mode: onboardTypingModeCheck.checked,
@@ -729,7 +755,7 @@ function gatherConfigFromUI(isOnboarding) {
     const colors = getPillColorsForTheme(themeName);
     return {
       api_url: api_url,
-      hotkey: hotkeySelect ? hotkeySelect.value : 'Ctrl + Shift',
+      hotkey: hotkeySelect ? hotkeySelect.value : 'Ctrl + Win',
       hotkey_mode: hotkeyModeSelect ? hotkeyModeSelect.value : 'hold',
       autostart: autostartCheck.checked,
       typing_mode: typingModeCheck.checked,

@@ -43,6 +43,14 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
         Some(d) => d,
         None => {
             eprintln!("No input device found!");
+            crate::win32::hide_overlay();
+            crate::win32::hide_preview();
+            crate::win32::play_chime(false);
+            crate::win32::show_tray_notification(
+                "SpeekTo.Me — Microphone Not Found",
+                "No active microphone was detected. Please connect a microphone and check Windows Sound settings.",
+                crate::win32::NotificationLevel::Error,
+            );
             return;
         }
     };
@@ -51,6 +59,14 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Failed to get default input config: {:?}", e);
+            crate::win32::hide_overlay();
+            crate::win32::hide_preview();
+            crate::win32::play_chime(false);
+            crate::win32::show_tray_notification(
+                "SpeekTo.Me — Audio Device Error",
+                "Failed to configure the default microphone. Please check your audio settings.",
+                crate::win32::NotificationLevel::Error,
+            );
             return;
         }
     };
@@ -144,11 +160,18 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
             return;
         }
     };
-    
-    match stream_res {
+      match stream_res {
         Ok(s) => {
             if let Err(e) = s.play() {
                 eprintln!("[AUDIO ERROR] Failed to play stream: {:?}", e);
+                crate::win32::hide_overlay();
+                crate::win32::hide_preview();
+                crate::win32::play_chime(false);
+                crate::win32::show_tray_notification(
+                    "SpeekTo.Me — Audio Error",
+                    "Failed to start recording audio from the microphone.",
+                    crate::win32::NotificationLevel::Error,
+                );
                 return;
             }
             println!("[AUDIO] Recording started...");
@@ -181,7 +204,8 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
 
                 if let Some(handle) = stream_handle {
                     let mut vad = crate::vad::SileroVadSession::new().ok();
-                    let mut vad_processed_16k_len = 0;
+                    let mut raw_processed_len = 0;
+                    let mut stream_16k_buf = Vec::<i16>::new();
                     let mut pre_speech_ring = std::collections::VecDeque::<i16>::with_capacity(4000);
                     let mut active_phrase_samples = Vec::<i16>::new();
                     let mut is_in_speech = false;
@@ -199,12 +223,29 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                 break;
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                let current_samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                                let all_16k = resample_to_16k_mono(&current_samples, sample_rate, channels);
+                                // Incrementally grab ONLY newly arrived raw samples
+                                let new_raw_samples: Vec<i16> = {
+                                    if let Ok(buf) = samples_buf.lock() {
+                                        if buf.len() > raw_processed_len {
+                                            let chunk = buf[raw_processed_len..].to_vec();
+                                            raw_processed_len = buf.len();
+                                            chunk
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    } else {
+                                        Vec::new()
+                                    }
+                                };
+
+                                if !new_raw_samples.is_empty() {
+                                    let new_16k = resample_to_16k_mono(&new_raw_samples, sample_rate, channels);
+                                    stream_16k_buf.extend_from_slice(&new_16k);
+                                }
 
                                 if let Some(ref mut vad_inst) = vad {
-                                    while all_16k.len() >= vad_processed_16k_len + 512 {
-                                        let frame_i16 = &all_16k[vad_processed_16k_len..vad_processed_16k_len + 512];
+                                    while stream_16k_buf.len() >= 512 {
+                                        let frame_i16: Vec<i16> = stream_16k_buf.drain(..512).collect();
                                         let frame_f32: Vec<f32> = frame_i16.iter().map(|&s| s as f32 / 32768.0).collect();
                                         let (_prob, speaking, pause_detected) = vad_inst.process_frame(&frame_f32);
 
@@ -214,13 +255,13 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                                 // Prepend pre-speech buffer so leading consonants are never clipped
                                                 active_phrase_samples.extend(pre_speech_ring.drain(..));
                                             }
-                                            active_phrase_samples.extend_from_slice(frame_i16);
+                                            active_phrase_samples.extend_from_slice(&frame_i16);
                                         } else {
                                             if is_in_speech {
                                                 // Keep appending trailing frames until pause is finalized
-                                                active_phrase_samples.extend_from_slice(frame_i16);
+                                                active_phrase_samples.extend_from_slice(&frame_i16);
                                             } else {
-                                                for &s in frame_i16 {
+                                                for &s in &frame_i16 {
                                                     if pre_speech_ring.len() >= 4000 { // ~250ms rolling buffer
                                                         pre_speech_ring.pop_front();
                                                     }
@@ -230,6 +271,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                         }
 
                                         let should_commit = pause_detected || active_phrase_samples.len() >= 80000; // max 5s chunk
+
                                         if should_commit && active_phrase_samples.len() >= 4800 { // >= 300ms of audio
                                             is_in_speech = false;
                                             let t_enc = std::time::Instant::now();
@@ -259,20 +301,17 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                             active_phrase_samples = retained;
                                             vad_inst.reset();
                                         }
-
-                                        vad_processed_16k_len += 512;
                                     }
                                 } else {
                                     // Fallback if VAD failed to init: 2-second periodic chunking
-                                    if all_16k.len() > vad_processed_16k_len + 32000 {
-                                        let new_slice = &all_16k[vad_processed_16k_len..vad_processed_16k_len + 32000];
+                                    if stream_16k_buf.len() >= 32000 {
+                                        let chunk: Vec<i16> = stream_16k_buf.drain(..32000).collect();
                                         let t_enc = std::time::Instant::now();
-                                        if let Ok(ogg_bytes) = encode_opus_ogg(new_slice, 16000, 1) {
+                                        if let Ok(ogg_bytes) = encode_opus_ogg(&chunk, 16000, 1) {
                                             let enc_dur = t_enc.elapsed();
                                             println!("[CLIENT BENCHMARK] Opus Ogg fallback encode: {:.2?}", enc_dur);
                                             let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
                                         }
-                                        vad_processed_16k_len += 32000;
                                     }
                                 }
                             }
@@ -288,13 +327,26 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     println!("Recording stopped.");
 
                     if !is_aborted {
+                        crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
+
                         // Drain any remaining tail audio samples sitting in buffer
-                        let final_samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        let all_16k = resample_to_16k_mono(&final_samples, sample_rate, channels);
-                        if all_16k.len() > vad_processed_16k_len {
-                            let tail = &all_16k[vad_processed_16k_len..];
-                            active_phrase_samples.extend_from_slice(tail);
+                        let remaining_raw_samples: Vec<i16> = {
+                            if let Ok(buf) = samples_buf.lock() {
+                                if buf.len() > raw_processed_len {
+                                    buf[raw_processed_len..].to_vec()
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                Vec::new()
+                            }
+                        };
+                        if !remaining_raw_samples.is_empty() {
+                            let rem_16k = resample_to_16k_mono(&remaining_raw_samples, sample_rate, channels);
+                            stream_16k_buf.extend_from_slice(&rem_16k);
                         }
+
+                        active_phrase_samples.extend(stream_16k_buf.drain(..));
 
                         // Send any remaining active phrase audio on key release
                         if active_phrase_samples.len() >= 2400 { // >= 150ms of audio
@@ -313,21 +365,107 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                         }
                         let _ = handle.tx.send(crate::stream::StreamAudioMessage::EndOfStream);
 
-                        if let Ok(Ok(final_result)) = handle.rx_final.recv_timeout(std::time::Duration::from_secs(5)) {
-                            println!("[STREAM SUCCESS] Live streaming completed. Final text: {}", final_result.text);
-                            if let (Some(log_id), Some(ack_token)) = (final_result.log_id, final_result.ack_token) {
-                                let ack_api = api_url.clone();
-                                let ack_auth = token.clone();
-                                let ack_txt = final_result.text.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    let _ = crate::api::send_transcribe_ack(&ack_api, &ack_auth, log_id, &ack_token, &ack_txt).await;
-                                });
+                        let mut stream_error_msg: Option<String> = None;
+                        let mut stream_timed_out = false;
+
+                        let final_text_to_inject = match handle.rx_final.recv_timeout(std::time::Duration::from_secs(15)) {
+                            Ok(Ok(final_result)) => {
+                                println!("[STREAM SUCCESS] Live streaming completed. Final text: {}", final_result.text);
+                                let trimmed = final_result.text.trim().to_string();
+                                if !trimmed.is_empty() {
+                                    let normalized = crate::vocab::get_vocab_manager().process_text(&trimmed);
+                                    if let (Some(log_id), Some(ack_token)) = (final_result.log_id, final_result.ack_token) {
+                                        if normalized != trimmed {
+                                            let ack_api = api_url.clone();
+                                            let ack_auth = token.clone();
+                                            let ack_txt = normalized.clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let _ = crate::api::send_transcribe_ack(&ack_api, &ack_auth, log_id, &ack_token, &ack_txt).await;
+                                            });
+                                        }
+                                    }
+                                    Some(normalized)
+                                } else {
+                                    None
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                eprintln!("[STREAM ERROR] Stream returned error: {}. Falling back to interim preview text.", e);
+                                stream_error_msg = Some(e);
+                                let fallback = crate::win32::get_preview_text();
+                                let trimmed = fallback.trim().to_string();
+                                if !trimmed.is_empty() { Some(trimmed) } else { None }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                eprintln!("[STREAM TIMEOUT] Final transcript timed out after 15s. Falling back to interim preview text.");
+                                stream_timed_out = true;
+                                let fallback = crate::win32::get_preview_text();
+                                let trimmed = fallback.trim().to_string();
+                                if !trimmed.is_empty() { Some(trimmed) } else { None }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                eprintln!("[STREAM DISCONNECTED] Stream disconnected before final transcript. Falling back to interim preview text.");
+                                let fallback = crate::win32::get_preview_text();
+                                let trimmed = fallback.trim().to_string();
+                                if !trimmed.is_empty() { Some(trimmed) } else { None }
+                            }
+                        };
+
+                        if let Some(normalized) = final_text_to_inject {
+                            crate::win32::set_preview_text(&normalized);
+
+                            let typing_mode = {
+                                let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                                cfg.typing_mode
+                            };
+
+                            println!("[STREAM INJECTION] Single-shot inject (typing_mode: {}): {}", typing_mode, normalized);
+                            if typing_mode {
+                                crate::keyboard::simulate_typing(&normalized);
+                            } else {
+                                crate::keyboard::paste_text(&normalized);
+                            }
+                        } else {
+                            // If no text could be injected, notify the user if an error occurred
+                            if let Some(err) = stream_error_msg {
+                                let err_lower = err.to_lowercase();
+                                if err_lower.contains("401") || err_lower.contains("unauthorized") || err_lower.contains("invalid token") || err_lower.contains("token expired") {
+                                    crate::handle_session_expired(Some("Your session has expired. Please sign in again to continue dictating."));
+                                } else if err_lower.contains("limit") || err_lower.contains("quota") || err_lower.contains("429") {
+                                    crate::win32::show_tray_notification(
+                                        "SpeekTo.Me — Usage Limit Reached",
+                                        "You have reached your monthly transcription limit. Upgrade your plan in Settings.",
+                                        crate::win32::NotificationLevel::Warning,
+                                    );
+                                    if let Some(app) = crate::TAURI_APP.get() {
+                                        crate::show_or_create_settings_window(app);
+                                    }
+                                } else if err_lower.contains("network") || err_lower.contains("timeout") || err_lower.contains("connection refused") || err_lower.contains("websocket connection failed") {
+                                    crate::win32::show_tray_notification(
+                                        "SpeekTo.Me — Network Error",
+                                        "Could not connect to SpeekTo.Me server. Please check your internet connection.",
+                                        crate::win32::NotificationLevel::Error,
+                                    );
+                                } else {
+                                    crate::win32::show_tray_notification(
+                                        "SpeekTo.Me — Transcription Error",
+                                        &format!("Live streaming error: {}", err),
+                                        crate::win32::NotificationLevel::Error,
+                                    );
+                                }
+                            } else if stream_timed_out {
+                                crate::win32::show_tray_notification(
+                                    "SpeekTo.Me — Server Timeout",
+                                    "Transcription timed out waiting for server response.",
+                                    crate::win32::NotificationLevel::Warning,
+                                );
                             }
                         }
                     } else {
                         println!("Recording aborted and discarded.");
                     }
                     crate::win32::hide_overlay();
+                    crate::win32::hide_preview();
                     crate::win32::play_chime(false);
                     return;
                 }
@@ -339,6 +477,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                 drop(s);
                 CURRENT_VOLUME.store(0, Ordering::Relaxed);
                 println!("Recording stopped.");
+                crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
                 
                 let samples = samples_buf.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 if !samples.is_empty() {
@@ -351,10 +490,12 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     } else {
                         println!("Silence or keyboard click detected. Transcription request skipped.");
                         crate::win32::hide_overlay();
+                        crate::win32::hide_preview();
                         crate::win32::play_chime(false);
                     }
                 } else {
                     crate::win32::hide_overlay();
+                    crate::win32::hide_preview();
                     crate::win32::play_chime(false);
                 }
             } else {
@@ -362,13 +503,20 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                 CURRENT_VOLUME.store(0, Ordering::Relaxed);
                 println!("Recording aborted and discarded.");
                 crate::win32::hide_overlay();
+                crate::win32::hide_preview();
                 crate::win32::play_chime(false);
             }
         }
         Err(e) => {
             eprintln!("Failed to build input stream: {:?}", e);
             crate::win32::hide_overlay();
+            crate::win32::hide_preview();
             crate::win32::play_chime(false);
+            crate::win32::show_tray_notification(
+                "SpeekTo.Me — Audio Error",
+                "Failed to initialize the microphone capture stream.",
+                crate::win32::NotificationLevel::Error,
+            );
         }
     }
 }

@@ -147,29 +147,11 @@ pub fn start_streaming_session(
             return;
         }
 
-        // Create debug recordings folder for testing
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let debug_dir = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join("debug_stream_recordings")
-            .join(format!("session_{}", timestamp));
-        let _ = std::fs::create_dir_all(&debug_dir);
-        println!("[STREAM DEBUG RECORDINGS] Saving live chunk recordings to: {}", debug_dir.display());
-
-        let mut chunk_index: usize = 0;
-
         // 2. Stream audio frames from channel
         let write_task = async move {
             while let Some(msg) = audio_rx.recv().await {
                 match msg {
                     StreamAudioMessage::AudioChunk(bytes) => {
-                        chunk_index += 1;
-                        let chunk_path = debug_dir.join(format!("chunk_{:03}.ogg", chunk_index));
-                        let _ = std::fs::write(&chunk_path, &bytes);
-
                         if write.send(Message::Binary(bytes)).await.is_err() {
                             break;
                         }
@@ -187,7 +169,6 @@ pub fn start_streaming_session(
         };
 
         let read_task = async move {
-            let mut currently_typed = String::new();
             let mut final_res: Option<StreamFinalResult> = None;
             while let Some(msg_res) = read.next().await {
                 match msg_res {
@@ -196,67 +177,23 @@ pub fn start_streaming_session(
                             if event.event_type == "interim" {
                                 if !event.text.is_empty() {
                                     let t_proc = std::time::Instant::now();
-
-                                    let t_vocab = std::time::Instant::now();
                                     let normalized_text = crate::vocab::get_vocab_manager().process_text(&event.text);
-                                    let vocab_dur = t_vocab.elapsed();
+                                    let proc_dur = t_proc.elapsed();
 
-                                    let t_diff = std::time::Instant::now();
-                                    let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &normalized_text);
-                                    let diff_dur = t_diff.elapsed();
-
-                                    let total_dur = t_proc.elapsed();
-
-                                    println!("[CLIENT BENCHMARK] Interim Chunk Processed in {:.2?} (Vocab: {:.2?} | Diff: {:.2?})",
-                                        total_dur, vocab_dur, diff_dur);
-
-                                    if backspaces > 0 || !new_suffix.is_empty() {
-                                        currently_typed = normalized_text.clone();
-                                        let type_text = new_suffix.clone();
-                                        println!("[STREAM INTERIM] Backspaces: {}, Typing: {:?}", backspaces, type_text);
-                                        tauri::async_runtime::spawn_blocking(move || {
-                                            if backspaces > 0 {
-                                                crate::keyboard::simulate_backspaces(backspaces);
-                                            }
-                                            if !type_text.is_empty() {
-                                                crate::keyboard::simulate_typing(&type_text);
-                                            }
-                                        });
-                                    }
+                                    println!("[STREAM INTERIM] Vocab normalized in {:.2?}: {:?}", proc_dur, normalized_text);
+                                    crate::win32::set_preview_text(&normalized_text);
                                 }
                             } else if event.event_type == "final" {
-                                if !event.text.is_empty() {
-                                    let t_proc = std::time::Instant::now();
-
-                                    let t_vocab = std::time::Instant::now();
-                                    let normalized_text = crate::vocab::get_vocab_manager().process_text(&event.text);
-                                    let vocab_dur = t_vocab.elapsed();
-
-                                    let t_diff = std::time::Instant::now();
-                                    let (backspaces, new_suffix) = compute_stream_diff(&currently_typed, &normalized_text);
-                                    let diff_dur = t_diff.elapsed();
-
-                                    let total_dur = t_proc.elapsed();
-
-                                    println!("[CLIENT BENCHMARK] Final Chunk Processed in {:.2?} (Vocab: {:.2?} | Diff: {:.2?})",
-                                        total_dur, vocab_dur, diff_dur);
-
-                                    if backspaces > 0 || !new_suffix.is_empty() {
-                                        let type_text = new_suffix.clone();
-                                        println!("[STREAM FINAL] Backspaces: {}, Final typing: {:?}", backspaces, type_text);
-                                        tauri::async_runtime::spawn_blocking(move || {
-                                            if backspaces > 0 {
-                                                crate::keyboard::simulate_backspaces(backspaces);
-                                            }
-                                            if !type_text.is_empty() {
-                                                crate::keyboard::simulate_typing(&type_text);
-                                            }
-                                        });
-                                    }
-                                }
+                                let normalized_text = if !event.text.is_empty() {
+                                    crate::vocab::get_vocab_manager().process_text(&event.text)
+                                } else {
+                                    String::new()
+                                };
+                                println!("[STREAM FINAL RECEIVED] Final normalized text: {:?}", normalized_text);
+                                crate::win32::set_preview_text(&normalized_text);
 
                                 final_res = Some(StreamFinalResult {
-                                    text: event.text,
+                                    text: normalized_text,
                                     log_id: event.log_id,
                                     ack_token: event.ack_token,
                                 });

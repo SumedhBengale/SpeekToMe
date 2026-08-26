@@ -32,6 +32,7 @@ fn send_inputs(inputs: &[INPUT]) {
 
 #[cfg(target_os = "windows")]
 pub fn simulate_paste() {
+    release_modifier_keys();
     unsafe {
         let mut inputs = [std::mem::zeroed::<INPUT>(); 4];
 
@@ -134,36 +135,73 @@ pub fn release_modifier_keys() {
         // Right Alt (Extended)
         keybd_event(0xA5, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
         keybd_event(0xA5, 0, KEYEVENTF_KEYUP, 0);
+        // Shift
+        keybd_event(0x10, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(0xA0, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(0xA1, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(0xA1, 0, KEYEVENTF_KEYUP, 0);
+        // Windows Key
+        keybd_event(0x5B, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(0x5C, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(0x5C, 0, KEYEVENTF_KEYUP, 0);
         crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
 #[cfg(target_os = "windows")]
 pub fn simulate_typing(text: &str) {
+    release_modifier_keys();
     unsafe {
         let utf16_chars: Vec<u16> = text.encode_utf16().collect();
-        for &c in &utf16_chars {
-            let mut inputs = [std::mem::zeroed::<INPUT>(); 2];
+        if utf16_chars.is_empty() {
+            return;
+        }
 
-            // 1. Key Down
-            inputs[0].r#type = INPUT_KEYBOARD;
+        let mut chunk_inputs: Vec<INPUT> = Vec::with_capacity(32);
+
+        for &c in &utf16_chars {
+            let mut in_down: INPUT = std::mem::zeroed();
+            in_down.r#type = INPUT_KEYBOARD;
             let mut ki0: KEYBDINPUT = std::mem::zeroed();
             ki0.wVk = 0;
             ki0.wScan = c;
             ki0.dwFlags = KEYEVENTF_UNICODE;
-            inputs[0].Anonymous.ki = ki0;
+            in_down.Anonymous.ki = ki0;
 
-            // 2. Key Up
-            inputs[1].r#type = INPUT_KEYBOARD;
+            let mut in_up: INPUT = std::mem::zeroed();
+            in_up.r#type = INPUT_KEYBOARD;
             let mut ki1: KEYBDINPUT = std::mem::zeroed();
             ki1.wVk = 0;
             ki1.wScan = c;
             ki1.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-            inputs[1].Anonymous.ki = ki1;
+            in_up.Anonymous.ki = ki1;
 
-            send_inputs(&inputs);
+            chunk_inputs.push(in_down);
+            chunk_inputs.push(in_up);
 
-            thread::sleep(Duration::from_millis(2));
+            let ch = char::from_u32(c as u32).unwrap_or(' ');
+            let is_space = ch == ' ';
+            let is_punct = matches!(ch, '.' | ',' | '!' | '?' | ';' | ':' | '\n');
+
+            // Flush chunk at word boundaries, punctuation, or every ~8 characters
+            if is_space || is_punct || chunk_inputs.len() >= 16 {
+                send_inputs(&chunk_inputs);
+                chunk_inputs.clear();
+
+                let delay_ms = if is_punct {
+                    4 + (rand::random::<u64>() % 4) // 4ms - 7ms punctuation pause
+                } else if is_space {
+                    1 + (rand::random::<u64>() % 3) // 1ms - 3ms word pause
+                } else {
+                    1 // 1ms micro-tick for long continuous words
+                };
+
+                thread::sleep(Duration::from_millis(delay_ms));
+            }
+        }
+
+        if !chunk_inputs.is_empty() {
+            send_inputs(&chunk_inputs);
         }
     }
 }
@@ -234,31 +272,57 @@ pub fn simulate_backspaces(count: usize) {
 // Shared Clipboard Injection Logic
 // ==========================================
 pub fn paste_text(text: &str) {
-    let mut ctx = match Clipboard::new() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to open clipboard: {:?}", e);
-            return;
+    let delays = [0, 50, 150];
+    let mut clipboard_success = false;
+
+    for (attempt, &delay_ms) in delays.iter().enumerate() {
+        if delay_ms > 0 {
+            thread::sleep(Duration::from_millis(delay_ms));
         }
-    };
 
-    let original_text = ctx.get_text().ok();
-    
-    if let Err(e) = ctx.set_text(text.to_owned()) {
-        eprintln!("Failed to set clipboard text: {:?}", e);
-        return;
-    }
-    
-    thread::sleep(Duration::from_millis(80));
-    
-    simulate_paste();
-
-    if let Some(orig) = original_text {
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(250));
-            if let Ok(mut ctx) = Clipboard::new() {
-                let _ = ctx.set_text(orig);
+        let mut ctx = match Clipboard::new() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[CLIPBOARD WARNING] Attempt {} failed to open clipboard: {:?}", attempt + 1, e);
+                continue;
             }
-        });
+        };
+
+        let original_text = ctx.get_text().ok();
+
+        if let Err(e) = ctx.set_text(text.to_owned()) {
+            eprintln!("[CLIPBOARD WARNING] Attempt {} failed to set clipboard text: {:?}", attempt + 1, e);
+            continue;
+        }
+
+        clipboard_success = true;
+        thread::sleep(Duration::from_millis(80));
+        simulate_paste();
+
+        if let Some(orig) = original_text {
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(250));
+                for &restore_delay in &[0, 50, 150] {
+                    if restore_delay > 0 {
+                        thread::sleep(Duration::from_millis(restore_delay));
+                    }
+                    if let Ok(mut ctx) = Clipboard::new() {
+                        if ctx.set_text(orig.clone()).is_ok() {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+        break;
+    }
+
+    if !clipboard_success {
+        eprintln!("[CLIPBOARD ERROR] All clipboard paste attempts failed.");
+        crate::win32::show_tray_notification(
+            "SpeekTo.Me — Clipboard Unavailable",
+            "Another application locked the clipboard. To bypass clipboard locks, enable \"Keystroke Simulation (Typing Mode)\" in Settings.",
+            crate::win32::NotificationLevel::Warning,
+        );
     }
 }

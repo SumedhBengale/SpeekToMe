@@ -241,14 +241,22 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 		baseSystemPrompt = strings.TrimSpace(provCfg.SystemPrompt)
 	}
 
-	systemPrompt := baseSystemPrompt + " Do not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text."
+	systemPrompt := baseSystemPrompt + "\n\nDo not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished transcription."
 	if strings.TrimSpace(t.customPrompt) != "" {
 		systemPrompt = fmt.Sprintf(
-			"%s\n\nAdditional User Instructions:\n%s\n\nDo not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished text.",
+			"%s\n\nAdditional User Instructions:\n%s\n\nDo not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished transcription.",
 			baseSystemPrompt,
 			strings.TrimSpace(t.customPrompt),
 		)
 	}
 
-	return RunDeepSeekChatCompletion(ctx, t.httpClient, t.model, systemPrompt, text, pctx)
+	userPrompt := fmt.Sprintf("<raw_transcript>\n%s\n</raw_transcript>", text)
+	res, err := RunDeepSeekChatCompletion(ctx, t.httpClient, t.model, systemPrompt, userPrompt, pctx)
+	if err != nil {
+		return "", err
+	}
+	res = strings.TrimPrefix(res, "<raw_transcript>")
+	res = strings.TrimSuffix(res, "</raw_transcript>")
+	res = strings.TrimSpace(res)
+	return res, nil
 }

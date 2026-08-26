@@ -23,7 +23,7 @@ fn default_transcription_mode() -> String {
     "stream".to_string()
 }
 fn default_hotkey() -> String {
-    "Ctrl + Shift".to_string()
+    "Ctrl + Win".to_string()
 }
 fn default_hotkey_mode() -> String {
     "hold".to_string()
@@ -145,25 +145,39 @@ pub fn parse_hotkey_combo(name: &str) -> u32 {
     let mut mask: u32 = 0;
     let mut vk: u32 = 0;
 
-    if lower.contains("ctrl") || lower.contains("control") {
-        mask |= HOTKEY_CTRL;
-    }
-    if lower.contains("shift") {
-        mask |= HOTKEY_SHIFT;
-    }
-    if lower.contains("alt") {
-        mask |= HOTKEY_ALT;
-    }
-    if lower.contains("win") {
-        mask |= HOTKEY_WIN;
-    }
-    if lower.contains("space") {
-        vk = 0x20; // VK_SPACE
+    if lower.contains("right alt") || lower.contains("ralt") {
+        vk = 0xA5; // VK_RMENU
+    } else if lower.contains("caps lock") || lower.contains("capslock") {
+        vk = 0x14; // VK_CAPITAL
+    } else if lower.contains("f8") {
+        vk = 0x77; // VK_F8
+    } else if lower.contains("f9") {
+        vk = 0x78; // VK_F9
+    } else if lower.contains("f12") {
+        vk = 0x7B; // VK_F12
+    } else {
+        if lower.contains("ctrl") || lower.contains("control") {
+            mask |= HOTKEY_CTRL;
+        }
+        if lower.contains("shift") {
+            mask |= HOTKEY_SHIFT;
+        }
+        if lower.contains("alt") {
+            mask |= HOTKEY_ALT;
+        }
+        if lower.contains("win") {
+            mask |= HOTKEY_WIN;
+        }
+        if lower.contains("space") {
+            vk = 0x20; // VK_SPACE
+        } else if lower.ends_with("+ z") || lower.ends_with(" z") || lower == "z" {
+            vk = 0x5A; // VK_Z
+        }
     }
 
     if mask == 0 && vk == 0 {
-        // Fallback default: Ctrl + Shift
-        mask = HOTKEY_CTRL | HOTKEY_SHIFT;
+        // Fallback default: Ctrl + Win
+        mask = HOTKEY_CTRL | HOTKEY_WIN;
     }
 
     (vk << 16) | (mask & 0xFFFF)

@@ -162,6 +162,17 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
         Some(t) => t,
         None => {
             println!("No session token available.");
+            crate::win32::hide_overlay();
+            crate::win32::hide_preview();
+            crate::win32::play_chime(false);
+            crate::win32::show_tray_notification(
+                "SpeekTo.Me — Sign In Required",
+                "Please sign in to your SpeekTo.Me account in Settings to start voice dictation.",
+                crate::win32::NotificationLevel::Warning,
+            );
+            if let Some(app) = crate::TAURI_APP.get() {
+                crate::show_or_create_settings_window(app);
+            }
             return;
         }
     };
@@ -170,6 +181,14 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("Failed to encode Opus audio: {:?}", e);
+            crate::win32::hide_overlay();
+            crate::win32::hide_preview();
+            crate::win32::play_chime(false);
+            crate::win32::show_tray_notification(
+                "SpeekTo.Me — Audio Error",
+                "Failed to encode microphone audio for transcription.",
+                crate::win32::NotificationLevel::Error,
+            );
             return;
         }
     };
@@ -193,9 +212,17 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                 if !trimmed.is_empty() {
                     let normalized = crate::vocab::get_vocab_manager().process_text(trimmed);
                     println!("Transcribed & Normalized Text: {}", normalized);
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        let _ = clipboard.set_text(normalized.clone());
-                        crate::keyboard::simulate_paste();
+                    crate::win32::set_preview_text(&normalized);
+
+                    let typing_mode = {
+                        let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                        config.typing_mode
+                    };
+
+                    if typing_mode {
+                        crate::keyboard::simulate_typing(&normalized);
+                    } else {
+                        crate::keyboard::paste_text(&normalized);
                     }
 
                     // If vocabulary modified the text and we have log_id + ack_token, send asynchronous ACK
@@ -213,12 +240,40 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                     }
                 }
                 crate::win32::hide_overlay();
+                crate::win32::hide_preview();
                 crate::win32::play_chime(false);
             }
             Err(err) => {
                 eprintln!("Transcription failed: {}", err);
                 crate::win32::hide_overlay();
+                crate::win32::hide_preview();
                 crate::win32::play_chime(false);
+
+                let err_lower = err.to_lowercase();
+                if err_lower.contains("401") || err_lower.contains("unauthorized") || err_lower.contains("invalid token") || err_lower.contains("token expired") {
+                    crate::handle_session_expired(Some("Your session has expired. Please sign in again to continue dictating."));
+                } else if err_lower.contains("limit") || err_lower.contains("quota") || err_lower.contains("429") {
+                    crate::win32::show_tray_notification(
+                        "SpeekTo.Me — Usage Limit Reached",
+                        "You have reached your monthly transcription limit. Upgrade your plan in Settings.",
+                        crate::win32::NotificationLevel::Warning,
+                    );
+                    if let Some(app) = crate::TAURI_APP.get() {
+                        crate::show_or_create_settings_window(app);
+                    }
+                } else if err_lower.contains("network") || err_lower.contains("timeout") || err_lower.contains("connection refused") || err_lower.contains("dns") {
+                    crate::win32::show_tray_notification(
+                        "SpeekTo.Me — Network Error",
+                        "Could not connect to SpeekTo.Me server. Please check your internet connection.",
+                        crate::win32::NotificationLevel::Error,
+                    );
+                } else {
+                    crate::win32::show_tray_notification(
+                        "SpeekTo.Me — Transcription Error",
+                        &format!("Transcription failed: {}", err),
+                        crate::win32::NotificationLevel::Error,
+                    );
+                }
             }
         }
     });
@@ -293,8 +348,12 @@ pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, Str
         .await
         .map_err(|e| format!("Network error: {}", e))?;
 
-    if res.status().is_success() {
+    let status = res.status();
+    if status.is_success() {
         res.json::<UserInfo>().await.map_err(|e| format!("Failed to parse user info: {}", e))
+    } else if status.as_u16() == 401 {
+        crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
+        Err("Session expired. Please sign in again.".to_string())
     } else {
         let err_text = res.text().await.unwrap_or_default();
         Err(format!("Server error: {}", err_text))
@@ -380,6 +439,9 @@ pub async fn fetch_vocabulary(api_url: &str, token: &str) -> Result<Vec<ClientVo
     if status.is_success() {
         serde_json::from_str::<Vec<ClientVocabularyTerm>>(&body_text)
             .map_err(|e| format!("Failed to parse vocabulary list: {}", e))
+    } else if status.as_u16() == 401 {
+        crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
+        Err("Session expired. Please sign in again.".to_string())
     } else {
         Err(format!("Failed to retrieve vocabulary: {}", body_text))
     }
@@ -401,6 +463,9 @@ pub async fn add_vocab_term(api_url: &str, token: &str, term: &str) -> Result<()
     let body_text = res.text().await.unwrap_or_default();
     if status.is_success() {
         Ok(())
+    } else if status.as_u16() == 401 {
+        crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
+        Err("Session expired. Please sign in again.".to_string())
     } else {
         Err(format!("Failed to add vocabulary term: {}", body_text))
     }
@@ -422,6 +487,9 @@ pub async fn delete_vocab_term(api_url: &str, token: &str, term: &str) -> Result
     let body_text = res.text().await.unwrap_or_default();
     if status.is_success() {
         Ok(())
+    } else if status.as_u16() == 401 {
+        crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
+        Err("Session expired. Please sign in again.".to_string())
     } else {
         Err(format!("Failed to delete vocabulary term: {}", body_text))
     }
@@ -487,7 +555,16 @@ pub async fn transcribe_audio(
             ack_token: resp.ack_token,
         })
     } else {
-        Err(body_text)
+        let body_trimmed = body_text.trim().to_string();
+        if status.as_u16() == 401 {
+            Err("401 Unauthorized: Session token is invalid or expired.".to_string())
+        } else if status.as_u16() == 429 {
+            Err("429: Monthly transcription limit or quota reached.".to_string())
+        } else if !body_trimmed.is_empty() {
+            Err(body_trimmed)
+        } else {
+            Err(format!("Server error with HTTP status {}", status))
+        }
     }
 }
 
@@ -572,6 +649,9 @@ pub async fn upload_meeting(
     let body_text = res.text().await.unwrap_or_default();
     if status.is_success() {
         Ok(body_text)
+    } else if status.as_u16() == 401 {
+        crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
+        Err("Session expired. Please sign in again.".to_string())
     } else {
         Err(format!("Upload failed with status {}: {}", status, body_text))
     }
@@ -589,13 +669,17 @@ pub async fn update_user_languages(api_url: &str, token: &str, languages: Vec<St
         .await
         .map_err(|e| format!("Network error: {}", e))?;
 
-    if res.status().is_success() {
+    let status = res.status();
+    if status.is_success() {
         #[derive(Deserialize)]
         struct Resp {
             languages: Vec<String>,
         }
         let parsed = res.json::<Resp>().await.map_err(|e| format!("Failed to parse response: {}", e))?;
         Ok(parsed.languages)
+    } else if status.as_u16() == 401 {
+        crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
+        Err("Session expired. Please sign in again.".to_string())
     } else {
         let err_text = res.text().await.unwrap_or_default();
         Err(format!("Server error: {}", err_text))

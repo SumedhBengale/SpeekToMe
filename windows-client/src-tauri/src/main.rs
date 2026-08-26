@@ -31,7 +31,7 @@ pub static SIMULATING_KEY: AtomicBool = AtomicBool::new(false);
 pub static LAST_WINDOW_POSITION: OnceLock<Mutex<Option<PhysicalPosition<i32>>>> = OnceLock::new();
 pub static LAST_WINDOW_SIZE: OnceLock<Mutex<Option<PhysicalSize<u32>>>> = OnceLock::new();
 
-pub static ACTIVE_HOTKEY_COMBO: AtomicU32 = AtomicU32::new(0x00000003); // Ctrl + Shift default
+pub static ACTIVE_HOTKEY_COMBO: AtomicU32 = AtomicU32::new(0x00000009); // Ctrl (0x01) + Win (0x08) default
 pub static ACTIVE_HOTKEY_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0); // 0 = hold, 1 = toggle
 pub static ACTIVE_PILL_BG_COLOR: AtomicU32 = AtomicU32::new(0x27221F);
 pub static ACTIVE_PILL_WAVE_COLOR: AtomicU32 = AtomicU32::new(0x57BF7C);
@@ -255,6 +255,27 @@ fn get_supported_languages() -> Vec<lang::LanguageItem> {
     lang::get_language_manager().get_languages()
 }
 
+pub fn handle_session_expired(reason: Option<&str>) {
+    {
+        let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        active.session_token = None;
+        sync_active_config_atomics(&active);
+        config::save_config(&active);
+    }
+
+    let msg = reason.unwrap_or("Your session has expired. Please sign in again to continue dictating.");
+    crate::win32::show_tray_notification(
+        "SpeekTo.Me — Session Expired",
+        msg,
+        crate::win32::NotificationLevel::Warning,
+    );
+
+    if let Some(app) = TAURI_APP.get() {
+        let _ = app.emit("auth-session-expired", ());
+        show_or_create_settings_window(app);
+    }
+}
+
 pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -265,7 +286,8 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
             .resizable(true)
             .transparent(false)
             .decorations(true)
-            .skip_taskbar(false);
+            .skip_taskbar(false)
+            .min_inner_size(840.0, 620.0);
 
         let pos_opt = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
         let size_opt = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -276,7 +298,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         if let Some(size) = size_opt {
             builder = builder.inner_size(size.width as f64, size.height as f64);
         } else {
-            builder = builder.inner_size(800.0, 600.0);
+            builder = builder.inner_size(900.0, 680.0);
         }
 
         match builder.build() {
