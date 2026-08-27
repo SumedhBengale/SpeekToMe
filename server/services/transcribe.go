@@ -54,6 +54,13 @@ func SyncGeoCacheFromDB(d *db.Database) {
 		}
 		geoMutex.Unlock()
 		log.Printf("[GEOIP CACHE] Synchronized %d GeoIP locations from database into memory.", len(entries))
+
+		// L2 Valkey GeoIP Cache Sync
+		if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+			ctxSet, cancelSet := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancelSet()
+			_ = valkey.GlobalClient.SetGeoIPBatch(ctxSet, entries, 30*24*time.Hour)
+		}
 	}
 }
 

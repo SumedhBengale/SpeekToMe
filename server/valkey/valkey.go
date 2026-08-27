@@ -241,6 +241,47 @@ func (c *Client) SetGeoIP(ctx context.Context, ip, location string, ttl time.Dur
 	return c.rdb.Set(ctx, KeyPrefixGeoIP+ip, location, ttl).Err()
 }
 
+func (c *Client) SetGeoIPBatch(ctx context.Context, entries map[string]string, ttl time.Duration) error {
+	if !c.IsConnected() || len(entries) == 0 {
+		return nil
+	}
+	if ttl <= 0 {
+		ttl = 30 * 24 * time.Hour
+	}
+	pipe := c.rdb.Pipeline()
+	for ip, loc := range entries {
+		pipe.Set(ctx, KeyPrefixGeoIP+ip, loc, ttl)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// ----------------------------------------------------------------------
+// SaaS Configuration Cache Operations (L2 Fast Configuration)
+// ----------------------------------------------------------------------
+
+func (c *Client) SetCachedSaaSConfig(ctx context.Context, raw map[string]string) error {
+	if !c.IsConnected() || len(raw) == 0 {
+		return nil
+	}
+	pipe := c.rdb.Pipeline()
+	// Store as hash in config:saas
+	pipe.HSet(ctx, KeyPrefixSaaSConfig, raw)
+	// Also store models_config_json directly for instant JSON inspection
+	if modelsJSON, ok := raw["models_config_json"]; ok && strings.TrimSpace(modelsJSON) != "" {
+		pipe.Set(ctx, KeyModelsConfigJSON, modelsJSON, 0)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (c *Client) GetCachedSaaSConfig(ctx context.Context) (map[string]string, error) {
+	if !c.IsConnected() {
+		return nil, fmt.Errorf("valkey disconnected")
+	}
+	return c.rdb.HGetAll(ctx, KeyPrefixSaaSConfig).Result()
+}
+
 // ----------------------------------------------------------------------
 // Pub/Sub Notifications (Instant Multi-Instance Synchronization)
 // ----------------------------------------------------------------------

@@ -1,14 +1,17 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"speektome-server/db"
 	"speektome-server/utils"
+	"speektome-server/valkey"
 )
 
 var (
@@ -482,6 +485,13 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 	}
 
 	ConfigManager.Set(newConfig, dbConfigs)
+
+	// L2 Valkey SaaS Config Cache
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		_ = valkey.GlobalClient.SetCachedSaaSConfig(ctx, dbConfigs)
+	}
 
 	if updateGroqLimitFunc != nil {
 		updateGroqLimitFunc(newConfig.GroqRateLimitRPM)
