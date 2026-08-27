@@ -614,31 +614,27 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	audioFormat := "wav"
 	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
 
-	defaultVoxtralPrompt := "Transcribe the audio speech accurately and verbatim. Return ONLY the spoken words with proper punctuation and capitalization without any introductory, conversational, or markdown wrapper text."
-
-	systemText := strings.TrimSpace(promptStr)
-	if systemText == "" {
-		systemText = defaultVoxtralPrompt
+	var contentList []map[string]interface{}
+	if strings.TrimSpace(promptStr) != "" {
+		contentList = append(contentList, map[string]interface{}{
+			"type": "text",
+			"text": strings.TrimSpace(promptStr),
+		})
 	}
+	contentList = append(contentList, map[string]interface{}{
+		"type": "input_audio",
+		"input_audio": map[string]string{
+			"data":   audioB64,
+			"format": audioFormat,
+		},
+	})
 
 	payload := map[string]interface{}{
 		"model": model,
 		"messages": []map[string]interface{}{
 			{
-				"role": "user",
-				"content": []map[string]interface{}{
-					{
-						"type": "text",
-						"text": systemText,
-					},
-					{
-						"type": "input_audio",
-						"input_audio": map[string]string{
-							"data":   audioB64,
-							"format": audioFormat,
-						},
-					},
-				},
+				"role":    "user",
+				"content": contentList,
 			},
 		},
 		"temperature": 0.0,
