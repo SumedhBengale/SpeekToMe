@@ -28,8 +28,8 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if config.DeepInfraAPIKey == "" && config.GroqAPIKey == "" {
-		http.Error(w, "Neither DEEPINFRA_API_KEY nor GROQ_API_KEY environment variable is set", http.StatusInternalServerError)
+	if config.AWSBedrockAPIKey == "" && config.DeepInfraAPIKey == "" && config.GroqAPIKey == "" && config.CloudflareAPIToken == "" {
+		http.Error(w, "No STT provider API keys are configured (AWS_BEDROCK_API_KEY, DEEPINFRA_API_KEY, GROQ_API_KEY)", http.StatusInternalServerError)
 		return
 	}
 

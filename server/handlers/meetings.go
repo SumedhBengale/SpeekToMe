@@ -146,7 +146,7 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(energyJSONStr), &energySamples)
 	}
 
-	if (config.CloudflareAPIToken != "" && config.CloudflareAccountID != "") || config.DeepInfraAPIKey != "" || config.GroqAPIKey != "" {
+	if config.AWSBedrockAPIKey != "" || (config.CloudflareAPIToken != "" && config.CloudflareAccountID != "") || config.DeepInfraAPIKey != "" || config.GroqAPIKey != "" {
 		var errWhisper error
 		var segments []services.WhisperSegment
 		var mixProvider, mixRouting string

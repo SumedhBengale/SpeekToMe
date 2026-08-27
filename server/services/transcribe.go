@@ -574,6 +574,139 @@ func RunCustomBatchTranscribe(ctx context.Context, audioBytes []byte, baseURL, a
 	return rawText, result.Segments, routingLoc, nil
 }
 
+func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL, model, apiKey string, promptStr string, timeout time.Duration) (string, []WhisperSegment, string, error) {
+	if baseURL == "" {
+		region := config.AWSBedrockRegion
+		if region == "" {
+			region = "us-east-1"
+		}
+		baseURL = fmt.Sprintf("https://bedrock-mantle.%s.api.aws/v1/chat/completions", region)
+	}
+	if apiKey == "" {
+		apiKey = config.AWSBedrockAPIKey
+	}
+	if apiKey == "" {
+		return "", nil, "", fmt.Errorf("AWS Bedrock API key is not configured")
+	}
+	if model == "" {
+		model = "mistral.voxtral-mini-3b-2507"
+	}
+
+	audioFormat := "wav"
+	if len(audioBytes) > 4 && string(audioBytes[:4]) == "OggS" {
+		audioFormat = "opus"
+	}
+
+	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
+
+	systemText := "Transcribe the following audio accurately and verbatim. Return ONLY the spoken words with proper punctuation and capitalization without any introductory, conversational, or markdown wrapper text."
+	if promptStr != "" {
+		systemText = systemText + " " + promptStr
+	}
+
+	payload := map[string]interface{}{
+		"model": model,
+		"messages": []map[string]interface{}{
+			{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": systemText,
+					},
+					{
+						"type": "input_audio",
+						"input_audio": map[string]string{
+							"data":   audioB64,
+							"format": audioFormat,
+						},
+					},
+				},
+			},
+		},
+		"temperature": 0.0,
+		"max_tokens":  1000,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return "", nil, "", err
+	}
+
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var remoteIP string
+	trace := &httptrace.ClientTrace{
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			addr := connInfo.Conn.RemoteAddr().String()
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				remoteIP = host
+			} else {
+				remoteIP = addr
+			}
+		},
+	}
+	ctxTrace := httptrace.WithClientTrace(ctxTimeout, trace)
+
+	client := &http.Client{Timeout: timeout}
+	req, err := http.NewRequestWithContext(ctxTrace, "POST", baseURL, bytes.NewReader(jsonPayload))
+	if err != nil {
+		return "", nil, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, "", err
+	}
+	defer resp.Body.Close()
+
+	routingLoc := GetHTTPResponseRouting(resp, remoteIP)
+
+	if resp.StatusCode != http.StatusOK {
+		bodyB, _ := io.ReadAll(resp.Body)
+		return "", nil, "", fmt.Errorf("bedrock voxtral failed (%d): %s", resp.StatusCode, string(bodyB))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", nil, "", err
+	}
+
+	if len(result.Choices) == 0 {
+		return "", make([]WhisperSegment, 0), routingLoc, nil
+	}
+
+	rawText := strings.TrimSpace(result.Choices[0].Message.Content)
+	rawText = strings.TrimPrefix(rawText, "Transcribed Text:")
+	rawText = strings.TrimPrefix(rawText, "Transcription:")
+	rawText = strings.TrimPrefix(rawText, "Here is the transcription:")
+	rawText = strings.TrimSpace(rawText)
+
+	hallucinations := map[string]bool{
+		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
+		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
+		"thank you!": true, "thanks!": true,
+	}
+	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'*_")
+	if hallucinations[checkText] {
+		rawText = ""
+	}
+
+	return rawText, make([]WhisperSegment, 0), routingLoc, nil
+}
+
 func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string, userLanguages []string) (string, []WhisperSegment, string, string, error) {
 	cfg := config.ConfigManager.Get()
 	langParam, promptStr := BuildWhisperPrompt(userLanguages)
@@ -590,7 +723,33 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 			continue
 		}
 
-		if strings.HasPrefix(provider, "groq") {
+		if strings.HasPrefix(provider, "bedrock") || strings.Contains(provider, "voxtral") {
+			apiKey := config.AWSBedrockAPIKey
+			if provCfg.APIKey != "" {
+				apiKey = provCfg.APIKey
+			}
+			if apiKey != "" {
+				if langParam != "" && !cfg.IsBatchLanguageSupported(provider, langParam) {
+					log.Printf("[BEDROCK SKIP] Language %q not in %s supported languages. Trying fallback.", langParam, provider)
+					continue
+				}
+				modelName := provCfg.Model
+				if modelName == "" {
+					modelName = "mistral.voxtral-mini-3b-2507"
+				}
+				timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
+				if timeout <= 0 {
+					timeout = 10 * time.Second
+				}
+				log.Printf("[BEDROCK VOXTRAL] Attempting transcription using %s model %s (lang: %q, timeout: %v)", provider, modelName, langParam, timeout)
+				text, segments, loc, err := RunBedrockVoxtralTranscribe(ctx, audioBytes, provCfg.BaseURL, modelName, apiKey, promptStr, timeout)
+				if err == nil {
+					return text, segments, provider, loc, nil
+				}
+				log.Printf("[BEDROCK VOXTRAL ERROR] Transcription failed: %v. Trying fallback.", err)
+				lastErr = err
+			}
+		} else if strings.HasPrefix(provider, "groq") {
 			if config.GroqAPIKey != "" {
 				if langParam != "" && !cfg.IsBatchLanguageSupported(provider, langParam) {
 					log.Printf("[GROQ SKIP] Language %q not in %s capabilities. Trying fallback.", langParam, provider)
@@ -706,7 +865,33 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 			continue
 		}
 
-		if strings.HasPrefix(provider, "deepinfra") || strings.Contains(provider, "nemotron") {
+		if strings.HasPrefix(provider, "bedrock") || strings.Contains(provider, "voxtral") {
+			apiKey := config.AWSBedrockAPIKey
+			if provCfg.APIKey != "" {
+				apiKey = provCfg.APIKey
+			}
+			if apiKey != "" {
+				if langParam != "" && !cfg.IsStreamingLanguageSupported(provider, langParam) {
+					log.Printf("[BEDROCK STREAM SKIP] Language %q not in %s supported languages. Trying fallback.", langParam, provider)
+					continue
+				}
+				modelName := provCfg.Model
+				if modelName == "" {
+					modelName = "mistral.voxtral-mini-3b-2507"
+				}
+				timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
+				if timeout <= 0 {
+					timeout = 4000 * time.Millisecond
+				}
+				log.Printf("[BEDROCK STREAM ASR] Attempting pseudo-streaming transcription using %s model %s (lang: %q, timeout: %v)", provider, modelName, langParam, timeout)
+				text, segments, loc, err := RunBedrockVoxtralTranscribe(ctx, audioBytes, provCfg.BaseURL, modelName, apiKey, promptStr, timeout)
+				if err == nil {
+					return text, segments, provider, loc, nil
+				}
+				log.Printf("[BEDROCK STREAM ASR ERROR] %v. Trying fallback.", err)
+				lastErr = err
+			}
+		} else if strings.HasPrefix(provider, "deepinfra") || strings.Contains(provider, "nemotron") {
 			if config.DeepInfraAPIKey != "" {
 				if langParam != "" && !cfg.IsStreamingLanguageSupported(provider, langParam) {
 					log.Printf("[NEMOTRON SKIP] Language %q not in %s supported languages. Auto-routing to full Whisper engine.", langParam, provider)

@@ -22,17 +22,20 @@ var (
 	WaferAPIKey         string
 	CloudflareAPIToken  string
 	CloudflareAccountID string
+	AWSBedrockAPIKey    string
+	AWSBedrockRegion    string
 	GoogleClientID      string
 	GoogleClientSecret  string
 	BackendURL          string
 	DatabaseURL         string
 	FrontendURL         string
 
-	GroqAPIURL       = "https://api.groq.com/openai/v1/audio/transcriptions"
-	DeepInfraBaseURL = "https://api.deepinfra.com/v1/inference/"
-	DeepSeekAPIURL   = "https://api.deepseek.com/chat/completions"
-	CerebrasAPIURL   = "https://api.cerebras.ai/v1/chat/completions"
-	WaferAPIURL      = "https://pass.wafer.ai/v1/chat/completions"
+	GroqAPIURL          = "https://api.groq.com/openai/v1/audio/transcriptions"
+	DeepInfraBaseURL    = "https://api.deepinfra.com/v1/inference/"
+	DeepSeekAPIURL      = "https://api.deepseek.com/chat/completions"
+	CerebrasAPIURL      = "https://api.cerebras.ai/v1/chat/completions"
+	WaferAPIURL         = "https://pass.wafer.ai/v1/chat/completions"
+	AWSBedrockMantleURL = "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions"
 )
 
 // Provider descriptor structs
@@ -97,13 +100,31 @@ func DefaultModelsConfig() ModelsConfig {
 	defaultStreamingPrompt := "Transcribe the spoken speech clearly, preserving sentence continuity, punctuation, and exact terminology."
 
 	return ModelsConfig{
-		DefaultBatchProvider:     "deepinfra_nemotron_3_5",
-		DefaultStreamingProvider: "self_hosted_nemotron_3_5",
+		DefaultBatchProvider:     "bedrock_voxtral_mini_3b",
+		DefaultStreamingProvider: "bedrock_voxtral_mini_3b",
 		DefaultLLMProvider:       "cerebras_gpt_oss_120b",
 		BatchProviders: map[string]BatchProviderConfig{
-			"deepinfra_nemotron_3_5": {
+			"bedrock_voxtral_mini_3b": {
 				Enabled:            true,
 				Priority:           1,
+				Model:              "mistral.voxtral-mini-3b-2507",
+				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+				TimeoutMs:          10000,
+				InitialPrompt:      defaultStreamingPrompt,
+				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
+			},
+			"bedrock_voxtral_small_24b": {
+				Enabled:            true,
+				Priority:           2,
+				Model:              "mistral.voxtral-small-24b-2507",
+				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+				TimeoutMs:          15000,
+				InitialPrompt:      defaultStreamingPrompt,
+				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
+			},
+			"deepinfra_nemotron_3_5": {
+				Enabled:            true,
+				Priority:           3,
 				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
 				BaseURL:            DeepInfraBaseURL + "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
 				TimeoutMs:          4000,
@@ -113,7 +134,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"deepinfra_whisper_large_v3_turbo": {
 				Enabled:            true,
-				Priority:           2,
+				Priority:           4,
 				Model:              "openai/whisper-large-v3-turbo",
 				BaseURL:            DeepInfraBaseURL + "openai/whisper-large-v3-turbo",
 				TimeoutMs:          10000,
@@ -123,7 +144,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"deepinfra_whisper_large_v3": {
 				Enabled:            true,
-				Priority:           3,
+				Priority:           5,
 				Model:              "openai/whisper-large-v3",
 				BaseURL:            DeepInfraBaseURL + "openai/whisper-large-v3",
 				TimeoutMs:          12000,
@@ -133,7 +154,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"groq_whisper_large_v3_turbo": {
 				Enabled:            false,
-				Priority:           4,
+				Priority:           6,
 				Model:              "whisper-large-v3-turbo",
 				BaseURL:            GroqAPIURL,
 				TimeoutMs:          10000,
@@ -142,7 +163,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"cloudflare_whisper_large_v3_turbo": {
 				Enabled:            false,
-				Priority:           5,
+				Priority:           7,
 				Model:              "@cf/openai/whisper-large-v3-turbo",
 				TimeoutMs:          15000,
 				InitialPrompt:      defaultSTTPrompt,
@@ -170,9 +191,29 @@ func DefaultModelsConfig() ModelsConfig {
 				InitialPrompt:      defaultStreamingPrompt,
 				SupportedLanguages: []string{"*"},
 			},
-			"deepinfra_nemotron_3_5": {
+			"bedrock_voxtral_mini_3b": {
 				Enabled:            true,
 				Priority:           2,
+				Type:               "pseudo",
+				Model:              "mistral.voxtral-mini-3b-2507",
+				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+				TimeoutMs:          4000,
+				InitialPrompt:      defaultStreamingPrompt,
+				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
+			},
+			"bedrock_voxtral_small_24b": {
+				Enabled:            true,
+				Priority:           3,
+				Type:               "pseudo",
+				Model:              "mistral.voxtral-small-24b-2507",
+				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+				TimeoutMs:          5000,
+				InitialPrompt:      defaultStreamingPrompt,
+				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
+			},
+			"deepinfra_nemotron_3_5": {
+				Enabled:            true,
+				Priority:           4,
 				Type:               "pseudo",
 				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
 				BaseURL:            DeepInfraBaseURL + "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
@@ -183,7 +224,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"deepinfra_whisper_large_v3_turbo": {
 				Enabled:            true,
-				Priority:           3,
+				Priority:           5,
 				Type:               "pseudo",
 				Model:              "openai/whisper-large-v3-turbo",
 				BaseURL:            DeepInfraBaseURL + "openai/whisper-large-v3-turbo",
@@ -194,7 +235,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"deepinfra_whisper_large_v3": {
 				Enabled:            true,
-				Priority:           4,
+				Priority:           6,
 				Type:               "pseudo",
 				Model:              "openai/whisper-large-v3",
 				BaseURL:            DeepInfraBaseURL + "openai/whisper-large-v3",
