@@ -76,9 +76,9 @@ type LLMProviderConfig struct {
 }
 
 type ModelsConfig struct {
-	DefaultBatchProvider     string                             `json:"default_batch_provider"`
-	DefaultStreamingProvider string                             `json:"default_streaming_provider"`
-	DefaultLLMProvider       string                             `json:"default_llm_provider"`
+	DefaultBatchProvider     string                             `json:"default_batch_provider,omitempty"`
+	DefaultStreamingProvider string                             `json:"default_streaming_provider,omitempty"`
+	DefaultLLMProvider       string                             `json:"default_llm_provider,omitempty"`
 	BatchProviders           map[string]BatchProviderConfig     `json:"batch_providers"`
 	StreamingProviders       map[string]StreamingProviderConfig `json:"streaming_providers"`
 	LLMProviders             map[string]LLMProviderConfig       `json:"llm_providers"`
@@ -100,26 +100,23 @@ func DefaultModelsConfig() ModelsConfig {
 	defaultStreamingPrompt := "Transcribe the spoken speech clearly, preserving sentence continuity, punctuation, and exact terminology."
 
 	return ModelsConfig{
-		DefaultBatchProvider:     "bedrock_voxtral_mini_3b",
-		DefaultStreamingProvider: "bedrock_voxtral_mini_3b",
-		DefaultLLMProvider:       "cerebras_gpt_oss_120b",
 		BatchProviders: map[string]BatchProviderConfig{
-			"bedrock_voxtral_mini_3b": {
-				Enabled:            true,
-				Priority:           1,
-				Model:              "mistral.voxtral-mini-3b-2507",
-				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
-				TimeoutMs:          10000,
-				InitialPrompt:      defaultStreamingPrompt,
-				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
-			},
 			"bedrock_voxtral_small_24b": {
 				Enabled:            true,
-				Priority:           2,
+				Priority:           1,
 				Model:              "mistral.voxtral-small-24b-2507",
 				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
 				TimeoutMs:          15000,
-				InitialPrompt:      defaultStreamingPrompt,
+				InitialPrompt:      "",
+				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
+			},
+			"bedrock_voxtral_mini_3b": {
+				Enabled:            true,
+				Priority:           2,
+				Model:              "mistral.voxtral-mini-3b-2507",
+				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+				TimeoutMs:          10000,
+				InitialPrompt:      "",
 				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
 			},
 			"deepinfra_nemotron_3_5": {
@@ -181,39 +178,19 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 		},
 		StreamingProviders: map[string]StreamingProviderConfig{
-			"self_hosted_nemotron_3_5": {
-				Enabled:            true,
-				Priority:           1,
-				Type:               "real",
-				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
-				BaseURL:            "ws://TAILSCALE_IP:8080/v1/audio/stream",
-				TimeoutMs:          5000,
-				InitialPrompt:      defaultStreamingPrompt,
-				SupportedLanguages: []string{"*"},
-			},
-			"bedrock_voxtral_mini_3b": {
-				Enabled:            true,
-				Priority:           2,
-				Type:               "pseudo",
-				Model:              "mistral.voxtral-mini-3b-2507",
-				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
-				TimeoutMs:          4000,
-				InitialPrompt:      defaultStreamingPrompt,
-				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
-			},
 			"bedrock_voxtral_small_24b": {
 				Enabled:            true,
-				Priority:           3,
+				Priority:           1,
 				Type:               "pseudo",
 				Model:              "mistral.voxtral-small-24b-2507",
 				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
 				TimeoutMs:          5000,
-				InitialPrompt:      defaultStreamingPrompt,
+				InitialPrompt:      "",
 				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
 			},
 			"deepinfra_nemotron_3_5": {
 				Enabled:            true,
-				Priority:           4,
+				Priority:           2,
 				Type:               "pseudo",
 				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
 				BaseURL:            DeepInfraBaseURL + "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
@@ -224,7 +201,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"deepinfra_whisper_large_v3_turbo": {
 				Enabled:            true,
-				Priority:           5,
+				Priority:           3,
 				Type:               "pseudo",
 				Model:              "openai/whisper-large-v3-turbo",
 				BaseURL:            DeepInfraBaseURL + "openai/whisper-large-v3-turbo",
@@ -235,7 +212,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"deepinfra_whisper_large_v3": {
 				Enabled:            true,
-				Priority:           6,
+				Priority:           4,
 				Type:               "pseudo",
 				Model:              "openai/whisper-large-v3",
 				BaseURL:            DeepInfraBaseURL + "openai/whisper-large-v3",
@@ -244,15 +221,24 @@ func DefaultModelsConfig() ModelsConfig {
 				InitialPrompt:      defaultSTTPrompt,
 				SupportedLanguages: []string{"*"},
 			},
-			"custom_streaming": {
+			"bedrock_voxtral_mini_3b": {
 				Enabled:            false,
-				Priority:           99,
-				Type:               "real",
-				Model:              "",
-				BaseURL:            "",
-				APIKey:             "",
-				TimeoutMs:          15000,
+				Priority:           5,
+				Type:               "pseudo",
+				Model:              "mistral.voxtral-mini-3b-2507",
+				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+				TimeoutMs:          4000,
 				InitialPrompt:      "",
+				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
+			},
+			"self_hosted_nemotron_3_5": {
+				Enabled:            false,
+				Priority:           6,
+				Type:               "real",
+				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
+				BaseURL:            "ws://TAILSCALE_IP:8080/v1/audio/stream",
+				TimeoutMs:          5000,
+				InitialPrompt:      defaultStreamingPrompt,
 				SupportedLanguages: []string{"*"},
 			},
 		},
@@ -329,8 +315,6 @@ func sortProviderRanks(ranks []providerRank) []string {
 // Helpers on ProviderConfig for fallback priority chains
 func (p *ProviderConfig) GetActiveBatchFallbackOrder() []string {
 	var ranks []providerRank
-	defaultProv := p.Models.DefaultBatchProvider
-
 	for name, prov := range p.Models.BatchProviders {
 		if !prov.Enabled {
 			continue
@@ -339,9 +323,6 @@ func (p *ProviderConfig) GetActiveBatchFallbackOrder() []string {
 		if effectivePriority <= 0 {
 			effectivePriority = 100
 		}
-		if name == defaultProv {
-			effectivePriority -= 1000
-		}
 		ranks = append(ranks, providerRank{name: name, priority: effectivePriority})
 	}
 	return sortProviderRanks(ranks)
@@ -349,8 +330,6 @@ func (p *ProviderConfig) GetActiveBatchFallbackOrder() []string {
 
 func (p *ProviderConfig) GetActiveStreamingFallbackOrder() []string {
 	var ranks []providerRank
-	defaultProv := p.Models.DefaultStreamingProvider
-
 	for name, prov := range p.Models.StreamingProviders {
 		if !prov.Enabled {
 			continue
@@ -358,9 +337,6 @@ func (p *ProviderConfig) GetActiveStreamingFallbackOrder() []string {
 		effectivePriority := prov.Priority
 		if effectivePriority <= 0 {
 			effectivePriority = 100
-		}
-		if name == defaultProv {
-			effectivePriority -= 1000
 		}
 		ranks = append(ranks, providerRank{name: name, priority: effectivePriority})
 	}
@@ -381,8 +357,6 @@ func (p *ProviderConfig) GetStreamingProviderType(providerName string) string {
 
 func (p *ProviderConfig) GetActiveLLMFallbackOrder() []string {
 	var ranks []providerRank
-	defaultProv := p.Models.DefaultLLMProvider
-
 	for name, prov := range p.Models.LLMProviders {
 		if !prov.Enabled {
 			continue
@@ -390,9 +364,6 @@ func (p *ProviderConfig) GetActiveLLMFallbackOrder() []string {
 		effectivePriority := prov.Priority
 		if effectivePriority <= 0 {
 			effectivePriority = 100
-		}
-		if name == defaultProv {
-			effectivePriority -= 1000
 		}
 		ranks = append(ranks, providerRank{name: name, priority: effectivePriority})
 	}
@@ -494,24 +465,18 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 	if jsonStr, ok := dbConfigs["models_config_json"]; ok && strings.TrimSpace(jsonStr) != "" {
 		var parsed ModelsConfig
 		if err := json.Unmarshal([]byte(jsonStr), &parsed); err == nil {
-			if parsed.DefaultBatchProvider != "" {
-				models.DefaultBatchProvider = parsed.DefaultBatchProvider
+			if len(parsed.BatchProviders) > 0 {
+				models.BatchProviders = parsed.BatchProviders
 			}
-			if parsed.DefaultStreamingProvider != "" {
-				models.DefaultStreamingProvider = parsed.DefaultStreamingProvider
+			if len(parsed.StreamingProviders) > 0 {
+				models.StreamingProviders = parsed.StreamingProviders
 			}
-			if parsed.DefaultLLMProvider != "" {
-				models.DefaultLLMProvider = parsed.DefaultLLMProvider
+			if len(parsed.LLMProviders) > 0 {
+				models.LLMProviders = parsed.LLMProviders
 			}
-			for k, v := range parsed.BatchProviders {
-				models.BatchProviders[k] = v
-			}
-			for k, v := range parsed.StreamingProviders {
-				models.StreamingProviders[k] = v
-			}
-			for k, v := range parsed.LLMProviders {
-				models.LLMProviders[k] = v
-			}
+			models.DefaultBatchProvider = parsed.DefaultBatchProvider
+			models.DefaultStreamingProvider = parsed.DefaultStreamingProvider
+			models.DefaultLLMProvider = parsed.DefaultLLMProvider
 		} else {
 			snippet := strings.TrimSpace(jsonStr)
 			if len(snippet) > 60 {
@@ -571,9 +536,11 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 		newConfig.WhisperBasePrompt = strings.TrimSpace(val)
 	}
 
-	// Re-serialize models_config_json into rawConfigs so the admin API always sees full representation
-	if fullJSON, err := json.MarshalIndent(models, "", "  "); err == nil {
-		dbConfigs["models_config_json"] = string(fullJSON)
+	// Only serialize models_config_json if it was missing from dbConfigs
+	if _, ok := dbConfigs["models_config_json"]; !ok || strings.TrimSpace(dbConfigs["models_config_json"]) == "" {
+		if fullJSON, err := json.MarshalIndent(models, "", "  "); err == nil {
+			dbConfigs["models_config_json"] = string(fullJSON)
+		}
 	}
 
 	ConfigManager.Set(newConfig, dbConfigs)

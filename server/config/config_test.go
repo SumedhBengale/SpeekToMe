@@ -11,25 +11,15 @@ import (
 func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 	cfg := DefaultModelsConfig()
 
-	if cfg.DefaultBatchProvider != "bedrock_voxtral_mini_3b" {
-		t.Errorf("Expected default batch provider 'bedrock_voxtral_mini_3b'; got %s", cfg.DefaultBatchProvider)
-	}
-	if cfg.DefaultStreamingProvider != "bedrock_voxtral_mini_3b" {
-		t.Errorf("Expected default streaming provider 'bedrock_voxtral_mini_3b'; got %s", cfg.DefaultStreamingProvider)
-	}
-	if cfg.DefaultLLMProvider != "cerebras_gpt_oss_120b" {
-		t.Errorf("Expected default LLM provider 'cerebras_gpt_oss_120b'; got %s", cfg.DefaultLLMProvider)
-	}
-
 	pCfg := ProviderConfig{Models: cfg}
 	batchOrder := pCfg.GetActiveBatchFallbackOrder()
-	if len(batchOrder) < 3 || batchOrder[0] != "bedrock_voxtral_mini_3b" {
-		t.Errorf("Expected batch order to start with 'bedrock_voxtral_mini_3b'; got %v", batchOrder)
+	if len(batchOrder) < 2 || batchOrder[0] != "bedrock_voxtral_small_24b" {
+		t.Errorf("Expected batch order to start with 'bedrock_voxtral_small_24b'; got %v", batchOrder)
 	}
 
 	streamingOrder := pCfg.GetActiveStreamingFallbackOrder()
-	if len(streamingOrder) < 1 || streamingOrder[0] != "bedrock_voxtral_mini_3b" {
-		t.Errorf("Expected streaming order to start with 'bedrock_voxtral_mini_3b'; got %v", streamingOrder)
+	if len(streamingOrder) < 1 || streamingOrder[0] != "bedrock_voxtral_small_24b" {
+		t.Errorf("Expected streaming order to start with 'bedrock_voxtral_small_24b'; got %v", streamingOrder)
 	}
 
 	llmOrder := pCfg.GetActiveLLMFallbackOrder()
@@ -51,9 +41,6 @@ func TestSyncConfigsFromDBWithJSON(t *testing.T) {
 	}()
 
 	customJSON := ModelsConfig{
-		DefaultBatchProvider:     "deepinfra_whisper_large_v3_turbo",
-		DefaultStreamingProvider: "deepinfra_nemotron_3_5",
-		DefaultLLMProvider:       "deepinfra_deepseek_v4",
 		BatchProviders: map[string]BatchProviderConfig{
 			"bedrock_voxtral_mini_3b":           {Enabled: false, Priority: 1, Model: "mistral.voxtral-mini-3b-2507"},
 			"bedrock_voxtral_small_24b":          {Enabled: false, Priority: 2, Model: "mistral.voxtral-small-24b-2507"},
@@ -81,10 +68,6 @@ func TestSyncConfigsFromDBWithJSON(t *testing.T) {
 	SyncConfigsFromDB(database, nil)
 	active := ConfigManager.Get()
 
-	if active.Models.DefaultBatchProvider != "deepinfra_whisper_large_v3_turbo" {
-		t.Errorf("Expected default batch 'deepinfra_whisper_large_v3_turbo'; got %s", active.Models.DefaultBatchProvider)
-	}
-
 	batchOrder := active.GetActiveBatchFallbackOrder()
 	if len(batchOrder) != 2 || batchOrder[0] != "deepinfra_whisper_large_v3_turbo" || batchOrder[1] != "cloudflare_whisper_large_v3_turbo" {
 		t.Errorf("Expected fallback order ['deepinfra_whisper_large_v3_turbo', 'cloudflare_whisper_large_v3_turbo']; got %v", batchOrder)
@@ -106,15 +89,8 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 	SyncConfigsFromDB(database, nil)
 	active := ConfigManager.Get()
 
-	if active.Models.DefaultBatchProvider != "bedrock_voxtral_mini_3b" {
-		t.Errorf("Expected default batch 'bedrock_voxtral_mini_3b'; got %s", active.Models.DefaultBatchProvider)
-	}
-	if active.Models.DefaultStreamingProvider != "bedrock_voxtral_mini_3b" {
-		t.Errorf("Expected default streaming 'bedrock_voxtral_mini_3b'; got %s", active.Models.DefaultStreamingProvider)
-	}
-
 	batchOrder := active.GetActiveBatchFallbackOrder()
-	if len(batchOrder) < 3 || batchOrder[0] != "bedrock_voxtral_mini_3b" {
-		t.Fatalf("Expected batch order to start with bedrock_voxtral_mini_3b; got %v", batchOrder)
+	if len(batchOrder) < 2 || batchOrder[0] != "bedrock_voxtral_small_24b" {
+		t.Fatalf("Expected batch order to start with bedrock_voxtral_small_24b; got %v", batchOrder)
 	}
 }
