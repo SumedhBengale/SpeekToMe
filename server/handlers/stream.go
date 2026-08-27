@@ -232,6 +232,7 @@ func (a *App) handleRealStreamingSession(
 				t, _ := control["type"].(string)
 				if t == "end_of_stream" || t == "stop" {
 					log.Printf("[STREAM REAL] Received %s from user ID: %d", t, user.ID)
+					_ = upstream.SendControl(ctx, control)
 					break
 				}
 			}
@@ -249,7 +250,7 @@ func (a *App) handleRealStreamingSession(
 	}
 
 	// Allow upstream time to finalize last frame
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(350 * time.Millisecond)
 
 	textMutex.Lock()
 	finalRawTranscript := committedText
