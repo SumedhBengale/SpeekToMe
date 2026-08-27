@@ -614,7 +614,7 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	audioFormat := "wav"
 	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
 
-	defaultVoxtralPrompt := "You are an automated verbatim Speech-to-Text transcription model.\nCRITICAL DIRECTIVES:\n1. Transcribe ONLY the exact spoken words present in the audio with proper punctuation and capitalization.\n2. NEVER converse, answer questions, summarize, describe the audio, or generate conversational filler.\n3. NEVER generate hypothetical, simulated, or pre-trained meeting dialogue.\n4. If the audio contains NO clear speech, silence, background noise, or clicks, return strictly an empty string (\"\").\n5. Output RAW transcription only with zero introductory preamble, markdown, or quotation marks."
+	defaultVoxtralPrompt := "Transcribe the audio speech accurately and verbatim. Return ONLY the spoken words with proper punctuation and capitalization without any introductory, conversational, or markdown wrapper text. If the audio is silent, contains no speech, or cannot be transcribed, reply with [NO_SPEECH]."
 
 	systemText := strings.TrimSpace(promptStr)
 	if systemText == "" {
@@ -725,18 +725,9 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	}
 	rawText = strings.Trim(rawText, "\"*`")
 
-	// If the entire output is an LLM chatbot refusal response generated on silence, drop it
-	lower := strings.ToLower(rawText)
-	if strings.HasPrefix(lower, "i'm unable") ||
-		strings.HasPrefix(lower, "i am unable") ||
-		strings.HasPrefix(lower, "i'm an ai") ||
-		strings.HasPrefix(lower, "i am an ai") ||
-		strings.HasPrefix(lower, "i'm sorry") ||
-		strings.HasPrefix(lower, "i am sorry") ||
-		strings.HasPrefix(lower, "of course! please provide") ||
-		strings.HasPrefix(lower, "please provide the audio") ||
-		strings.HasPrefix(lower, "alright, please provide") ||
-		strings.HasPrefix(lower, "as an ai") {
+	// Sentinel silence token detection
+	trimmedCheck := strings.Trim(strings.ToUpper(rawText), "[].,\"'*_ ")
+	if trimmedCheck == "NO_SPEECH" || trimmedCheck == "SILENCE" {
 		rawText = ""
 	}
 
