@@ -595,7 +595,7 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	audioFormat := "wav"
 	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
 
-	systemText := "Transcribe the audio speech accurately and verbatim. Return ONLY the spoken words with proper punctuation and capitalization without any introductory, conversational, or markdown wrapper text. If the audio is silent or contains no speech, return an empty string."
+	systemText := "You are a verbatim speech recognition model. Transcribe ONLY the spoken words in the audio. Strict rules:\n1. Output strictly the exact spoken speech without adding any words.\n2. Do NOT hallucinate, converse, introduce yourself, or output simulated meetings.\n3. If there is silence, background noise, or no clear speech, output strictly nothing (empty string)."
 	if promptStr != "" {
 		systemText = systemText + " " + promptStr
 	}
@@ -700,7 +700,7 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	}
 	rawText = strings.Trim(rawText, "\"")
 
-	// Filter conversational refusal hallucinations common when audio is silent or background noise
+	// Filter conversational refusal hallucinations and training meeting hallucinations
 	lower := strings.ToLower(rawText)
 	refusalPatterns := []string{
 		"unable to process or transcribe audio",
@@ -710,6 +710,7 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 		"can't assist with that request",
 		"cannot assist with that request",
 		"please provide the text transcript",
+		"if you provide me with the text",
 		"if you have a text transcript",
 		"as an ai",
 		"i am an ai",
@@ -717,8 +718,23 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 		"i can't hear",
 		"i don't have access to audio",
 		"i do not have access to audio",
-		"audio files. if you have a text",
-		"audio files, if you have a text",
+		"operates solely on text-based",
+		"assistant that operates solely",
+		"i'm an assistant",
+		"i am an assistant",
+		"annual general meeting",
+		"association of business analysts",
+		"john smith",
+		"jane doe",
+		"welcome to our annual meeting",
+		"welcome to the 2023",
+		"welcome to the 2024",
+		"packed agenda, so let's get started",
+		"packed agenda so let's get started",
+		"overview of our association",
+		"hear from our president",
+		"[silence]",
+		"(silence)",
 	}
 	for _, pat := range refusalPatterns {
 		if strings.Contains(lower, pat) {
@@ -730,7 +746,7 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	hallucinations := map[string]bool{
 		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
 		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
-		"thank you!": true, "thanks!": true,
+		"thank you!": true, "thanks!": true, "[silence]": true, "(silence)": true,
 	}
 	checkText := strings.Trim(strings.ToLower(rawText), ".,!?\"'*_")
 	if hallucinations[checkText] {

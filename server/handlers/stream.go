@@ -404,6 +404,11 @@ func (a *App) handlePseudoStreamingSession(
 				audioDurationSec = float64(len(data)) / 32000.0
 			}
 
+			// Ignore tiny trailing noise or empty header packets
+			if len(data) < 300 && audioDurationSec > 0 && audioDurationSec < 0.25 {
+				continue
+			}
+
 			log.Printf("[STREAM ASR REQUEST] Chunk: %d | User ID: %d | Audio: %d bytes (%.2fs) | Prompt: %q",
 				currentChunk, user.ID, len(data), audioDurationSec, effectivePrompt)
 
