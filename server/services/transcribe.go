@@ -595,7 +595,7 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	audioFormat := "wav"
 	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
 
-	systemText := "Transcribe the following audio accurately and verbatim. Return ONLY the spoken words with proper punctuation and capitalization without any introductory, conversational, or markdown wrapper text."
+	systemText := "Transcribe the audio speech accurately and verbatim. Return ONLY the spoken words with proper punctuation and capitalization without any introductory, conversational, or markdown wrapper text. If the audio is silent or contains no speech, return an empty string."
 	if promptStr != "" {
 		systemText = systemText + " " + promptStr
 	}
@@ -699,6 +699,33 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 		}
 	}
 	rawText = strings.Trim(rawText, "\"")
+
+	// Filter conversational refusal hallucinations common when audio is silent or background noise
+	lower := strings.ToLower(rawText)
+	refusalPatterns := []string{
+		"unable to process or transcribe audio",
+		"don't have the capability to listen",
+		"do not have the capability to listen",
+		"unable to listen to or interpret audio",
+		"can't assist with that request",
+		"cannot assist with that request",
+		"please provide the text transcript",
+		"if you have a text transcript",
+		"as an ai",
+		"i am an ai",
+		"i cannot hear",
+		"i can't hear",
+		"i don't have access to audio",
+		"i do not have access to audio",
+		"audio files. if you have a text",
+		"audio files, if you have a text",
+	}
+	for _, pat := range refusalPatterns {
+		if strings.Contains(lower, pat) {
+			rawText = ""
+			break
+		}
+	}
 
 	hallucinations := map[string]bool{
 		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
