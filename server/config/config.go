@@ -513,7 +513,11 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 				models.LLMProviders[k] = v
 			}
 		} else {
-			log.Printf("[CONFIG SYNC WARNING] Failed to parse models_config_json: %v", err)
+			snippet := strings.TrimSpace(jsonStr)
+			if len(snippet) > 60 {
+				snippet = snippet[:60] + "..."
+			}
+			log.Printf("[CONFIG SYNC WARNING] Failed to parse models_config_json (raw snippet: %q): %v", snippet, err)
 		}
 	}
 

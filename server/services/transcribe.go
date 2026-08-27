@@ -748,6 +748,8 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 				}
 				log.Printf("[BEDROCK VOXTRAL ERROR] Transcription failed: %v. Trying fallback.", err)
 				lastErr = err
+			} else {
+				log.Printf("[BEDROCK SKIP] Provider %s is enabled but AWS_BEDROCK_API_KEY is not configured in .env. Trying fallback.", provider)
 			}
 		} else if strings.HasPrefix(provider, "groq") {
 			if config.GroqAPIKey != "" {
@@ -890,6 +892,8 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 				}
 				log.Printf("[BEDROCK STREAM ASR ERROR] %v. Trying fallback.", err)
 				lastErr = err
+			} else {
+				log.Printf("[BEDROCK STREAM SKIP] Provider %s is enabled but AWS_BEDROCK_API_KEY is not configured in .env. Trying fallback.", provider)
 			}
 		} else if strings.HasPrefix(provider, "deepinfra") || strings.Contains(provider, "nemotron") {
 			if config.DeepInfraAPIKey != "" {
