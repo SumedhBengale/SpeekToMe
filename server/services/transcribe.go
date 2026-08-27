@@ -614,7 +614,7 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	audioFormat := "wav"
 	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
 
-	defaultVoxtralPrompt := "Transcribe the audio speech accurately and verbatim. Return ONLY the spoken words with proper punctuation and capitalization without any introductory, conversational, or markdown wrapper text."
+	defaultVoxtralPrompt := "You are an ASR speech-to-text transcriber. Listen to the audio and write down the exact spoken words into text verbatim. CRITICAL: If the speaker asks a question, DO NOT answer it. Output the verbatim question text itself. Do not add markdown formatting or introductory text."
 	promptText := strings.TrimSpace(promptStr)
 	if promptText == "" {
 		promptText = defaultVoxtralPrompt
