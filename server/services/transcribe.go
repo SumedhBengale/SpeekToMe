@@ -321,7 +321,7 @@ func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model strin
 	return rawText, response.Result.Segments, routingLoc, nil
 }
 
-func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string, langParam, promptStr string) (string, []WhisperSegment, string, error) {
+func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string, langParam, promptStr string, failFast bool, timeout time.Duration) (string, []WhisperSegment, string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	filename := "recording.wav"
@@ -341,9 +341,16 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 		_ = writer.WriteField("initial_prompt", promptStr)
 		_ = writer.WriteField("prompt", promptStr)
 	}
+	if failFast {
+		_ = writer.WriteField("fail_fast", "true")
+		_ = writer.WriteField("failfast", "true")
+	}
 	_ = writer.Close()
 
-	ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var remoteIP string
@@ -359,13 +366,16 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	}
 	ctxTrace := httptrace.WithClientTrace(ctxTimeout, trace)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequestWithContext(ctxTrace, "POST", urlStr, body)
 	if err != nil {
 		return "", nil, "", err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+config.DeepInfraAPIKey)
+	if failFast {
+		req.Header.Set("X-Fail-Fast", "true")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -615,8 +625,13 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 					diURL = provCfg.BaseURL
 				}
 
-				log.Printf("[DI INFRA] Attempting transcription using %s model %s (lang: %q)", provider, diModel, langParam)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr)
+				timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
+				if timeout <= 0 {
+					timeout = 10 * time.Second
+				}
+
+				log.Printf("[DI INFRA] Attempting transcription using %s model %s (lang: %q, fail_fast: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, timeout)
+				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr, provCfg.FailFast, timeout)
 				if err == nil {
 					return text, segments, provider, loc, nil
 				}
@@ -707,12 +722,17 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 					diURL = provCfg.BaseURL
 				}
 
-				log.Printf("[DEEPINFRA NEMOTRON] Attempting streaming transcription using %s model %s (lang: %q)", provider, diModel, langParam)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr)
+				timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
+				if timeout <= 0 {
+					timeout = 3500 * time.Millisecond
+				}
+
+				log.Printf("[DEEPINFRA STREAM ASR] Attempting streaming transcription using %s model %s (lang: %q, fail_fast: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, timeout)
+				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr, provCfg.FailFast, timeout)
 				if err == nil {
 					return text, segments, provider, loc, nil
 				}
-				log.Printf("[DEEPINFRA NEMOTRON ERROR] %v. Trying fallback.", err)
+				log.Printf("[DEEPINFRA STREAM ASR ERROR] %v. Trying fallback.", err)
 				lastErr = err
 			}
 		} else {

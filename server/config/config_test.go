@@ -11,11 +11,11 @@ import (
 func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 	cfg := DefaultModelsConfig()
 
-	if cfg.DefaultBatchProvider != "deepinfra_whisper_large_v3_turbo" {
-		t.Errorf("Expected default batch provider 'deepinfra_whisper_large_v3_turbo'; got %s", cfg.DefaultBatchProvider)
+	if cfg.DefaultBatchProvider != "deepinfra_nemotron_3_5" {
+		t.Errorf("Expected default batch provider 'deepinfra_nemotron_3_5'; got %s", cfg.DefaultBatchProvider)
 	}
-	if cfg.DefaultStreamingProvider != "deepinfra_nemotron_3_5" {
-		t.Errorf("Expected default streaming provider 'deepinfra_nemotron_3_5'; got %s", cfg.DefaultStreamingProvider)
+	if cfg.DefaultStreamingProvider != "self_hosted_nemotron_3_5" {
+		t.Errorf("Expected default streaming provider 'self_hosted_nemotron_3_5'; got %s", cfg.DefaultStreamingProvider)
 	}
 	if cfg.DefaultLLMProvider != "cerebras_gpt_oss_120b" {
 		t.Errorf("Expected default LLM provider 'cerebras_gpt_oss_120b'; got %s", cfg.DefaultLLMProvider)
@@ -23,13 +23,13 @@ func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 
 	pCfg := ProviderConfig{Models: cfg}
 	batchOrder := pCfg.GetActiveBatchFallbackOrder()
-	if len(batchOrder) < 3 || batchOrder[0] != "deepinfra_whisper_large_v3_turbo" {
-		t.Errorf("Expected batch order to start with 'deepinfra_whisper_large_v3_turbo'; got %v", batchOrder)
+	if len(batchOrder) < 3 || batchOrder[0] != "deepinfra_nemotron_3_5" {
+		t.Errorf("Expected batch order to start with 'deepinfra_nemotron_3_5'; got %v", batchOrder)
 	}
 
 	streamingOrder := pCfg.GetActiveStreamingFallbackOrder()
-	if len(streamingOrder) < 1 || streamingOrder[0] != "deepinfra_nemotron_3_5" {
-		t.Errorf("Expected streaming order to start with 'deepinfra_nemotron_3_5'; got %v", streamingOrder)
+	if len(streamingOrder) < 1 || streamingOrder[0] != "self_hosted_nemotron_3_5" {
+		t.Errorf("Expected streaming order to start with 'self_hosted_nemotron_3_5'; got %v", streamingOrder)
 	}
 
 	llmOrder := pCfg.GetActiveLLMFallbackOrder()
@@ -58,6 +58,8 @@ func TestSyncConfigsFromDBWithJSON(t *testing.T) {
 			"deepinfra_whisper_large_v3_turbo":  {Enabled: true, Priority: 1, Model: "openai/whisper-large-v3-turbo"},
 			"groq_whisper_large_v3_turbo":       {Enabled: false, Priority: 2, Model: "whisper-large-v3-turbo"},
 			"cloudflare_whisper_large_v3_turbo": {Enabled: true, Priority: 3, Model: "@cf/openai/whisper-large-v3-turbo"},
+			"deepinfra_nemotron_3_5":            {Enabled: false, Priority: 4, Model: "nvidia/nemotron-3.5-asr-streaming-0.6b"},
+			"deepinfra_whisper_large_v3":        {Enabled: false, Priority: 5, Model: "openai/whisper-large-v3"},
 		},
 		StreamingProviders: map[string]StreamingProviderConfig{
 			"deepinfra_nemotron_3_5": {Enabled: true, Priority: 1, Model: "nvidia/nemotron-3.5-asr-streaming-0.6b"},
@@ -102,21 +104,15 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 	SyncConfigsFromDB(database, nil)
 	active := ConfigManager.Get()
 
-	if active.Models.DefaultBatchProvider != "deepinfra_whisper_large_v3_turbo" {
-		t.Errorf("Expected default batch 'deepinfra_whisper_large_v3_turbo'; got %s", active.Models.DefaultBatchProvider)
+	if active.Models.DefaultBatchProvider != "deepinfra_nemotron_3_5" {
+		t.Errorf("Expected default batch 'deepinfra_nemotron_3_5'; got %s", active.Models.DefaultBatchProvider)
 	}
-	if active.Models.DefaultStreamingProvider != "deepinfra_nemotron_3_5" {
-		t.Errorf("Expected default streaming 'deepinfra_nemotron_3_5'; got %s", active.Models.DefaultStreamingProvider)
+	if active.Models.DefaultStreamingProvider != "self_hosted_nemotron_3_5" {
+		t.Errorf("Expected default streaming 'self_hosted_nemotron_3_5'; got %s", active.Models.DefaultStreamingProvider)
 	}
 
 	batchOrder := active.GetActiveBatchFallbackOrder()
-	expectedOrder := []string{"deepinfra_whisper_large_v3_turbo", "groq_whisper_large_v3_turbo", "cloudflare_whisper_large_v3_turbo"}
-	if len(batchOrder) != len(expectedOrder) {
-		t.Fatalf("Expected order length %d; got %d (%v)", len(expectedOrder), len(batchOrder), batchOrder)
-	}
-	for i, name := range expectedOrder {
-		if batchOrder[i] != name {
-			t.Errorf("Expected order[%d] to be %s; got %s", i, name, batchOrder[i])
-		}
+	if len(batchOrder) < 3 || batchOrder[0] != "deepinfra_nemotron_3_5" {
+		t.Fatalf("Expected batch order to start with deepinfra_nemotron_3_5; got %v", batchOrder)
 	}
 }

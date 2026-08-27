@@ -40,7 +40,7 @@ func TestCerebrasChatCompletionMock(t *testing.T) {
 	defer mockServer.Close()
 
 	client := mockServer.Client()
-	res, loc, err := callChatCompletionsAPI(context.Background(), client, mockServer.URL, "test-cerebras-key", "gpt-oss-120b", "System Prompt", "User Prompt", false)
+	res, loc, err := callChatCompletionsAPI(context.Background(), client, mockServer.URL, "test-cerebras-key", "gpt-oss-120b", "System Prompt", "User Prompt", false, false)
 	if err != nil {
 		t.Fatalf("callChatCompletionsAPI failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestWaferChatCompletionMock(t *testing.T) {
 	defer mockServer.Close()
 
 	client := mockServer.Client()
-	res, loc, err := callChatCompletionsAPI(context.Background(), client, mockServer.URL, "test-wafer-key", "DeepSeek-V4-Flash-0731-Fast", "System Prompt", "User Prompt", true)
+	res, loc, err := callChatCompletionsAPI(context.Background(), client, mockServer.URL, "test-wafer-key", "DeepSeek-V4-Flash-0731-Fast", "System Prompt", "User Prompt", true, false)
 	if err != nil {
 		t.Fatalf("callChatCompletionsAPI for Wafer failed: %v", err)
 	}

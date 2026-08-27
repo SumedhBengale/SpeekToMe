@@ -63,7 +63,7 @@ func (t *AIEnhancementTransform) Name() string {
 	return "AI Enhancement"
 }
 
-func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, apiKey, model, systemPrompt, text string, includeThinking bool) (string, string, error) {
+func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, apiKey, model, systemPrompt, text string, includeThinking bool, failFast bool) (string, string, error) {
 	payload := map[string]interface{}{
 		"model": model,
 		"messages": []map[string]string{
@@ -73,6 +73,9 @@ func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, ap
 	}
 	if includeThinking {
 		payload["thinking"] = map[string]string{"type": "disabled"}
+	}
+	if failFast {
+		payload["fail_fast"] = true
 	}
 
 	jsonPayload, err := json.Marshal(payload)
@@ -100,6 +103,9 @@ func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, ap
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if failFast {
+		req.Header.Set("X-Fail-Fast", "true")
 	}
 
 	resp, err := client.Do(req)
@@ -202,8 +208,15 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 			continue
 		}
 
+		timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = 15 * time.Second
+		}
+		ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
 		isDeepSeek := strings.Contains(strings.ToLower(providerKey), "deepseek") || strings.Contains(strings.ToLower(useModel), "deepseek")
-		res, loc, err := callChatCompletionsAPI(ctx, client, apiURL, apiKey, useModel, systemPrompt, userPrompt, isDeepSeek)
+		res, loc, err := callChatCompletionsAPI(ctxTimeout, client, apiURL, apiKey, useModel, systemPrompt, userPrompt, isDeepSeek, provCfg.FailFast)
 		if err == nil {
 			if pctx != nil {
 				pctx.LLMProvider = providerKey

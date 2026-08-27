@@ -244,23 +244,27 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_subscription_payments_subscription ON subscription_payments(subscription_id)")
 
 	defaultModelsJSON := `{
-  "default_batch_provider": "deepinfra_whisper_large_v3_turbo",
-  "default_streaming_provider": "deepinfra_nemotron_3_5",
+  "default_batch_provider": "deepinfra_nemotron_3_5",
+  "default_streaming_provider": "self_hosted_nemotron_3_5",
   "default_llm_provider": "cerebras_gpt_oss_120b",
   "batch_providers": {
-    "deepinfra_whisper_large_v3_turbo": { "enabled": true, "priority": 1, "model": "openai/whisper-large-v3-turbo", "base_url": "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo", "timeout_ms": 10000, "supported_languages": ["*"] },
-    "groq_whisper_large_v3_turbo": { "enabled": true, "priority": 2, "model": "whisper-large-v3-turbo", "base_url": "https://api.groq.com/openai/v1/audio/transcriptions", "timeout_ms": 10000, "supported_languages": ["*"] },
-    "cloudflare_whisper_large_v3_turbo": { "enabled": true, "priority": 3, "model": "@cf/openai/whisper-large-v3-turbo", "timeout_ms": 15000, "supported_languages": ["*"] },
+    "deepinfra_nemotron_3_5": { "enabled": true, "priority": 1, "model": "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "base_url": "https://api.deepinfra.com/v1/inference/nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "timeout_ms": 10000, "fail_fast": true, "supported_languages": ["en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"] },
+    "deepinfra_whisper_large_v3_turbo": { "enabled": true, "priority": 2, "model": "openai/whisper-large-v3-turbo", "base_url": "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo", "timeout_ms": 10000, "fail_fast": true, "supported_languages": ["*"] },
+    "deepinfra_whisper_large_v3": { "enabled": true, "priority": 3, "model": "openai/whisper-large-v3", "base_url": "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3", "timeout_ms": 12000, "fail_fast": true, "supported_languages": ["*"] },
+    "groq_whisper_large_v3_turbo": { "enabled": false, "priority": 4, "model": "whisper-large-v3-turbo", "base_url": "https://api.groq.com/openai/v1/audio/transcriptions", "timeout_ms": 10000, "supported_languages": ["*"] },
+    "cloudflare_whisper_large_v3_turbo": { "enabled": false, "priority": 5, "model": "@cf/openai/whisper-large-v3-turbo", "timeout_ms": 15000, "supported_languages": ["*"] },
     "custom_batch": { "enabled": false, "priority": 99, "model": "", "base_url": "", "api_key": "", "timeout_ms": 10000, "supported_languages": ["*"] }
   },
   "streaming_providers": {
-    "deepinfra_nemotron_3_5": { "enabled": true, "priority": 1, "type": "pseudo", "model": "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "base_url": "https://api.deepinfra.com/v1/inference/nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "timeout_ms": 15000, "supported_languages": ["en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"] },
-    "self_hosted_nemotron_3_5": { "enabled": false, "priority": 2, "type": "real", "model": "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "base_url": "ws://127.0.0.1:8080/v1/audio/stream", "timeout_ms": 15000, "supported_languages": ["*"] },
+    "self_hosted_nemotron_3_5": { "enabled": true, "priority": 1, "type": "real", "model": "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "base_url": "ws://TAILSCALE_IP:8080/v1/audio/stream", "timeout_ms": 5000, "supported_languages": ["*"] },
+    "deepinfra_nemotron_3_5": { "enabled": true, "priority": 2, "type": "pseudo", "model": "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "base_url": "https://api.deepinfra.com/v1/inference/nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b", "timeout_ms": 3500, "fail_fast": true, "supported_languages": ["en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"] },
+    "deepinfra_whisper_large_v3_turbo": { "enabled": true, "priority": 3, "type": "pseudo", "model": "openai/whisper-large-v3-turbo", "base_url": "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo", "timeout_ms": 3500, "fail_fast": true, "supported_languages": ["*"] },
+    "deepinfra_whisper_large_v3": { "enabled": true, "priority": 4, "type": "pseudo", "model": "openai/whisper-large-v3", "base_url": "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3", "timeout_ms": 4000, "fail_fast": true, "supported_languages": ["*"] },
     "custom_streaming": { "enabled": false, "priority": 99, "type": "real", "model": "", "base_url": "", "api_key": "", "timeout_ms": 15000, "supported_languages": ["*"] }
   },
   "llm_providers": {
     "cerebras_gpt_oss_120b": { "enabled": true, "priority": 1, "model": "gpt-oss-120b", "base_url": "https://api.cerebras.ai/v1/chat/completions", "timeout_ms": 15000 },
-    "deepinfra_deepseek_v4": { "enabled": true, "priority": 2, "model": "deepseek-ai/DeepSeek-V4-Flash", "base_url": "https://api.deepinfra.com/v1/openai/chat/completions", "timeout_ms": 30000 },
+    "deepinfra_deepseek_v4": { "enabled": true, "priority": 2, "model": "deepseek-ai/DeepSeek-V4-Flash", "base_url": "https://api.deepinfra.com/v1/openai/chat/completions", "timeout_ms": 15000, "fail_fast": true },
     "deepseek_deepseek_v4_flash": { "enabled": true, "priority": 3, "model": "deepseek-v4-flash", "base_url": "https://api.deepseek.com/chat/completions", "timeout_ms": 30000 },
     "wafer_deepseek_v4_flash": { "enabled": false, "priority": 4, "model": "DeepSeek-V4-Flash-0731-Fast", "base_url": "https://pass.wafer.ai/v1/chat/completions", "timeout_ms": 15000 },
     "custom_llm": { "enabled": false, "priority": 99, "model": "", "base_url": "", "api_key": "", "timeout_ms": 30000 }
