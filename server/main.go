@@ -33,13 +33,13 @@ func main() {
 	config.WaferAPIKey = os.Getenv("WAFER_API_KEY")
 	config.CloudflareAPIToken = os.Getenv("CLOUDFLARE_API_TOKEN")
 	config.CloudflareAccountID = os.Getenv("CLOUDFLARE_ACCOUNT_ID")
-	config.AWSBedrockAPIKey = os.Getenv("AWS_BEDROCK_API_KEY")
+	config.AWSBedrockAPIKey = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
 	if config.AWSBedrockAPIKey == "" {
-		config.AWSBedrockAPIKey = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
+		config.AWSBedrockAPIKey = os.Getenv("AWS_BEDROCK_API_KEY")
 	}
-	config.AWSBedrockRegion = os.Getenv("AWS_BEDROCK_REGION")
+	config.AWSBedrockRegion = os.Getenv("AWS_REGION")
 	if config.AWSBedrockRegion == "" {
-		config.AWSBedrockRegion = os.Getenv("AWS_REGION")
+		config.AWSBedrockRegion = os.Getenv("AWS_BEDROCK_REGION")
 	}
 	if config.AWSBedrockRegion == "" {
 		config.AWSBedrockRegion = "us-east-1"
