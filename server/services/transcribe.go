@@ -593,10 +593,6 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	}
 
 	audioFormat := "wav"
-	if len(audioBytes) > 4 && string(audioBytes[:4]) == "OggS" {
-		audioFormat = "opus"
-	}
-
 	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
 
 	systemText := "Transcribe the following audio accurately and verbatim. Return ONLY the spoken words with proper punctuation and capitalization without any introductory, conversational, or markdown wrapper text."
@@ -689,10 +685,20 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	}
 
 	rawText := strings.TrimSpace(result.Choices[0].Message.Content)
-	rawText = strings.TrimPrefix(rawText, "Transcribed Text:")
-	rawText = strings.TrimPrefix(rawText, "Transcription:")
-	rawText = strings.TrimPrefix(rawText, "Here is the transcription:")
-	rawText = strings.TrimSpace(rawText)
+	prefixesToStrip := []string{
+		"Here's the transcribed verbatim text:",
+		"Here is the transcribed verbatim text:",
+		"Here is the transcription:",
+		"Here's the transcription:",
+		"Transcribed Text:",
+		"Transcription:",
+	}
+	for _, pfx := range prefixesToStrip {
+		if strings.HasPrefix(rawText, pfx) {
+			rawText = strings.TrimSpace(strings.TrimPrefix(rawText, pfx))
+		}
+	}
+	rawText = strings.Trim(rawText, "\"")
 
 	hallucinations := map[string]bool{
 		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
