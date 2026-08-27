@@ -595,10 +595,18 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, int, int) {
 	replacements := 0
 	i := 0
 
+	// For long streaming transcripts (> 16 tokens), words before the active trailing 16 tokens
+	// are already stable. Fast exact lookup runs across all tokens, while fuzzy phonetic permutation
+	// matching focuses on the actively changing trailing tail.
+	prefixThreshold := n - 16
+	if prefixThreshold < 0 {
+		prefixThreshold = 0
+	}
+
 	for i < n {
 		matched := false
 
-		// Stage 1: Exact and Normalized N-Gram Lookup
+		// Stage 1: Exact and Normalized N-Gram Lookup (O(1) Map Lookup)
 		for k := maxK; k >= 1; k-- {
 			if i+k <= n {
 				var sb strings.Builder
@@ -619,14 +627,21 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, int, int) {
 						Normalized: joinedNorm,
 					})
 					i += k
-					matched = true
 					replacements++
+					matched = true
 					break
 				}
 			}
 		}
 
 		if matched {
+			continue
+		}
+
+		// In the stable prefix zone, exact lookup is sufficient
+		if i < prefixThreshold {
+			resultTokens = append(resultTokens, tokens[i])
+			i++
 			continue
 		}
 
