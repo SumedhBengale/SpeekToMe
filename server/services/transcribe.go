@@ -340,7 +340,8 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	if promptStr != "" {
 		_ = writer.WriteField("initial_prompt", promptStr)
 	}
-	if failFast {
+	// DeepInfra's Nemotron container currently throws a 500 inference exception when fail_fast is present in form-data
+	if failFast && !strings.Contains(strings.ToLower(urlStr), "nemotron") {
 		_ = writer.WriteField("fail_fast", "true")
 	}
 	_ = writer.Close()
