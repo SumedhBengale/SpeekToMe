@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -19,6 +20,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"speektome-server/utils"
+	"speektome-server/valkey"
 )
 
 type Database struct {
@@ -435,6 +437,20 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 
 	if u.IsTempSession == 1 {
 		return nil, nil, fmt.Errorf("2FA_REQUIRED")
+	}
+
+	// L2 Valkey Vocabulary Cache
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() && len(terms) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		var vterms []valkey.CachedVocabTerm
+		for _, t := range terms {
+			vterms = append(vterms, valkey.CachedVocabTerm{
+				Canonical:  t.Canonical,
+				Normalized: t.Normalized,
+			})
+		}
+		_ = valkey.GlobalClient.SetCachedVocabulary(ctx, u.ID, vterms, 24*time.Hour)
 	}
 
 	return &u, terms, nil
@@ -920,6 +936,22 @@ func (d *Database) AddVocabularyTerm(userID int64, canonical, normalized string)
 }
 
 func (d *Database) GetVocabularyTerms(userID int64) ([]VocabularyTerm, error) {
+	// L2 Valkey Cache check
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		if cached, err := valkey.GlobalClient.GetCachedVocabulary(ctx, userID); err == nil && len(cached) > 0 {
+			var terms []VocabularyTerm
+			for _, t := range cached {
+				terms = append(terms, VocabularyTerm{
+					Canonical:  t.Canonical,
+					Normalized: t.Normalized,
+				})
+			}
+			return terms, nil
+		}
+	}
+
 	rows, err := d.db.Query(`
 		SELECT canonical_term, normalized_term
 		FROM vocabulary
@@ -941,6 +973,21 @@ func (d *Database) GetVocabularyTerms(userID int64) ([]VocabularyTerm, error) {
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
+
+	// Populate Valkey Cache
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() && len(terms) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		var vterms []valkey.CachedVocabTerm
+		for _, t := range terms {
+			vterms = append(vterms, valkey.CachedVocabTerm{
+				Canonical:  t.Canonical,
+				Normalized: t.Normalized,
+			})
+		}
+		_ = valkey.GlobalClient.SetCachedVocabulary(ctx, userID, vterms, 24*time.Hour)
+	}
+
 	return terms, nil
 }
 
@@ -949,6 +996,11 @@ func (d *Database) DeleteVocabularyTerm(userID int64, canonical string) error {
 		DELETE FROM vocabulary
 		WHERE user_id = ? AND canonical_term = ?
 	`, userID, canonical)
+	if err == nil && valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_ = valkey.GlobalClient.InvalidateCachedVocabulary(ctx, userID)
+	}
 	return err
 }
 

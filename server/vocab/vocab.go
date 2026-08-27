@@ -69,6 +69,7 @@ func (vc *VocabCache) Invalidate(userID int64) {
 	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
+		_ = valkey.GlobalClient.InvalidateCachedVocabulary(ctx, userID)
 		_ = valkey.GlobalClient.PublishVocabInvalidate(ctx, userID)
 	}
 }

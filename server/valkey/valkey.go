@@ -23,6 +23,7 @@ const (
 	KeyPrefixAuth         = "ratelimit:auth:"
 	KeyPrefixGeoIP        = "geoip:"
 	KeyPrefixSession      = "session:"
+	KeyPrefixVocab        = "vocab:user:"
 	KeyPrefixSaaSConfig   = "config:saas"
 	KeyModelsConfigJSON   = "config:models_config_json"
 )
@@ -346,3 +347,49 @@ func (c *Client) InvalidateSession(ctx context.Context, token string) error {
 	}
 	return c.rdb.Del(ctx, KeyPrefixSession+token).Err()
 }
+
+// ----------------------------------------------------------------------
+// Cached Vocabulary (L2 Fast Lookup & UI Visibility)
+// ----------------------------------------------------------------------
+
+type CachedVocabTerm struct {
+	Canonical  string `json:"canonical_term"`
+	Normalized string `json:"normalized_term"`
+}
+
+func (c *Client) GetCachedVocabulary(ctx context.Context, userID int64) ([]CachedVocabTerm, error) {
+	if !c.IsConnected() {
+		return nil, fmt.Errorf("valkey disconnected")
+	}
+	data, err := c.rdb.Get(ctx, fmt.Sprintf("%s%d", KeyPrefixVocab, userID)).Bytes()
+	if err != nil {
+		return nil, err
+	}
+	var terms []CachedVocabTerm
+	if err := json.Unmarshal(data, &terms); err != nil {
+		return nil, err
+	}
+	return terms, nil
+}
+
+func (c *Client) SetCachedVocabulary(ctx context.Context, userID int64, terms []CachedVocabTerm, ttl time.Duration) error {
+	if !c.IsConnected() {
+		return nil
+	}
+	data, err := json.Marshal(terms)
+	if err != nil {
+		return err
+	}
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	return c.rdb.Set(ctx, fmt.Sprintf("%s%d", KeyPrefixVocab, userID), data, ttl).Err()
+}
+
+func (c *Client) InvalidateCachedVocabulary(ctx context.Context, userID int64) error {
+	if !c.IsConnected() {
+		return nil
+	}
+	return c.rdb.Del(ctx, fmt.Sprintf("%s%d", KeyPrefixVocab, userID)).Err()
+}
+
