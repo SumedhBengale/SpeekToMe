@@ -339,7 +339,6 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	}
 	if promptStr != "" {
 		_ = writer.WriteField("initial_prompt", promptStr)
-		_ = writer.WriteField("prompt", promptStr)
 	}
 	if failFast {
 		_ = writer.WriteField("fail_fast", "true")
