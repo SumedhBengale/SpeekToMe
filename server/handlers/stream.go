@@ -172,6 +172,14 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("[STREAM REAL FAILOVER] Upstream connection to %s failed (%v). Falling back to pseudo-streaming.", selectedProvider, uerr)
+
+		// Pick next active pseudo-streaming provider in fallback order
+		for _, p := range streamOrder {
+			if p != selectedProvider && activeConfig.IsStreamingLanguageSupported(p, "") {
+				selectedProvider = p
+				break
+			}
+		}
 	}
 
 	// Pseudo-Streaming (Chunked VAD)

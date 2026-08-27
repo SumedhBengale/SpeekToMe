@@ -680,6 +680,11 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 			continue
 		}
 
+		// Skip WebSocket real-streaming providers in HTTP chunk fallback
+		if provCfg.Type == "real" || strings.HasPrefix(provCfg.BaseURL, "ws://") || strings.HasPrefix(provCfg.BaseURL, "wss://") {
+			continue
+		}
+
 		if strings.HasPrefix(provider, "deepinfra") || strings.Contains(provider, "nemotron") {
 			if config.DeepInfraAPIKey != "" {
 				if langParam != "" && !cfg.IsStreamingLanguageSupported(provider, langParam) {
