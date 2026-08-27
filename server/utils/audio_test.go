@@ -47,6 +47,24 @@ func TestMergeTranscriptsSeamStitching(t *testing.T) {
 			current:   "API endpoints easily.",
 			expected:  "We can connect API endpoints easily.",
 		},
+		{
+			name:      "Exact phrase overlap deduplication",
+			committed: "The model is pretty much working in the streaming step as well, but",
+			current:   "working in the streaming step as well, but the text is repeated across chunks.",
+			expected:  "The model is pretty much working in the streaming step as well, but the text is repeated across chunks.",
+		},
+		{
+			name:      "Exact identical repetition deduplication",
+			committed: "Hello, Sumedh.",
+			current:   "Hello, Sumedh.",
+			expected:  "Hello, Sumedh.",
+		},
+		{
+			name:      "Multi-word tail overlap",
+			committed: "I want to see which provider is currently being used that would be",
+			current:   "used that would be all. Thank you.",
+			expected:  "I want to see which provider is currently being used that would be all. Thank you.",
+		},
 	}
 
 	for _, tc := range tests {

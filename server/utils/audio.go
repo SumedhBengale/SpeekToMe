@@ -172,7 +172,7 @@ func isProperOrAcronym(word string) bool {
 	return false
 }
 
-// MergeTranscripts combines committed text with current active chunk transcript cleanly using seam stitching
+// MergeTranscripts combines committed text with current active chunk transcript cleanly using seam stitching and overlap deduplication
 func MergeTranscripts(committed, current string) string {
 	cTrimmed := strings.TrimSpace(committed)
 	curTrimmed := strings.TrimSpace(current)
@@ -183,19 +183,54 @@ func MergeTranscripts(committed, current string) string {
 		return cTrimmed
 	}
 
-	// Extract first word of current chunk
+	cWords := strings.Fields(cTrimmed)
 	curWords := strings.Fields(curTrimmed)
 	if len(curWords) == 0 {
 		return cTrimmed
 	}
+	if len(cWords) == 0 {
+		return curTrimmed
+	}
+
+	// 1. Check for suffix-prefix word overlap between committed text and new chunk
+	maxOverlap := len(curWords)
+	if len(cWords) < maxOverlap {
+		maxOverlap = len(cWords)
+	}
+
+	overlapCount := 0
+	for k := maxOverlap; k >= 1; k-- {
+		cTail := cWords[len(cWords)-k:]
+		curHead := curWords[:k]
+		match := true
+		for i := 0; i < k; i++ {
+			cleanCTail := strings.ToLower(strings.Trim(cTail[i], ".,!?:;\"'()[]{}"))
+			cleanCurHead := strings.ToLower(strings.Trim(curHead[i], ".,!?:;\"'()[]{}"))
+			if cleanCTail != cleanCurHead {
+				match = false
+				break
+			}
+		}
+		if match {
+			overlapCount = k
+			break
+		}
+	}
+
+	// If overlap found, slice off the duplicated prefix words from the new chunk
+	if overlapCount > 0 {
+		curWords = curWords[overlapCount:]
+		if len(curWords) == 0 {
+			return cTrimmed
+		}
+		curTrimmed = strings.Join(curWords, " ")
+	}
+
+	// Extract first word of current chunk
 	firstWordClean := strings.ToLower(strings.Trim(curWords[0], ".,!?:;\"'()[]{}"))
 
 	// Extract last word of committed text
-	cWords := strings.Fields(cTrimmed)
-	lastWordClean := ""
-	if len(cWords) > 0 {
-		lastWordClean = strings.ToLower(strings.Trim(cWords[len(cWords)-1], ".,!?:;\"'()[]{}"))
-	}
+	lastWordClean := strings.ToLower(strings.Trim(cWords[len(cWords)-1], ".,!?:;\"'()[]{}"))
 
 	isContinuation := continuationWords[firstWordClean]
 	isIncomplete := incompleteEndings[lastWordClean]

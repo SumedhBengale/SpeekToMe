@@ -918,8 +918,9 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 				if timeout <= 0 {
 					timeout = 4000 * time.Millisecond
 				}
+				voxtralPrompt := strings.TrimSpace(provCfg.InitialPrompt)
 				log.Printf("[BEDROCK STREAM ASR] Attempting pseudo-streaming transcription using %s model %s (lang: %q, timeout: %v)", provider, modelName, langParam, timeout)
-				text, segments, loc, err := RunBedrockVoxtralTranscribe(ctx, audioBytes, provCfg.BaseURL, modelName, apiKey, promptStr, timeout)
+				text, segments, loc, err := RunBedrockVoxtralTranscribe(ctx, audioBytes, provCfg.BaseURL, modelName, apiKey, voxtralPrompt, timeout)
 				if err == nil {
 					return text, segments, provider, loc, nil
 				}
