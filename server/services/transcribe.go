@@ -595,9 +595,11 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	audioFormat := "wav"
 	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
 
-	systemText := "You are a verbatim speech recognition model. Transcribe ONLY the spoken words in the audio. Strict rules:\n1. Output strictly the exact spoken speech without adding any words.\n2. Do NOT hallucinate, converse, introduce yourself, or output simulated meetings.\n3. If there is silence, background noise, or no clear speech, output strictly nothing (empty string)."
-	if promptStr != "" {
-		systemText = systemText + " " + promptStr
+	defaultVoxtralPrompt := "You are an automated verbatim Speech-to-Text transcription model.\nCRITICAL DIRECTIVES:\n1. Transcribe ONLY the exact spoken words present in the audio with proper punctuation and capitalization.\n2. NEVER converse, answer questions, summarize, describe the audio, or generate conversational filler.\n3. NEVER generate hypothetical, simulated, or pre-trained meeting dialogue.\n4. If the audio contains NO clear speech, silence, background noise, or clicks, return strictly an empty string (\"\").\n5. Output RAW transcription only with zero introductory preamble, markdown, or quotation marks."
+
+	systemText := strings.TrimSpace(promptStr)
+	if systemText == "" {
+		systemText = defaultVoxtralPrompt
 	}
 
 	payload := map[string]interface{}{
@@ -699,49 +701,6 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 		}
 	}
 	rawText = strings.Trim(rawText, "\"")
-
-	// Filter conversational refusal hallucinations and training meeting hallucinations
-	lower := strings.ToLower(rawText)
-	refusalPatterns := []string{
-		"unable to process or transcribe audio",
-		"don't have the capability to listen",
-		"do not have the capability to listen",
-		"unable to listen to or interpret audio",
-		"can't assist with that request",
-		"cannot assist with that request",
-		"please provide the text transcript",
-		"if you provide me with the text",
-		"if you have a text transcript",
-		"as an ai",
-		"i am an ai",
-		"i cannot hear",
-		"i can't hear",
-		"i don't have access to audio",
-		"i do not have access to audio",
-		"operates solely on text-based",
-		"assistant that operates solely",
-		"i'm an assistant",
-		"i am an assistant",
-		"annual general meeting",
-		"association of business analysts",
-		"john smith",
-		"jane doe",
-		"welcome to our annual meeting",
-		"welcome to the 2023",
-		"welcome to the 2024",
-		"packed agenda, so let's get started",
-		"packed agenda so let's get started",
-		"overview of our association",
-		"hear from our president",
-		"[silence]",
-		"(silence)",
-	}
-	for _, pat := range refusalPatterns {
-		if strings.Contains(lower, pat) {
-			rawText = ""
-			break
-		}
-	}
 
 	hallucinations := map[string]bool{
 		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
