@@ -23,10 +23,12 @@ import (
 	"speektome-server/ratelimit"
 	"speektome-server/services"
 	"speektome-server/utils"
+	"speektome-server/vocab"
 )
 
 type App struct {
-	DB *db.Database
+	DB         *db.Database
+	VocabCache *vocab.VocabCache
 }
 
 func (a *App) HandleAuthLogin(w http.ResponseWriter, r *http.Request) {

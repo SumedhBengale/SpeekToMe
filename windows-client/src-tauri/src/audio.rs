@@ -211,113 +211,164 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     let mut is_in_speech = false;
                     let mut is_aborted = false;
 
-                    loop {
-                        match rx.recv_timeout(std::time::Duration::from_millis(32)) {
-                            Ok(true) => {
-                                // Hotkey released normally
-                                break;
-                            }
-                            Ok(false) => {
-                                // Aborted
-                                is_aborted = true;
-                                break;
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                // Incrementally grab ONLY newly arrived raw samples
-                                let new_raw_samples: Vec<i16> = {
-                                    if let Ok(buf) = samples_buf.lock() {
-                                        if buf.len() > raw_processed_len {
-                                            let chunk = buf[raw_processed_len..].to_vec();
-                                            raw_processed_len = buf.len();
-                                            chunk
-                                        } else {
-                                            Vec::new()
-                                        }
-                                    } else {
-                                        Vec::new()
+                    match handle.mode {
+                        crate::stream::NegotiatedStreamMode::ContinuousStream => {
+                            let frame_samples = 960; // 60ms @ 16kHz
+                            loop {
+                                match rx.recv_timeout(std::time::Duration::from_millis(20)) {
+                                    Ok(true) => {
+                                        // Hotkey released normally
+                                        break;
                                     }
-                                };
-
-                                if !new_raw_samples.is_empty() {
-                                    let new_16k = resample_to_16k_mono(&new_raw_samples, sample_rate, channels);
-                                    stream_16k_buf.extend_from_slice(&new_16k);
-                                }
-
-                                if let Some(ref mut vad_inst) = vad {
-                                    while stream_16k_buf.len() >= 512 {
-                                        let frame_i16: Vec<i16> = stream_16k_buf.drain(..512).collect();
-                                        let frame_f32: Vec<f32> = frame_i16.iter().map(|&s| s as f32 / 32768.0).collect();
-                                        let (_prob, speaking, pause_detected) = vad_inst.process_frame(&frame_f32);
-
-                                        if speaking {
-                                            if !is_in_speech {
-                                                is_in_speech = true;
-                                                // Prepend pre-speech buffer so leading consonants are never clipped
-                                                active_phrase_samples.extend(pre_speech_ring.drain(..));
-                                            }
-                                            active_phrase_samples.extend_from_slice(&frame_i16);
-                                        } else {
-                                            if is_in_speech {
-                                                // Keep appending trailing frames until pause is finalized
-                                                active_phrase_samples.extend_from_slice(&frame_i16);
-                                            } else {
-                                                for &s in &frame_i16 {
-                                                    if pre_speech_ring.len() >= 4000 { // ~250ms rolling buffer
-                                                        pre_speech_ring.pop_front();
-                                                    }
-                                                    pre_speech_ring.push_back(s);
+                                    Ok(false) => {
+                                        // Aborted
+                                        is_aborted = true;
+                                        break;
+                                    }
+                                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                        let new_raw_samples: Vec<i16> = {
+                                            if let Ok(buf) = samples_buf.lock() {
+                                                if buf.len() > raw_processed_len {
+                                                    let chunk = buf[raw_processed_len..].to_vec();
+                                                    raw_processed_len = buf.len();
+                                                    chunk
+                                                } else {
+                                                    Vec::new()
                                                 }
-                                            }
-                                        }
-
-                                        let should_commit = pause_detected || active_phrase_samples.len() >= 80000; // max 5s chunk
-
-                                        if should_commit && active_phrase_samples.len() >= 4800 { // >= 300ms of audio
-                                            is_in_speech = false;
-                                            let t_enc = std::time::Instant::now();
-                                            match encode_opus_ogg(&active_phrase_samples, 16000, 1) {
-                                                Ok(ogg_bytes) => {
-                                                    let enc_dur = t_enc.elapsed();
-                                                    let pcm_len = active_phrase_samples.len() * 2;
-                                                    let ogg_len = ogg_bytes.len();
-                                                    let ratio = if ogg_len > 0 { pcm_len as f64 / ogg_len as f64 } else { 1.0 };
-                                                    let audio_sec = active_phrase_samples.len() as f64 / 16000.0;
-                                                    println!("[CLIENT BENCHMARK] Opus Ogg encode: {:.2?} (Audio: {:.2}s | Raw PCM: {} B -> Opus Ogg: {} B | {:.1}x compression)",
-                                                        enc_dur, audio_sec, pcm_len, ogg_len, ratio);
-                                                    let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("[STREAM ERROR] Failed to encode Opus Ogg: {}", e);
-                                                }
-                                            }
-
-                                            // Retain trailing 200ms (3200 samples) for acoustic continuity
-                                            let overlap_samples = 3200;
-                                            let retained = if active_phrase_samples.len() > overlap_samples {
-                                                active_phrase_samples[active_phrase_samples.len() - overlap_samples..].to_vec()
                                             } else {
                                                 Vec::new()
-                                            };
-                                            active_phrase_samples = retained;
-                                            vad_inst.reset();
+                                            }
+                                        };
+
+                                        if !new_raw_samples.is_empty() {
+                                            let new_16k = resample_to_16k_mono(&new_raw_samples, sample_rate, channels);
+                                            stream_16k_buf.extend_from_slice(&new_16k);
+                                        }
+
+                                        while stream_16k_buf.len() >= frame_samples {
+                                            let frame_i16: Vec<i16> = stream_16k_buf.drain(..frame_samples).collect();
+                                            if let Ok(ogg_bytes) = encode_opus_ogg(&frame_i16, 16000, 1) {
+                                                let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                                            }
                                         }
                                     }
-                                } else {
-                                    // Fallback if VAD failed to init: 2-second periodic chunking
-                                    if stream_16k_buf.len() >= 32000 {
-                                        let chunk: Vec<i16> = stream_16k_buf.drain(..32000).collect();
-                                        let t_enc = std::time::Instant::now();
-                                        if let Ok(ogg_bytes) = encode_opus_ogg(&chunk, 16000, 1) {
-                                            let enc_dur = t_enc.elapsed();
-                                            println!("[CLIENT BENCHMARK] Opus Ogg fallback encode: {:.2?}", enc_dur);
-                                            let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
-                                        }
+                                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                        is_aborted = true;
+                                        break;
                                     }
                                 }
                             }
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                is_aborted = true;
-                                break;
+                        }
+                        crate::stream::NegotiatedStreamMode::ChunkedVad => {
+                            loop {
+                                match rx.recv_timeout(std::time::Duration::from_millis(32)) {
+                                    Ok(true) => {
+                                        // Hotkey released normally
+                                        break;
+                                    }
+                                    Ok(false) => {
+                                        // Aborted
+                                        is_aborted = true;
+                                        break;
+                                    }
+                                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                        // Incrementally grab ONLY newly arrived raw samples
+                                        let new_raw_samples: Vec<i16> = {
+                                            if let Ok(buf) = samples_buf.lock() {
+                                                if buf.len() > raw_processed_len {
+                                                    let chunk = buf[raw_processed_len..].to_vec();
+                                                    raw_processed_len = buf.len();
+                                                    chunk
+                                                } else {
+                                                    Vec::new()
+                                                }
+                                            } else {
+                                                Vec::new()
+                                            }
+                                        };
+
+                                        if !new_raw_samples.is_empty() {
+                                            let new_16k = resample_to_16k_mono(&new_raw_samples, sample_rate, channels);
+                                            stream_16k_buf.extend_from_slice(&new_16k);
+                                        }
+
+                                        if let Some(ref mut vad_inst) = vad {
+                                            while stream_16k_buf.len() >= 512 {
+                                                let frame_i16: Vec<i16> = stream_16k_buf.drain(..512).collect();
+                                                let frame_f32: Vec<f32> = frame_i16.iter().map(|&s| s as f32 / 32768.0).collect();
+                                                let (_prob, speaking, pause_detected) = vad_inst.process_frame(&frame_f32);
+
+                                                if speaking {
+                                                    if !is_in_speech {
+                                                        is_in_speech = true;
+                                                        // Prepend pre-speech buffer so leading consonants are never clipped
+                                                        active_phrase_samples.extend(pre_speech_ring.drain(..));
+                                                    }
+                                                    active_phrase_samples.extend_from_slice(&frame_i16);
+                                                } else {
+                                                    if is_in_speech {
+                                                        // Keep appending trailing frames until pause is finalized
+                                                        active_phrase_samples.extend_from_slice(&frame_i16);
+                                                    } else {
+                                                        for &s in &frame_i16 {
+                                                            if pre_speech_ring.len() >= 4000 { // ~250ms rolling buffer
+                                                                pre_speech_ring.pop_front();
+                                                            }
+                                                            pre_speech_ring.push_back(s);
+                                                        }
+                                                    }
+                                                }
+
+                                                let should_commit = pause_detected || active_phrase_samples.len() >= 80000; // max 5s chunk
+
+                                                if should_commit && active_phrase_samples.len() >= 4800 { // >= 300ms of audio
+                                                    is_in_speech = false;
+                                                    let t_enc = std::time::Instant::now();
+                                                    match encode_opus_ogg(&active_phrase_samples, 16000, 1) {
+                                                        Ok(ogg_bytes) => {
+                                                            let enc_dur = t_enc.elapsed();
+                                                            let pcm_len = active_phrase_samples.len() * 2;
+                                                            let ogg_len = ogg_bytes.len();
+                                                            let ratio = if ogg_len > 0 { pcm_len as f64 / ogg_len as f64 } else { 1.0 };
+                                                            let audio_sec = active_phrase_samples.len() as f64 / 16000.0;
+                                                            println!("[CLIENT BENCHMARK] Opus Ogg encode: {:.2?} (Audio: {:.2}s | Raw PCM: {} B -> Opus Ogg: {} B | {:.1}x compression)",
+                                                                enc_dur, audio_sec, pcm_len, ogg_len, ratio);
+                                                            let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                                                        }
+                                                        Err(e) => {
+                                                            eprintln!("[STREAM ERROR] Failed to encode Opus Ogg: {}", e);
+                                                        }
+                                                    }
+
+                                                    // Retain trailing 200ms (3200 samples) for acoustic continuity
+                                                    let overlap_samples = 3200;
+                                                    let retained = if active_phrase_samples.len() > overlap_samples {
+                                                        active_phrase_samples[active_phrase_samples.len() - overlap_samples..].to_vec()
+                                                    } else {
+                                                        Vec::new()
+                                                    };
+                                                    active_phrase_samples = retained;
+                                                    vad_inst.reset();
+                                                }
+                                            }
+                                        } else {
+                                            // Fallback if VAD failed to init: 2-second periodic chunking
+                                            if stream_16k_buf.len() >= 32000 {
+                                                let chunk: Vec<i16> = stream_16k_buf.drain(..32000).collect();
+                                                let t_enc = std::time::Instant::now();
+                                                if let Ok(ogg_bytes) = encode_opus_ogg(&chunk, 16000, 1) {
+                                                    let enc_dur = t_enc.elapsed();
+                                                    println!("[CLIENT BENCHMARK] Opus Ogg fallback encode: {:.2?}", enc_dur);
+                                                    let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                        is_aborted = true;
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -346,23 +397,32 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                             stream_16k_buf.extend_from_slice(&rem_16k);
                         }
 
-                        active_phrase_samples.extend(stream_16k_buf.drain(..));
-
-                        // Send any remaining active phrase audio on key release
-                        if active_phrase_samples.len() >= 2400 { // >= 150ms of audio
-                            let t_enc = std::time::Instant::now();
-                            if let Ok(ogg_bytes) = encode_opus_ogg(&active_phrase_samples, 16000, 1) {
-                                let enc_dur = t_enc.elapsed();
-                                let pcm_len = active_phrase_samples.len() * 2;
-                                let ogg_len = ogg_bytes.len();
-                                let ratio = if ogg_len > 0 { pcm_len as f64 / ogg_len as f64 } else { 1.0 };
-                                let audio_sec = active_phrase_samples.len() as f64 / 16000.0;
-                                println!("[CLIENT BENCHMARK] Tail Opus Ogg encode: {:.2?} (Audio: {:.2}s | Raw PCM: {} B -> Opus Ogg: {} B | {:.1}x compression)",
-                                    enc_dur, audio_sec, pcm_len, ogg_len, ratio);
-                                let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                        if handle.mode == crate::stream::NegotiatedStreamMode::ContinuousStream {
+                            if stream_16k_buf.len() >= 480 { // >= 30ms
+                                if let Ok(ogg_bytes) = encode_opus_ogg(&stream_16k_buf, 16000, 1) {
+                                    let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                                }
                             }
-                            active_phrase_samples.clear();
+                        } else {
+                            active_phrase_samples.extend(stream_16k_buf.drain(..));
+
+                            // Send any remaining active phrase audio on key release
+                            if active_phrase_samples.len() >= 2400 { // >= 150ms of audio
+                                let t_enc = std::time::Instant::now();
+                                if let Ok(ogg_bytes) = encode_opus_ogg(&active_phrase_samples, 16000, 1) {
+                                    let enc_dur = t_enc.elapsed();
+                                    let pcm_len = active_phrase_samples.len() * 2;
+                                    let ogg_len = ogg_bytes.len();
+                                    let ratio = if ogg_len > 0 { pcm_len as f64 / ogg_len as f64 } else { 1.0 };
+                                    let audio_sec = active_phrase_samples.len() as f64 / 16000.0;
+                                    println!("[CLIENT BENCHMARK] Tail Opus Ogg encode: {:.2?} (Audio: {:.2}s | Raw PCM: {} B -> Opus Ogg: {} B | {:.1}x compression)",
+                                        enc_dur, audio_sec, pcm_len, ogg_len, ratio);
+                                    let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
+                                }
+                                active_phrase_samples.clear();
+                            }
                         }
+
                         let _ = handle.tx.send(crate::stream::StreamAudioMessage::EndOfStream);
 
                         let mut stream_error_msg: Option<String> = None;
@@ -373,18 +433,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                 println!("[STREAM SUCCESS] Live streaming completed. Final text: {}", final_result.text);
                                 let trimmed = final_result.text.trim().to_string();
                                 if !trimmed.is_empty() {
-                                    let normalized = crate::vocab::get_vocab_manager().process_text(&trimmed);
-                                    if let (Some(log_id), Some(ack_token)) = (final_result.log_id, final_result.ack_token) {
-                                        if normalized != trimmed {
-                                            let ack_api = api_url.clone();
-                                            let ack_auth = token.clone();
-                                            let ack_txt = normalized.clone();
-                                            tauri::async_runtime::spawn(async move {
-                                                let _ = crate::api::send_transcribe_ack(&ack_api, &ack_auth, log_id, &ack_token, &ack_txt).await;
-                                            });
-                                        }
-                                    }
-                                    Some(normalized)
+                                    Some(trimmed)
                                 } else {
                                     None
                                 }

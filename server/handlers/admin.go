@@ -12,6 +12,7 @@ import (
 	"speektome-server/config"
 	"speektome-server/db"
 	"speektome-server/ratelimit"
+	"speektome-server/valkey"
 )
 
 func (a *App) HandleAdminGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +54,9 @@ func (a *App) HandleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	config.SyncConfigsFromDB(a.DB, ratelimit.GroqRateLimiter.SetLimit)
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		_ = valkey.GlobalClient.PublishConfigReload(r.Context())
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 }

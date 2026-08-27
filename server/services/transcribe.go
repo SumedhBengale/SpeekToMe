@@ -16,10 +16,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"speektome-server/config"
 	"speektome-server/db"
 	"speektome-server/ratelimit"
 	"speektome-server/utils"
+	"speektome-server/valkey"
 )
 
 var (
@@ -70,6 +73,18 @@ func GetGeoIPLocation(ip string) string {
 		return loc
 	}
 
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctxValkey, cancelValkey := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		if vLoc, err := valkey.GlobalClient.GetGeoIP(ctxValkey, ip); err == nil && vLoc != "" {
+			cancelValkey()
+			geoMutex.Lock()
+			geoCache[ip] = vLoc
+			geoMutex.Unlock()
+			return vLoc
+		}
+		cancelValkey()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -111,6 +126,14 @@ func GetGeoIPLocation(ip string) string {
 			geoMutex.Lock()
 			geoCache[ip] = locStr
 			geoMutex.Unlock()
+
+			if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+				go func(targetIP, targetLoc string) {
+					ctxSet, cancelSet := context.WithTimeout(context.Background(), 500*time.Millisecond)
+					defer cancelSet()
+					_ = valkey.GlobalClient.SetGeoIP(ctxSet, targetIP, targetLoc, 30*24*time.Hour)
+				}(ip, locStr)
+			}
 
 			geoDBMu.RLock()
 			database := geoDB
@@ -546,23 +569,26 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 
 	var lastErr error
 	for _, provider := range fallbackOrder {
-		switch provider {
-		case "groq_whisper", "groq":
+		provCfg, ok := cfg.Models.BatchProviders[provider]
+		if !ok || !provCfg.Enabled {
+			continue
+		}
+
+		if strings.HasPrefix(provider, "groq") {
 			if config.GroqAPIKey != "" {
-				if langParam != "" && !cfg.IsBatchLanguageSupported("groq_whisper", langParam) {
-					log.Printf("[GROQ SKIP] Language %q not in groq_whisper capabilities. Trying fallback.", langParam)
+				if langParam != "" && !cfg.IsBatchLanguageSupported(provider, langParam) {
+					log.Printf("[GROQ SKIP] Language %q not in %s capabilities. Trying fallback.", langParam, provider)
 					continue
 				}
 				if ratelimit.GroqRateLimiter.Allow() {
-					provCfg := cfg.Models.BatchProviders["groq_whisper"]
-					useModel := model
-					if provCfg.Model != "" && model == "whisper-large-v3-turbo" {
-						useModel = provCfg.Model
+					useModel := provCfg.Model
+					if useModel == "" {
+						useModel = model
 					}
-					log.Printf("[GROQ] Attempting transcription using model %s (lang: %q)", useModel, langParam)
+					log.Printf("[GROQ] Attempting transcription using %s model %s (lang: %q)", provider, useModel, langParam)
 					text, segments, loc, err := RunGroqTranscribe(ctx, audioBytes, useModel, langParam, promptStr)
 					if err == nil {
-						return text, segments, "groq", loc, nil
+						return text, segments, provider, loc, nil
 					}
 					log.Printf("[GROQ ERROR] Transcription failed: %v. Trying fallback.", err)
 					lastErr = err
@@ -571,52 +597,45 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 					lastErr = fmt.Errorf("groq rate limit reached")
 				}
 			}
-		case "deepinfra_whisper", "deepinfra":
+		} else if strings.HasPrefix(provider, "deepinfra") {
 			if config.DeepInfraAPIKey != "" {
-				provCfg := cfg.Models.BatchProviders["deepinfra_whisper"]
-				diModel := "openai/whisper-large-v3-turbo"
-				if provCfg.Model != "" {
-					diModel = provCfg.Model
-				} else if model == "whisper-large-v3" {
-					diModel = "openai/whisper-large-v3"
+				diModel := provCfg.Model
+				if diModel == "" {
+					diModel = "openai/whisper-large-v3-turbo"
 				}
 				diURL := config.DeepInfraBaseURL + diModel
 				if provCfg.BaseURL != "" {
 					diURL = provCfg.BaseURL
 				}
 
-				log.Printf("[DI INFRA] Attempting transcription using model %s (lang: %q)", diModel, langParam)
+				log.Printf("[DI INFRA] Attempting transcription using %s model %s (lang: %q)", provider, diModel, langParam)
 				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr)
 				if err == nil {
-					return text, segments, "deepinfra", loc, nil
+					return text, segments, provider, loc, nil
 				}
 				log.Printf("[DI INFRA ERROR] Transcription failed: %v. Trying fallback.", err)
 				lastErr = err
 			}
-		case "cloudflare_whisper", "cloudflare":
+		} else if strings.HasPrefix(provider, "cloudflare") {
 			if config.CloudflareAPIToken != "" && config.CloudflareAccountID != "" {
-				provCfg := cfg.Models.BatchProviders["cloudflare_whisper"]
-				cfModel := "@cf/openai/whisper-large-v3-turbo"
-				if provCfg.Model != "" {
-					cfModel = provCfg.Model
-				} else if model == "whisper-large-v3" {
-					cfModel = "@cf/openai/whisper"
+				cfModel := provCfg.Model
+				if cfModel == "" {
+					cfModel = "@cf/openai/whisper-large-v3-turbo"
 				}
-				log.Printf("[CLOUDFLARE AI] Attempting transcription using model %s (lang: %q)", cfModel, langParam)
+				log.Printf("[CLOUDFLARE AI] Attempting transcription using %s model %s (lang: %q)", provider, cfModel, langParam)
 				text, segments, loc, err := RunCloudflareTranscribe(ctx, audioBytes, cfModel, langParam, promptStr)
 				if err == nil {
-					return text, segments, "cloudflare", loc, nil
+					return text, segments, provider, loc, nil
 				}
 				log.Printf("[CLOUDFLARE AI ERROR] Transcription failed: %v. Trying fallback.", err)
 				lastErr = err
 			}
-		case "custom_batch", "custom":
-			provCfg := cfg.Models.BatchProviders["custom_batch"]
+		} else {
 			if provCfg.BaseURL != "" {
 				log.Printf("[CUSTOM BATCH] Attempting transcription on custom server: %s (model: %s)", provCfg.BaseURL, provCfg.Model)
 				text, segments, loc, err := RunCustomBatchTranscribe(ctx, audioBytes, provCfg.BaseURL, provCfg.APIKey, provCfg.Model, langParam, promptStr)
 				if err == nil {
-					return text, segments, "custom_batch", loc, nil
+					return text, segments, provider, loc, nil
 				}
 				log.Printf("[CUSTOM BATCH ERROR] Transcription failed: %v. Trying fallback.", err)
 				lastErr = err
@@ -656,38 +675,40 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 	var lastErr error
 
 	for _, provider := range fallbackOrder {
-		switch provider {
-		case "deepinfra_nemotron", "nemotron":
+		provCfg, ok := cfg.Models.StreamingProviders[provider]
+		if !ok || !provCfg.Enabled {
+			continue
+		}
+
+		if strings.HasPrefix(provider, "deepinfra") || strings.Contains(provider, "nemotron") {
 			if config.DeepInfraAPIKey != "" {
-				if langParam != "" && !cfg.IsStreamingLanguageSupported("deepinfra_nemotron", langParam) {
-					log.Printf("[NEMOTRON SKIP] Language %q not in Nemotron 40 supported languages. Auto-routing to full Whisper engine.", langParam)
+				if langParam != "" && !cfg.IsStreamingLanguageSupported(provider, langParam) {
+					log.Printf("[NEMOTRON SKIP] Language %q not in %s supported languages. Auto-routing to full Whisper engine.", langParam, provider)
 					continue
 				}
-				provCfg := cfg.Models.StreamingProviders["deepinfra_nemotron"]
-				diModel := "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b"
-				if provCfg.Model != "" {
-					diModel = provCfg.Model
+				diModel := provCfg.Model
+				if diModel == "" {
+					diModel = "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b"
 				}
 				diURL := config.DeepInfraBaseURL + diModel
 				if provCfg.BaseURL != "" {
 					diURL = provCfg.BaseURL
 				}
 
-				log.Printf("[DEEPINFRA NEMOTRON] Attempting streaming transcription using %s (lang: %q)", diModel, langParam)
+				log.Printf("[DEEPINFRA NEMOTRON] Attempting streaming transcription using %s model %s (lang: %q)", provider, diModel, langParam)
 				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr)
 				if err == nil {
-					return text, segments, "deepinfra_nemotron", loc, nil
+					return text, segments, provider, loc, nil
 				}
 				log.Printf("[DEEPINFRA NEMOTRON ERROR] %v. Trying fallback.", err)
 				lastErr = err
 			}
-		case "custom_streaming":
-			provCfg := cfg.Models.StreamingProviders["custom_streaming"]
+		} else {
 			if provCfg.BaseURL != "" {
 				log.Printf("[CUSTOM STREAMING] Attempting transcription on custom streaming server: %s", provCfg.BaseURL)
 				text, segments, loc, err := RunCustomBatchTranscribe(ctx, audioBytes, provCfg.BaseURL, provCfg.APIKey, provCfg.Model, langParam, promptStr)
 				if err == nil {
-					return text, segments, "custom_streaming", loc, nil
+					return text, segments, provider, loc, nil
 				}
 				log.Printf("[CUSTOM STREAMING ERROR] %v. Trying fallback.", err)
 				lastErr = err
@@ -707,4 +728,123 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 func RunWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
 	text, segments, _, _, err := RunWhisperTranscribeWithModel(ctx, audioBytes, "whisper-large-v3-turbo", []string{"en"})
 	return text, segments, err
+}
+
+type UpstreamStreamingSession struct {
+	Conn       *websocket.Conn
+	Provider   string
+	CancelFunc context.CancelFunc
+	TextChan   chan string
+	ErrChan    chan error
+	DoneChan   chan struct{}
+}
+
+func (s *UpstreamStreamingSession) SendAudio(ctx context.Context, data []byte) error {
+	if s.Conn == nil {
+		return fmt.Errorf("upstream connection not open")
+	}
+	return s.Conn.Write(ctx, websocket.MessageBinary, data)
+}
+
+func (s *UpstreamStreamingSession) SendControl(ctx context.Context, msg map[string]interface{}) error {
+	if s.Conn == nil {
+		return fmt.Errorf("upstream connection not open")
+	}
+	bytes, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return s.Conn.Write(ctx, websocket.MessageText, bytes)
+}
+
+func (s *UpstreamStreamingSession) Close(status websocket.StatusCode, reason string) {
+	if s.CancelFunc != nil {
+		s.CancelFunc()
+	}
+	if s.Conn != nil {
+		_ = s.Conn.Close(status, reason)
+	}
+}
+
+func CreateUpstreamStreamingSession(ctx context.Context, providerName string, userLanguages []string, prompt string) (*UpstreamStreamingSession, error) {
+	cfg := config.ConfigManager.Get()
+	provCfg, ok := cfg.Models.StreamingProviders[providerName]
+	if !ok || !provCfg.Enabled || provCfg.BaseURL == "" {
+		return nil, fmt.Errorf("streaming provider %s is not enabled or configured", providerName)
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(dialCtx, provCfg.BaseURL, &websocket.DialOptions{
+		Subprotocols: []string{},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to upstream %s at %s: %w", providerName, provCfg.BaseURL, err)
+	}
+
+	langParam, promptStr := BuildWhisperPrompt(userLanguages)
+	if provCfg.InitialPrompt != "" {
+		promptStr = provCfg.InitialPrompt
+	}
+	if prompt != "" {
+		if promptStr != "" {
+			promptStr = prompt + " " + promptStr
+		} else {
+			promptStr = prompt
+		}
+	}
+
+	startMsg := map[string]interface{}{
+		"type":           "start",
+		"model":          provCfg.Model,
+		"language":       langParam,
+		"initial_prompt": promptStr,
+		"sample_rate":    16000,
+		"channels":       1,
+	}
+	startBytes, _ := json.Marshal(startMsg)
+	if err := conn.Write(ctx, websocket.MessageText, startBytes); err != nil {
+		conn.Close(websocket.StatusInternalError, "failed to send start frame")
+		return nil, fmt.Errorf("failed to send handshake to upstream %s: %w", providerName, err)
+	}
+
+	sessCtx, sessCancel := context.WithCancel(ctx)
+	sess := &UpstreamStreamingSession{
+		Conn:       conn,
+		Provider:   providerName,
+		CancelFunc: sessCancel,
+		TextChan:   make(chan string, 100),
+		ErrChan:    make(chan error, 1),
+		DoneChan:   make(chan struct{}),
+	}
+
+	go func() {
+		defer close(sess.DoneChan)
+		for {
+			msgType, data, err := conn.Read(sessCtx)
+			if err != nil {
+				sess.ErrChan <- err
+				return
+			}
+			if msgType == websocket.MessageText {
+				var parsed struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				if json.Unmarshal(data, &parsed) == nil && parsed.Text != "" {
+					sess.TextChan <- parsed.Text
+				} else {
+					var fallbackText struct {
+						Transcript string `json:"transcript"`
+					}
+					if json.Unmarshal(data, &fallbackText) == nil && fallbackText.Transcript != "" {
+						sess.TextChan <- fallbackText.Transcript
+					}
+				}
+			}
+		}
+	}()
+
+	return sess, nil
 }

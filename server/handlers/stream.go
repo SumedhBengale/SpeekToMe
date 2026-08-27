@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"speektome-server/auth"
 	"speektome-server/config"
+	"speektome-server/db"
 	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
@@ -22,16 +24,18 @@ import (
 )
 
 type StreamStartPayload struct {
-	Type        string `json:"type"` // "start"
-	Format      string `json:"format"` // "opus" | "wav" | "pcm"
-	SampleRate  int    `json:"sample_rate"`
-	Channels    int    `json:"channels"`
-	Enhance     bool   `json:"enhance"`
-	Prompt      string `json:"prompt"`
+	Type         string   `json:"type"` // "start"
+	Format       string   `json:"format"` // "opus" | "wav" | "pcm" | "ogg_opus"
+	SampleRate   int      `json:"sample_rate"`
+	Channels     int      `json:"channels"`
+	Enhance      bool     `json:"enhance"`
+	Prompt       string   `json:"prompt"`
+	Capabilities []string `json:"capabilities,omitempty"` // e.g. ["continuous_stream", "chunked_vad"]
 }
 
 type StreamEventMessage struct {
-	Type       string  `json:"type"` // "interim" | "final" | "error"
+	Type       string  `json:"type"` // "session_ready" | "interim" | "final" | "error"
+	Mode       string  `json:"mode,omitempty"` // "continuous_stream" | "chunked_vad"
 	Text       string  `json:"text,omitempty"`
 	LogID      int64   `json:"log_id,omitempty"`
 	AckToken   string  `json:"ack_token,omitempty"`
@@ -75,7 +79,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := a.DB.GetUserBySession(token)
+	user, vocabTerms, err := a.DB.GetUserAndVocabularyBySession(token)
 	if err != nil || user == nil {
 		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Invalid or expired session token"})
 		conn.Close(websocket.StatusPolicyViolation, "Unauthorized")
@@ -119,16 +123,226 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var fullAudioAccumulator bytes.Buffer
-	var startPayload StreamStartPayload
 	streamStartTime := time.Now()
-	enhance := false
-	customPrompt := ""
+
+	// 2. Read initial handshake message from client
+	msgType, data, err := conn.Read(ctx)
+	if err != nil {
+		log.Printf("[STREAM ERROR] Failed to read initial handshake frame: %v", err)
+		return
+	}
+
+	var startPayload StreamStartPayload
+	if msgType == websocket.MessageText {
+		_ = json.Unmarshal(data, &startPayload)
+	}
+
+	log.Printf("[STREAM START] Session initialized | User ID: %d | Lang: %v | Enhance: %v | Prompt: %q | Capabilities: %v | Vocab: %d terms",
+		user.ID, user.Languages, startPayload.Enhance, startPayload.Prompt, startPayload.Capabilities, len(vocabTerms))
+
+	// 3. Resolve best available streaming provider
+	activeConfig := config.ConfigManager.Get()
+	streamOrder := activeConfig.GetActiveStreamingFallbackOrder()
+	var selectedProvider string
+	var selectedType string
+
+	for _, p := range streamOrder {
+		if activeConfig.IsStreamingLanguageSupported(p, "") {
+			selectedProvider = p
+			selectedType = activeConfig.GetStreamingProviderType(p)
+			break
+		}
+	}
+	if selectedProvider == "" {
+		selectedProvider = "deepinfra_nemotron"
+		selectedType = "pseudo"
+	}
+
+	// 4. Branch: Real Streaming Proxy vs Pseudo-Streaming (Chunked VAD)
+	if selectedType == "real" {
+		upstreamSess, uerr := services.CreateUpstreamStreamingSession(ctx, selectedProvider, user.Languages, startPayload.Prompt)
+		if uerr == nil && upstreamSess != nil {
+			log.Printf("[STREAM NEGOTIATION] Selected REAL streaming provider: %s", selectedProvider)
+			_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+				Type:     "session_ready",
+				Mode:     "continuous_stream",
+				Provider: selectedProvider,
+			})
+			a.handleRealStreamingSession(ctx, conn, user, vocabTerms, upstreamSess, startPayload, selectedProvider, streamStartTime)
+			return
+		}
+		log.Printf("[STREAM REAL FAILOVER] Upstream connection to %s failed (%v). Falling back to pseudo-streaming.", selectedProvider, uerr)
+	}
+
+	// Pseudo-Streaming (Chunked VAD)
+	log.Printf("[STREAM NEGOTIATION] Selected PSEUDO streaming provider: %s", selectedProvider)
+	_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+		Type:     "session_ready",
+		Mode:     "chunked_vad",
+		Provider: selectedProvider,
+	})
+	a.handlePseudoStreamingSession(ctx, conn, user, vocabTerms, startPayload, selectedProvider, streamStartTime)
+}
+
+func (a *App) handleRealStreamingSession(
+	ctx context.Context,
+	conn *websocket.Conn,
+	user *db.UserProfile,
+	vocabTerms []db.VocabularyTerm,
+	upstream *services.UpstreamStreamingSession,
+	startPayload StreamStartPayload,
+	provider string,
+	startTime time.Time,
+) {
+	defer upstream.Close(websocket.StatusNormalClosure, "client stream closed")
+
+	var fullAudioAccumulator bytes.Buffer
+	var committedText string
+	var textMutex sync.Mutex
+
+	// Goroutine to receive text tokens from upstream real-time model and forward to client
+	go func() {
+		for text := range upstream.TextChan {
+			normText := text
+			if a.VocabCache != nil && len(vocabTerms) > 0 {
+				normText, _, _ = a.VocabCache.ProcessText(user.ID, text, vocabTerms)
+			}
+
+			textMutex.Lock()
+			committedText = normText
+			textMutex.Unlock()
+
+			_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+				Type:     "interim",
+				Text:     normText,
+				Provider: provider,
+			})
+		}
+	}()
+
+	// Main loop: forward binary audio frames from client to upstream model
+	for {
+		msgType, data, err := conn.Read(ctx)
+		if err != nil {
+			break
+		}
+		if msgType == websocket.MessageText {
+			var control map[string]interface{}
+			if err := json.Unmarshal(data, &control); err == nil {
+				t, _ := control["type"].(string)
+				if t == "end_of_stream" || t == "stop" {
+					log.Printf("[STREAM REAL] Received %s from user ID: %d", t, user.ID)
+					break
+				}
+			}
+		} else if msgType == websocket.MessageBinary {
+			fullAudioAccumulator.Write(data)
+			if fullAudioAccumulator.Len() > 15<<20 {
+				_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Audio stream payload exceeded limit"})
+				break
+			}
+			if err := upstream.SendAudio(ctx, data); err != nil {
+				log.Printf("[STREAM REAL ERROR] Failed to forward audio to upstream: %v", err)
+				break
+			}
+		}
+	}
+
+	// Allow upstream time to finalize last frame
+	time.Sleep(150 * time.Millisecond)
+
+	textMutex.Lock()
+	finalRawTranscript := committedText
+	textMutex.Unlock()
+
+	if a.VocabCache != nil && len(vocabTerms) > 0 && finalRawTranscript != "" {
+		finalRawTranscript, _, _ = a.VocabCache.ProcessText(user.ID, finalRawTranscript, vocabTerms)
+	}
+
+	audioRaw := fullAudioAccumulator.Bytes()
+	audioSizeBytes := len(audioRaw)
+	audioDuration := utils.GetOggOpusDuration(audioRaw)
+	if audioDuration <= 0 && audioSizeBytes > 0 {
+		audioDuration = float64(audioSizeBytes) / 32000.0
+	}
+
+	currentText := finalRawTranscript
+	var dsLatency float64
+	pctx := pipeline.NewPipelineContext(user.ID)
+
+	if startPayload.Enhance && finalRawTranscript != "" {
+		tstart := time.Now()
+		enhancer := pipeline.NewAIEnhancementTransform(startPayload.Prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
+		dsLatency = time.Since(tstart).Seconds()
+		if terr != nil {
+			log.Printf("[STREAM REAL ENHANCE ERROR] %v", terr)
+		} else if enhancedText != "" {
+			currentText = enhancedText
+		}
+	}
+
+	totalLatencyMs := time.Since(startTime).Milliseconds()
+	finalOutput := currentText
+	status := "success"
+	if finalRawTranscript == "" {
+		status = "success_empty"
+	}
+	loggedModel := ""
+	if startPayload.Enhance {
+		loggedModel = "deepseek-v4-flash"
+	}
+
+	logID, err := a.DB.LogUsageAndUpdateQuota(
+		user.ID,
+		audioDuration,
+		float64(totalLatencyMs)/1000.0,
+		dsLatency,
+		float64(totalLatencyMs)/1000.0,
+		startPayload.Enhance,
+		loggedModel,
+		finalRawTranscript,
+		finalOutput,
+		status,
+		audioSizeBytes,
+		provider,
+		pctx.LLMProvider,
+	)
+	if err != nil {
+		log.Printf("[STREAM LOG ERROR] Failed to log usage: %v", err)
+	}
+
+	ackToken := auth.GenerateLogAckToken(user.ID, logID)
+
+	_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+		Type:      "final",
+		Text:      finalOutput,
+		LogID:     logID,
+		AckToken:  ackToken,
+		LatencyMs: totalLatencyMs,
+		Provider:  provider,
+	})
+
+	conn.Close(websocket.StatusNormalClosure, "Transcription complete")
+}
+
+func (a *App) handlePseudoStreamingSession(
+	ctx context.Context,
+	conn *websocket.Conn,
+	user *db.UserProfile,
+	vocabTerms []db.VocabularyTerm,
+	startPayload StreamStartPayload,
+	provider string,
+	startTime time.Time,
+) {
+	var fullAudioAccumulator bytes.Buffer
+	enhance := startPayload.Enhance
+	customPrompt := startPayload.Prompt
 
 	var committedText string
 	var chunkCount int
 
-	// Read audio and control loop
+	// Read audio chunks loop (VAD pause chunks)
 	for {
 		msgType, data, err := conn.Read(ctx)
 		if err != nil {
@@ -144,14 +358,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			var control map[string]interface{}
 			if err := json.Unmarshal(data, &control); err == nil {
 				t, _ := control["type"].(string)
-				if t == "start" {
-					_ = json.Unmarshal(data, &startPayload)
-					enhance = startPayload.Enhance
-					customPrompt = startPayload.Prompt
-					log.Printf("[STREAM START] Session initialized | User ID: %d | Lang: %v | Enhance: %v | Prompt: %q",
-						user.ID, user.Languages, enhance, customPrompt)
-					continue
-				} else if t == "end_of_stream" || t == "stop" {
+				if t == "end_of_stream" || t == "stop" {
 					log.Printf("[STREAM CLIENT] Received %s signal from user ID: %d", t, user.ID)
 					break
 				}
@@ -205,6 +412,10 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 				currentChunk, user.ID, usedProvider, rawChunkText, asrDuration)
 
 			if rawChunkText != "" {
+				if a.VocabCache != nil && len(vocabTerms) > 0 {
+					rawChunkText, _, _ = a.VocabCache.ProcessText(user.ID, rawChunkText, vocabTerms)
+				}
+
 				previousCommitted := committedText
 				committedText = utils.MergeTranscripts(committedText, rawChunkText)
 				log.Printf("[STREAM ASR MERGE] Chunk: %d | Prev: %q | New: %q -> Merged: %q",
@@ -235,15 +446,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	whisperStart := time.Now()
 
 	finalRawTranscript := committedText
-
-	activeConfig := config.ConfigManager.Get()
-	streamOrder := activeConfig.GetActiveStreamingFallbackOrder()
-	selectedStreamingProvider := "deepinfra_nemotron"
-	if len(streamOrder) > 0 {
-		selectedStreamingProvider = streamOrder[0]
-	}
-
-	var asrProvider string = selectedStreamingProvider
+	var asrProvider string = provider
 
 	// Fallback to full audio if no committed text was produced
 	if finalRawTranscript == "" {
@@ -262,6 +465,10 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 			conn.Close(websocket.StatusInternalError, "ASR Failed")
 			return
 		}
+	}
+
+	if a.VocabCache != nil && len(vocabTerms) > 0 && finalRawTranscript != "" {
+		finalRawTranscript, _, _ = a.VocabCache.ProcessText(user.ID, finalRawTranscript, vocabTerms)
 	}
 
 	whisperLatency := time.Since(whisperStart).Seconds()
@@ -284,7 +491,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	totalLatencyMs := time.Since(streamStartTime).Milliseconds()
+	totalLatencyMs := time.Since(startTime).Milliseconds()
 
 	// Log usage asynchronously
 	finalOutput := currentText
@@ -324,7 +531,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		LogID:     logID,
 		AckToken:  ackToken,
 		LatencyMs: totalLatencyMs,
-		Provider:  selectedStreamingProvider,
+		Provider:  asrProvider,
 	})
 
 	conn.Close(websocket.StatusNormalClosure, "Transcription complete")

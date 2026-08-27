@@ -1,8 +1,11 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"speektome-server/valkey"
 )
 
 type RollingRateLimiter struct {
@@ -72,6 +75,15 @@ func NewSimpleRateLimiter() *SimpleRateLimiter {
 }
 
 func (rl *SimpleRateLimiter) Allow(userID int64, limit int) bool {
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		allowed, _, err := valkey.GlobalClient.AllowUserRPM(ctx, userID, limit)
+		if err == nil {
+			return allowed
+		}
+	}
+
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
@@ -84,6 +96,15 @@ func (rl *SimpleRateLimiter) Allow(userID int64, limit int) bool {
 }
 
 func (rl *SimpleRateLimiter) GetCounts() map[int64]int {
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		counts, err := valkey.GlobalClient.GetUserRPMCounts(ctx)
+		if err == nil {
+			return counts
+		}
+	}
+
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	copyMap := make(map[int64]int, len(rl.store))
@@ -94,12 +115,24 @@ func (rl *SimpleRateLimiter) GetCounts() map[int64]int {
 }
 
 func (rl *SimpleRateLimiter) ResetAll() {
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		_ = valkey.GlobalClient.ResetAllUserRPM(ctx)
+	}
+
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	rl.store = make(map[int64]int)
 }
 
 func (rl *SimpleRateLimiter) ResetUser(userID int64) {
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_ = valkey.GlobalClient.ResetUserRPM(ctx, userID)
+	}
+
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	delete(rl.store, userID)
@@ -169,6 +202,15 @@ func NewAuthRateLimiter() *AuthRateLimiter {
 }
 
 func (arl *AuthRateLimiter) Allow(key string, limit int, window time.Duration) bool {
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		allowed, err := valkey.GlobalClient.AllowAuthAttempt(ctx, key, limit, int(window.Seconds()))
+		if err == nil {
+			return allowed
+		}
+	}
+
 	arl.mu.Lock()
 	defer arl.mu.Unlock()
 

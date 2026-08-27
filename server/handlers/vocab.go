@@ -58,6 +58,10 @@ func (a *App) HandleAddVocabulary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if a.VocabCache != nil {
+		a.VocabCache.Invalidate(user.ID)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
@@ -89,6 +93,10 @@ func (a *App) HandleDeleteVocabulary(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DB ERROR] Failed to delete vocabulary term for user %d: %v", user.ID, err)
 		http.Error(w, "Failed to delete vocabulary term", http.StatusInternalServerError)
 		return
+	}
+
+	if a.VocabCache != nil {
+		a.VocabCache.Invalidate(user.ID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

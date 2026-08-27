@@ -5,10 +5,18 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::connect_async;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NegotiatedStreamMode {
+    ContinuousStream,
+    ChunkedVad,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StreamEventResponse {
     #[serde(rename = "type")]
-    pub event_type: String, // "interim" | "final" | "error"
+    pub event_type: String, // "session_ready" | "interim" | "final" | "error"
+    #[serde(default)]
+    pub mode: Option<String>, // "continuous_stream" | "chunked_vad"
     #[serde(default)]
     pub text: String,
     #[serde(default)]
@@ -39,6 +47,7 @@ pub enum StreamAudioMessage {
 pub struct StreamSessionHandle {
     pub tx: UnboundedSender<StreamAudioMessage>,
     pub rx_final: Receiver<Result<StreamFinalResult, String>>,
+    pub mode: NegotiatedStreamMode,
 }
 
 /// Computes the diff between what is currently on screen (`currently_typed`) and `incoming_text`,
@@ -112,6 +121,7 @@ pub fn start_streaming_session(
 ) -> Result<StreamSessionHandle, String> {
     let (audio_tx, mut audio_rx) = unbounded_channel::<StreamAudioMessage>();
     let (final_tx, final_rx) = channel::<Result<StreamFinalResult, String>>();
+    let (mode_tx, mode_rx) = channel::<NegotiatedStreamMode>();
 
     let ws_url = get_stream_ws_url(&api_url, &token);
 
@@ -131,14 +141,15 @@ pub fn start_streaming_session(
 
         let (mut write, mut read) = ws_stream.split();
 
-        // 1. Send start handshake frame
+        // 1. Send start handshake frame with client capabilities
         let start_payload = serde_json::json!({
             "type": "start",
             "format": "ogg_opus",
             "sample_rate": 16000,
             "channels": 1,
             "enhance": enhance,
-            "prompt": custom_prompt
+            "prompt": custom_prompt,
+            "capabilities": ["continuous_stream", "chunked_vad"]
         });
 
         if let Err(e) = write.send(Message::Text(start_payload.to_string())).await {
@@ -170,30 +181,40 @@ pub fn start_streaming_session(
 
         let read_task = async move {
             let mut final_res: Option<StreamFinalResult> = None;
+            let mut mode_sent = false;
+
             while let Some(msg_res) = read.next().await {
                 match msg_res {
                     Ok(Message::Text(text)) => {
                         if let Ok(event) = serde_json::from_str::<StreamEventResponse>(&text) {
+                            if event.event_type == "session_ready" {
+                                let negotiated = if event.mode.as_deref() == Some("continuous_stream") {
+                                    NegotiatedStreamMode::ContinuousStream
+                                } else {
+                                    NegotiatedStreamMode::ChunkedVad
+                                };
+                                println!("[STREAM CLIENT] Server confirmed session mode: {:?} (provider: {:?})", negotiated, event.provider);
+                                let _ = mode_tx.send(negotiated);
+                                mode_sent = true;
+                                continue;
+                            }
+
+                            if !mode_sent {
+                                let _ = mode_tx.send(NegotiatedStreamMode::ChunkedVad);
+                                mode_sent = true;
+                            }
+
                             if event.event_type == "interim" {
                                 if !event.text.is_empty() {
-                                    let t_proc = std::time::Instant::now();
-                                    let normalized_text = crate::vocab::get_vocab_manager().process_text(&event.text);
-                                    let proc_dur = t_proc.elapsed();
-
-                                    println!("[STREAM INTERIM] Vocab normalized in {:.2?}: {:?}", proc_dur, normalized_text);
-                                    crate::win32::set_preview_text(&normalized_text);
+                                    println!("[STREAM INTERIM] Text: {:?}", event.text);
+                                    crate::win32::set_preview_text(&event.text);
                                 }
                             } else if event.event_type == "final" {
-                                let normalized_text = if !event.text.is_empty() {
-                                    crate::vocab::get_vocab_manager().process_text(&event.text)
-                                } else {
-                                    String::new()
-                                };
-                                println!("[STREAM FINAL RECEIVED] Final normalized text: {:?}", normalized_text);
-                                crate::win32::set_preview_text(&normalized_text);
+                                println!("[STREAM FINAL RECEIVED] Final text: {:?}", event.text);
+                                crate::win32::set_preview_text(&event.text);
 
                                 final_res = Some(StreamFinalResult {
-                                    text: normalized_text,
+                                    text: event.text,
                                     log_id: event.log_id,
                                     ack_token: event.ack_token,
                                 });
@@ -216,9 +237,13 @@ pub fn start_streaming_session(
         let _ = final_tx.send(read_res);
     });
 
+    let negotiated_mode = mode_rx.recv_timeout(std::time::Duration::from_millis(2500)).unwrap_or(NegotiatedStreamMode::ChunkedVad);
+    println!("[STREAM CLIENT] Active negotiated stream mode: {:?}", negotiated_mode);
+
     Ok(StreamSessionHandle {
         tx: audio_tx,
         rx_final: final_rx,
+        mode: negotiated_mode,
     })
 }
 

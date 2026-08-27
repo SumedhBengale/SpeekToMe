@@ -11,30 +11,30 @@ import (
 func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 	cfg := DefaultModelsConfig()
 
-	if cfg.DefaultBatchProvider != "deepinfra_whisper" {
-		t.Errorf("Expected default batch provider 'deepinfra_whisper'; got %s", cfg.DefaultBatchProvider)
+	if cfg.DefaultBatchProvider != "deepinfra_whisper_large_v3_turbo" {
+		t.Errorf("Expected default batch provider 'deepinfra_whisper_large_v3_turbo'; got %s", cfg.DefaultBatchProvider)
 	}
-	if cfg.DefaultStreamingProvider != "deepinfra_nemotron" {
-		t.Errorf("Expected default streaming provider 'deepinfra_nemotron'; got %s", cfg.DefaultStreamingProvider)
+	if cfg.DefaultStreamingProvider != "deepinfra_nemotron_3_5" {
+		t.Errorf("Expected default streaming provider 'deepinfra_nemotron_3_5'; got %s", cfg.DefaultStreamingProvider)
 	}
-	if cfg.DefaultLLMProvider != "cerebras" {
-		t.Errorf("Expected default LLM provider 'cerebras'; got %s", cfg.DefaultLLMProvider)
+	if cfg.DefaultLLMProvider != "cerebras_gpt_oss_120b" {
+		t.Errorf("Expected default LLM provider 'cerebras_gpt_oss_120b'; got %s", cfg.DefaultLLMProvider)
 	}
 
 	pCfg := ProviderConfig{Models: cfg}
 	batchOrder := pCfg.GetActiveBatchFallbackOrder()
-	if len(batchOrder) < 3 || batchOrder[0] != "deepinfra_whisper" {
-		t.Errorf("Expected batch order to start with 'deepinfra_whisper'; got %v", batchOrder)
+	if len(batchOrder) < 3 || batchOrder[0] != "deepinfra_whisper_large_v3_turbo" {
+		t.Errorf("Expected batch order to start with 'deepinfra_whisper_large_v3_turbo'; got %v", batchOrder)
 	}
 
 	streamingOrder := pCfg.GetActiveStreamingFallbackOrder()
-	if len(streamingOrder) < 1 || streamingOrder[0] != "deepinfra_nemotron" {
-		t.Errorf("Expected streaming order to start with 'deepinfra_nemotron'; got %v", streamingOrder)
+	if len(streamingOrder) < 1 || streamingOrder[0] != "deepinfra_nemotron_3_5" {
+		t.Errorf("Expected streaming order to start with 'deepinfra_nemotron_3_5'; got %v", streamingOrder)
 	}
 
 	llmOrder := pCfg.GetActiveLLMFallbackOrder()
-	if len(llmOrder) < 3 || llmOrder[0] != "cerebras" {
-		t.Errorf("Expected LLM order to start with 'cerebras'; got %v", llmOrder)
+	if len(llmOrder) < 3 || llmOrder[0] != "cerebras_gpt_oss_120b" {
+		t.Errorf("Expected LLM order to start with 'cerebras_gpt_oss_120b'; got %v", llmOrder)
 	}
 }
 
@@ -51,19 +51,19 @@ func TestSyncConfigsFromDBWithJSON(t *testing.T) {
 	}()
 
 	customJSON := ModelsConfig{
-		DefaultBatchProvider:     "deepinfra_whisper",
-		DefaultStreamingProvider: "deepinfra_nemotron",
-		DefaultLLMProvider:       "deepinfra_deepseek",
+		DefaultBatchProvider:     "deepinfra_whisper_large_v3_turbo",
+		DefaultStreamingProvider: "deepinfra_nemotron_3_5",
+		DefaultLLMProvider:       "deepinfra_deepseek_v4",
 		BatchProviders: map[string]BatchProviderConfig{
-			"deepinfra_whisper": {Enabled: true, Model: "openai/whisper-large-v3-turbo"},
-			"groq_whisper":      {Enabled: false, Model: "whisper-large-v3-turbo"},
-			"cloudflare_whisper": {Enabled: true, Model: "@cf/openai/whisper-large-v3-turbo"},
+			"deepinfra_whisper_large_v3_turbo":  {Enabled: true, Priority: 1, Model: "openai/whisper-large-v3-turbo"},
+			"groq_whisper_large_v3_turbo":       {Enabled: false, Priority: 2, Model: "whisper-large-v3-turbo"},
+			"cloudflare_whisper_large_v3_turbo": {Enabled: true, Priority: 3, Model: "@cf/openai/whisper-large-v3-turbo"},
 		},
 		StreamingProviders: map[string]StreamingProviderConfig{
-			"deepinfra_nemotron": {Enabled: true, Model: "nvidia/nemotron-3.5-asr-streaming-0.6b"},
+			"deepinfra_nemotron_3_5": {Enabled: true, Priority: 1, Model: "nvidia/nemotron-3.5-asr-streaming-0.6b"},
 		},
 		LLMProviders: map[string]LLMProviderConfig{
-			"deepinfra_deepseek": {Enabled: true, Model: "deepseek-ai/DeepSeek-V4-Flash"},
+			"deepinfra_deepseek_v4": {Enabled: true, Priority: 1, Model: "deepseek-ai/DeepSeek-V4-Flash"},
 		},
 	}
 
@@ -77,13 +77,13 @@ func TestSyncConfigsFromDBWithJSON(t *testing.T) {
 	SyncConfigsFromDB(database, nil)
 	active := ConfigManager.Get()
 
-	if active.Models.DefaultBatchProvider != "deepinfra_whisper" {
-		t.Errorf("Expected default batch 'deepinfra_whisper'; got %s", active.Models.DefaultBatchProvider)
+	if active.Models.DefaultBatchProvider != "deepinfra_whisper_large_v3_turbo" {
+		t.Errorf("Expected default batch 'deepinfra_whisper_large_v3_turbo'; got %s", active.Models.DefaultBatchProvider)
 	}
 
 	batchOrder := active.GetActiveBatchFallbackOrder()
-	if len(batchOrder) != 2 || batchOrder[0] != "deepinfra_whisper" || batchOrder[1] != "cloudflare_whisper" {
-		t.Errorf("Expected fallback order ['deepinfra_whisper', 'cloudflare_whisper']; got %v", batchOrder)
+	if len(batchOrder) != 2 || batchOrder[0] != "deepinfra_whisper_large_v3_turbo" || batchOrder[1] != "cloudflare_whisper_large_v3_turbo" {
+		t.Errorf("Expected fallback order ['deepinfra_whisper_large_v3_turbo', 'cloudflare_whisper_large_v3_turbo']; got %v", batchOrder)
 	}
 }
 
@@ -102,15 +102,15 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 	SyncConfigsFromDB(database, nil)
 	active := ConfigManager.Get()
 
-	if active.Models.DefaultBatchProvider != "groq_whisper" {
-		t.Errorf("Expected default batch 'groq_whisper'; got %s", active.Models.DefaultBatchProvider)
+	if active.Models.DefaultBatchProvider != "deepinfra_whisper_large_v3_turbo" {
+		t.Errorf("Expected default batch 'deepinfra_whisper_large_v3_turbo'; got %s", active.Models.DefaultBatchProvider)
 	}
-	if active.Models.DefaultStreamingProvider != "deepinfra_nemotron" {
-		t.Errorf("Expected default streaming 'deepinfra_nemotron'; got %s", active.Models.DefaultStreamingProvider)
+	if active.Models.DefaultStreamingProvider != "deepinfra_nemotron_3_5" {
+		t.Errorf("Expected default streaming 'deepinfra_nemotron_3_5'; got %s", active.Models.DefaultStreamingProvider)
 	}
 
 	batchOrder := active.GetActiveBatchFallbackOrder()
-	expectedOrder := []string{"groq_whisper", "deepinfra_whisper", "cloudflare_whisper"}
+	expectedOrder := []string{"deepinfra_whisper_large_v3_turbo", "groq_whisper_large_v3_turbo", "cloudflare_whisper_large_v3_turbo"}
 	if len(batchOrder) != len(expectedOrder) {
 		t.Fatalf("Expected order length %d; got %d (%v)", len(expectedOrder), len(batchOrder), batchOrder)
 	}
@@ -120,4 +120,3 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 		}
 	}
 }
-

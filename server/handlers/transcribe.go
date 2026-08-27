@@ -22,7 +22,7 @@ import (
 )
 
 func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
-	user, authErr := auth.Authenticate(r, a.DB)
+	user, vocabTerms, authErr := auth.AuthenticateWithVocab(r, a.DB)
 	if authErr != nil {
 		http.Error(w, authErr.Error(), http.StatusUnauthorized)
 		return
@@ -164,12 +164,18 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	pctx := pipeline.NewPipelineContext(user.ID)
 	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true"
-	currentText := rawText
 
-	if enhance && rawText != "" {
+	var vocabNormalized string = rawText
+	if rawText != "" && a.VocabCache != nil && len(vocabTerms) > 0 {
+		vocabNormalized, _, _ = a.VocabCache.ProcessText(user.ID, rawText, vocabTerms)
+	}
+
+	currentText := vocabNormalized
+
+	if enhance && vocabNormalized != "" {
 		enhancer := pipeline.NewAIEnhancementTransform(prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		tstart := time.Now()
-		enhancedText, terr := enhancer.Transform(ctx, rawText, pctx)
+		enhancedText, terr := enhancer.Transform(ctx, vocabNormalized, pctx)
 		if terr != nil {
 			log.Printf("[PIPELINE ERROR] AI Enhancement failed: %v", terr)
 		} else if enhancedText != "" {

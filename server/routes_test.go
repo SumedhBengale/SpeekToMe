@@ -11,6 +11,7 @@ import (
 	"speektome-server/auth"
 	"speektome-server/db"
 	"speektome-server/handlers"
+	"speektome-server/vocab"
 )
 
 func setupTestServer(t *testing.T) (*httptest.Server, func()) {
@@ -23,7 +24,8 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 	}
 
 	app := &handlers.App{
-		DB: database,
+		DB:         database,
+		VocabCache: vocab.NewVocabCache(),
 	}
 
 	mux := http.NewServeMux()

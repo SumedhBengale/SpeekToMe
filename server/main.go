@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,6 +16,8 @@ import (
 	"speektome-server/handlers"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
+	"speektome-server/valkey"
+	"speektome-server/vocab"
 )
 
 func main() {
@@ -48,7 +51,19 @@ func main() {
 	}
 
 	app := &handlers.App{
-		DB: database,
+		DB:         database,
+		VocabCache: vocab.NewVocabCache(),
+	}
+
+	// Initialize Valkey / Redis instance
+	valkeyClient := valkey.InitGlobalClient()
+	if valkeyClient != nil && valkeyClient.IsConnected() {
+		valkeyClient.SubscribeConfigReload(context.Background(), func() {
+			config.SyncConfigsFromDB(database, ratelimit.GroqRateLimiter.SetLimit)
+		})
+		valkeyClient.SubscribeVocabInvalidate(context.Background(), func(userID int64) {
+			app.VocabCache.Invalidate(userID)
+		})
 	}
 
 	config.SyncConfigsFromDB(database, ratelimit.GroqRateLimiter.SetLimit)

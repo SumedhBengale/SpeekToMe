@@ -6,7 +6,6 @@ pub mod audio_processing;
 pub mod api;
 pub mod keyboard;
 pub mod win32;
-pub mod vocab;
 pub mod stream;
 pub mod vad;
 pub mod lang;
@@ -117,11 +116,6 @@ fn start_login(window: tauri::WebviewWindow) {
             }
             
             if let Ok(user_info) = tauri::async_runtime::block_on(api::fetch_user_info(&api::get_api_url(), &token)) {
-                let token_clone = token.clone();
-                let api_url = api::get_api_url();
-                tauri::async_runtime::spawn(async move {
-                    let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token_clone).await;
-                });
                 let _ = window.emit("login-success", user_info);
             } else {
                 let _ = window.emit("login-failed", "Failed to retrieve user info.");
@@ -181,11 +175,6 @@ async fn login_with_credentials(email: String, mut password: String) -> Result<a
     password.zeroize();
     match res {
         Ok((token, user_info)) => {
-            let token_clone = token.clone();
-            let api_url = api::get_api_url();
-            tauri::async_runtime::spawn(async move {
-                let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token_clone).await;
-            });
             let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
             active.session_token = Some(token);
             sync_active_config_atomics(&active);
@@ -209,10 +198,7 @@ async fn get_vocabulary() -> Result<Vec<api::ClientVocabularyTerm>, String> {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    let terms = api::fetch_vocabulary(&api::get_api_url(), &token).await?;
-    let canonical_list: Vec<String> = terms.iter().map(|t| t.canonical.clone()).collect();
-    crate::vocab::get_vocab_manager().set_terms(canonical_list);
-    Ok(terms)
+    api::fetch_vocabulary(&api::get_api_url(), &token).await
 }
 
 #[tauri::command]
@@ -221,7 +207,6 @@ async fn add_vocabulary_term(term: String) -> Result<(), String> {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    crate::vocab::get_vocab_manager().add_term(&term);
     api::add_vocab_term(&api::get_api_url(), &token, &term).await
 }
 
@@ -231,7 +216,6 @@ async fn delete_vocabulary_term(term: String) -> Result<(), String> {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
-    crate::vocab::get_vocab_manager().delete_term(&term);
     api::delete_vocab_term(&api::get_api_url(), &token, &term).await
 }
 
@@ -418,8 +402,7 @@ fn main() {
 
     // 1. Initialize global loaded config
     let _ = get_active_config();
-    let _ = crate::vocab::get_vocab_manager();
-    println!("[STARTUP 4] Active config & Vocab manager initialized.");
+    println!("[STARTUP 4] Active config initialized.");
 
     // 2. Cleanup old meeting recordings from previous runs (if older than 24 hours)
     cleanup_old_recordings();
@@ -458,15 +441,7 @@ fn main() {
                 });
             });
 
-            if let Some(token) = token_opt {
-                std::thread::spawn(move || {
-                    tauri::async_runtime::block_on(async move {
-                        println!("[STARTUP] Syncing vocabulary from server in background thread...");
-                        let _ = crate::vocab::get_vocab_manager().sync_from_server(&api_url, &token).await;
-                        println!("[STARTUP] Vocabulary sync finished.");
-                    });
-                });
-            } else {
+            if token_opt.is_none() {
                 println!("[STARTUP] No session token found. Displaying onboarding settings window...");
                 show_or_create_settings_window(&handle);
             }

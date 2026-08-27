@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -156,131 +157,68 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 	cfg := config.ConfigManager.Get()
 	fallbackOrder := cfg.GetActiveLLMFallbackOrder()
 	if len(fallbackOrder) == 0 {
-		fallbackOrder = []string{"cerebras", "deepinfra_deepseek", "deepseek_v4"}
+		return "", fmt.Errorf("no enabled LLM provider available")
 	}
 
 	var lastErr error
-	for _, provider := range fallbackOrder {
-		switch provider {
-		case "cerebras":
-			if config.CerebrasAPIKey != "" {
-				provCfg := cfg.Models.LLMProviders["cerebras"]
-				cURL := config.CerebrasAPIURL
-				if provCfg.BaseURL != "" {
-					cURL = provCfg.BaseURL
-				}
-				cModel := "gpt-oss-120b"
-				if provCfg.Model != "" {
-					cModel = provCfg.Model
-				} else if model != "" && !strings.Contains(model, "deepseek") {
-					cModel = model
-				}
-				apiKey := config.CerebrasAPIKey
-				if provCfg.APIKey != "" {
-					apiKey = provCfg.APIKey
-				}
-				res, loc, err := callChatCompletionsAPI(ctx, client, cURL, apiKey, cModel, systemPrompt, userPrompt, false)
-				if err == nil {
-					if pctx != nil {
-						pctx.LLMProvider = "cerebras"
-						pctx.LLMRouting = loc
-					}
-					return res, nil
-				}
-				lastErr = err
-			}
-		case "deepseek_v4", "deepseek":
-			if config.DeepSeekAPIKey != "" {
-				provCfg := cfg.Models.LLMProviders["deepseek_v4"]
-				useModel := "deepseek-v4-flash"
-				if provCfg.Model != "" {
-					useModel = provCfg.Model
-				} else if model != "" {
-					useModel = model
-				}
-				apiURL := config.DeepSeekAPIURL
-				if provCfg.BaseURL != "" {
-					apiURL = provCfg.BaseURL
-				}
-				res, loc, err := callChatCompletionsAPI(ctx, client, apiURL, config.DeepSeekAPIKey, useModel, systemPrompt, userPrompt, true)
-				if err == nil {
-					if pctx != nil {
-						pctx.LLMProvider = "deepseek"
-						pctx.LLMRouting = loc
-					}
-					return res, nil
-				}
-				lastErr = err
-			}
-		case "deepinfra_deepseek", "deepinfra":
-			if config.DeepInfraAPIKey != "" {
-				provCfg := cfg.Models.LLMProviders["deepinfra_deepseek"]
-				diURL := "https://api.deepinfra.com/v1/openai/chat/completions"
-				if provCfg.BaseURL != "" {
-					diURL = provCfg.BaseURL
-				}
-				diModel := "deepseek-ai/DeepSeek-V4-Flash"
-				if provCfg.Model != "" {
-					diModel = provCfg.Model
-				}
-				res, loc, err := callChatCompletionsAPI(ctx, client, diURL, config.DeepInfraAPIKey, diModel, systemPrompt, userPrompt, false)
-				if err == nil {
-					if pctx != nil {
-						pctx.LLMProvider = "deepinfra"
-						pctx.LLMRouting = loc
-					}
-					return res, nil
-				}
-				lastErr = err
-			}
-		case "wafer", "wafer_ai", "wafer_deepseek":
-			if config.WaferAPIKey != "" {
-				provCfg := cfg.Models.LLMProviders["wafer"]
-				wURL := config.WaferAPIURL
-				if provCfg.BaseURL != "" {
-					wURL = provCfg.BaseURL
-				}
-				wModel := "DeepSeek-V4-Flash-0731-Fast"
-				if provCfg.Model != "" {
-					wModel = provCfg.Model
-				} else if model != "" {
-					wModel = model
-				}
-				apiKey := config.WaferAPIKey
-				if provCfg.APIKey != "" {
-					apiKey = provCfg.APIKey
-				}
-				res, loc, err := callChatCompletionsAPI(ctx, client, wURL, apiKey, wModel, systemPrompt, userPrompt, true)
-				if err == nil {
-					if pctx != nil {
-						pctx.LLMProvider = "wafer"
-						pctx.LLMRouting = loc
-					}
-					return res, nil
-				}
-				lastErr = err
-			}
-		case "custom_llm", "custom":
-			provCfg := cfg.Models.LLMProviders["custom_llm"]
-			if provCfg.BaseURL != "" {
-				apiKey := provCfg.APIKey
-				res, loc, err := callChatCompletionsAPI(ctx, client, provCfg.BaseURL, apiKey, provCfg.Model, systemPrompt, userPrompt, false)
-				if err == nil {
-					if pctx != nil {
-						pctx.LLMProvider = "custom_llm"
-						pctx.LLMRouting = loc
-					}
-					return res, nil
-				}
-				lastErr = err
+	for _, providerKey := range fallbackOrder {
+		provCfg, ok := cfg.Models.LLMProviders[providerKey]
+		if !ok || !provCfg.Enabled {
+			continue
+		}
+
+		apiKey := provCfg.APIKey
+		if apiKey == "" {
+			if strings.HasPrefix(providerKey, "cerebras") {
+				apiKey = config.CerebrasAPIKey
+			} else if strings.HasPrefix(providerKey, "deepinfra") {
+				apiKey = config.DeepInfraAPIKey
+			} else if strings.HasPrefix(providerKey, "deepseek") {
+				apiKey = config.DeepSeekAPIKey
+			} else if strings.HasPrefix(providerKey, "wafer") {
+				apiKey = config.WaferAPIKey
 			}
 		}
+
+		apiURL := provCfg.BaseURL
+		if apiURL == "" {
+			if strings.HasPrefix(providerKey, "cerebras") {
+				apiURL = config.CerebrasAPIURL
+			} else if strings.HasPrefix(providerKey, "deepinfra") {
+				apiURL = "https://api.deepinfra.com/v1/openai/chat/completions"
+			} else if strings.HasPrefix(providerKey, "deepseek") {
+				apiURL = config.DeepSeekAPIURL
+			} else if strings.HasPrefix(providerKey, "wafer") {
+				apiURL = config.WaferAPIURL
+			}
+		}
+
+		useModel := provCfg.Model
+		if useModel == "" && model != "" {
+			useModel = model
+		}
+
+		if apiKey == "" || apiURL == "" || useModel == "" {
+			continue
+		}
+
+		isDeepSeek := strings.Contains(strings.ToLower(providerKey), "deepseek") || strings.Contains(strings.ToLower(useModel), "deepseek")
+		res, loc, err := callChatCompletionsAPI(ctx, client, apiURL, apiKey, useModel, systemPrompt, userPrompt, isDeepSeek)
+		if err == nil {
+			if pctx != nil {
+				pctx.LLMProvider = providerKey
+				pctx.LLMRouting = loc
+			}
+			return res, nil
+		}
+		log.Printf("[LLM FALLBACK] Provider %s (%s) failed: %v. Trying next in priority order.", providerKey, useModel, err)
+		lastErr = err
 	}
 
 	if lastErr != nil {
-		return "", fmt.Errorf("all enabled LLM providers failed. Last error: %w", lastErr)
+		return "", fmt.Errorf("all configured LLM providers failed. Last error: %w", lastErr)
 	}
-	return "", fmt.Errorf("neither CerebrasAPIKey, DeepInfraAPIKey, WaferAPIKey, nor DeepSeekAPIKey is configured or enabled")
+	return "", fmt.Errorf("no LLM providers succeeded")
 }
 
 func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pctx *PipelineContext) (string, error) {

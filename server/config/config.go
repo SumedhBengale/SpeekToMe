@@ -35,6 +35,7 @@ var (
 // Provider descriptor structs
 type BatchProviderConfig struct {
 	Enabled            bool     `json:"enabled"`
+	Priority           int      `json:"priority,omitempty"`
 	Model              string   `json:"model"`
 	BaseURL            string   `json:"base_url,omitempty"`
 	APIKey             string   `json:"api_key,omitempty"`
@@ -45,6 +46,8 @@ type BatchProviderConfig struct {
 
 type StreamingProviderConfig struct {
 	Enabled            bool     `json:"enabled"`
+	Priority           int      `json:"priority,omitempty"`
+	Type               string   `json:"type,omitempty"` // "real" | "pseudo"
 	Model              string   `json:"model"`
 	BaseURL            string   `json:"base_url,omitempty"`
 	APIKey             string   `json:"api_key,omitempty"`
@@ -55,6 +58,7 @@ type StreamingProviderConfig struct {
 
 type LLMProviderConfig struct {
 	Enabled      bool   `json:"enabled"`
+	Priority     int    `json:"priority,omitempty"`
 	Model        string `json:"model"`
 	BaseURL      string `json:"base_url,omitempty"`
 	APIKey       string `json:"api_key,omitempty"`
@@ -87,28 +91,31 @@ func DefaultModelsConfig() ModelsConfig {
 	defaultStreamingPrompt := "Transcribe the spoken speech clearly, preserving sentence continuity, punctuation, and exact terminology."
 
 	return ModelsConfig{
-		DefaultBatchProvider:     "deepinfra_whisper",
-		DefaultStreamingProvider: "deepinfra_nemotron",
-		DefaultLLMProvider:       "cerebras",
+		DefaultBatchProvider:     "deepinfra_whisper_large_v3_turbo",
+		DefaultStreamingProvider: "deepinfra_nemotron_3_5",
+		DefaultLLMProvider:       "cerebras_gpt_oss_120b",
 		BatchProviders: map[string]BatchProviderConfig{
-			"deepinfra_whisper": {
+			"deepinfra_whisper_large_v3_turbo": {
 				Enabled:            true,
+				Priority:           1,
 				Model:              "openai/whisper-large-v3-turbo",
 				BaseURL:            DeepInfraBaseURL + "openai/whisper-large-v3-turbo",
 				TimeoutMs:          10000,
 				InitialPrompt:      defaultSTTPrompt,
 				SupportedLanguages: []string{"*"},
 			},
-			"groq_whisper": {
+			"groq_whisper_large_v3_turbo": {
 				Enabled:            true,
+				Priority:           2,
 				Model:              "whisper-large-v3-turbo",
 				BaseURL:            GroqAPIURL,
 				TimeoutMs:          10000,
 				InitialPrompt:      defaultSTTPrompt,
 				SupportedLanguages: []string{"*"},
 			},
-			"cloudflare_whisper": {
+			"cloudflare_whisper_large_v3_turbo": {
 				Enabled:            true,
+				Priority:           3,
 				Model:              "@cf/openai/whisper-large-v3-turbo",
 				TimeoutMs:          15000,
 				InitialPrompt:      defaultSTTPrompt,
@@ -116,6 +123,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"custom_batch": {
 				Enabled:            false,
+				Priority:           99,
 				Model:              "",
 				BaseURL:            "",
 				APIKey:             "",
@@ -125,16 +133,30 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 		},
 		StreamingProviders: map[string]StreamingProviderConfig{
-			"deepinfra_nemotron": {
+			"deepinfra_nemotron_3_5": {
 				Enabled:            true,
+				Priority:           1,
+				Type:               "pseudo",
 				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
 				BaseURL:            DeepInfraBaseURL + "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
 				TimeoutMs:          15000,
 				InitialPrompt:      defaultStreamingPrompt,
 				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
 			},
+			"self_hosted_nemotron_3_5": {
+				Enabled:            false,
+				Priority:           2,
+				Type:               "real",
+				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
+				BaseURL:            "ws://127.0.0.1:8080/v1/audio/stream",
+				TimeoutMs:          15000,
+				InitialPrompt:      defaultStreamingPrompt,
+				SupportedLanguages: []string{"*"},
+			},
 			"custom_streaming": {
 				Enabled:            false,
+				Priority:           99,
+				Type:               "real",
 				Model:              "",
 				BaseURL:            "",
 				APIKey:             "",
@@ -144,36 +166,41 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 		},
 		LLMProviders: map[string]LLMProviderConfig{
-			"cerebras": {
+			"cerebras_gpt_oss_120b": {
 				Enabled:      true,
+				Priority:     1,
 				Model:        "gpt-oss-120b",
 				BaseURL:      CerebrasAPIURL,
 				TimeoutMs:    15000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
-			"deepinfra_deepseek": {
+			"deepinfra_deepseek_v4": {
 				Enabled:      true,
+				Priority:     2,
 				Model:        "deepseek-ai/DeepSeek-V4-Flash",
 				BaseURL:      "https://api.deepinfra.com/v1/openai/chat/completions",
 				TimeoutMs:    30000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
-			"wafer": {
-				Enabled:      false,
-				Model:        "DeepSeek-V4-Flash-0731-Fast",
-				BaseURL:      WaferAPIURL,
-				TimeoutMs:    15000,
-				SystemPrompt: DefaultUniversalLLMSystemPrompt,
-			},
-			"deepseek_v4": {
+			"deepseek_deepseek_v4_flash": {
 				Enabled:      true,
+				Priority:     3,
 				Model:        "deepseek-v4-flash",
 				BaseURL:      DeepSeekAPIURL,
 				TimeoutMs:    30000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
 			},
+			"wafer_deepseek_v4_flash": {
+				Enabled:      false,
+				Priority:     4,
+				Model:        "DeepSeek-V4-Flash-0731-Fast",
+				BaseURL:      WaferAPIURL,
+				TimeoutMs:    15000,
+				SystemPrompt: DefaultUniversalLLMSystemPrompt,
+			},
 			"custom_llm": {
 				Enabled:      false,
+				Priority:     99,
 				Model:        "",
 				BaseURL:      "",
 				APIKey:       "",
@@ -184,68 +211,101 @@ func DefaultModelsConfig() ModelsConfig {
 	}
 }
 
-// Helpers on ProviderConfig for fallback priority chains
-func (p *ProviderConfig) GetActiveBatchFallbackOrder() []string {
-	var order []string
-	defaultProv := p.Models.DefaultBatchProvider
-	if defaultProv != "" {
-		if prov, ok := p.Models.BatchProviders[defaultProv]; ok && prov.Enabled {
-			order = append(order, defaultProv)
+type providerRank struct {
+	name     string
+	priority int
+}
+
+func sortProviderRanks(ranks []providerRank) []string {
+	if len(ranks) == 0 {
+		return nil
+	}
+	// Sort by priority ascending, then by name for stable ordering
+	for i := 0; i < len(ranks); i++ {
+		for j := i + 1; j < len(ranks); j++ {
+			if ranks[i].priority > ranks[j].priority || (ranks[i].priority == ranks[j].priority && ranks[i].name > ranks[j].name) {
+				ranks[i], ranks[j] = ranks[j], ranks[i]
+			}
 		}
 	}
-
-	knownBatch := []string{"groq_whisper", "deepinfra_whisper", "cloudflare_whisper", "custom_batch"}
-	for _, name := range knownBatch {
-		if name == defaultProv {
-			continue
-		}
-		if prov, ok := p.Models.BatchProviders[name]; ok && prov.Enabled {
-			order = append(order, name)
-		}
+	order := make([]string, len(ranks))
+	for i, r := range ranks {
+		order[i] = r.name
 	}
 	return order
+}
+
+// Helpers on ProviderConfig for fallback priority chains
+func (p *ProviderConfig) GetActiveBatchFallbackOrder() []string {
+	var ranks []providerRank
+	defaultProv := p.Models.DefaultBatchProvider
+
+	for name, prov := range p.Models.BatchProviders {
+		if !prov.Enabled {
+			continue
+		}
+		effectivePriority := prov.Priority
+		if effectivePriority <= 0 {
+			effectivePriority = 100
+		}
+		if name == defaultProv {
+			effectivePriority -= 1000
+		}
+		ranks = append(ranks, providerRank{name: name, priority: effectivePriority})
+	}
+	return sortProviderRanks(ranks)
 }
 
 func (p *ProviderConfig) GetActiveStreamingFallbackOrder() []string {
-	var order []string
+	var ranks []providerRank
 	defaultProv := p.Models.DefaultStreamingProvider
-	if defaultProv != "" {
-		if prov, ok := p.Models.StreamingProviders[defaultProv]; ok && prov.Enabled {
-			order = append(order, defaultProv)
-		}
-	}
 
-	knownStreaming := []string{"deepinfra_nemotron", "custom_streaming"}
-	for _, name := range knownStreaming {
-		if name == defaultProv {
+	for name, prov := range p.Models.StreamingProviders {
+		if !prov.Enabled {
 			continue
 		}
-		if prov, ok := p.Models.StreamingProviders[name]; ok && prov.Enabled {
-			order = append(order, name)
+		effectivePriority := prov.Priority
+		if effectivePriority <= 0 {
+			effectivePriority = 100
+		}
+		if name == defaultProv {
+			effectivePriority -= 1000
+		}
+		ranks = append(ranks, providerRank{name: name, priority: effectivePriority})
+	}
+	return sortProviderRanks(ranks)
+}
+
+func (p *ProviderConfig) GetStreamingProviderType(providerName string) string {
+	if prov, ok := p.Models.StreamingProviders[providerName]; ok {
+		if prov.Type != "" {
+			return strings.ToLower(prov.Type)
+		}
+		if strings.HasPrefix(prov.BaseURL, "ws://") || strings.HasPrefix(prov.BaseURL, "wss://") {
+			return "real"
 		}
 	}
-	return order
+	return "pseudo"
 }
 
 func (p *ProviderConfig) GetActiveLLMFallbackOrder() []string {
-	var order []string
+	var ranks []providerRank
 	defaultProv := p.Models.DefaultLLMProvider
-	if defaultProv != "" {
-		if prov, ok := p.Models.LLMProviders[defaultProv]; ok && prov.Enabled {
-			order = append(order, defaultProv)
-		}
-	}
 
-	knownLLM := []string{"cerebras", "deepinfra_deepseek", "wafer", "deepseek_v4", "custom_llm"}
-	for _, name := range knownLLM {
-		if name == defaultProv {
+	for name, prov := range p.Models.LLMProviders {
+		if !prov.Enabled {
 			continue
 		}
-		if prov, ok := p.Models.LLMProviders[name]; ok && prov.Enabled {
-			order = append(order, name)
+		effectivePriority := prov.Priority
+		if effectivePriority <= 0 {
+			effectivePriority = 100
 		}
+		if name == defaultProv {
+			effectivePriority -= 1000
+		}
+		ranks = append(ranks, providerRank{name: name, priority: effectivePriority})
 	}
-	return order
+	return sortProviderRanks(ranks)
 }
 
 func (p *ProviderConfig) IsStreamingLanguageSupported(providerName, langCode string) bool {
@@ -431,26 +491,28 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 func normalizeProviderName(name string) string {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	switch lower {
-	case "groq", "groq_whisper", "whisper_groq":
-		return "groq_whisper"
-	case "deepinfra", "deepinfra_whisper", "whisper_deepinfra":
-		return "deepinfra_whisper"
-	case "cloudflare", "cloudflare_whisper", "whisper_cloudflare":
-		return "cloudflare_whisper"
+	case "groq", "groq_whisper", "whisper_groq", "groq_whisper_large_v3_turbo":
+		return "groq_whisper_large_v3_turbo"
+	case "deepinfra", "deepinfra_whisper", "whisper_deepinfra", "deepinfra_whisper_large_v3_turbo":
+		return "deepinfra_whisper_large_v3_turbo"
+	case "cloudflare", "cloudflare_whisper", "whisper_cloudflare", "cloudflare_whisper_large_v3_turbo":
+		return "cloudflare_whisper_large_v3_turbo"
 	case "custom", "custom_batch":
 		return "custom_batch"
-	case "nemotron", "deepinfra_nemotron", "nemotron_streaming":
-		return "deepinfra_nemotron"
+	case "self_hosted", "self_hosted_nemotron", "selfhosted_nemotron", "riva", "self_hosted_nemotron_3_5":
+		return "self_hosted_nemotron_3_5"
+	case "nemotron", "deepinfra_nemotron", "nemotron_streaming", "deepinfra_nemotron_3_5":
+		return "deepinfra_nemotron_3_5"
 	case "custom_streaming":
 		return "custom_streaming"
-	case "deepseek", "deepseek_v4", "deepseek_chat":
-		return "deepseek_v4"
-	case "deepinfra_deepseek":
-		return "deepinfra_deepseek"
-	case "cerebras", "cerebras_llama", "cerebras_llm":
-		return "cerebras"
-	case "wafer", "wafer_ai", "wafer_deepseek":
-		return "wafer"
+	case "deepseek", "deepseek_v4", "deepseek_chat", "deepseek_deepseek_v4_flash":
+		return "deepseek_deepseek_v4_flash"
+	case "deepinfra_deepseek", "deepinfra_deepseek_v4":
+		return "deepinfra_deepseek_v4"
+	case "cerebras", "cerebras_llama", "cerebras_llm", "cerebras_gpt_oss_120b":
+		return "cerebras_gpt_oss_120b"
+	case "wafer", "wafer_ai", "wafer_deepseek", "wafer_deepseek_v4_flash":
+		return "wafer_deepseek_v4_flash"
 	case "custom_llm":
 		return "custom_llm"
 	default:

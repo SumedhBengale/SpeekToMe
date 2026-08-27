@@ -14,6 +14,7 @@ import (
 	"speektome-server/config"
 	"speektome-server/db"
 	"speektome-server/handlers"
+	"speektome-server/vocab"
 )
 
 func TestHandleValidatePrompt(t *testing.T) {
@@ -32,7 +33,8 @@ func TestHandleValidatePrompt(t *testing.T) {
 	}()
 
 	app := &handlers.App{
-		DB: database,
+		DB:         database,
+		VocabCache: vocab.NewVocabCache(),
 	}
 
 	nonce := auth.GenerateNonce()

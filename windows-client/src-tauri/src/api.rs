@@ -208,11 +208,10 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
 
         match transcript_result {
             Ok(result) => {
-                let trimmed = result.text.trim();
-                if !trimmed.is_empty() {
-                    let normalized = crate::vocab::get_vocab_manager().process_text(trimmed);
-                    println!("Transcribed & Normalized Text: {}", normalized);
-                    crate::win32::set_preview_text(&normalized);
+                let text = result.text.trim();
+                if !text.is_empty() {
+                    println!("Transcribed Text: {}", text);
+                    crate::win32::set_preview_text(text);
 
                     let typing_mode = {
                         let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
@@ -220,23 +219,9 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                     };
 
                     if typing_mode {
-                        crate::keyboard::simulate_typing(&normalized);
+                        crate::keyboard::simulate_typing(text);
                     } else {
-                        crate::keyboard::paste_text(&normalized);
-                    }
-
-                    // If vocabulary modified the text and we have log_id + ack_token, send asynchronous ACK
-                    if let (Some(log_id), Some(ack_token)) = (result.log_id, result.ack_token) {
-                        if normalized != trimmed {
-                            let ack_api_url = api_url.clone();
-                            let ack_token_auth = token.clone();
-                            let ack_final = normalized.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) = send_transcribe_ack(&ack_api_url, &ack_token_auth, log_id, &ack_token, &ack_final).await {
-                                    eprintln!("[ACK ERROR] Failed to send vocabulary update ACK to server: {}", e);
-                                }
-                            });
-                        }
+                        crate::keyboard::paste_text(text);
                     }
                 }
                 crate::win32::hide_overlay();
