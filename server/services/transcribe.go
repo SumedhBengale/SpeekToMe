@@ -702,6 +702,40 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	}
 	rawText = strings.Trim(rawText, "\"")
 
+	// Filter chatbot assistant disclaimers, refusals, and synthetic meeting training artifacts
+	lower := strings.ToLower(rawText)
+	assistantRefusalPatterns := []string{
+		"unable to process audio",
+		"unable to listen",
+		"don't have the capability to",
+		"do not have the capability to",
+		"cannot process audio",
+		"cannot listen to audio",
+		"cannot listen or interpret",
+		"provide me with the text",
+		"if you provide me with",
+		"if you have a text transcript",
+		"i can transcribe it for you",
+		"i'd be happy to help",
+		"i'd be more than happy",
+		"i would be happy to help",
+		"i'm unable to process",
+		"i am unable to process",
+		"can't assist with that request",
+		"cannot assist with that request",
+		"annual general meeting",
+		"association of business analysts",
+		"packed agenda, so let's get started",
+		"hear from our president",
+		"welcome to our annual meeting",
+	}
+	for _, pat := range assistantRefusalPatterns {
+		if strings.Contains(lower, pat) {
+			rawText = ""
+			break
+		}
+	}
+
 	hallucinations := map[string]bool{
 		"thank you": true, "thank you.": true, "thanks for watching": true, "thanks for watching.": true,
 		"thank you for watching.": true, "please subscribe": true, "subtitles by": true, "subtitles by amara": true,
