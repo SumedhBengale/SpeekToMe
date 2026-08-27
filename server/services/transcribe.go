@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -592,6 +594,23 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 		model = "mistral.voxtral-mini-3b-2507"
 	}
 
+	if len(audioBytes) > 44 && string(audioBytes[:4]) == "RIFF" {
+		pcm := audioBytes[44:]
+		if len(pcm) >= 1600 {
+			var sumSquares float64
+			numSamples := len(pcm) / 2
+			for i := 0; i < len(pcm)-1; i += 2 {
+				val := int16(binary.LittleEndian.Uint16(pcm[i:]))
+				sumSquares += float64(val) * float64(val)
+			}
+			rms := math.Sqrt(sumSquares / float64(numSamples))
+			if rms < 100.0 {
+				// Pure silence / ambient background noise floor
+				return "", make([]WhisperSegment, 0), "", nil
+			}
+		}
+	}
+
 	audioFormat := "wav"
 	audioB64 := base64.StdEncoding.EncodeToString(audioBytes)
 
@@ -692,6 +711,10 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 		"Here is the transcribed verbatim text:",
 		"Here is the transcription:",
 		"Here's the transcription:",
+		"Here's the transcribed text:",
+		"Here is the transcribed text:",
+		"Here's the transcribed audio:",
+		"Here is the transcribed audio:",
 		"Transcribed Text:",
 		"Transcription:",
 	}
@@ -700,40 +723,21 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 			rawText = strings.TrimSpace(strings.TrimPrefix(rawText, pfx))
 		}
 	}
-	rawText = strings.Trim(rawText, "\"")
+	rawText = strings.Trim(rawText, "\"*`")
 
-	// Filter chatbot assistant disclaimers, refusals, and synthetic meeting training artifacts
+	// If the entire output is an LLM chatbot refusal response generated on silence, drop it
 	lower := strings.ToLower(rawText)
-	assistantRefusalPatterns := []string{
-		"unable to process audio",
-		"unable to listen",
-		"don't have the capability to",
-		"do not have the capability to",
-		"cannot process audio",
-		"cannot listen to audio",
-		"cannot listen or interpret",
-		"provide me with the text",
-		"if you provide me with",
-		"if you have a text transcript",
-		"i can transcribe it for you",
-		"i'd be happy to help",
-		"i'd be more than happy",
-		"i would be happy to help",
-		"i'm unable to process",
-		"i am unable to process",
-		"can't assist with that request",
-		"cannot assist with that request",
-		"annual general meeting",
-		"association of business analysts",
-		"packed agenda, so let's get started",
-		"hear from our president",
-		"welcome to our annual meeting",
-	}
-	for _, pat := range assistantRefusalPatterns {
-		if strings.Contains(lower, pat) {
-			rawText = ""
-			break
-		}
+	if strings.HasPrefix(lower, "i'm unable") ||
+		strings.HasPrefix(lower, "i am unable") ||
+		strings.HasPrefix(lower, "i'm an ai") ||
+		strings.HasPrefix(lower, "i am an ai") ||
+		strings.HasPrefix(lower, "i'm sorry") ||
+		strings.HasPrefix(lower, "i am sorry") ||
+		strings.HasPrefix(lower, "of course! please provide") ||
+		strings.HasPrefix(lower, "please provide the audio") ||
+		strings.HasPrefix(lower, "alright, please provide") ||
+		strings.HasPrefix(lower, "as an ai") {
+		rawText = ""
 	}
 
 	hallucinations := map[string]bool{

@@ -405,7 +405,7 @@ func (a *App) handlePseudoStreamingSession(
 			}
 
 			// Ignore tiny trailing noise or empty header packets
-			if len(data) < 300 && audioDurationSec > 0 && audioDurationSec < 0.25 {
+			if (len(data) < 500 && audioDurationSec > 0 && audioDurationSec < 0.35) || len(data) < 250 {
 				continue
 			}
 

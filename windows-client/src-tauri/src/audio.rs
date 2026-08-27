@@ -406,8 +406,9 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                         } else {
                             active_phrase_samples.extend(stream_16k_buf.drain(..));
 
-                            // Send any remaining active phrase audio on key release
-                            if active_phrase_samples.len() >= 2400 { // >= 150ms of audio
+                            // Only send tail phrase if there is genuine audio beyond the retained 200ms silence buffer
+                            let overlap_samples = 3200;
+                            if active_phrase_samples.len() > overlap_samples + 1600 { // at least 100ms of new audio beyond overlap
                                 let t_enc = std::time::Instant::now();
                                 if let Ok(ogg_bytes) = encode_opus_ogg(&active_phrase_samples, 16000, 1) {
                                     let enc_dur = t_enc.elapsed();
@@ -419,8 +420,8 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                         enc_dur, audio_sec, pcm_len, ogg_len, ratio);
                                     let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
                                 }
-                                active_phrase_samples.clear();
                             }
+                            active_phrase_samples.clear();
                         }
 
                         let _ = handle.tx.send(crate::stream::StreamAudioMessage::EndOfStream);
