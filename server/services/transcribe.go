@@ -872,9 +872,12 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 	cfg := config.ConfigManager.Get()
 	langParam, promptStr := BuildWhisperPrompt(userLanguages)
 
-	defaultStreamProv := cfg.Models.DefaultStreamingProvider
-	if provCfg, ok := cfg.Models.StreamingProviders[defaultStreamProv]; ok && strings.TrimSpace(provCfg.InitialPrompt) != "" {
-		promptStr = strings.TrimSpace(provCfg.InitialPrompt)
+	fallbackOrder := cfg.GetActiveStreamingFallbackOrder()
+	if len(fallbackOrder) > 0 {
+		topProv := fallbackOrder[0]
+		if provCfg, ok := cfg.Models.StreamingProviders[topProv]; ok && strings.TrimSpace(provCfg.InitialPrompt) != "" {
+			promptStr = strings.TrimSpace(provCfg.InitialPrompt)
+		}
 	}
 
 	if promptContext != "" {
@@ -886,7 +889,6 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 		}
 	}
 
-	fallbackOrder := cfg.GetActiveStreamingFallbackOrder()
 	var lastErr error
 
 	for _, provider := range fallbackOrder {
