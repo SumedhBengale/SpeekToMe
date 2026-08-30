@@ -22,7 +22,6 @@ import (
 	"speektome-server/ratelimit"
 	"speektome-server/services"
 	"speektome-server/utils"
-	"speektome-server/vocab"
 )
 
 type StreamStartPayload struct {
@@ -88,9 +87,6 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TEMPORARY: Inject 1000 hardcoded terms for stress testing the vocabulary matcher
-	vocabTerms = append(vocabTerms, vocab.Generate1000TestTerms()...)
-	log.Printf("[STRESS TEST] Injected 1000 test terms. Total active vocab terms for user %d: %d", user.ID, len(vocabTerms))
 
 	// Rate limiting & quota check
 	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
