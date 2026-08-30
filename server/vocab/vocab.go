@@ -115,10 +115,76 @@ func (vc *VocabCache) ProcessText(userID int64, text string, dbTerms []db.Vocabu
 	resultText, replacedTerms, tokenCount := MatchAndReplace(text, vocab)
 	matchDuration := time.Since(matchStart)
 
-	log.Printf("[VOCAB BENCHMARK] User ID: %d | Match Time: %v (%d µs) | Input Words: %d | Total Vocab Terms: %d | Replacements: %d",
+	log.Printf("[VOCAB BENCHMARK] User ID: %d | Match Time: %v (%d µs) | Input Words: %d (Full) | Total Vocab Terms: %d | Replacements: %d",
 		userID, matchDuration, matchDuration.Microseconds(), tokenCount, len(vocab.Terms), len(replacedTerms))
 
 	return resultText, replacedTerms, matchDuration
+}
+
+// ProcessStreamingText runs sliding-window vocabulary matching on streaming transcripts.
+// It slices only the trailing window of words (e.g. last 12 words) for tokenization and fuzzy matching,
+// preserving the already-processed stable prefix with zero re-computation.
+func (vc *VocabCache) ProcessStreamingText(userID int64, text string, dbTerms []db.VocabularyTerm) (string, []string, time.Duration) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || len(dbTerms) == 0 {
+		return text, nil, 0
+	}
+
+	vocab := vc.GetOrCompile(userID, dbTerms)
+	if vocab == nil || len(vocab.Terms) == 0 {
+		return text, nil, 0
+	}
+
+	windowWords := 12
+	if vocab.MaxTokenCount+4 > windowWords {
+		windowWords = vocab.MaxTokenCount + 4
+	}
+
+	// Find the start of the trailing window by scanning backwards for word boundaries
+	runes := []rune(text)
+	n := len(runes)
+	wordCount := 0
+	splitIdx := 0
+
+	inWord := false
+	for i := n - 1; i >= 0; i-- {
+		r := runes[i]
+		isSpace := r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		if !isSpace && !inWord {
+			inWord = true
+			wordCount++
+			if wordCount > windowWords {
+				splitIdx = i + 1
+				break
+			}
+		} else if isSpace {
+			inWord = false
+		}
+	}
+
+	if splitIdx <= 0 {
+		// Entire text is within the window (short text <= 12 words)
+		matchStart := time.Now()
+		resultText, replacedTerms, tokenCount := MatchAndReplace(text, vocab)
+		matchDuration := time.Since(matchStart)
+
+		log.Printf("[VOCAB BENCHMARK] User ID: %d | Match Time: %v (%d µs) | Input Words: %d (Window Tail) | Total Vocab Terms: %d | Replacements: %d",
+			userID, matchDuration, matchDuration.Microseconds(), tokenCount, len(vocab.Terms), len(replacedTerms))
+
+		return resultText, replacedTerms, matchDuration
+	}
+
+	prefix := string(runes[:splitIdx])
+	tail := string(runes[splitIdx:])
+
+	matchStart := time.Now()
+	matchedTail, replacedTerms, tailTokens := MatchAndReplace(tail, vocab)
+	matchDuration := time.Since(matchStart)
+
+	log.Printf("[VOCAB BENCHMARK] User ID: %d | Match Time: %v (%d µs) | Input Words: %d (Window Tail) | Total Vocab Terms: %d | Replacements: %d",
+		userID, matchDuration, matchDuration.Microseconds(), tailTokens, len(vocab.Terms), len(replacedTerms))
+
+	return prefix + matchedTail, replacedTerms, matchDuration
 }
 
 // NormalizeString converts string to lowercase, keeps alphanumeric and specific chars (+, #)

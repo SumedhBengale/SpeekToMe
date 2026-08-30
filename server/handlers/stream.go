@@ -227,7 +227,7 @@ func (a *App) handleRealStreamingSession(
 			normText := text
 			if a.VocabCache != nil && len(vocabTerms) > 0 {
 				var replaced []string
-				normText, replaced, _ = a.VocabCache.ProcessText(user.ID, text, vocabTerms)
+				normText, replaced, _ = a.VocabCache.ProcessStreamingText(user.ID, text, vocabTerms)
 				if len(replaced) > 0 {
 					sessionVocabMutex.Lock()
 					for _, term := range replaced {
