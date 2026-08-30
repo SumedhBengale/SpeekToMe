@@ -53,8 +53,8 @@ func TestVocabMatching(t *testing.T) {
 
 	for _, tt := range tests {
 		result, repls, dur := cache.ProcessText(1, tt.input, terms)
-		if repls != tt.expectRepls {
-			t.Errorf("For input %q, expected %d replacements, got %d (output: %q)", tt.input, tt.expectRepls, repls, result)
+		if len(repls) != tt.expectRepls {
+			t.Errorf("For input %q, expected %d replacements, got %d (output: %q)", tt.input, tt.expectRepls, len(repls), result)
 		}
 		if result != tt.expected {
 			t.Errorf("For input %q, expected %q, got %q", tt.input, tt.expected, result)
@@ -71,7 +71,7 @@ func TestVocabCacheInvalidate(t *testing.T) {
 		{Canonical: "AlphaOne", Normalized: "alphaone"},
 	}
 	res1, r1, _ := cache.ProcessText(42, "Testing alpha one here.", terms1)
-	if res1 != "Testing AlphaOne here." || r1 != 1 {
+	if res1 != "Testing AlphaOne here." || len(r1) != 1 {
 		t.Fatalf("Expected AlphaOne, got %q", res1)
 	}
 
@@ -82,7 +82,7 @@ func TestVocabCacheInvalidate(t *testing.T) {
 		{Canonical: "BetaTwo", Normalized: "betatwo"},
 	}
 	res2, r2, _ := cache.ProcessText(42, "Testing beta two here.", terms2)
-	if res2 != "Testing BetaTwo here." || r2 != 1 {
+	if res2 != "Testing BetaTwo here." || len(r2) != 1 {
 		t.Fatalf("Expected BetaTwo, got %q", res2)
 	}
 }

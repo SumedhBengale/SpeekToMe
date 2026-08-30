@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -165,21 +166,39 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	pctx := pipeline.NewPipelineContext(user.ID)
 	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true"
 
+	protectedVocabMap := make(map[string]bool)
+	for _, vt := range vocabTerms {
+		if strings.TrimSpace(vt.Canonical) != "" {
+			protectedVocabMap[strings.TrimSpace(vt.Canonical)] = true
+		}
+	}
+
 	var vocabNormalized string = rawText
 	if rawText != "" && a.VocabCache != nil && len(vocabTerms) > 0 {
-		vocabNormalized, _, _ = a.VocabCache.ProcessText(user.ID, rawText, vocabTerms)
+		var replaced []string
+		vocabNormalized, replaced, _ = a.VocabCache.ProcessText(user.ID, rawText, vocabTerms)
+		for _, term := range replaced {
+			protectedVocabMap[term] = true
+		}
 	}
 
 	currentText := vocabNormalized
 
 	if enhance && vocabNormalized != "" {
-		enhancer := pipeline.NewAIEnhancementTransform(prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		var protectedList []string
+		for term := range protectedVocabMap {
+			protectedList = append(protectedList, term)
+		}
+		sort.Strings(protectedList)
+
+		enhancer := pipeline.NewAIEnhancementTransform(prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		tstart := time.Now()
 		enhancedText, terr := enhancer.Transform(ctx, vocabNormalized, pctx)
 		if terr != nil {
 			log.Printf("[PIPELINE ERROR] AI Enhancement failed: %v", terr)
 		} else if enhancedText != "" {
 			currentText = enhancedText
+			log.Printf("[TRANSCRIBE ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s, protected vocab: %d terms)", time.Since(tstart).Seconds(), "deepseek-v4-flash", pctx.LLMProvider, len(protectedList))
 		}
 		dsLatency = time.Since(tstart).Seconds()
 	}

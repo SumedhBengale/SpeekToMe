@@ -42,20 +42,22 @@ var aiHTTPClient = &http.Client{
 
 // AIEnhancementTransform cleans transcripts using LLMs
 type AIEnhancementTransform struct {
-	customPrompt string
-	model        string
-	apiKey       string
-	apiURL       string
-	httpClient   *http.Client
+	customPrompt   string
+	model          string
+	apiKey         string
+	apiURL         string
+	httpClient     *http.Client
+	protectedVocab []string
 }
 
-func NewAIEnhancementTransform(customPrompt, model, apiKey, apiURL string) *AIEnhancementTransform {
+func NewAIEnhancementTransform(customPrompt, model, apiKey, apiURL string, protectedVocab []string) *AIEnhancementTransform {
 	return &AIEnhancementTransform{
-		customPrompt: customPrompt,
-		model:        model,
-		apiKey:       apiKey,
-		apiURL:       apiURL,
-		httpClient:   aiHTTPClient,
+		customPrompt:   customPrompt,
+		model:          model,
+		apiKey:         apiKey,
+		apiURL:         apiURL,
+		httpClient:     aiHTTPClient,
+		protectedVocab: protectedVocab,
 	}
 }
 
@@ -243,15 +245,26 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 		baseSystemPrompt = strings.TrimSpace(provCfg.SystemPrompt)
 	}
 
-	systemPrompt := baseSystemPrompt + "\n\nDo not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished transcription."
-	if strings.TrimSpace(t.customPrompt) != "" {
-		systemPrompt = fmt.Sprintf(
-			"%s\n\nAdditional User Instructions:\n%s\n\nDo not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished transcription.",
-			baseSystemPrompt,
-			strings.TrimSpace(t.customPrompt),
-		)
+	var sb strings.Builder
+	sb.WriteString(baseSystemPrompt)
+
+	if len(t.protectedVocab) > 0 {
+		sb.WriteString("\n\nCRITICAL - PRESERVED DOMAIN & VOCABULARY TERMS:\n")
+		sb.WriteString("The following terms are verified domain-specific vocabulary and user terms. You MUST NOT modify, autocorrect, rephrase, or remove these exact terms under any circumstances. Preserve their exact spelling, capitalization, and formatting:\n")
+		for _, term := range t.protectedVocab {
+			if strings.TrimSpace(term) != "" {
+				sb.WriteString(fmt.Sprintf("- %s\n", strings.TrimSpace(term)))
+			}
+		}
 	}
 
+	if strings.TrimSpace(t.customPrompt) != "" {
+		sb.WriteString(fmt.Sprintf("\n\nAdditional User Instructions:\n%s", strings.TrimSpace(t.customPrompt)))
+	}
+
+	sb.WriteString("\n\nDo not add any conversational filler, intro/outro text, or explanations. Return ONLY the final polished transcription.")
+
+	systemPrompt := sb.String()
 	userPrompt := fmt.Sprintf("<raw_transcript>\n%s\n</raw_transcript>", text)
 	res, err := RunDeepSeekChatCompletion(ctx, t.httpClient, t.model, systemPrompt, userPrompt, pctx)
 	if err != nil {

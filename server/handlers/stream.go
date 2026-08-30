@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -212,12 +213,28 @@ func (a *App) handleRealStreamingSession(
 	var chunkCount int
 	var timingMutex sync.Mutex
 
+	var sessionVocabMutex sync.Mutex
+	sessionProtectedVocab := make(map[string]bool)
+	for _, vt := range vocabTerms {
+		if strings.TrimSpace(vt.Canonical) != "" {
+			sessionProtectedVocab[strings.TrimSpace(vt.Canonical)] = true
+		}
+	}
+
 	// Goroutine to receive text tokens from upstream real-time model and forward to client
 	go func() {
 		for text := range upstream.TextChan {
 			normText := text
 			if a.VocabCache != nil && len(vocabTerms) > 0 {
-				normText, _, _ = a.VocabCache.ProcessText(user.ID, text, vocabTerms)
+				var replaced []string
+				normText, replaced, _ = a.VocabCache.ProcessText(user.ID, text, vocabTerms)
+				if len(replaced) > 0 {
+					sessionVocabMutex.Lock()
+					for _, term := range replaced {
+						sessionProtectedVocab[term] = true
+					}
+					sessionVocabMutex.Unlock()
+				}
 			}
 
 			timingMutex.Lock()
@@ -287,8 +304,22 @@ func (a *App) handleRealStreamingSession(
 	textMutex.Unlock()
 
 	if a.VocabCache != nil && len(vocabTerms) > 0 && finalRawTranscript != "" {
-		finalRawTranscript, _, _ = a.VocabCache.ProcessText(user.ID, finalRawTranscript, vocabTerms)
+		var finalReplaced []string
+		finalRawTranscript, finalReplaced, _ = a.VocabCache.ProcessText(user.ID, finalRawTranscript, vocabTerms)
+		sessionVocabMutex.Lock()
+		for _, term := range finalReplaced {
+			sessionProtectedVocab[term] = true
+		}
+		sessionVocabMutex.Unlock()
 	}
+
+	sessionVocabMutex.Lock()
+	var protectedList []string
+	for term := range sessionProtectedVocab {
+		protectedList = append(protectedList, term)
+	}
+	sessionVocabMutex.Unlock()
+	sort.Strings(protectedList)
 
 	audioRaw := fullAudioAccumulator.Bytes()
 	audioSizeBytes := len(audioRaw)
@@ -303,14 +334,14 @@ func (a *App) handleRealStreamingSession(
 
 	if startPayload.Enhance && finalRawTranscript != "" {
 		tstart := time.Now()
-		enhancer := pipeline.NewAIEnhancementTransform(startPayload.Prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancer := pipeline.NewAIEnhancementTransform(startPayload.Prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
 			log.Printf("[STREAM REAL ENHANCE ERROR] %v", terr)
 		} else if enhancedText != "" {
 			currentText = enhancedText
-			log.Printf("[STREAM REAL ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s)", dsLatency, "deepseek-v4-flash", pctx.LLMProvider)
+			log.Printf("[STREAM REAL ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s, protected vocab: %d terms)", dsLatency, "deepseek-v4-flash", pctx.LLMProvider, len(protectedList))
 		}
 	}
 
@@ -373,6 +404,13 @@ func (a *App) handlePseudoStreamingSession(
 
 	var committedText string
 	var chunkCount int
+
+	var sessionProtectedVocab = make(map[string]bool)
+	for _, vt := range vocabTerms {
+		if strings.TrimSpace(vt.Canonical) != "" {
+			sessionProtectedVocab[strings.TrimSpace(vt.Canonical)] = true
+		}
+	}
 
 	// Read audio chunks loop (VAD pause chunks)
 	for {
@@ -450,7 +488,11 @@ func (a *App) handlePseudoStreamingSession(
 
 			if rawChunkText != "" {
 				if a.VocabCache != nil && len(vocabTerms) > 0 {
-					rawChunkText, _, _ = a.VocabCache.ProcessText(user.ID, rawChunkText, vocabTerms)
+					var replaced []string
+					rawChunkText, replaced, _ = a.VocabCache.ProcessText(user.ID, rawChunkText, vocabTerms)
+					for _, term := range replaced {
+						sessionProtectedVocab[term] = true
+					}
 				}
 
 				previousCommitted := committedText
@@ -505,7 +547,11 @@ func (a *App) handlePseudoStreamingSession(
 	}
 
 	if a.VocabCache != nil && len(vocabTerms) > 0 && finalRawTranscript != "" {
-		finalRawTranscript, _, _ = a.VocabCache.ProcessText(user.ID, finalRawTranscript, vocabTerms)
+		var finalReplaced []string
+		finalRawTranscript, finalReplaced, _ = a.VocabCache.ProcessText(user.ID, finalRawTranscript, vocabTerms)
+		for _, term := range finalReplaced {
+			sessionProtectedVocab[term] = true
+		}
 	}
 
 	whisperLatency := time.Since(whisperStart).Seconds()
@@ -514,16 +560,22 @@ func (a *App) handlePseudoStreamingSession(
 	var dsLatency float64
 	pctx := pipeline.NewPipelineContext(user.ID)
 
+	var protectedList []string
+	for term := range sessionProtectedVocab {
+		protectedList = append(protectedList, term)
+	}
+	sort.Strings(protectedList)
+
 	if enhance && finalRawTranscript != "" {
 		tstart := time.Now()
-		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Prompt: %q | Raw Input: %q", user.ID, customPrompt, finalRawTranscript)
-		enhancer := pipeline.NewAIEnhancementTransform(customPrompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Prompt: %q | Raw Input: %q | Protected Vocab: %d terms", user.ID, customPrompt, finalRawTranscript, len(protectedList))
+		enhancer := pipeline.NewAIEnhancementTransform(customPrompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
 			log.Printf("[STREAM AI ENHANCE ERROR] User ID: %d | Error: %v | Latency: %.2fs", user.ID, terr, dsLatency)
 		} else if enhancedText != "" {
-			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Enhanced: %q | Latency: %.2fs", user.ID, enhancedText, dsLatency)
+			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Enhanced: %q | Latency: %.2fs (model: %s, provider: %s)", user.ID, enhancedText, dsLatency, "deepseek-v4-flash", pctx.LLMProvider)
 			currentText = enhancedText
 		}
 	}

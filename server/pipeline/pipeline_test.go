@@ -14,7 +14,7 @@ func TestPipelineContext(t *testing.T) {
 		t.Errorf("Expected UserID 42; got %d", pctx.UserID)
 	}
 
-	enhancer := NewAIEnhancementTransform("custom prompt", "deepseek-v4-flash", "test-key", "https://api.deepseek.com")
+	enhancer := NewAIEnhancementTransform("custom prompt", "deepseek-v4-flash", "test-key", "https://api.deepseek.com", []string{"SpeekToMe"})
 	if enhancer.Name() != "AI Enhancement" {
 		t.Errorf("Expected name 'AI Enhancement'; got %s", enhancer.Name())
 	}

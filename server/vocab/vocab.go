@@ -3,6 +3,7 @@ package vocab
 import (
 	"context"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -97,26 +98,27 @@ func (vc *VocabCache) GetOrCompile(userID int64, dbTerms []db.VocabularyTerm) *U
 	return compiled
 }
 
-// ProcessText normalizes raw text using the user's custom vocabulary and logs matching benchmark stats.
-func (vc *VocabCache) ProcessText(userID int64, text string, dbTerms []db.VocabularyTerm) (string, int, time.Duration) {
+// ProcessText normalizes raw text using the user's custom vocabulary, logs matching benchmark stats,
+// and returns the transformed text, a slice of replaced canonical terms, and matching duration.
+func (vc *VocabCache) ProcessText(userID int64, text string, dbTerms []db.VocabularyTerm) (string, []string, time.Duration) {
 	if strings.TrimSpace(text) == "" || len(dbTerms) == 0 {
-		return text, 0, 0
+		return text, nil, 0
 	}
 
 	vocab := vc.GetOrCompile(userID, dbTerms)
 	if vocab == nil || len(vocab.Terms) == 0 {
-		return text, 0, 0
+		return text, nil, 0
 	}
 
 	// Benchmark ONLY the actual matching step
 	matchStart := time.Now()
-	resultText, replacementCount, tokenCount := MatchAndReplace(text, vocab)
+	resultText, replacedTerms, tokenCount := MatchAndReplace(text, vocab)
 	matchDuration := time.Since(matchStart)
 
 	log.Printf("[VOCAB BENCHMARK] User ID: %d | Match Time: %v (%d µs) | Input Words: %d | Total Vocab Terms: %d | Replacements: %d",
-		userID, matchDuration, matchDuration.Microseconds(), tokenCount, len(vocab.Terms), replacementCount)
+		userID, matchDuration, matchDuration.Microseconds(), tokenCount, len(vocab.Terms), len(replacedTerms))
 
-	return resultText, replacementCount, matchDuration
+	return resultText, replacedTerms, matchDuration
 }
 
 // NormalizeString converts string to lowercase, keeps alphanumeric and specific chars (+, #)
@@ -579,11 +581,12 @@ func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 	}
 }
 
-// MatchAndReplace executes greedy longest-match lookup and fuzzy phonetic replacement
-func MatchAndReplace(text string, vocab *UserVocabulary) (string, int, int) {
+// MatchAndReplace executes greedy longest-match lookup and fuzzy phonetic replacement.
+// Returns the transformed string, the slice of unique replaced canonical terms, and the input token count.
+func MatchAndReplace(text string, vocab *UserVocabulary) (string, []string, int) {
 	tokens := Tokenize(text)
 	if len(tokens) == 0 {
-		return text, 0, 0
+		return text, nil, 0
 	}
 
 	n := len(tokens)
@@ -593,13 +596,17 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, int, int) {
 		maxK = 1
 	}
 
-	replacements := 0
+	replacedMap := make(map[string]bool)
 	i := 0
 
-	// For long streaming transcripts (> 16 tokens), words before the active trailing 16 tokens
-	// are already stable. Fast exact lookup runs across all tokens, while fuzzy phonetic permutation
-	// matching focuses on the actively changing trailing tail.
-	prefixThreshold := n - 16
+	// Sliding window optimization: for long streaming transcripts (> 12 tokens), words before the
+	// active trailing window are already stable. Fast O(1) exact map lookup runs across all tokens,
+	// while fuzzy phonetic matching focuses strictly on the active trailing context window.
+	windowSize := 12
+	if vocab.MaxTokenCount+4 > windowSize {
+		windowSize = vocab.MaxTokenCount + 4
+	}
+	prefixThreshold := n - windowSize
 	if prefixThreshold < 0 {
 		prefixThreshold = 0
 	}
@@ -628,7 +635,7 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, int, int) {
 						Normalized: joinedNorm,
 					})
 					i += k
-					replacements++
+					replacedMap[canonical] = true
 					matched = true
 					break
 				}
@@ -775,7 +782,7 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, int, int) {
 				Normalized: bestCanonical,
 			})
 			i += bestK
-			replacements++
+			replacedMap[bestCanonical] = true
 		} else {
 			resultTokens = append(resultTokens, tokens[i])
 			i++
@@ -793,7 +800,13 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, int, int) {
 		out.WriteString(tok.Suffix)
 	}
 
-	return out.String(), replacements, n
+	var replacedList []string
+	for term := range replacedMap {
+		replacedList = append(replacedList, term)
+	}
+	sort.Strings(replacedList)
+
+	return out.String(), replacedList, n
 }
 
 func absVal(x int) int {
