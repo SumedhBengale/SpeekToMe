@@ -310,6 +310,7 @@ func (a *App) handleRealStreamingSession(
 			log.Printf("[STREAM REAL ENHANCE ERROR] %v", terr)
 		} else if enhancedText != "" {
 			currentText = enhancedText
+			log.Printf("[STREAM REAL ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s)", dsLatency, "deepseek-v4-flash", pctx.LLMProvider)
 		}
 	}
 
