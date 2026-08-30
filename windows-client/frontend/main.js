@@ -19,7 +19,7 @@ function isUserPro(info) {
   return Boolean(active && tier === 'pro');
 }
 
-function showToast(message, title = "Notification", type = "error") {
+function showToast(message, title = "Notification", type = "info") {
   let container = document.querySelector('.custom-toast-container');
   if (!container) {
     container = document.createElement('div');
@@ -28,12 +28,14 @@ function showToast(message, title = "Notification", type = "error") {
   }
 
   let iconSvg = '';
-  if (type === 'warning') {
-    iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+  if (type === 'success') {
+    iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11.5 14.5 15.5 9.5"/></svg>`;
+  } else if (type === 'warning') {
+    iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
   } else if (type === 'info') {
     iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-color, #00e676)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
   } else {
-    iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff5252" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+    iconSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
   }
   
   const toast = document.createElement('div');
@@ -205,8 +207,7 @@ function renderClientLanguageUI() {
     selectedLanguages.forEach(code => {
       const chip = document.createElement('span');
       chip.className = 'lang-chip';
-      chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:var(--accent-color, #00e676);color:#000000;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,0.3);';
-      chip.innerHTML = `${escapeHtml(getLanguageName(code))} <button type="button" style="background:none;border:none;color:#000000;cursor:pointer;font-weight:bold;margin-left:2px;font-size:14px;line-height:1;" title="Remove">&times;</button>`;
+      chip.innerHTML = `${escapeHtml(getLanguageName(code))} <button type="button" class="lang-chip-remove" title="Remove">&times;</button>`;
       
       chip.querySelector('button').addEventListener('click', () => {
         if (selectedLanguages.length <= 1) {
@@ -370,11 +371,90 @@ async function saveLanguagesToBackend() {
 }
 
 async function init() {
+  // Initialize Custom Themed Dropdowns immediately before any async backend calls
+  initCustomSelects();
+
+  // 0. Synchronously bind all core UI listeners first so buttons are ALWAYS responsive
+  const saveBtnEl = document.getElementById('save-btn');
+  if (saveBtnEl) saveBtnEl.addEventListener('click', saveAndApply);
+
+  const hideBtnEl = document.getElementById('hide-btn');
+  if (hideBtnEl) hideBtnEl.addEventListener('click', hideWindow);
+
+  const refreshBtnEl = document.getElementById('refresh-data-btn');
+  if (refreshBtnEl) refreshBtnEl.addEventListener('click', refreshUserData);
+
+  const winMinBtn = document.getElementById('win-min-btn');
+  if (winMinBtn) winMinBtn.addEventListener('click', () => invoke('minimize_window'));
+
+  const winMaxBtn = document.getElementById('win-max-btn');
+  if (winMaxBtn) winMaxBtn.addEventListener('click', () => invoke('toggle_maximize_window'));
+
+  const winCloseBtn = document.getElementById('win-close-btn');
+  if (winCloseBtn) winCloseBtn.addEventListener('click', () => invoke('close_window'));
+
+  const onboardWinMinBtn = document.getElementById('onboard-win-min-btn');
+  if (onboardWinMinBtn) onboardWinMinBtn.addEventListener('click', () => invoke('minimize_window'));
+
+  const onboardWinCloseBtn = document.getElementById('onboard-win-close-btn');
+  if (onboardWinCloseBtn) onboardWinCloseBtn.addEventListener('click', () => invoke('close_window'));
+
+  // 1. Tab selection setup (Dashboard)
+  tabItems.forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      const tabId = item.getAttribute('data-tab');
+      
+      tabItems.forEach(nav => nav.classList.remove('active'));
+      tabPanes.forEach(pane => pane.classList.remove('active'));
+      
+      item.classList.add('active');
+      document.getElementById(`tab-${tabId}`).classList.add('active');
+
+      // Refresh user subscription status when visiting the account page
+      if (tabId === 'account') {
+        invoke('get_user_info').then(info => {
+          updateAuthUI(info);
+        });
+      } else if (tabId === 'vocabulary') {
+        loadVocabulary();
+      } else if (tabId === 'meetings') {
+        loadMeetings();
+      }
+    });
+  });
+
+  // 1.5. Attach live dirty detection listeners across all dashboard inputs
+  const dashboardInputs = [
+    hotkeySelect,
+    hotkeyModeSelect,
+    autostartCheck,
+    typingModeCheck,
+    soundFeedbackCheck,
+    themeSelect,
+    pillPosModeSelect,
+    pillPredefinedSelect,
+    pillCustomX,
+    pillCustomY,
+    modelSelect,
+    enhanceCheck,
+    streamingModeCheck,
+    customPromptText
+  ];
+
+  dashboardInputs.forEach(input => {
+    if (input) {
+      input.addEventListener('change', markDirty);
+      input.addEventListener('input', markDirty);
+    }
+  });
+
   try {
     try {
       API_URL = await invoke('get_api_url');
+      console.log("[INIT] API_URL loaded:", API_URL);
     } catch (err) {
-      console.error("Failed to load API URL from backend:", err);
+      console.error("[INIT] Failed to load API URL from backend:", err);
     }
 
     try {
@@ -384,70 +464,23 @@ async function init() {
         console.log(`[LANGUAGES] Loaded ${dynamicLangs.length} dynamic languages from backend.`);
       }
     } catch (err) {
-      console.warn("Could not load dynamic languages list from backend, using defaults:", err);
+      console.warn("[INIT] Could not load dynamic languages list from backend, using defaults:", err);
     }
 
     setupLanguageCombobox('client-lang-search-input', 'client-lang-dropdown-list', 'client-add-lang-btn');
     setupLanguageCombobox('onboard-lang-search-input', 'onboard-lang-dropdown-list', 'onboard-add-lang-btn');
 
-    // 1. Tab selection setup (Dashboard)
-    tabItems.forEach(item => {
-      item.addEventListener('click', (e) => {
-        e.preventDefault();
-        const tabId = item.getAttribute('data-tab');
-        
-        tabItems.forEach(nav => nav.classList.remove('active'));
-        tabPanes.forEach(pane => pane.classList.remove('active'));
-        
-        item.classList.add('active');
-        document.getElementById(`tab-${tabId}`).classList.add('active');
-
-        // Refresh user subscription status when visiting the account page
-        if (tabId === 'account') {
-          invoke('get_user_info').then(info => {
-            updateAuthUI(info);
-          });
-        } else if (tabId === 'vocabulary') {
-          loadVocabulary();
-        } else if (tabId === 'meetings') {
-          loadMeetings();
-        }
-      });
-    });
-
     // 2. Fetch and apply configuration
     currentConfig = await invoke('get_config');
+    console.log("[INIT] Config loaded:", currentConfig);
     applyConfigToUI(currentConfig);
 
     // 3. Fetch user information status & update dashboard UI
     const userInfo = await invoke('get_user_info');
+    console.log("[INIT] UserInfo loaded:", userInfo);
     currentUserInfo = userInfo;
     updateAuthUI(userInfo);
     updateOnboardAuthUI(userInfo);
-
-    // 3.5. Bind Refresh Button Click Event
-    const refreshBtn = document.getElementById('refresh-data-btn');
-    if (refreshBtn) {
-      refreshBtn.addEventListener('click', async () => {
-        const originalText = refreshBtn.innerHTML;
-        refreshBtn.disabled = true;
-        refreshBtn.innerHTML = '<span>🔄</span> Refreshing...';
-        
-        try {
-          const freshInfo = await invoke('get_user_info');
-          currentUserInfo = freshInfo;
-          if (freshInfo) {
-            updateAuthUI(freshInfo);
-            updateOnboardAuthUI(freshInfo);
-          }
-        } catch (err) {
-          console.error("Failed to refresh user data:", err);
-        } finally {
-          refreshBtn.disabled = false;
-          refreshBtn.innerHTML = originalText;
-        }
-      });
-    }
 
     // 3.55. Listen for Session Expiration Event from Backend
     try {
@@ -484,7 +517,6 @@ async function init() {
           await invoke('open_external_url', { url: "https://speekto.me/dashboard" });
         } catch (err) {
           console.error("Failed to open web dashboard:", err);
-          // Fallback if running outside full Tauri context
           window.open("https://speekto.me/dashboard", "_blank");
         }
       });
@@ -493,24 +525,26 @@ async function init() {
     // 3.8. Theme preview listeners
     if (themeSelect) {
       themeSelect.addEventListener('change', (e) => {
-        document.body.setAttribute('data-theme', e.target.value);
+        console.log("[THEME] themeSelect changed to:", e.target.value);
+        applyAppTheme(e.target.value);
       });
     }
 
     if (pillPosModeSelect) {
       pillPosModeSelect.addEventListener('change', (e) => {
         if (e.target.value === 'custom') {
-          if (customPosGroup) customPosGroup.style.display = 'block';
+          if (customPosGroup) customPosGroup.style.display = 'flex';
           if (predefinedPosGroup) predefinedPosGroup.style.display = 'none';
         } else {
           if (customPosGroup) customPosGroup.style.display = 'none';
-          if (predefinedPosGroup) predefinedPosGroup.style.display = 'block';
+          if (predefinedPosGroup) predefinedPosGroup.style.display = 'flex';
         }
       });
     }
     if (onboardThemeSelect) {
       onboardThemeSelect.addEventListener('change', (e) => {
-        document.body.setAttribute('data-theme', e.target.value);
+        console.log("[THEME] onboardThemeSelect changed to:", e.target.value);
+        applyAppTheme(e.target.value);
       });
     }
 
@@ -535,7 +569,7 @@ async function init() {
     }
 
     // 4. Setup Onboarding flow state
-    if (!currentConfig.session_token) {
+    if (currentConfig && !currentConfig.session_token) {
       // User is logged out / first run: Show Onboarding Flow
       onboardingWrapper.classList.remove('hidden');
       goToStep(1);
@@ -544,20 +578,18 @@ async function init() {
       onboardingWrapper.classList.add('hidden');
     }
 
-    // 5. Button listeners (Dashboard)
-    saveBtn.addEventListener('click', saveAndApply);
-    hideBtn.addEventListener('click', hideWindow);
-    loginBtn.addEventListener('click', () => triggerLogin(false));
-    cancelLoginBtn.addEventListener('click', () => triggerCancelLogin(false));
-    logoutBtn.addEventListener('click', triggerLogout);
+    // 5. Button listeners (Auth & Onboarding)
+    if (loginBtn) loginBtn.addEventListener('click', () => triggerLogin(false));
+    if (cancelLoginBtn) cancelLoginBtn.addEventListener('click', () => triggerCancelLogin(false));
+    if (logoutBtn) logoutBtn.addEventListener('click', triggerLogout);
 
     // 6. Button listeners (Onboarding)
-    onboardLoginBtn.addEventListener('click', () => triggerLogin(true));
-    onboardCancelLoginBtn.addEventListener('click', () => triggerCancelLogin(true));
-    onboardNext1Btn.addEventListener('click', () => goToStep(2));
-    onboardNext2Btn.addEventListener('click', () => goToStep(3));
-    onboardNext3Btn.addEventListener('click', validateOnboardingPrompt);
-    onboardFinishBtn.addEventListener('click', finishOnboarding);
+    if (onboardLoginBtn) onboardLoginBtn.addEventListener('click', () => triggerLogin(true));
+    if (onboardCancelLoginBtn) onboardCancelLoginBtn.addEventListener('click', () => triggerCancelLogin(true));
+    if (onboardNext1Btn) onboardNext1Btn.addEventListener('click', () => goToStep(2));
+    if (onboardNext2Btn) onboardNext2Btn.addEventListener('click', () => goToStep(3));
+    if (onboardNext3Btn) onboardNext3Btn.addEventListener('click', validateOnboardingPrompt);
+    if (onboardFinishBtn) onboardFinishBtn.addEventListener('click', finishOnboarding);
 
     // 7. Setup OAuth event listeners
     setupOAuthListeners();
@@ -584,6 +616,10 @@ async function init() {
       'app-auth-error',
       false
     );
+
+    setupPasswordToggle('app-password-input', 'app-password-toggle');
+    setupPasswordToggle('onboard-password-input', 'onboard-password-toggle');
+    
     // 9. Vocabulary Engine UI binding
     const vocabInput = document.getElementById('vocab-input');
     const vocabAddBtn = document.getElementById('vocab-add-btn');
@@ -614,15 +650,218 @@ async function init() {
 
     // Initialize Meeting Notes UI event listeners
     setupMeetingsUI();
+
+    // Initialize Custom Themed Dropdowns
+    initCustomSelects();
+    console.log("[INIT] SpeekTo.Me Frontend initialization complete!");
   } catch (err) {
     console.error("Failed to initialize SpeekTo.Me UI:", err);
   }
 }
 
+function initCustomSelects() {
+  const selects = document.querySelectorAll('select.fluent-select');
+  selects.forEach(select => {
+    if (select.parentElement && select.parentElement.classList.contains('custom-select-wrapper')) {
+      return;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'custom-select-wrapper';
+    
+    select.parentNode.insertBefore(wrapper, select);
+    wrapper.appendChild(select);
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'custom-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'custom-select-label';
+    const selectedOption = select.options[select.selectedIndex];
+    labelSpan.textContent = selectedOption ? selectedOption.textContent : (select.options[0]?.textContent || '');
+
+    const arrowSpan = document.createElement('span');
+    arrowSpan.className = 'custom-select-arrow';
+    arrowSpan.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+
+    trigger.appendChild(labelSpan);
+    trigger.appendChild(arrowSpan);
+    wrapper.appendChild(trigger);
+
+    const menu = document.createElement('div');
+    menu.className = 'custom-select-menu';
+    menu.setAttribute('role', 'listbox');
+
+    Array.from(select.options).forEach(opt => {
+      const optEl = document.createElement('div');
+      optEl.className = 'custom-select-option' + (opt.value === select.value ? ' selected' : '');
+      optEl.setAttribute('role', 'option');
+      optEl.setAttribute('data-value', opt.value);
+      optEl.textContent = opt.textContent;
+
+      optEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        select.value = opt.value;
+        labelSpan.textContent = opt.textContent;
+
+        menu.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('selected'));
+        optEl.classList.add('selected');
+
+        wrapper.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+
+        if (select.id === 'theme-select' || select.id === 'onboard-theme-select') {
+          applyAppTheme(opt.value);
+        }
+
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        if (typeof markDirty === 'function') {
+          setTimeout(markDirty, 10);
+        }
+      });
+
+      menu.appendChild(optEl);
+    });
+
+    wrapper.appendChild(menu);
+
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = wrapper.classList.contains('open');
+      document.querySelectorAll('.custom-select-wrapper.open').forEach(w => {
+        if (w !== wrapper) {
+          w.classList.remove('open');
+          const t = w.querySelector('.custom-select-trigger');
+          if (t) t.setAttribute('aria-expanded', 'false');
+        }
+      });
+
+      if (isOpen) {
+        wrapper.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+      } else {
+        wrapper.classList.add('open');
+        trigger.setAttribute('aria-expanded', 'true');
+      }
+    });
+
+    select.addEventListener('change', () => {
+      const curOpt = select.options[select.selectedIndex];
+      if (curOpt) {
+        labelSpan.textContent = curOpt.textContent;
+        menu.querySelectorAll('.custom-select-option').forEach(o => {
+          o.classList.toggle('selected', o.getAttribute('data-value') === select.value);
+        });
+      }
+    });
+  });
+
+  if (!window._customSelectsGlobalBound) {
+    window._customSelectsGlobalBound = true;
+    document.addEventListener('click', () => {
+      document.querySelectorAll('.custom-select-wrapper.open').forEach(w => {
+        w.classList.remove('open');
+        const t = w.querySelector('.custom-select-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+      });
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        document.querySelectorAll('.custom-select-wrapper.open').forEach(w => {
+          w.classList.remove('open');
+          const t = w.querySelector('.custom-select-trigger');
+          if (t) t.setAttribute('aria-expanded', 'false');
+        });
+      }
+    });
+  }
+}
+
+function syncCustomSelects() {
+  document.querySelectorAll('.custom-select-wrapper').forEach(wrapper => {
+    const select = wrapper.querySelector('select');
+    const labelSpan = wrapper.querySelector('.custom-select-label');
+    const menu = wrapper.querySelector('.custom-select-menu');
+    if (select && labelSpan && menu) {
+      const curOpt = select.options[select.selectedIndex];
+      if (curOpt) {
+        labelSpan.textContent = curOpt.textContent;
+        menu.querySelectorAll('.custom-select-option').forEach(o => {
+          o.classList.toggle('selected', o.getAttribute('data-value') === select.value);
+        });
+      }
+    }
+  });
+}
+
+function checkIfConfigDirty(a, b) {
+  if (!a || !b) return false;
+  if (a.hotkey !== b.hotkey) return true;
+  if (a.hotkey_mode !== b.hotkey_mode) return true;
+  if (Boolean(a.autostart) !== Boolean(b.autostart)) return true;
+  if (Boolean(a.typing_mode) !== Boolean(b.typing_mode)) return true;
+  if (Boolean(a.sound_feedback) !== Boolean(b.sound_feedback)) return true;
+  if (a.theme !== b.theme) return true;
+  if (a.model !== b.model) return true;
+  if (Boolean(a.enhance) !== Boolean(b.enhance)) return true;
+  if (a.transcription_mode !== b.transcription_mode) return true;
+  if ((a.custom_prompt || '').trim() !== (b.custom_prompt || '').trim()) return true;
+  if (a.pill_position_mode !== b.pill_position_mode) return true;
+  if (a.pill_predefined_position !== b.pill_predefined_position) return true;
+  if (Number(a.pill_custom_x) !== Number(b.pill_custom_x)) return true;
+  if (Number(a.pill_custom_y) !== Number(b.pill_custom_y)) return true;
+  return false;
+}
+
+function markDirty() {
+  const saveBtn = document.getElementById('save-btn');
+  if (!saveBtn) return;
+  if (!currentConfig) {
+    saveBtn.style.display = 'none';
+    return;
+  }
+  const currentUI = gatherConfigFromUI(false);
+  const isDirty = checkIfConfigDirty(currentUI, currentConfig);
+  if (isDirty) {
+    saveBtn.style.display = 'flex';
+  } else {
+    saveBtn.style.display = 'none';
+  }
+}
+
+function applyAppTheme(theme) {
+  const t = theme || 'forest';
+  document.documentElement.setAttribute('data-theme', t);
+  document.body.setAttribute('data-theme', t);
+  if (themeSelect && themeSelect.value !== t) {
+    themeSelect.value = t;
+  }
+  if (onboardThemeSelect && onboardThemeSelect.value !== t) {
+    onboardThemeSelect.value = t;
+  }
+  syncCustomSelects();
+  try {
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      invoke('update_tray_theme', { theme: t }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
 function applyConfigToUI(config) {
-  // Dashboard inputs
-  if (hotkeySelect) hotkeySelect.value = config.hotkey || 'Ctrl + Win';
-  if (hotkeyModeSelect) hotkeyModeSelect.value = config.hotkey_mode || 'hold';
+  if (!config) return;
+
+  const saveBtn = document.getElementById('save-btn');
+  if (saveBtn) {
+    saveBtn.style.display = 'none';
+  }
+
+  // General settings inputs
+  hotkeySelect.value = config.hotkey || 'Ctrl + Win';
+  hotkeyModeSelect.value = config.hotkey_mode || 'hold';
   autostartCheck.checked = config.autostart;
   typingModeCheck.checked = config.typing_mode;
   soundFeedbackCheck.checked = config.sound_feedback;
@@ -638,11 +877,11 @@ function applyConfigToUI(config) {
   if (pillPosModeSelect) {
     pillPosModeSelect.value = config.pill_position_mode || 'predefined';
     if (config.pill_position_mode === 'custom') {
-      if (customPosGroup) customPosGroup.style.display = 'block';
+      if (customPosGroup) customPosGroup.style.display = 'flex';
       if (predefinedPosGroup) predefinedPosGroup.style.display = 'none';
     } else {
       if (customPosGroup) customPosGroup.style.display = 'none';
-      if (predefinedPosGroup) predefinedPosGroup.style.display = 'block';
+      if (predefinedPosGroup) predefinedPosGroup.style.display = 'flex';
     }
   }
   if (pillPredefinedSelect) {
@@ -669,13 +908,16 @@ function applyConfigToUI(config) {
   onboardCustomPromptText.value = config.custom_prompt;
   if (onboardThemeSelect) onboardThemeSelect.value = config.theme || 'forest';
 
-  // Apply theme class to document body
-  document.body.setAttribute('data-theme', config.theme || 'forest');
+  // Apply theme class to document
+  applyAppTheme(config.theme || 'forest');
 
   if (config.languages && Array.isArray(config.languages) && config.languages.length > 0) {
     selectedLanguages = config.languages;
     renderClientLanguageUI();
   }
+
+  // Sync custom dropdown displays with applied config values
+  syncCustomSelects();
 }
 
 function cssColorToBgr(colorStr) {
@@ -771,15 +1013,23 @@ function gatherConfigFromUI(isOnboarding) {
       pill_custom_x: pillCustomX ? parseInt(pillCustomX.value, 10) || 0 : 0,
       pill_custom_y: pillCustomY ? parseInt(pillCustomY.value, 10) || 0 : 60,
       pill_bg_color: colors.bg,
-      pill_wave_color: colors.wave
+  pill_wave_color: colors.wave
     };
   }
 }
 
-async function saveAndApply() {
+let isSavingInProgress = false;
+let isRefreshingInProgress = false;
+
+async function saveAndApply(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  if (isSavingInProgress) return;
+  isSavingInProgress = true;
+
   const banner = promptValidationBanner;
-  const prompt = customPromptText.value.trim();
-  const originalText = saveBtn.innerHTML;
+  const prompt = (customPromptText && customPromptText.value) ? customPromptText.value.trim() : '';
+  const activeSaveBtn = document.getElementById('save-btn') || saveBtn;
+  const defaultContent = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Save & Apply</span>';
 
   if (banner) {
     banner.classList.add('hidden');
@@ -787,80 +1037,142 @@ async function saveAndApply() {
     banner.innerHTML = '';
   }
 
-  // If enhance is enabled and prompt is not empty, validate it first
-  if (enhanceCheck.checked && prompt !== '') {
-    saveBtn.disabled = true;
-    saveBtn.innerHTML = '<span>⏳</span> Validating...';
-
-    if (banner) {
-      banner.classList.remove('hidden');
-      banner.className = 'validation-banner info';
-      banner.innerHTML = '<div class="spinner"></div> Checking instruction safety...';
-    }
-
-    try {
-      const result = await invoke('validate_prompt', { prompt: prompt });
-      if (!result.safe) {
-        if (banner) {
-          banner.className = 'validation-banner error';
-          banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${escapeHtml(result.explanation || 'Not eligible to be a system prompt.')}`;
-        }
-        saveBtn.disabled = false;
-        saveBtn.innerHTML = originalText;
-        return; // Block saving
-      }
-      
-      if (banner) {
-        banner.className = 'validation-banner success';
-        banner.innerHTML = '<span>✅</span> Instructions validated!';
-      }
-      // Brief delay to let the user see validation success state
-      await new Promise(resolve => setTimeout(resolve, 800));
-    } catch (err) {
-      console.error("Failed to validate custom prompt:", err);
-      if (banner) {
-        banner.className = 'validation-banner error';
-        banner.innerHTML = `<span>❌</span> Validation error: ${escapeHtml(formatAuthError(err))}`;
-      }
-      saveBtn.disabled = false;
-      saveBtn.innerHTML = originalText;
-      return; // Block saving on validation error
-    }
+  if (activeSaveBtn) {
+    activeSaveBtn.disabled = true;
+    activeSaveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite;"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg><span>Saving...</span>';
   }
 
   try {
-    saveBtn.disabled = true;
-    saveBtn.innerHTML = '<span>⏳</span> Saving...';
+    // If enhance is enabled and prompt is not empty, validate it first
+    if (enhanceCheck && enhanceCheck.checked && prompt !== '') {
+      if (banner) {
+        banner.classList.remove('hidden');
+        banner.className = 'validation-banner info';
+        banner.innerHTML = '<div class="spinner"></div> Checking instruction safety...';
+      }
+
+      try {
+        const result = await invoke('validate_prompt', { prompt: prompt });
+        if (!result.safe) {
+          if (banner) {
+            banner.className = 'validation-banner error';
+            banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${escapeHtml(result.explanation || 'Not eligible to be a system prompt.')}`;
+          }
+          if (activeSaveBtn) {
+            activeSaveBtn.disabled = false;
+            activeSaveBtn.innerHTML = defaultContent;
+          }
+          return; // Block saving
+        }
+        
+        if (banner) {
+          banner.className = 'validation-banner success';
+          banner.innerHTML = '<span>✅</span> Instructions validated!';
+        }
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (valErr) {
+        console.error("Failed to validate custom prompt:", valErr);
+        if (banner) {
+          banner.className = 'validation-banner error';
+          banner.innerHTML = `<span>❌</span> Validation error: ${escapeHtml(formatAuthError(valErr))}`;
+        }
+        if (activeSaveBtn) {
+          activeSaveBtn.disabled = false;
+          activeSaveBtn.innerHTML = defaultContent;
+        }
+        return; // Block saving on validation error
+      }
+    }
+
     const updated = gatherConfigFromUI(false);
     await invoke('save_config', { config: updated });
     currentConfig = updated;
     
-    saveBtn.innerHTML = '<span>✅</span> Saved Successfully!';
+    if (activeSaveBtn) {
+      activeSaveBtn.disabled = false;
+      activeSaveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Saved</span>';
+    }
+    showToast("Settings saved and applied successfully.", "Settings Saved", "success");
     if (banner) {
       banner.className = 'validation-banner success';
       banner.innerHTML = '<span>✅</span> Settings saved and applied!';
       banner.classList.remove('hidden');
     }
     
-    // Reset save button after a brief delay
+    // Auto-hide the save button after a brief confirmation delay
     setTimeout(() => {
-      saveBtn.disabled = false;
-      saveBtn.innerHTML = originalText;
+      if (activeSaveBtn) {
+        activeSaveBtn.style.display = 'none';
+        activeSaveBtn.innerHTML = defaultContent;
+      }
       if (banner) {
         banner.classList.add('hidden');
       }
-    }, 2000);
+    }, 1200);
   } catch (err) {
     console.error("Failed to save config:", err);
-    saveBtn.disabled = false;
-    saveBtn.innerHTML = originalText;
+    if (activeSaveBtn) {
+      activeSaveBtn.disabled = false;
+      activeSaveBtn.innerHTML = defaultContent;
+    }
     if (banner) {
       banner.className = 'validation-banner error';
       banner.innerHTML = `<span>❌</span> Save failed: ${escapeHtml(formatAuthError(err))}`;
       banner.classList.remove('hidden');
     }
+    showToast(formatAuthError(err), "Save Failed", "error");
+  } finally {
+    isSavingInProgress = false;
   }
 }
+
+async function refreshUserData(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  if (isRefreshingInProgress) return;
+  isRefreshingInProgress = true;
+
+  const refreshBtn = document.getElementById('refresh-data-btn');
+  const defaultContent = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg><span>Refresh</span>';
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite;"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg><span>Refreshing...</span>';
+  }
+  
+  try {
+    const freshInfo = await invoke('get_user_info');
+    currentUserInfo = freshInfo;
+    if (freshInfo) {
+      updateAuthUI(freshInfo);
+      updateOnboardAuthUI(freshInfo);
+    }
+    currentConfig = await invoke('get_config');
+    applyConfigToUI(currentConfig);
+    showToast("Account status and settings synchronized.", "Refreshed Successfully", "success");
+  } catch (err) {
+    console.error("Failed to refresh user data:", err);
+    showToast(formatAuthError(err), "Refresh Error", "error");
+  } finally {
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.innerHTML = defaultContent;
+    }
+    isRefreshingInProgress = false;
+  }
+}
+
+async function hideWindow(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  try {
+    await invoke('hide_window');
+  } catch (err) {
+    console.error("Failed to hide window:", err);
+  }
+}
+
+window.saveAndApply = saveAndApply;
+window.hideWindow = hideWindow;
+window.refreshUserData = refreshUserData;
+window.markDirty = markDirty;
 
 async function validateOnboardingPrompt() {
   const prompt = onboardCustomPromptText.value.trim();
@@ -916,14 +1228,6 @@ async function validateOnboardingPrompt() {
     banner.innerHTML = `<span>❌</span> Validation error: ${escapeHtml(formatAuthError(err))}`;
     onboardNext3Btn.disabled = false;
     onboardNext3Btn.innerHTML = originalText;
-  }
-}
-
-async function hideWindow() {
-  try {
-    await invoke('hide_window');
-  } catch (err) {
-    console.error("Failed to hide window:", err);
   }
 }
 
@@ -1103,9 +1407,6 @@ function updateAuthUI(userInfo) {
         sidebarAnnouncement.classList.add('hidden');
       }
     }
-
-    const sidebarFooter = document.getElementById('sidebar-footer');
-    if (sidebarFooter) sidebarFooter.style.display = 'block';
   } else {
     // Show descriptive text when logged out
     if (accountDesc) accountDesc.classList.remove('hidden');
@@ -1116,9 +1417,6 @@ function updateAuthUI(userInfo) {
     authLoggedIn.classList.add('hidden');
     authLoggingIn.classList.add('hidden');
     authLoggedOut.classList.remove('hidden');
-
-    const sidebarFooter = document.getElementById('sidebar-footer');
-    if (sidebarFooter) sidebarFooter.style.display = 'none';
   }
 }
 
@@ -1201,6 +1499,21 @@ window.addEventListener('beforeunload', () => {
   if (unlistenLoginFailed) unlistenLoginFailed();
 });
 
+function setupPasswordToggle(inputId, toggleBtnId) {
+  const input = document.getElementById(inputId);
+  const toggleBtn = document.getElementById(toggleBtnId);
+  if (!input || !toggleBtn) return;
+
+  toggleBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const isPassword = input.type === 'password';
+    input.type = isPassword ? 'text' : 'password';
+    toggleBtn.innerHTML = isPassword
+      ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`
+      : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+  });
+}
+
 function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId, submitBtnId, toggleLinkId, errorId, isOnboarding) {
   const nameInput = document.getElementById(nameInputId);
   const emailInput = document.getElementById(emailInputId);
@@ -1208,6 +1521,7 @@ function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId,
   const submitBtn = document.getElementById(submitBtnId);
   const toggleLink = document.getElementById(toggleLinkId);
   const errorEl = document.getElementById(errorId);
+  const nameGroup = nameInput ? (nameInput.closest('.auth-input-group') || nameInput) : null;
 
   let isSignUp = false;
 
@@ -1215,11 +1529,11 @@ function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId,
     e.preventDefault();
     isSignUp = !isSignUp;
     if (isSignUp) {
-      nameInput.style.display = 'block';
+      if (nameGroup) nameGroup.style.display = 'flex';
       submitBtn.textContent = 'Create Account';
       toggleLink.textContent = 'Already have an account? Sign in';
     } else {
-      nameInput.style.display = 'none';
+      if (nameGroup) nameGroup.style.display = 'none';
       submitBtn.textContent = 'Sign In';
       toggleLink.textContent = 'Need an account? Sign up';
     }
@@ -1231,7 +1545,7 @@ function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId,
     e.preventDefault();
     const email = emailInput.value.trim();
     const password = passwordInput.value;
-    const name = nameInput.value.trim();
+    const name = nameInput ? nameInput.value.trim() : '';
 
     if (!email || !password || (isSignUp && !name)) {
       errorEl.textContent = 'All fields are required.';
@@ -1247,15 +1561,15 @@ function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId,
     try {
       if (isSignUp) {
         const msg = await invoke('signup_with_credentials', { email, password, name });
-        // Show success message in green
+        // Show success message
         errorEl.textContent = msg;
-        errorEl.style.color = '#00e676';
+        errorEl.style.color = 'var(--validation-success-text)';
         errorEl.style.display = 'block';
         
         // Auto-switch to login pane after 4 seconds
         setTimeout(() => {
           isSignUp = false;
-          nameInput.style.display = 'none';
+          if (nameGroup) nameGroup.style.display = 'none';
           submitBtn.textContent = 'Sign In';
           toggleLink.textContent = 'Need an account? Sign up';
           errorEl.style.display = 'none';
@@ -1264,7 +1578,7 @@ function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId,
 
         // Clear input fields (leave email for quick login)
         passwordInput.value = '';
-        nameInput.value = '';
+        if (nameInput) nameInput.value = '';
       } else {
         const userInfo = await invoke('login_with_credentials', { email, password });
         currentUserInfo = userInfo;
@@ -1370,7 +1684,7 @@ async function loadVocabulary() {
     });
   } catch (err) {
     console.error("Failed to load vocabulary:", err);
-    vocabList.innerHTML = `<li class="vocab-empty" style="color: #ff5252;">Error loading vocabulary: ${escapeHtml(String(err))}</li>`;
+    vocabList.innerHTML = `<li class="vocab-empty" style="color: var(--btn-danger-text);">Error loading vocabulary: ${escapeHtml(String(err))}</li>`;
     vocabEmpty.style.display = 'none';
   }
 }

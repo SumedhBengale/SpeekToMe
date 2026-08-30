@@ -23,7 +23,6 @@ import (
 	"speektome-server/utils"
 )
 
-
 func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -146,7 +145,7 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(energyJSONStr), &energySamples)
 	}
 
-	if config.AWSBedrockAPIKey != "" || (config.CloudflareAPIToken != "" && config.CloudflareAccountID != "") || config.DeepInfraAPIKey != "" || config.GroqAPIKey != "" {
+	if config.AWSBearerTokenBedrock != "" || (config.CloudflareAPIToken != "" && config.CloudflareAccountID != "") || config.DeepInfraAPIKey != "" || config.GroqAPIKey != "" {
 		var errWhisper error
 		var segments []services.WhisperSegment
 		var mixProvider, mixRouting string
@@ -341,7 +340,6 @@ You must return your response in JSON format with exactly three fields:
 - "action_items": A markdown list of action items, tasks, and owners.
 
 Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" + `json) or conversational text outside the JSON structure.`
-
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	content, err := pipeline.RunDeepSeekChatCompletion(ctx, client, "deepseek-v4-flash", systemPrompt, transcript, pctx)

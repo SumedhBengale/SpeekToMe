@@ -178,11 +178,13 @@ func runDeepInfra(ctx context.Context, idx int, audioBytes []byte) Result {
 	start := time.Now()
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	filePart, err := writer.CreateFormFile("audio", "recording.ogg")
+	filePart, err := writer.CreateFormFile("file", "recording.ogg")
 	if err != nil {
 		return Result{Index: idx, Provider: "DeepInfra", Error: err}
 	}
 	_, _ = filePart.Write(audioBytes)
+	_ = writer.WriteField("model", "openai/whisper-large-v3-turbo")
+	_ = writer.WriteField("response_format", "verbose_json")
 	_ = writer.Close()
 
 	var remoteIP string
@@ -198,7 +200,7 @@ func runDeepInfra(ctx context.Context, idx int, audioBytes []byte) Result {
 	}
 	ctxTrace := httptrace.WithClientTrace(ctx, trace)
 
-	urlStr := "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3-turbo"
+	urlStr := "https://api.deepinfra.com/v1/openai/audio/transcriptions"
 	req, err := http.NewRequestWithContext(ctxTrace, "POST", urlStr, body)
 	if err != nil {
 		return Result{Index: idx, Provider: "DeepInfra", Error: err}

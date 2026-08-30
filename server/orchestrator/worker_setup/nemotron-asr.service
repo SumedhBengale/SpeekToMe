@@ -1,0 +1,17 @@
+[Unit]
+Description=SpeekToMe Nemotron 3.5 INT8 Streaming ASR Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/speektome-asr
+Environment=NEMOTRON_MODEL_PATH=/opt/speektome-asr/models/nemotron-3.5-asr-streaming-0.6b.nemo
+Environment=PORT=8080
+ExecStart=/opt/speektome-asr/venv/bin/python /opt/speektome-asr/nemotron_streaming_worker.py
+ExecStartPost=/bin/bash -c "sleep 5 && curl -s -X POST https://api.speekto.me/worker/heartbeat -H 'Content-Type: application/json' -d '{\"instance_id\": \"'$(ec2-metadata -i | cut -d " " -f 2)'\", \"region\": \"'$(ec2-metadata -z | cut -d " " -f 2 | sed "s/[a-z]$//")'\", \"status\": \"ready\"}' || true"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

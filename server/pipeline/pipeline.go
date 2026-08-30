@@ -104,9 +104,6 @@ func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, ap
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	if failFast {
-		req.Header.Set("X-Fail-Fast", "true")
-	}
 
 	resp, err := client.Do(req)
 	if err != nil {

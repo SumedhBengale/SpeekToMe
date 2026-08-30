@@ -14,6 +14,7 @@ import (
 	"speektome-server/config"
 	"speektome-server/db"
 	"speektome-server/handlers"
+	"speektome-server/orchestrator"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
 	"speektome-server/valkey"
@@ -21,7 +22,10 @@ import (
 )
 
 func main() {
+
+	//Initial try to load the .env file from the root directory
 	_ = godotenv.Load()
+	//Second try to load the .env file from the server directory if not found in root
 	if os.Getenv("GROQ_API_KEY") == "" && os.Getenv("DEEPINFRA_API_KEY") == "" {
 		_ = godotenv.Load("server/.env")
 	}
@@ -33,9 +37,9 @@ func main() {
 	config.WaferAPIKey = os.Getenv("WAFER_API_KEY")
 	config.CloudflareAPIToken = os.Getenv("CLOUDFLARE_API_TOKEN")
 	config.CloudflareAccountID = os.Getenv("CLOUDFLARE_ACCOUNT_ID")
-	config.AWSBedrockAPIKey = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
-	if config.AWSBedrockAPIKey == "" {
-		config.AWSBedrockAPIKey = os.Getenv("AWS_BEDROCK_API_KEY")
+	config.AWSBearerTokenBedrock = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
+	if config.AWSBearerTokenBedrock == "" {
+		config.AWSBearerTokenBedrock = os.Getenv("AWS_BEDROCK_API_KEY")
 	}
 	config.AWSBedrockRegion = os.Getenv("AWS_REGION")
 	if config.AWSBedrockRegion == "" {
@@ -150,6 +154,15 @@ func main() {
 	mux.HandleFunc("POST /billing/cancel-subscription", app.HandleCancelSubscription)
 	mux.HandleFunc("POST /webhooks/razorpay", app.HandleRazorpayWebhook)
 
+	// Initialize and start the EC2 Spot Orchestrator
+	spotAMI := os.Getenv("SPOT_AMI_ID")
+	spotKey := os.Getenv("SPOT_KEY_NAME")
+	spotSG := os.Getenv("SPOT_SECURITY_GROUP")
+	spotUserData := os.Getenv("SPOT_USER_DATA")
+	spotOrchestrator := orchestrator.NewOrchestrator(nil, spotAMI, spotKey, spotSG, spotUserData)
+	spotOrchestrator.Start()
+	defer spotOrchestrator.Stop()
+
 	mux.HandleFunc("GET /admin/users", app.HandleAdminGetUsers)
 	mux.HandleFunc("POST /admin/users/{id}/plan", app.HandleAdminUpdatePlan)
 	mux.HandleFunc("POST /admin/users/{id}/rate-limit", app.HandleAdminUpdateRateLimit)
@@ -158,6 +171,11 @@ func main() {
 	mux.HandleFunc("GET /admin/webhook-logs", app.HandleAdminGetWebhookLogs)
 	mux.HandleFunc("GET /admin/cache/rate-limits", app.HandleAdminGetRateLimits)
 	mux.HandleFunc("DELETE /admin/cache/rate-limits", app.HandleAdminDeleteRateLimits)
+
+	// EC2 Spot Orchestrator Routes
+	mux.HandleFunc("POST /webhooks/aws-spot-event", spotOrchestrator.HandleSpotEvent)
+	mux.HandleFunc("POST /worker/heartbeat", spotOrchestrator.HandleWorkerHeartbeat)
+	mux.HandleFunc("GET /admin/spot/status", spotOrchestrator.HandleAdminStatus)
 
 	handler := corsMiddleware(mux)
 

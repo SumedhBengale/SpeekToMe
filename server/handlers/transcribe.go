@@ -28,7 +28,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if config.AWSBedrockAPIKey == "" && config.DeepInfraAPIKey == "" && config.GroqAPIKey == "" && config.CloudflareAPIToken == "" {
+	if config.AWSBearerTokenBedrock == "" && config.DeepInfraAPIKey == "" && config.GroqAPIKey == "" && config.CloudflareAPIToken == "" {
 		http.Error(w, "No STT provider API keys are configured (AWS_BEARER_TOKEN_BEDROCK, DEEPINFRA_API_KEY, GROQ_API_KEY)", http.StatusInternalServerError)
 		return
 	}

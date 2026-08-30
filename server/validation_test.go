@@ -56,7 +56,7 @@ func TestHandleValidatePrompt(t *testing.T) {
 	config.DeepInfraAPIKey = os.Getenv("DEEPINFRA_API_KEY")
 
 	config.DeepSeekAPIURL = "https://api.deepseek.com/chat/completions"
-	config.DeepInfraBaseURL = "https://api.deepinfra.com/v1/inference/"
+	config.DeepInfraBaseURL = "https://api.deepinfra.com/v1/openai/audio/transcriptions"
 
 	t.Run("Empty prompt is safe", func(t *testing.T) {
 		reqBody := map[string]string{"prompt": ""}

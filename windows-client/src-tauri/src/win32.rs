@@ -19,20 +19,21 @@ mod win32_impl {
         WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_NOACTIVATE,
         WNDCLASSW, SetTimer, KillTimer, WM_CREATE, WM_TIMER,
         SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE, UpdateLayeredWindow,
+        CreateIconIndirect, DestroyIcon, ICONINFO, SendMessageW,
     };
     use windows_sys::Win32::Graphics::Gdi::{
         BeginPaint, EndPaint, SelectObject, DeleteObject,
         PAINTSTRUCT, CreateCompatibleDC, DeleteDC,
         CreateDIBSection, GetDC, ReleaseDC,
         CreateFontW, SetBkMode, SetTextColor,
+        CreateBitmap, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, BI_RGB,
         HDC,
     };
     use windows_sys::Win32::UI::Shell::{
         Shell_NotifyIconW, NOTIFYICONDATAW, NIM_ADD, NIM_DELETE, NIM_MODIFY,
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIF_INFO,
-        NIIF_INFO, NIIF_WARNING, NIIF_ERROR, ExtractIconW,
+        NIIF_INFO, NIIF_WARNING, NIIF_ERROR,
     };
-    use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
 
     const SM_CXSCREEN: i32 = 0;
     const SM_CYSCREEN: i32 = 1;
@@ -1197,6 +1198,154 @@ mod win32_impl {
         CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
     }
 
+    static CURRENT_TRAY_HICON: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+    pub unsafe fn create_themed_soundwave_icon(theme: &str) -> *mut std::ffi::c_void {
+        let (r, g, b) = match theme {
+            "lavender" => (179u8, 136u8, 255u8),   // #b388ff
+            "mint" => (0u8, 230u8, 118u8),         // #00e676
+            "classic_dark" => (0u8, 230u8, 118u8), // #00e676
+            _ => (244u8, 63u8, 94u8),              // "forest" / default -> #f43f5e
+        };
+
+        let size = 32i32;
+        let mut bgra = vec![0u8; (size * size * 4) as usize];
+
+        struct Bar {
+            cx: f32,
+            half_h: f32,
+            radius: f32,
+        }
+        let bars = [
+            Bar { cx: 4.5, half_h: 5.0, radius: 1.8 },
+            Bar { cx: 10.25, half_h: 10.0, radius: 1.8 },
+            Bar { cx: 16.0, half_h: 14.2, radius: 1.8 },
+            Bar { cx: 21.75, half_h: 10.0, radius: 1.8 },
+            Bar { cx: 27.5, half_h: 5.0, radius: 1.8 },
+        ];
+
+        for y in 0..size {
+            for x in 0..size {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let cy = 15.5f32;
+
+                let mut min_dist_to_pill = 999.0f32;
+                for bar in &bars {
+                    let dx = (px - bar.cx).abs();
+                    let segment_half = (bar.half_h - bar.radius).max(0.0);
+                    let dy = (py - cy).abs();
+                    let clamped_dy = (dy - segment_half).max(0.0);
+                    let dist = (dx * dx + clamped_dy * clamped_dy).sqrt();
+                    if dist < min_dist_to_pill {
+                        min_dist_to_pill = dist;
+                    }
+                }
+
+                let radius = 1.8f32;
+                let edge = min_dist_to_pill - radius;
+                let alpha = if edge <= -0.5 {
+                    1.0f32
+                } else if edge >= 0.5 {
+                    0.0f32
+                } else {
+                    0.5 - edge
+                };
+
+                if alpha > 0.0 {
+                    let row = (size - 1 - y) as usize;
+                    let col = x as usize;
+                    let idx = (row * size as usize + col) * 4;
+                    let a = (alpha * 255.0).clamp(0.0, 255.0) as u8;
+                    bgra[idx + 0] = (b as f32 * alpha) as u8; // B
+                    bgra[idx + 1] = (g as f32 * alpha) as u8; // G
+                    bgra[idx + 2] = (r as f32 * alpha) as u8; // R
+                    bgra[idx + 3] = a;                        // A
+                }
+            }
+        }
+
+        let h_dc = GetDC(std::ptr::null_mut());
+        let mut bmi: BITMAPINFO = mem::zeroed();
+        bmi.bmiHeader.biSize = mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = size;
+        bmi.bmiHeader.biHeight = size;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        let mut bits_ptr = std::ptr::null_mut();
+        let h_color = CreateDIBSection(
+            h_dc,
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits_ptr,
+            std::ptr::null_mut(),
+            0,
+        );
+
+        if !bits_ptr.is_null() {
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits_ptr as *mut u8, bgra.len());
+        }
+
+        let mask_bytes = [0u8; 128];
+        let h_mask = CreateBitmap(size, size, 1, 1, mask_bytes.as_ptr() as *const _);
+
+        let mut ii: ICONINFO = mem::zeroed();
+        ii.fIcon = 1;
+        ii.xHotspot = 0;
+        ii.yHotspot = 0;
+        ii.hbmMask = h_mask;
+        ii.hbmColor = h_color;
+
+        let h_icon = CreateIconIndirect(&ii);
+
+        DeleteObject(h_color);
+        DeleteObject(h_mask);
+        ReleaseDC(std::ptr::null_mut(), h_dc);
+
+        h_icon as *mut std::ffi::c_void
+    }
+
+    pub fn update_tray_icon_for_theme(theme: &str) {
+        unsafe {
+            if let Some(hwnd) = TRAY_HWND.get() {
+                let h_icon = create_themed_soundwave_icon(theme);
+                if !h_icon.is_null() {
+                    let mut nid: NOTIFYICONDATAW = mem::zeroed();
+                    nid.cbSize = mem::size_of::<NOTIFYICONDATAW>() as u32;
+                    nid.hWnd = hwnd.0;
+                    nid.uID = 1;
+                    nid.uFlags = NIF_ICON;
+                    nid.hIcon = h_icon;
+                    let res = Shell_NotifyIconW(NIM_MODIFY, &nid);
+                    println!("[WIN32] Updated tray icon for theme: {} (success: {})", theme, res != 0);
+
+                    let old_icon = CURRENT_TRAY_HICON.swap(h_icon as isize, Ordering::SeqCst);
+                    if old_icon != 0 {
+                        DestroyIcon(old_icon as *mut std::ffi::c_void);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn set_window_icon_for_theme(hwnd: *mut std::ffi::c_void, theme: &str) {
+        unsafe {
+            if !hwnd.is_null() {
+                let h_icon = create_themed_soundwave_icon(theme);
+                if !h_icon.is_null() {
+                    const WM_SETICON: u32 = 0x0080;
+                    const ICON_SMALL: usize = 0;
+                    const ICON_BIG: usize = 1;
+                    SendMessageW(hwnd as HWND, WM_SETICON, ICON_BIG, h_icon as isize);
+                    SendMessageW(hwnd as HWND, WM_SETICON, ICON_SMALL, h_icon as isize);
+                    println!("[WIN32] Updated taskbar window icon for theme: {}", theme);
+                }
+            }
+        }
+    }
+
     pub unsafe fn run_win32_hook_and_tray_thread() {
         PlaySoundW(std::ptr::null(), std::ptr::null_mut(), 0);
         let hinstance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
@@ -1299,17 +1448,10 @@ mod win32_impl {
         nid.uID = 1;
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
-        let mut exe_path = [0u16; 260];
-        let len = GetModuleFileNameW(hinstance, exe_path.as_mut_ptr(), 260);
-        let mut h_icon = std::ptr::null_mut();
-        if len > 0 {
-            let extracted = ExtractIconW(hinstance, exe_path.as_ptr(), 0);
-            if !extracted.is_null() && (extracted as usize) != 1 {
-                h_icon = extracted as *mut std::ffi::c_void;
-            }
-        }
-        if h_icon.is_null() {
-            h_icon = windows_sys::Win32::UI::WindowsAndMessaging::LoadIconW(std::ptr::null_mut(), 32512 as *const u16);
+        let initial_theme = "forest";
+        let h_icon = create_themed_soundwave_icon(initial_theme);
+        if !h_icon.is_null() {
+            CURRENT_TRAY_HICON.store(h_icon as isize, Ordering::SeqCst);
         }
         nid.hIcon = h_icon;
         
@@ -1320,7 +1462,7 @@ mod win32_impl {
             }
         }
         let tray_ok = Shell_NotifyIconW(NIM_ADD, &nid);
-        println!("[WIN32] System tray icon registered (success: {}).", tray_ok != 0);
+        println!("[WIN32] Themed system tray icon registered (success: {}).", tray_ok != 0);
         
         let hook_id = SetWindowsHookExW(
             WH_KEYBOARD_LL,
@@ -1369,7 +1511,8 @@ pub use win32_impl::{
     calculate_pill_position, update_overlay_position, play_chime,
     show_overlay, hide_overlay, show_preview, hide_preview,
     set_preview_text, get_preview_text, set_preview_state, update_preview_position,
-    show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance
+    show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance,
+    update_tray_icon_for_theme, set_window_icon_for_theme
 };
 
 // ==========================================
@@ -1425,6 +1568,10 @@ mod win32_stub {
 
     pub fn ensure_single_instance() {}
 
+    pub fn update_tray_icon_for_theme(_theme: &str) {}
+
+    pub fn set_window_icon_for_theme(_hwnd: *mut std::ffi::c_void, _theme: &str) {}
+
     pub unsafe fn run_win32_hook_and_tray_thread() {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3600));
@@ -1436,5 +1583,6 @@ mod win32_stub {
 pub use win32_stub::{
     SendHWND, PreviewState, NotificationLevel, calculate_pill_position, update_overlay_position, play_chime,
     show_overlay, hide_overlay, show_preview, hide_preview, set_preview_text, get_preview_text,
-    set_preview_state, update_preview_position, show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance
+    set_preview_state, update_preview_position, show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance,
+    update_tray_icon_for_theme, set_window_icon_for_theme
 };

@@ -213,7 +213,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
 
                     match handle.mode {
                         crate::stream::NegotiatedStreamMode::ContinuousStream => {
-                            let frame_samples = 960; // 60ms @ 16kHz
+                            let frame_samples = 8960; // 560ms @ 16kHz (aligned with native real-time ASR acoustic geometry)
                             loop {
                                 match rx.recv_timeout(std::time::Duration::from_millis(20)) {
                                     Ok(true) => {

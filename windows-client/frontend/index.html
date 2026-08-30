@@ -5,16 +5,32 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SpeekTo.Me Settings</title>
+  <link rel="icon" type="image/svg+xml" href="logo.svg">
   <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
   <!-- Onboarding Wizard Overlay -->
-  <div id="onboarding" class="hidden">
+  <div id="onboarding" class="hidden" data-tauri-drag-region>
+    <!-- Top Drag & Window Controls for Onboarding -->
+    <div class="window-titlebar" data-tauri-drag-region>
+      <div class="window-titlebar-drag" data-tauri-drag-region></div>
+      <div class="window-controls">
+        <button class="win-btn win-minimize" id="onboard-win-min-btn" onclick="window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('minimize_window')" title="Minimize">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="4" y1="12" x2="20" y2="12"></line></svg>
+        </button>
+        <button class="win-btn win-close" id="onboard-win-close-btn" onclick="window.hideWindow ? window.hideWindow() : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('close_window'))" title="Close">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="6" y1="18" x2="18" y2="6"></line></svg>
+        </button>
+      </div>
+    </div>
+
     <div class="onboarding-card">
       <div class="onboarding-header">
-        <span class="logo-icon"><img src="assets/icons/logo.png" alt="Logo"></span>
-        <span class="logo-text">SpeekTo.Me Setup</span>
+        <div class="app-logo" style="margin-bottom: 0;">
+          <span class="logo-icon logo-img" aria-label="SpeekTo.Me Logo"></span>
+          <span class="logo-text">SpeekTo.Me Setup</span>
+        </div>
         <div class="step-tracker">
           <div class="step-dot active" data-step="1"></div>
           <div class="step-dot" data-step="2"></div>
@@ -30,17 +46,88 @@
           <p class="step-desc">First, sign in to your SpeekTo.Me account to activate transcription services.</p>
 
           <div id="onboard-auth-logged-out" class="auth-section">
-            <button id="onboard-login-btn" class="fluent-button primary large">🔑 Sign in with Google</button>
-            <div class="divider">or use email</div>
-            <div class="auth-form" id="onboard-auth-form">
-              <input type="text" id="onboard-name-input" placeholder="Your Name" style="display: none;">
-              <input type="email" id="onboard-email-input" placeholder="Email Address">
-              <input type="password" id="onboard-password-input" placeholder="Password">
-              <button id="onboard-email-submit-btn" class="fluent-button primary">Sign In</button>
-              <div class="auth-form-links">
-                <a id="onboard-form-toggle-link">Need an account? Sign up</a>
+            <div class="auth-card-modern" style="margin-top: 0;">
+              <!-- Avatar Icon Badge -->
+              <div class="auth-avatar-badge">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="12" cy="7" r="4"></circle>
+                </svg>
               </div>
-              <div id="onboard-auth-error" class="auth-error-msg" style="display: none;"></div>
+
+              <!-- Heading & Subheading -->
+              <h3 class="auth-card-title">You are currently signed out</h3>
+              <p class="auth-card-subtitle">Sign in to access your account and unlock premium features.</p>
+
+              <!-- Google Sign In -->
+              <button id="onboard-login-btn" class="auth-google-btn">
+                <svg width="18" height="18" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                </svg>
+                <span>Sign in with Google</span>
+              </button>
+
+              <!-- Divider -->
+              <div class="auth-divider">
+                <span>or use email</span>
+              </div>
+
+              <!-- Credential Fields Form -->
+              <div class="auth-fields-stack" id="onboard-auth-form">
+                <div class="auth-input-group" id="onboard-name-group" style="display: none;">
+                  <span class="auth-input-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                      <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                  </span>
+                  <input type="text" id="onboard-name-input" class="auth-input" placeholder="Your Name">
+                </div>
+
+                <div class="auth-input-group">
+                  <span class="auth-input-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+                    </svg>
+                  </span>
+                  <input type="email" id="onboard-email-input" class="auth-input" placeholder="Email Address">
+                </div>
+
+                <div class="auth-input-group">
+                  <span class="auth-input-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                  </span>
+                  <input type="password" id="onboard-password-input" class="auth-input" placeholder="Password">
+                  <button type="button" class="auth-password-toggle-btn" id="onboard-password-toggle" title="Toggle password visibility">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                  </button>
+                </div>
+
+                <button id="onboard-email-submit-btn" class="auth-submit-btn">Sign In</button>
+
+                <div class="auth-footer-text">
+                  Need an account? <a id="onboard-form-toggle-link" class="auth-link">Sign up</a>
+                </div>
+
+                <div id="onboard-auth-error" class="auth-error-msg" style="display: none;"></div>
+              </div>
+
+              <!-- Bottom Decorative Wave Illustration -->
+              <svg class="auth-card-wave" viewBox="0 0 460 70" preserveAspectRatio="none" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M-10 40 C 90 10, 180 65, 300 25 C 370 5, 420 50, 480 35" stroke="var(--accent-color)" stroke-width="1.2" stroke-opacity="0.22"/>
+                <path d="M-10 52 C 110 25, 210 70, 320 38 C 390 18, 440 55, 480 48" stroke="var(--accent-color)" stroke-width="0.9" stroke-opacity="0.16"/>
+                <path d="M-10 64 C 130 40, 230 75, 340 50 C 400 32, 450 62, 480 58" stroke="var(--accent-color)" stroke-width="0.7" stroke-opacity="0.10"/>
+              </svg>
             </div>
           </div>
 
@@ -51,14 +138,19 @@
           </div>
 
           <div id="onboard-auth-logged-in" class="auth-section hidden">
-            <div class="profile-card">
-              <div class="avatar"><img src="assets/icons/avatar.svg" alt="Avatar"></div>
+            <div class="settings-card profile-card" style="margin-bottom: 16px;">
+              <div class="avatar">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+              </div>
               <div class="profile-info">
                 <h3 id="onboard-user-name">User Profile</h3>
                 <p id="onboard-user-email">email@example.com</p>
               </div>
             </div>
-            <button id="onboard-next-1-btn" class="fluent-button accent">Next Step ➔</button>
+            <button id="onboard-next-1-btn" class="onboard-nav-btn">Next Step ➔</button>
           </div>
         </div>
 
@@ -67,29 +159,375 @@
           <h2>Core Preferences</h2>
           <p class="step-desc">Configure your trigger hotkey and system behavior.</p>
 
-          <div class="setting-group streaming-feature-card">
-            <div class="streaming-feature-header">
+          <div class="settings-card" style="margin-bottom: 16px;">
+            <div class="streaming-feature-header" style="margin-bottom: 6px;">
               <label class="fluent-checkbox-container">
                 <input type="checkbox" id="onboard-streaming-mode-check">
                 <span class="checkmark"></span>
-                Real-Time Streaming
+                <span class="checkbox-title">Real-Time Streaming</span>
               </label>
               <span class="pro-tag">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
                 </svg>
                 PRO
               </span>
             </div>
-            <span class="setting-hint">
+            <span class="setting-hint" style="margin-left: 28px;">
               Dictate with near-zero latency and instantaneous word-by-word typing for a fluid experience.
             </span>
           </div>
 
-          <div class="setting-group">
-            <label for="onboard-hotkey-select">Trigger Hotkey</label>
-            <div class="select-wrapper">
-              <select id="onboard-hotkey-select" class="fluent-select">
+          <div class="settings-card">
+            <div class="setting-row">
+              <div class="setting-left">
+                <div class="setting-icon-badge">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
+                    <line x1="6" y1="8" x2="6.01" y2="8"></line>
+                    <line x1="10" y1="8" x2="10.01" y2="8"></line>
+                    <line x1="14" y1="8" x2="14.01" y2="8"></line>
+                    <line x1="18" y1="8" x2="18.01" y2="8"></line>
+                    <line x1="6" y1="12" x2="6.01" y2="12"></line>
+                    <line x1="10" y1="12" x2="10.01" y2="12"></line>
+                    <line x1="14" y1="12" x2="14.01" y2="12"></line>
+                    <line x1="18" y1="12" x2="18.01" y2="12"></line>
+                    <line x1="8" y1="16" x2="16" y2="16"></line>
+                  </svg>
+                </div>
+                <div class="setting-info">
+                  <label for="onboard-hotkey-select" class="setting-title">Trigger Hotkey</label>
+                  <span class="setting-desc">Choose shortcut to activate SpeekTo.Me.</span>
+                </div>
+              </div>
+              <div class="setting-control">
+                <select id="onboard-hotkey-select" class="fluent-select">
+                  <option value="Ctrl + Win">Ctrl + Windows (Recommended)</option>
+                  <option value="Alt + Space">Alt + Space</option>
+                  <option value="Ctrl + Space">Ctrl + Space</option>
+                  <option value="Right Alt">Right Alt (Single Key)</option>
+                  <option value="F8">F8 (Single Key)</option>
+                  <option value="Ctrl + Shift + Z">Ctrl + Shift + Z</option>
+                  <option value="Ctrl + Shift">Ctrl + Shift</option>
+                  <option value="Ctrl + Alt">Ctrl + Alt</option>
+                  <option value="Shift + Space">Shift + Space</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-left">
+                <div class="setting-icon-badge">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path>
+                    <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path>
+                    <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path>
+                    <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path>
+                  </svg>
+                </div>
+                <div class="setting-info">
+                  <label for="onboard-hotkey-mode-select" class="setting-title">Trigger Mode</label>
+                  <span class="setting-desc">Choose how SpeekTo.Me is activated.</span>
+                </div>
+              </div>
+              <div class="setting-control">
+                <select id="onboard-hotkey-mode-select" class="fluent-select">
+                  <option value="hold">Push to Talk</option>
+                  <option value="toggle">Hands-Free Toggle</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-left">
+                <div class="setting-icon-badge">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle>
+                    <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle>
+                    <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>
+                    <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>
+                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"></path>
+                  </svg>
+                </div>
+                <div class="setting-info">
+                  <label for="onboard-theme-select" class="setting-title">App Theme</label>
+                  <span class="setting-desc">Customize the look and feel.</span>
+                </div>
+              </div>
+              <div class="setting-control">
+                <select id="onboard-theme-select" class="fluent-select">
+                  <option value="forest">Pale Cream (Default)</option>
+                  <option value="lavender">Sleek Lavender</option>
+                  <option value="mint">Dark Mint</option>
+                  <option value="classic_dark">Classic Dark</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-card" style="margin-top: 14px;">
+            <div class="checkbox-row">
+              <label class="fluent-checkbox-container">
+                <input type="checkbox" id="onboard-autostart-check">
+                <span class="checkmark"></span>
+                <div class="checkbox-label-block">
+                  <span class="checkbox-title">Start SpeekTo.Me on system startup</span>
+                  <span class="setting-hint">Launches SpeekTo.Me in your system tray automatically.</span>
+                </div>
+              </label>
+            </div>
+
+            <div class="checkbox-row">
+              <label class="fluent-checkbox-container">
+                <input type="checkbox" id="onboard-typing-mode-check">
+                <span class="checkmark"></span>
+                <div class="checkbox-label-block">
+                  <span class="checkbox-title">Use keystroke simulation (typing)</span>
+                  <span class="setting-hint">Simulates typing to circumvent anti-paste mechanisms.</span>
+                </div>
+              </label>
+            </div>
+
+            <div class="checkbox-row">
+              <label class="fluent-checkbox-container">
+                <input type="checkbox" id="onboard-sound-feedback-check">
+                <span class="checkmark"></span>
+                <div class="checkbox-label-block">
+                  <span class="checkbox-title">Enable audio feedback chimes</span>
+                  <span class="setting-hint">Plays a sound when you start and stop recording.</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <button id="onboard-next-2-btn" class="onboard-nav-btn">Next Step ➔</button>
+        </div>
+
+        <!-- Step 3: AI Config -->
+        <div class="onboarding-step" id="onboard-step-3">
+          <h2>AI Settings</h2>
+          <p class="step-desc">Select your transcription engine and instructions.</p>
+
+          <input type="hidden" id="onboard-model-select" value="whisper-large-v3-turbo">
+
+          <div class="settings-card">
+            <div class="checkbox-row">
+              <label class="fluent-checkbox-container">
+                <input type="checkbox" id="onboard-enhance-check">
+                <span class="checkmark"></span>
+                <div class="checkbox-label-block">
+                  <span class="checkbox-title">Enhance transcription with DeepSeek AI</span>
+                  <span class="setting-hint">Uses DeepSeek to format grammar, fix context, or translate.</span>
+                </div>
+              </label>
+            </div>
+
+            <div class="setting-group" style="margin-top: 12px;">
+              <label for="onboard-custom-prompt-text" class="setting-title" style="margin-bottom: 6px; display: block;">Custom AI Instructions</label>
+              <textarea id="onboard-custom-prompt-text" class="fluent-textarea"
+                placeholder="e.g. Translate to French, rewrite as email..."></textarea>
+              <div id="onboard-prompt-validation-banner" class="validation-banner hidden"></div>
+            </div>
+          </div>
+
+          <div class="settings-card" style="margin-top: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label class="setting-title">Spoken Languages</label>
+              <span id="onboard-lang-count" class="lang-count-badge">1/5</span>
+            </div>
+            <span class="setting-hint" style="margin-bottom: 10px; display: block;">1 language locks Whisper for max speed. Multiple languages guide multi-lingual detection.</span>
+            <div id="onboard-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;">
+              <!-- Rendered dynamically -->
+            </div>
+            <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
+              <div style="position: relative; flex: 1;">
+                <input type="text" id="onboard-lang-search-input" class="fluent-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
+                <div id="onboard-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
+              </div>
+              <button type="button" id="onboard-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add</button>
+            </div>
+          </div>
+
+          <button id="onboard-next-3-btn" class="onboard-nav-btn">Next Step ➔</button>
+        </div>
+
+        <!-- Step 4: Finish -->
+        <div class="onboarding-step" id="onboard-step-4">
+          <h2>You're All Set!</h2>
+          <p class="step-desc">Setup is complete. SpeekTo.Me will now run in the background as a system tray service.</p>
+
+          <div class="settings-card tutorial-card">
+            <p><strong>How to use SpeekTo.Me:</strong></p>
+            <ul>
+              <li><strong>Hold</strong> your hotkey to record audio.</li>
+              <li><strong>Speak</strong> normally (whispering works too!).</li>
+              <li><strong>Release</strong> the hotkey to automatically type/paste the text.</li>
+            </ul>
+          </div>
+
+          <button id="onboard-finish-btn" class="onboard-nav-btn" style="height: 46px; font-size: 14px;">Finish & Launch SpeekTo.Me</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Regular Settings Application -->
+  <div id="app">
+    <!-- Top Drag & Window Controls Titlebar -->
+    <div class="window-titlebar" data-tauri-drag-region>
+      <div class="window-titlebar-drag" data-tauri-drag-region></div>
+      <div class="window-controls">
+        <button class="win-btn win-minimize" id="win-min-btn" onclick="window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('minimize_window')" title="Minimize">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="4" y1="12" x2="20" y2="12"></line></svg>
+        </button>
+        <button class="win-btn win-maximize" id="win-max-btn" onclick="window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('toggle_maximize_window')" title="Maximize">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
+        </button>
+        <button class="win-btn win-close" id="win-close-btn" onclick="window.hideWindow ? window.hideWindow() : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('close_window'))" title="Close">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="6" y1="18" x2="18" y2="6"></line></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Sidebar Navigation -->
+    <div class="sidebar">
+      <div class="app-logo">
+        <span class="logo-icon logo-img" aria-label="SpeekTo.Me Logo"></span>
+        <span class="logo-text">SpeekTo.Me</span>
+      </div>
+      <nav class="nav-links">
+        <a href="#" class="nav-item active" data-tab="general">
+          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>General</span>
+        </a>
+        <a href="#" class="nav-item" data-tab="dictation">
+          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+          <span>Dictation</span>
+        </a>
+        <a href="#" class="nav-item" data-tab="ai">
+          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"></path>
+            <path d="M20 3v4"></path>
+            <path d="M22 5h-4"></path>
+            <path d="M4 17v2"></path>
+            <path d="M5 18H3"></path>
+          </svg>
+          <span>AI Assistant</span>
+        </a>
+        <a href="#" class="nav-item" data-tab="vocabulary">
+          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+            <path d="M6 6h10"></path>
+            <path d="M6 10h10"></path>
+            <path d="M6 14h6"></path>
+          </svg>
+          <span>Vocabulary</span>
+        </a>
+        <a href="#" class="nav-item" data-tab="meetings">
+          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          <span>Meeting Notes</span>
+          <span class="beta-badge" title="This feature is in beta and some bugs are expected.">BETA</span>
+        </a>
+        <a href="#" class="nav-item" data-tab="account">
+          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          <span>Account</span>
+        </a>
+        <div class="nav-divider"></div>
+        <a href="#" class="nav-item nav-item-external" id="open-web-dashboard-nav-btn" title="Open SpeekTo.Me Web Dashboard in your browser">
+          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+          <span>Web Dashboard</span>
+          <svg class="external-arrow-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </a>
+        <div id="sidebar-announcement" class="sidebar-announcement hidden">
+          <div id="sidebar-announcement-text" class="sidebar-announcement-text"></div>
+        </div>
+      </nav>
+      <!-- Sidebar Footer Action Controls -->
+      <div class="sidebar-footer" id="sidebar-footer">
+        <button type="button" id="save-btn" class="fluent-button accent sidebar-action-btn save-action-btn" style="display: none;" title="Save and apply your configuration changes">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+          <span>Save & Apply</span>
+        </button>
+        <button type="button" id="refresh-data-btn" class="fluent-button secondary sidebar-action-btn refresh-action-btn" title="Refresh user profile and cloud sync status">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          <span>Refresh</span>
+        </button>
+        <button type="button" id="hide-btn" class="fluent-button secondary sidebar-action-btn hide-action-btn" title="Hide window to system tray">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"></path>
+            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"></path>
+            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"></path>
+            <line x1="2" y1="2" x2="22" y2="22"></line>
+          </svg>
+          <span>Hide Window</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <div class="content">
+      <!-- General Tab -->
+      <div class="tab-pane active" id="tab-general">
+        <div class="tab-header">
+          <h2>General Settings</h2>
+          <p class="section-desc">Configure core keyboard and feedback behavior.</p>
+        </div>
+
+        <!-- Setting Dropdowns Card -->
+        <div class="settings-card">
+          <!-- Trigger Hotkey -->
+          <div class="setting-row">
+            <div class="setting-left">
+              <div class="setting-icon-badge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
+                  <line x1="6" y1="8" x2="6.01" y2="8"></line>
+                  <line x1="10" y1="8" x2="10.01" y2="8"></line>
+                  <line x1="14" y1="8" x2="14.01" y2="8"></line>
+                  <line x1="18" y1="8" x2="18.01" y2="8"></line>
+                  <line x1="6" y1="12" x2="6.01" y2="12"></line>
+                  <line x1="10" y1="12" x2="10.01" y2="12"></line>
+                  <line x1="14" y1="12" x2="14.01" y2="12"></line>
+                  <line x1="18" y1="12" x2="18.01" y2="12"></line>
+                  <line x1="8" y1="16" x2="16" y2="16"></line>
+                </svg>
+              </div>
+              <div class="setting-info">
+                <label for="hotkey-select" class="setting-title">Trigger Hotkey</label>
+                <span class="setting-desc">Choose the keyboard shortcut to activate SpeekTo.Me.</span>
+              </div>
+            </div>
+            <div class="setting-control">
+              <select id="hotkey-select" class="fluent-select">
                 <option value="Ctrl + Win">Ctrl + Windows (Recommended)</option>
                 <option value="Alt + Space">Alt + Space</option>
                 <option value="Ctrl + Space">Ctrl + Space</option>
@@ -103,322 +541,207 @@
             </div>
           </div>
 
-          <div class="setting-group">
-            <label for="onboard-hotkey-mode-select">Trigger Mode</label>
-            <div class="select-wrapper">
-              <select id="onboard-hotkey-mode-select" class="fluent-select">
-                <option value="hold">Push to Talk</option>
-                <option value="toggle">Hands-Free Toggle</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="setting-group">
-            <label for="onboard-theme-select">App Theme</label>
-            <div class="select-wrapper">
-              <select id="onboard-theme-select" class="fluent-select">
-                <option value="forest">🧁 Pale Cream (Default)</option>
-                <option value="lavender">💜 Sleek Lavender</option>
-                <option value="mint">🌿 Dark Mint</option>
-                <option value="classic_dark">🌌 Classic Dark</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="setting-group checkbox-group">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="onboard-autostart-check">
-              <span class="checkmark"></span>
-              Start SpeekTo.Me on system startup
-            </label>
-            <span class="setting-hint">Launches SpeekTo.Me in your system tray automatically.</span>
-          </div>
-
-          <div class="setting-group checkbox-group">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="onboard-typing-mode-check">
-              <span class="checkmark"></span>
-              Use keystroke simulation (typing)
-            </label>
-          </div>
-
-          <div class="setting-group checkbox-group">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="onboard-sound-feedback-check">
-              <span class="checkmark"></span>
-              Enable audio feedback chimes
-            </label>
-          </div>
-
-          <button id="onboard-next-2-btn" class="fluent-button accent">Next Step ➔</button>
-        </div>
-
-        <!-- Step 3: AI Config -->
-        <div class="onboarding-step" id="onboard-step-3">
-          <h2>AI Settings</h2>
-          <p class="step-desc">Select your transcription engine and instructions.</p>
-
-          <input type="hidden" id="onboard-model-select" value="whisper-large-v3-turbo">
-
-          <div class="setting-group checkbox-group">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="onboard-enhance-check">
-              <span class="checkmark"></span>
-              Enhance transcription with DeepSeek AI
-            </label>
-          </div>
-
-          <div class="setting-group">
-            <label for="onboard-custom-prompt-text" class="accent-label">Custom AI Instructions</label>
-            <textarea id="onboard-custom-prompt-text" class="fluent-textarea"
-              placeholder="e.g. Translate to French, rewrite as email..."></textarea>
-            <div id="onboard-prompt-validation-banner" class="validation-banner hidden"></div>
-          </div>
-
-          <div class="setting-group"
-            style="margin-top: 14px; border-top: 1px solid var(--border-color, rgba(255,255,255,0.1)); padding-top: 14px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <label class="accent-label" style="margin-bottom: 0;">Spoken Languages</label>
-              <span id="onboard-lang-count" class="lang-count-badge">1/5</span>
-            </div>
-            <span class="setting-hint" style="margin-bottom: 8px; margin-left: 0; display: block;">1 language locks Whisper for max speed. Multiple languages guide multi-lingual detection.</span>
-            <div id="onboard-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
-              <!-- Rendered dynamically -->
-            </div>
-            <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
-              <div style="position: relative; flex: 1;">
-                <input type="text" id="onboard-lang-search-input" class="fluent-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
-                <div id="onboard-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
+          <!-- Trigger Mode -->
+          <div class="setting-row">
+            <div class="setting-left">
+              <div class="setting-icon-badge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path>
+                  <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path>
+                  <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path>
+                  <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path>
+                </svg>
               </div>
-              <button type="button" id="onboard-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add</button>
+              <div class="setting-info">
+                <label for="hotkey-mode-select" class="setting-title">Trigger Mode</label>
+                <span class="setting-desc">Choose how SpeekTo.Me is activated.</span>
+              </div>
+            </div>
+            <div class="setting-control">
+              <select id="hotkey-mode-select" class="fluent-select">
+                <option value="hold">Push to Talk (Hold)</option>
+                <option value="toggle">Hands-Free (Tap to start/stop)</option>
+              </select>
             </div>
           </div>
 
-          <button id="onboard-next-3-btn" class="fluent-button accent" style="margin-top: 14px;">Next Step ➔</button>
-        </div>
-
-        <!-- Step 4: Finish -->
-        <div class="onboarding-step" id="onboard-step-4">
-          <h2>You're All Set!</h2>
-          <p class="step-desc">Setup is complete. SpeekTo.Me will now run in the background as a system tray service.
-          </p>
-
-          <div class="tutorial-card">
-            <p><strong>How to use SpeekTo.Me:</strong></p>
-            <ul>
-              <li><strong>Hold</strong> your hotkey to record audio.</li>
-              <li><strong>Speak</strong> normally (whispering works too!).</li>
-              <li><strong>Release</strong> the hotkey to automatically type/paste the text.</li>
-            </ul>
-          </div>
-
-          <button id="onboard-finish-btn" class="fluent-button accent large">Finish & Launch SpeekTo.Me</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Regular Settings Application -->
-  <div id="app">
-    <!-- Sidebar Navigation -->
-    <div class="sidebar">
-      <div class="app-logo">
-        <span class="logo-icon"><img src="assets/icons/logo.png" alt="Logo"></span>
-        <span class="logo-text">SpeekTo.Me</span>
-      </div>
-      <nav class="nav-links">
-        <a href="#" class="nav-item active" data-tab="general">
-          <img src="assets/icons/general.svg" class="icon" alt=""> General
-        </a>
-        <a href="#" class="nav-item" data-tab="dictation">
-          <img src="assets/icons/dictation.svg" class="icon" alt=""> Dictation
-        </a>
-        <a href="#" class="nav-item" data-tab="ai">
-          <img src="assets/icons/ai.svg" class="icon" alt=""> AI Assistant
-        </a>
-        <a href="#" class="nav-item" data-tab="vocabulary">
-          <img src="assets/icons/vocabulary.svg" class="icon" alt=""> Vocabulary
-        </a>
-        <a href="#" class="nav-item" data-tab="meetings">
-          <img src="assets/icons/meetings.svg" class="icon" alt=""> Meeting Notes <span class="beta-badge" title="This feature is in beta and some bugs are expected.">BETA</span>
-        </a>
-        <a href="#" class="nav-item" data-tab="account">
-          <img src="assets/icons/account.svg" class="icon" alt=""> Account
-        </a>
-        <div class="nav-divider" style="height: 1px; background: rgba(255, 255, 255, 0.08); margin: 6px 8px;"></div>
-        <a href="#" class="nav-item nav-item-external" id="open-web-dashboard-nav-btn" title="Open SpeekTo.Me Web Dashboard in your browser">
-          <svg class="icon svg-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style="margin-right: 10px; vertical-align: middle; flex-shrink: 0;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-          <span>Web Dashboard</span>
-          <svg class="external-arrow-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style="margin-left: auto; opacity: 0.6;"><polyline points="9 18 15 12 9 6"></polyline></svg>
-        </a>
-        <div id="sidebar-announcement" class="sidebar-announcement hidden">
-          <div id="sidebar-announcement-text" class="sidebar-announcement-text"></div>
-        </div>
-      </nav>
-      <!-- Sidebar Footer containing the Refresh option -->
-      <div class="sidebar-footer" id="sidebar-footer"
-        style="margin-top: auto; padding: 0 12px; width: 100%; box-sizing: border-box; display: none;">
-        <button id="refresh-data-btn" class="fluent-button secondary small"
-          style="width: 100%; justify-content: center; gap: 5px; font-size: 11px; padding: 6px 8px; display: flex; align-items: center;">
-          <img src="assets/icons/refresh.svg" class="icon" alt="" style="width: 12px; height: 12px; margin-right: 0;">
-          Refresh
-        </button>
-      </div>
-    </div>
-
-    <!-- Main Content Area -->
-    <div class="content">
-      <!-- General Tab -->
-      <div class="tab-pane active" id="tab-general">
-        <h2>General Settings</h2>
-        <p class="section-desc">Configure core keyboard and feedback behavior.</p>
-
-        <div class="setting-group">
-          <label for="hotkey-select">Trigger Hotkey</label>
-          <div class="select-wrapper">
-            <select id="hotkey-select" class="fluent-select">
-              <option value="Ctrl + Win">Ctrl + Windows (Recommended)</option>
-              <option value="Alt + Space">Alt + Space</option>
-              <option value="Ctrl + Space">Ctrl + Space</option>
-              <option value="Right Alt">Right Alt (Single Key)</option>
-              <option value="F8">F8 (Single Key)</option>
-              <option value="Ctrl + Shift + Z">Ctrl + Shift + Z</option>
-              <option value="Ctrl + Shift">Ctrl + Shift</option>
-              <option value="Ctrl + Alt">Ctrl + Alt</option>
-              <option value="Shift + Space">Shift + Space</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="setting-group">
-          <label for="hotkey-mode-select">Trigger Mode</label>
-          <div class="select-wrapper">
-            <select id="hotkey-mode-select" class="fluent-select">
-              <option value="hold">Push to Talk (Hold combination)</option>
-              <option value="toggle">Hands-Free (Tap to start / Tap to stop)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="setting-group">
-          <label for="theme-select">App Theme</label>
-          <div class="select-wrapper">
-            <select id="theme-select" class="fluent-select">
-              <option value="forest">Pale Cream (Default)</option>
-              <option value="lavender">Sleek Lavender</option>
-              <option value="mint">Dark Mint</option>
-              <option value="classic_dark">Classic Dark</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="setting-group">
-          <label for="pill-pos-mode-select">Pill Position Mode</label>
-          <div class="select-wrapper">
-            <select id="pill-pos-mode-select" class="fluent-select">
-              <option value="predefined">Predefined Locations</option>
-              <option value="custom">Custom (Pixel Coordinates)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="setting-group" id="predefined-pos-group">
-          <label for="pill-predefined-select">Pill Location</label>
-          <div class="select-wrapper">
-            <select id="pill-predefined-select" class="fluent-select">
-              <option value="Top Center">Top Center</option>
-              <option value="Top Left">Top Left</option>
-              <option value="Top Right">Top Right</option>
-              <option value="Bottom Center">Bottom Center</option>
-              <option value="Bottom Left">Bottom Left</option>
-              <option value="Bottom Right">Bottom Right</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="setting-group" id="custom-pos-group" style="display: none;">
-          <label>Custom Position (X, Y in Pixels)</label>
-          <div style="display: flex; gap: 10px; margin-top: 5px;">
-            <div style="flex: 1;">
-              <span class="setting-hint" style="margin-bottom: 2px; display: block;">X Coordinate</span>
-              <input type="number" id="pill-custom-x" class="fluent-input" style="width: 100%; box-sizing: border-box;"
-                value="0">
+          <!-- App Theme -->
+          <div class="setting-row">
+            <div class="setting-left">
+              <div class="setting-icon-badge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle>
+                  <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle>
+                  <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>
+                  <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>
+                  <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"></path>
+                </svg>
+              </div>
+              <div class="setting-info">
+                <label for="theme-select" class="setting-title">App Theme</label>
+                <span class="setting-desc">Customize the look and feel of the app.</span>
+              </div>
             </div>
-            <div style="flex: 1;">
-              <span class="setting-hint" style="margin-bottom: 2px; display: block;">Y Coordinate</span>
-              <input type="number" id="pill-custom-y" class="fluent-input" style="width: 100%; box-sizing: border-box;"
-                value="60">
+            <div class="setting-control">
+              <select id="theme-select" class="fluent-select">
+                <option value="forest">Pale Cream (Default)</option>
+                <option value="lavender">Sleek Lavender</option>
+                <option value="mint">Dark Mint</option>
+                <option value="classic_dark">Classic Dark</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Pill Position Mode -->
+          <div class="setting-row">
+            <div class="setting-left">
+              <div class="setting-icon-badge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"></path>
+                  <path d="m8.5 8.5 7 7"></path>
+                </svg>
+              </div>
+              <div class="setting-info">
+                <label for="pill-pos-mode-select" class="setting-title">Pill Position Mode</label>
+                <span class="setting-desc">Choose how the pill is positioned on screen.</span>
+              </div>
+            </div>
+            <div class="setting-control">
+              <select id="pill-pos-mode-select" class="fluent-select">
+                <option value="predefined">Predefined Locations</option>
+                <option value="custom">Custom (Pixel Coordinates)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Predefined Pill Location -->
+          <div class="setting-row" id="predefined-pos-group">
+            <div class="setting-left">
+              <div class="setting-icon-badge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                  <circle cx="12" cy="10" r="3"></circle>
+                </svg>
+              </div>
+              <div class="setting-info">
+                <label for="pill-predefined-select" class="setting-title">Pill Location</label>
+                <span class="setting-desc">Select the default location for the pill.</span>
+              </div>
+            </div>
+            <div class="setting-control">
+              <select id="pill-predefined-select" class="fluent-select">
+                <option value="Top Center">Top Center</option>
+                <option value="Top Left">Top Left</option>
+                <option value="Top Right">Top Right</option>
+                <option value="Bottom Center">Bottom Center</option>
+                <option value="Bottom Left">Bottom Left</option>
+                <option value="Bottom Right">Bottom Right</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Custom Pill Location -->
+          <div class="setting-row" id="custom-pos-group" style="display: none;">
+            <div class="setting-left">
+              <div class="setting-icon-badge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 3H3v18h18V3z"></path>
+                  <path d="M3 9h18"></path>
+                  <path d="M9 21V9"></path>
+                </svg>
+              </div>
+              <div class="setting-info">
+                <label class="setting-title">Custom Position (X, Y in Pixels)</label>
+                <span class="setting-desc">Specify manual X and Y screen pixel coordinates.</span>
+              </div>
+            </div>
+            <div class="setting-control" style="display: flex; gap: 8px;">
+              <input type="number" id="pill-custom-x" class="fluent-input" placeholder="X" value="0" style="width: 80px;">
+              <input type="number" id="pill-custom-y" class="fluent-input" placeholder="Y" value="60" style="width: 80px;">
             </div>
           </div>
         </div>
 
-        <div class="setting-group checkbox-group">
-          <label class="fluent-checkbox-container">
-            <input type="checkbox" id="autostart-check">
-            <span class="checkmark"></span>
-            Start SpeekTo.Me on system startup
-          </label>
-          <span class="setting-hint">Automatically launches the app in the tray when Windows boots.</span>
+        <!-- Checkboxes Card -->
+        <div class="settings-card">
+          <!-- Autostart -->
+          <div class="checkbox-row">
+            <label class="fluent-checkbox-container">
+              <input type="checkbox" id="autostart-check">
+              <span class="checkmark"></span>
+              <div class="checkbox-label-block">
+                <span class="checkbox-title">Start SpeekTo.Me on system startup</span>
+                <span class="setting-hint">Automatically launches the app in the tray when Windows boots.</span>
+              </div>
+            </label>
+          </div>
+
+          <!-- Keystroke simulation -->
+          <div class="checkbox-row">
+            <label class="fluent-checkbox-container">
+              <input type="checkbox" id="typing-mode-check">
+              <span class="checkmark"></span>
+              <div class="checkbox-label-block">
+                <span class="checkbox-title">Use keystroke simulation (typing)</span>
+                <span class="setting-hint">Simulates typing to circumvent anti-paste mechanisms.</span>
+              </div>
+            </label>
+          </div>
+
+          <!-- Sound feedback -->
+          <div class="checkbox-row">
+            <label class="fluent-checkbox-container">
+              <input type="checkbox" id="sound-feedback-check">
+              <span class="checkmark"></span>
+              <div class="checkbox-label-block">
+                <span class="checkbox-title">Enable audio feedback chimes</span>
+                <span class="setting-hint">Plays a sound when you start and stop recording.</span>
+              </div>
+            </label>
+          </div>
         </div>
 
-        <div class="setting-group checkbox-group">
-          <label class="fluent-checkbox-container">
-            <input type="checkbox" id="typing-mode-check">
-            <span class="checkmark"></span>
-            Use keystroke simulation (typing)
-          </label>
-          <span class="setting-hint">Simulates typing to circumvent anti-paste mechanisms.</span>
-        </div>
-
-        <div class="setting-group checkbox-group">
-          <label class="fluent-checkbox-container">
-            <input type="checkbox" id="sound-feedback-check">
-            <span class="checkmark"></span>
-            Enable audio feedback chimes
-          </label>
-          <span class="setting-hint">Plays a sound when you start and stop recording.</span>
-        </div>
       </div>
 
       <!-- Dictation Tab -->
       <div class="tab-pane" id="tab-dictation">
-        <h2>Dictation & Languages</h2>
-        <p class="section-desc">Configure real-time streaming dictation and spoken language preferences.</p>
+        <div class="tab-header">
+          <h2>Dictation & Languages</h2>
+          <p class="section-desc">Configure real-time streaming dictation and spoken language preferences.</p>
+        </div>
 
-        <div class="setting-group streaming-feature-card">
+        <div class="settings-card streaming-feature-card">
           <div class="streaming-feature-header">
             <label class="fluent-checkbox-container">
               <input type="checkbox" id="streaming-mode-check">
               <span class="checkmark"></span>
-              Real-Time Streaming Dictation
+              <span class="checkbox-title">Real-Time Streaming Dictation</span>
             </label>
             <span class="pro-tag">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
               </svg>
               PRO
             </span>
           </div>
-          <span class="setting-hint">
+          <span class="setting-hint" style="margin-left: 28px;">
             Dictate with near-zero latency and instantaneous word-by-word pasting for a fast, responsive dictation experience.
           </span>
-          <div id="streaming-pro-hint" class="streaming-pro-hint" style="display: none;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-right: 2px;">
+          <div id="streaming-pro-hint" class="streaming-pro-hint" style="display: none; margin-left: 28px; margin-top: 8px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-right: 4px;">
               <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
             </svg>
             Pro plan feature. Upgrade on your Web Dashboard to unlock streaming dictation.
           </div>
         </div>
 
-        <div class="setting-group"
-          style="margin-top: 20px; border-top: 1px solid var(--border-color, rgba(255,255,255,0.1)); padding-top: 16px;">
+        <div class="settings-card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <label class="accent-label" style="margin-bottom: 0;">Spoken Language Preferences</label>
+            <label class="setting-title">Spoken Language Preferences</label>
             <span id="client-lang-count" class="lang-count-badge">1/5</span>
           </div>
-          <span class="setting-hint" style="margin-bottom: 10px; display: block;">1 language locks Whisper for max speed
-            & accuracy. Multiple languages guide Whisper multi-lingual detection without translating.</span>
-          <div id="client-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;">
+          <span class="setting-hint" style="margin-bottom: 12px; display: block;">1 language locks Whisper for max speed & accuracy. Multiple languages guide Whisper multi-lingual detection without translating.</span>
+          <div id="client-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;">
             <!-- Rendered dynamically -->
           </div>
           <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
@@ -429,101 +752,187 @@
             <button type="button" id="client-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add</button>
           </div>
         </div>
+
       </div>
 
       <!-- AI Assistant Tab -->
       <div class="tab-pane" id="tab-ai">
-        <h2>AI Assistant</h2>
-        <p class="section-desc">Manage voice-to-text models and enhancement options.</p>
+        <div class="tab-header">
+          <h2>AI Assistant</h2>
+          <p class="section-desc">Manage voice-to-text models and enhancement options.</p>
+        </div>
 
         <input type="hidden" id="model-select" value="whisper-large-v3-turbo">
 
-        <div class="setting-group checkbox-group">
-          <label class="fluent-checkbox-container">
-            <input type="checkbox" id="enhance-check">
-            <span class="checkmark"></span>
-            Enhance transcription with DeepSeek AI
-          </label>
-          <span class="setting-hint">Uses DeepSeek to format grammar, fix context, or translate.</span>
+        <div class="settings-card">
+          <div class="checkbox-row">
+            <label class="fluent-checkbox-container">
+              <input type="checkbox" id="enhance-check">
+              <span class="checkmark"></span>
+              <div class="checkbox-label-block">
+                <span class="checkbox-title">Enhance transcription with DeepSeek AI</span>
+                <span class="setting-hint">Uses DeepSeek to format grammar, fix context, or translate.</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="setting-group" style="margin-top: 14px;">
+            <label for="custom-prompt-text" class="setting-title" style="margin-bottom: 6px; display: block;">Custom AI Instructions</label>
+            <textarea id="custom-prompt-text" class="fluent-textarea"
+              placeholder="e.g. Translate to French, rewrite as email..."></textarea>
+            <div id="prompt-validation-banner" class="validation-banner hidden"></div>
+          </div>
         </div>
 
-        <div class="setting-group">
-          <label for="custom-prompt-text" class="accent-label">Custom AI Instructions</label>
-          <textarea id="custom-prompt-text" class="fluent-textarea"
-            placeholder="e.g. Translate to French, rewrite as email..."></textarea>
-          <div id="prompt-validation-banner" class="validation-banner hidden"></div>
-        </div>
       </div>
 
       <!-- Vocabulary Tab -->
       <div class="tab-pane" id="tab-vocabulary">
-        <h2>Custom Vocabulary</h2>
-        <p class="section-desc">Add words, names, or abbreviations you want the transcription to match and correct.</p>
-
-        <div class="vocab-input-row">
-          <input type="text" id="vocab-input" class="fluent-input" placeholder="e.g. SpeekTo.Me, DeepSeek">
-          <button id="vocab-add-btn" class="fluent-button primary">Add Word</button>
+        <div class="tab-header">
+          <h2>Custom Vocabulary</h2>
+          <p class="section-desc">Add words, names, or abbreviations you want the transcription to match and correct.</p>
         </div>
 
-        <div class="vocab-warning hidden" id="vocab-warning">
-          <span>⚠️</span> <span>Warning: Having more than 1000 terms may slightly affect latency.</span>
-        </div>
-
-        <div class="vocab-list-container">
-          <div id="vocab-empty-msg" class="vocab-empty">
-            No custom vocabulary terms yet. Add one above!
+        <div class="settings-card">
+          <div class="vocab-input-row" style="display: flex; gap: 10px; margin-bottom: 12px;">
+            <input type="text" id="vocab-input" class="fluent-input" placeholder="e.g. SpeekTo.Me, DeepSeek" style="flex: 1;">
+            <button id="vocab-add-btn" class="fluent-button primary">Add Word</button>
           </div>
-          <ul id="vocab-list" class="vocab-list">
-            <!-- Rendered dynamically -->
-          </ul>
+
+          <div class="vocab-warning hidden" id="vocab-warning">
+            <span>⚠️</span> <span>Warning: Having more than 1000 terms may slightly affect latency.</span>
+          </div>
+
+          <div class="vocab-list-container">
+            <div id="vocab-empty-msg" class="vocab-empty">
+              No custom vocabulary terms yet. Add one above!
+            </div>
+            <ul id="vocab-list" class="vocab-list">
+              <!-- Rendered dynamically -->
+            </ul>
+          </div>
+          <span class="setting-hint" style="margin-left: 0; margin-top: 10px; display: block;">Terms are synced to all your devices. Matching is case-insensitive.</span>
         </div>
-        <span class="setting-hint" style="margin-left: 0; margin-top: 10px; display: block;">Terms are synced to all
-          your devices. Matching is case-insensitive.</span>
       </div>
 
       <!-- Account Tab -->
       <div class="tab-pane" id="tab-account">
-        <h2>Account</h2>
-        <p class="section-desc" id="account-desc">Sign in to unlock SpeekTo.Me transcription services.</p>
+        <div class="tab-header">
+          <h2>Account</h2>
+          <p class="section-desc" id="account-desc">Sign in to unlock SpeekTo.Me transcription services.</p>
+        </div>
 
         <div id="auth-logged-out" class="auth-section">
-          <div class="auth-card">
-            <p>You are currently signed out.</p>
-            <button id="login-btn" class="fluent-button primary">🔑 Sign in with Google</button>
-            <div class="divider">or use email</div>
-            <div class="auth-form" id="app-auth-form">
-              <input type="text" id="app-name-input" placeholder="Your Name" style="display: none;">
-              <input type="email" id="app-email-input" placeholder="Email Address">
-              <input type="password" id="app-password-input" placeholder="Password">
-              <button id="app-email-submit-btn" class="fluent-button primary">Sign In</button>
-              <div class="auth-form-links">
-                <a id="app-form-toggle-link">Need an account? Sign up</a>
+          <div class="auth-card-modern">
+            <!-- Avatar Icon Badge -->
+            <div class="auth-avatar-badge">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+            </div>
+
+            <!-- Heading & Subheading -->
+            <h3 class="auth-card-title">You are currently signed out</h3>
+            <p class="auth-card-subtitle">Sign in to access your account and unlock premium features.</p>
+
+            <!-- Google Sign In -->
+            <button id="login-btn" class="auth-google-btn">
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+              </svg>
+              <span>Sign in with Google</span>
+            </button>
+
+            <!-- Divider -->
+            <div class="auth-divider">
+              <span>or use email</span>
+            </div>
+
+            <!-- Credential Fields Form -->
+            <div class="auth-fields-stack" id="app-auth-form">
+              <div class="auth-input-group" id="app-name-group" style="display: none;">
+                <span class="auth-input-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                </span>
+                <input type="text" id="app-name-input" class="auth-input" placeholder="Your Name">
               </div>
+
+              <div class="auth-input-group">
+                <span class="auth-input-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+                  </svg>
+                </span>
+                <input type="email" id="app-email-input" class="auth-input" placeholder="Email Address">
+              </div>
+
+              <div class="auth-input-group">
+                <span class="auth-input-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                  </svg>
+                </span>
+                <input type="password" id="app-password-input" class="auth-input" placeholder="Password">
+                <button type="button" class="auth-password-toggle-btn" id="app-password-toggle" title="Toggle password visibility">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                </button>
+              </div>
+
+              <button id="app-email-submit-btn" class="auth-submit-btn">Sign In</button>
+
+              <div class="auth-footer-text">
+                Need an account? <a id="app-form-toggle-link" class="auth-link">Sign up</a>
+              </div>
+
               <div id="app-auth-error" class="auth-error-msg" style="display: none;"></div>
             </div>
+
+            <!-- Bottom Decorative Wave Illustration -->
+            <svg class="auth-card-wave" viewBox="0 0 460 70" preserveAspectRatio="none" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M-10 40 C 90 10, 180 65, 300 25 C 370 5, 420 50, 480 35" stroke="var(--accent-color)" stroke-width="1.2" stroke-opacity="0.22"/>
+              <path d="M-10 52 C 110 25, 210 70, 320 38 C 390 18, 440 55, 480 48" stroke="var(--accent-color)" stroke-width="0.9" stroke-opacity="0.16"/>
+              <path d="M-10 64 C 130 40, 230 75, 340 50 C 400 32, 450 62, 480 58" stroke="var(--accent-color)" stroke-width="0.7" stroke-opacity="0.10"/>
+            </svg>
           </div>
         </div>
 
         <div id="auth-logging-in" class="auth-section hidden">
-          <div class="auth-card loading">
-            <div class="spinner"></div>
-            <p>Awaiting authorization in default browser...</p>
+          <div class="settings-card auth-card loading" style="width: 100%; max-width: 440px; padding: 30px; text-align: center;">
+            <div class="spinner" style="margin: 0 auto 12px auto;"></div>
+            <p style="margin-bottom: 16px;">Awaiting authorization in default browser...</p>
             <button id="cancel-login-btn" class="fluent-button secondary">Cancel Login</button>
           </div>
         </div>
 
         <div id="auth-logged-in" class="auth-section hidden">
-          <div class="profile-card">
-            <div class="avatar"><img src="assets/icons/avatar.svg" alt="Avatar"></div>
+          <div class="settings-card profile-card" style="margin-bottom: 16px;">
+            <div class="avatar">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+            </div>
             <div class="profile-info">
               <h3 id="user-name">User Profile</h3>
               <p id="user-email">email@example.com</p>
             </div>
           </div>
 
-          <div class="subscription-card">
+          <div class="settings-card subscription-card" style="margin-bottom: 16px;">
             <div class="subscription-header">Plan & Subscription</div>
-            <div class="subscription-body">
+            <div class="subscription-body" style="margin-top: 12px;">
               <div class="sub-row">
                 <span class="sub-label">Current Plan:</span>
                 <span id="sub-plan" class="sub-value">Free</span>
@@ -560,7 +969,7 @@
 
       <!-- Meeting Notes Tab -->
       <div class="tab-pane" id="tab-meetings">
-        <div style="display: flex; align-items: center; gap: 8px;">
+        <div class="tab-header" style="display: flex; align-items: center; gap: 8px;">
           <h2>Meeting Notes</h2>
           <span class="beta-badge" title="This feature is in beta and some bugs are expected.">BETA</span>
         </div>
@@ -570,21 +979,16 @@
         <div id="meetings-container">
           <!-- 1. Dashboard View (default) -->
           <div id="meetings-dashboard-view">
-            <div class="meetings-header-row"
-              style="display: flex; gap: 10px; margin-bottom: 20px; align-items: center;">
-              <input type="text" id="meetings-search-input" class="fluent-input" placeholder="Search meetings..."
-                style="flex: 1;">
+            <div class="meetings-header-row" style="display: flex; gap: 10px; margin-bottom: 16px; align-items: center;">
+              <input type="text" id="meetings-search-input" class="fluent-input" placeholder="Search meetings..." style="flex: 1;">
               <button id="meetings-start-rec-btn" class="fluent-button primary">New Meeting</button>
             </div>
 
-            <div class="meetings-list-container"
-              style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; min-height: 200px; padding: 15px;">
-              <div id="meetings-empty-msg" class="meetings-empty"
-                style="text-align: center; color: var(--text-secondary); padding: 50px 0;">
+            <div class="settings-card meetings-list-container" style="min-height: 220px; padding: 18px;">
+              <div id="meetings-empty-msg" class="meetings-empty">
                 No meeting notes recorded yet. Click "New Meeting" to start!
               </div>
-              <div id="meetings-list" class="meetings-list-grid"
-                style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 15px;">
+              <div id="meetings-list" class="meetings-list-grid">
                 <!-- Rendered dynamically -->
               </div>
             </div>
@@ -592,50 +996,33 @@
 
           <!-- 2. Recording View -->
           <div id="meetings-recording-view" class="hidden">
-            <div class="recorder-card"
-              style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 30px; text-align: center;">
-              <div class="recorder-status"
-                style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 15px;">
-                <span class="pulse-dot"
-                  style="width: 10px; height: 10px; background: #ff3b30; border-radius: 50%; display: inline-block; animation: pulse 1.5s infinite;"></span>
-                <span class="status-label" style="font-weight: 500; font-size: 14px; color: #ff453a;">Recording
-                  Audio...</span>
+            <div class="settings-card recorder-card" style="padding: 30px; text-align: center;">
+              <div class="recorder-status" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 15px;">
+                <span class="pulse-dot"></span>
+                <span class="status-label" style="font-weight: 600; font-size: 14px; color: #ff453a;">Recording Audio...</span>
               </div>
 
-              <div id="meetings-timer" class="recorder-timer"
-                style="font-size: 48px; font-weight: bold; font-family: monospace; color: var(--text-primary); margin-bottom: 25px; letter-spacing: 2px;">
-                00:00:00</div>
+              <div id="meetings-timer" class="recorder-timer">00:00:00</div>
 
               <!-- Live Level Meters -->
-              <div class="visualizer-row"
-                style="display: flex; flex-direction: column; gap: 12px; max-width: 400px; margin: 0 auto 25px auto; text-align: left;">
+              <div class="visualizer-row" style="display: flex; flex-direction: column; gap: 12px; max-width: 400px; margin: 0 auto 25px auto; text-align: left;">
                 <div class="meter-container">
-                  <span class="meter-label"
-                    style="font-size: 11.5px; opacity: 0.8; display: block; margin-bottom: 4px;">🎙️ Microphone
-                    Level</span>
-                  <div class="meter-bg"
-                    style="height: 6px; background: var(--progress-bg); border-radius: 3px; overflow: hidden;">
-                    <div id="mic-level-fill" class="meter-fill"
-                      style="width: 0%; height: 100%; background: #00e676; transition: width 0.08s ease;"></div>
+                  <span class="meter-label">🎙️ Microphone Level</span>
+                  <div class="meter-bg">
+                    <div id="mic-level-fill" class="meter-fill" style="width: 0%;"></div>
                   </div>
                 </div>
                 <div class="meter-container">
-                  <span class="meter-label"
-                    style="font-size: 11.5px; opacity: 0.8; display: block; margin-bottom: 4px;">🔊 System Loopback
-                    Level</span>
-                  <div class="meter-bg"
-                    style="height: 6px; background: var(--progress-bg); border-radius: 3px; overflow: hidden;">
-                    <div id="loopback-level-fill" class="meter-fill"
-                      style="width: 0%; height: 100%; background: #2f80ed; transition: width 0.08s ease;"></div>
+                  <span class="meter-label">🔊 System Loopback Level</span>
+                  <div class="meter-bg">
+                    <div id="loopback-level-fill" class="meter-fill" style="width: 0%;"></div>
                   </div>
                 </div>
               </div>
 
-              <div class="setting-group"
-                style="margin-top: 25px; text-align: left; max-width: 400px; margin: 0 auto 25px auto;">
-                <label for="meeting-title-input">Meeting / Note Title</label>
-                <input type="text" id="meeting-title-input" class="fluent-input"
-                  placeholder="e.g. Project Sync with Team" style="width: 100%; box-sizing: border-box;">
+              <div class="setting-group" style="text-align: left; max-width: 400px; margin: 0 auto 25px auto;">
+                <label for="meeting-title-input" class="setting-title" style="margin-bottom: 6px; display: block;">Meeting / Note Title</label>
+                <input type="text" id="meeting-title-input" class="fluent-input" placeholder="e.g. Project Sync with Team" style="width: 100%; box-sizing: border-box;">
               </div>
 
               <div class="recorder-actions" style="display: flex; gap: 10px; justify-content: center;">
@@ -647,66 +1034,49 @@
 
           <!-- 3. Detail View -->
           <div id="meetings-detail-view" class="hidden">
-            <button id="meetings-back-btn" class="fluent-button secondary"
-              style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
+            <button id="meetings-back-btn" class="fluent-button secondary" style="margin-bottom: 14px; display: flex; align-items: center; gap: 5px;">
               <span>⬅</span> Back to List
             </button>
 
-            <div class="meeting-detail-card"
-              style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px;">
-              <div class="meeting-detail-header"
-                style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
+            <div class="settings-card meeting-detail-card" style="padding: 20px;">
+              <div class="meeting-detail-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px;">
                 <div>
-                  <h3 id="meeting-detail-title" style="margin: 0; font-size: 18px; color: var(--text-primary);">Meeting
-                    Title</h3>
-                  <span id="meeting-detail-date" class="meeting-date"
-                    style="font-size: 12px; color: var(--text-secondary);">July 6, 2026</span>
+                  <h3 id="meeting-detail-title" style="margin: 0; font-size: 18px; color: var(--text-primary);">Meeting Title</h3>
+                  <span id="meeting-detail-date" class="meeting-date" style="font-size: 12px; color: var(--text-secondary);">July 6, 2026</span>
                 </div>
               </div>
 
               <!-- Audio Player Section -->
-              <div class="audio-player-container"
-                style="margin-bottom: 20px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px;">
-                <audio id="meeting-audio-player" controls
-                  style="width: 100%; height: 40px; border-radius: 4px;"></audio>
+              <div class="audio-player-container" style="margin-bottom: 18px;">
+                <audio id="meeting-audio-player" controls style="width: 100%; height: 40px; border-radius: 6px;"></audio>
               </div>
 
               <!-- Tabs: Transcript vs AI Summary -->
-              <div class="detail-tabs"
-                style="display: flex; gap: 5px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 15px; align-items: center;">
-                <button class="detail-tab-btn active" data-detail-tab="transcript"
-                  style="background: none; border: none; padding: 6px 12px; color: var(--text-secondary); font-size: 13.5px; font-weight: 500; cursor: pointer; border-radius: 4px;">Transcript</button>
-                <button class="detail-tab-btn" data-detail-tab="summary"
-                  style="background: none; border: none; padding: 6px 12px; color: var(--text-secondary); font-size: 13.5px; font-weight: 500; cursor: pointer; border-radius: 4px;">AI
-                  Summary</button>
-                <button class="detail-tab-btn" data-detail-tab="actions"
-                  style="background: none; border: none; padding: 6px 12px; color: var(--text-secondary); font-size: 13.5px; font-weight: 500; cursor: pointer; border-radius: 4px;">Action
-                  Items</button>
-                <button id="meeting-delete-btn" class="fluent-button danger small"
-                  style="margin-left: auto; font-size: 11px; padding: 5px 8px; display: flex; align-items: center; gap: 3px;">Delete</button>
+              <div class="detail-tabs" style="display: flex; gap: 5px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px; margin-bottom: 15px; align-items: center;">
+                <button class="detail-tab-btn active" data-detail-tab="transcript">Transcript</button>
+                <button class="detail-tab-btn" data-detail-tab="summary">AI Summary</button>
+                <button class="detail-tab-btn" data-detail-tab="actions">Action Items</button>
+                <button id="meeting-delete-btn" class="fluent-button danger small" style="margin-left: auto;">Delete</button>
               </div>
 
               <div class="detail-tab-content">
                 <!-- Transcript Pane -->
                 <div class="detail-tab-pane active" id="detail-pane-transcript">
-                  <div id="meeting-transcript-text" class="transcript-view"
-                    style="font-size: 14px; line-height: 1.6; color: var(--text-primary); max-height: 500px; min-height: 280px; height: calc(100vh - 310px); overflow-y: auto; padding-right: 8px; text-align: justify; word-wrap: break-word;">
-                    <!-- Loaded dynamically with clickable words/sentences -->
+                  <div id="meeting-transcript-text" class="transcript-view">
+                    <!-- Loaded dynamically -->
                   </div>
                 </div>
 
                 <!-- Summary Pane -->
                 <div class="detail-tab-pane" id="detail-pane-summary">
-                  <div id="meeting-summary-text" class="markdown-view"
-                    style="font-size: 13.5px; line-height: 1.6; color: var(--text-primary); max-height: 500px; min-height: 280px; height: calc(100vh - 310px); overflow-y: auto; padding-right: 8px;">
+                  <div id="meeting-summary-text" class="markdown-view">
                     <!-- Loaded dynamically -->
                   </div>
                 </div>
 
                 <!-- Action Items Pane -->
                 <div class="detail-tab-pane" id="detail-pane-actions">
-                  <div id="meeting-actions-text" class="markdown-view"
-                    style="font-size: 13.5px; line-height: 1.6; color: var(--text-primary); max-height: 500px; min-height: 280px; height: calc(100vh - 310px); overflow-y: auto; padding-right: 8px;">
+                  <div id="meeting-actions-text" class="markdown-view">
                     <!-- Loaded dynamically -->
                   </div>
                 </div>
@@ -716,27 +1086,16 @@
 
           <!-- 4. Loading/Processing View -->
           <div id="meetings-processing-view" class="hidden">
-            <div class="processing-card"
-              style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 40px; text-align: center;">
-              <div class="spinner"
-                style="margin: 0 auto 20px auto; width: 40px; height: 40px; border: 3px solid var(--border-color); border-radius: 50%; border-top-color: var(--accent-color); animation: spin 1s linear infinite;">
-              </div>
+            <div class="settings-card processing-card" style="padding: 40px; text-align: center;">
+              <div class="spinner" style="margin: 0 auto 20px auto; width: 40px; height: 40px; border-width: 3px;"></div>
               <h3 style="color: var(--text-primary); margin-bottom: 10px;">Transcribing & Summarizing Note...</h3>
-              <p
-                style="font-size: 13px; color: var(--text-secondary); max-width: 400px; margin: 0 auto; line-height: 1.5;">
-                Uploading Opus compressed audio and running AI enhancement. This might take a few seconds depending on
-                the meeting length.</p>
+              <p style="font-size: 13px; color: var(--text-secondary); max-width: 400px; margin: 0 auto; line-height: 1.5;">
+                Uploading Opus compressed audio and running AI enhancement. This might take a few seconds depending on the meeting length.
+              </p>
             </div>
           </div>
 
         </div>
-      </div>
-
-
-      <!-- Footer Buttons -->
-      <div class="footer">
-        <button id="save-btn" class="fluent-button accent">Save & Apply</button>
-        <button id="hide-btn" class="fluent-button secondary">Hide Window</button>
       </div>
     </div>
   </div>

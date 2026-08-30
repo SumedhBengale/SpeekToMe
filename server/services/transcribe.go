@@ -323,27 +323,34 @@ func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model strin
 	return rawText, response.Result.Segments, routingLoc, nil
 }
 
-func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string, langParam, promptStr string, failFast bool, timeout time.Duration) (string, []WhisperSegment, string, error) {
+func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string, model string, langParam, promptStr string, failFast bool, timeout time.Duration) (string, []WhisperSegment, string, error) {
+	if urlStr == "" {
+		urlStr = config.DeepInfraBaseURL
+	}
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	filename := "recording.wav"
 	if len(audioBytes) >= 4 && string(audioBytes[:4]) == "OggS" {
 		filename = "recording.ogg"
 	}
-	filePart, err := writer.CreateFormFile("audio", filename)
+	filePart, err := writer.CreateFormFile("file", filename)
 	if err != nil {
 		return "", nil, "", err
 	}
 	_, _ = filePart.Write(audioBytes)
 
+	if model != "" {
+		_ = writer.WriteField("model", model)
+	}
+	_ = writer.WriteField("response_format", "verbose_json")
+
 	if langParam != "" {
 		_ = writer.WriteField("language", langParam)
 	}
 	if promptStr != "" {
-		_ = writer.WriteField("initial_prompt", promptStr)
+		_ = writer.WriteField("prompt", promptStr)
 	}
-	// DeepInfra's Nemotron container currently throws a 500 inference exception when fail_fast is present in form-data
-	if failFast && !strings.Contains(strings.ToLower(urlStr), "nemotron") {
+	if failFast {
 		_ = writer.WriteField("fail_fast", "true")
 	}
 	_ = writer.Close()
@@ -374,9 +381,6 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+config.DeepInfraAPIKey)
-	if failFast {
-		req.Header.Set("X-Fail-Fast", "true")
-	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -585,7 +589,7 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 		baseURL = fmt.Sprintf("https://bedrock-mantle.%s.api.aws/v1/chat/completions", region)
 	}
 	if apiKey == "" {
-		apiKey = config.AWSBedrockAPIKey
+		apiKey = config.AWSBearerTokenBedrock
 	}
 	if apiKey == "" {
 		return "", nil, "", fmt.Errorf("AWS Bedrock API key is not configured")
@@ -780,7 +784,7 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 		}
 
 		if strings.HasPrefix(provider, "bedrock") || strings.Contains(provider, "voxtral") {
-			apiKey := config.AWSBedrockAPIKey
+			apiKey := config.AWSBearerTokenBedrock
 			if provCfg.APIKey != "" {
 				apiKey = provCfg.APIKey
 			}
@@ -836,7 +840,7 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 				if diModel == "" {
 					diModel = "openai/whisper-large-v3-turbo"
 				}
-				diURL := config.DeepInfraBaseURL + diModel
+				diURL := config.DeepInfraBaseURL
 				if provCfg.BaseURL != "" {
 					diURL = provCfg.BaseURL
 				}
@@ -847,7 +851,7 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 				}
 
 				log.Printf("[DI INFRA] Attempting transcription using %s model %s (lang: %q, fail_fast: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, timeout)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr, provCfg.FailFast, timeout)
+				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, diModel, langParam, promptStr, provCfg.FailFast, timeout)
 				if err == nil {
 					return text, segments, provider, loc, nil
 				}
@@ -926,7 +930,7 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 		}
 
 		if strings.HasPrefix(provider, "bedrock") || strings.Contains(provider, "voxtral") {
-			apiKey := config.AWSBedrockAPIKey
+			apiKey := config.AWSBearerTokenBedrock
 			if provCfg.APIKey != "" {
 				apiKey = provCfg.APIKey
 			}
@@ -964,7 +968,7 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 				if diModel == "" {
 					diModel = "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b"
 				}
-				diURL := config.DeepInfraBaseURL + diModel
+				diURL := config.DeepInfraBaseURL
 				if provCfg.BaseURL != "" {
 					diURL = provCfg.BaseURL
 				}
@@ -975,7 +979,7 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 				}
 
 				log.Printf("[DEEPINFRA STREAM ASR] Attempting streaming transcription using %s model %s (lang: %q, fail_fast: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, timeout)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, langParam, promptStr, provCfg.FailFast, timeout)
+				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, diModel, langParam, promptStr, provCfg.FailFast, timeout)
 				if err == nil {
 					return text, segments, provider, loc, nil
 				}
@@ -1029,6 +1033,18 @@ func (s *UpstreamStreamingSession) SendControl(ctx context.Context, msg map[stri
 	if s.Conn == nil {
 		return fmt.Errorf("upstream connection not open")
 	}
+
+	t, _ := msg["type"].(string)
+	if t == "end_of_stream" || t == "stop" {
+		// Send NeMo-Speech.cpp / OpenAI Realtime commit message
+		commitMsg := map[string]interface{}{
+			"type": "input_audio_buffer.commit",
+		}
+		if commitBytes, err := json.Marshal(commitMsg); err == nil {
+			_ = s.Conn.Write(ctx, websocket.MessageText, commitBytes)
+		}
+	}
+
 	bytes, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -1052,7 +1068,11 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 		return nil, fmt.Errorf("streaming provider %s is not enabled or configured", providerName)
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	dialTimeout := 4 * time.Second
+	if provCfg.TimeoutMs > 0 {
+		dialTimeout = time.Duration(provCfg.TimeoutMs) * time.Millisecond
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(dialCtx, provCfg.BaseURL, &websocket.DialOptions{
@@ -1074,6 +1094,26 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 		}
 	}
 
+	// 1. Send OpenAI Realtime-style session.update configuration for NeMo-Speech.cpp
+	langConfig := "auto"
+	if langParam != "" {
+		langConfig = langParam
+	}
+	sessionUpdateMsg := map[string]interface{}{
+		"type": "session.update",
+		"session": map[string]interface{}{
+			"sample_rate":           16000,
+			"automatic_punctuation": true,
+			"language":              langConfig,
+			"model":                 provCfg.Model,
+			"initial_prompt":        promptStr,
+		},
+	}
+	if sessionUpdateBytes, err := json.Marshal(sessionUpdateMsg); err == nil {
+		_ = conn.Write(ctx, websocket.MessageText, sessionUpdateBytes)
+	}
+
+	// 2. Also send standard start handshake message for compatibility with other streaming backends
 	startMsg := map[string]interface{}{
 		"type":           "start",
 		"model":          provCfg.Model,
@@ -1082,10 +1122,8 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 		"sample_rate":    16000,
 		"channels":       1,
 	}
-	startBytes, _ := json.Marshal(startMsg)
-	if err := conn.Write(ctx, websocket.MessageText, startBytes); err != nil {
-		conn.Close(websocket.StatusInternalError, "failed to send start frame")
-		return nil, fmt.Errorf("failed to send handshake to upstream %s: %w", providerName, err)
+	if startBytes, err := json.Marshal(startMsg); err == nil {
+		_ = conn.Write(ctx, websocket.MessageText, startBytes)
 	}
 
 	sessCtx, sessCancel := context.WithCancel(ctx)
@@ -1100,6 +1138,7 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 
 	go func() {
 		defer close(sess.DoneChan)
+		var deltaAccumulator strings.Builder
 		for {
 			msgType, data, err := conn.Read(sessCtx)
 			if err != nil {
@@ -1107,18 +1146,33 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 				return
 			}
 			if msgType == websocket.MessageText {
-				var parsed struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				}
-				if json.Unmarshal(data, &parsed) == nil && parsed.Text != "" {
-					sess.TextChan <- parsed.Text
-				} else {
-					var fallbackText struct {
-						Transcript string `json:"transcript"`
+				var eventMap map[string]interface{}
+				if err := json.Unmarshal(data, &eventMap); err == nil {
+					eventType, _ := eventMap["type"].(string)
+
+					// Case A: Realtime streaming delta token (e.g. "conversation.item.input_audio_transcription.delta")
+					if deltaVal, ok := eventMap["delta"].(string); ok && deltaVal != "" {
+						deltaAccumulator.WriteString(deltaVal)
+						sess.TextChan <- deltaAccumulator.String()
+						continue
 					}
-					if json.Unmarshal(data, &fallbackText) == nil && fallbackText.Transcript != "" {
-						sess.TextChan <- fallbackText.Transcript
+
+					// Case B: Final completed transcription (e.g. "conversation.item.input_audio_transcription.completed")
+					if transcriptVal, ok := eventMap["transcript"].(string); ok && transcriptVal != "" {
+						deltaAccumulator.Reset()
+						deltaAccumulator.WriteString(transcriptVal)
+						sess.TextChan <- transcriptVal
+						continue
+					}
+
+					// Case C: Standard "text" field
+					if textVal, ok := eventMap["text"].(string); ok && textVal != "" {
+						if eventType == "interim" || eventType == "final" {
+							deltaAccumulator.Reset()
+							deltaAccumulator.WriteString(textVal)
+						}
+						sess.TextChan <- textVal
+						continue
 					}
 				}
 			}

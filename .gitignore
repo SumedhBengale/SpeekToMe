@@ -3,6 +3,8 @@ client/src-tauri/target/
 target/
 
 # Go build outputs
+server/speektome-server
+server/speektome-server-*
 server/speektome-server.exe
 *.exe
 *.exe.local

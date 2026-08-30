@@ -18,8 +18,8 @@ func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 	}
 
 	streamingOrder := pCfg.GetActiveStreamingFallbackOrder()
-	if len(streamingOrder) < 1 || streamingOrder[0] != "bedrock_voxtral_small_24b" {
-		t.Errorf("Expected streaming order to start with 'bedrock_voxtral_small_24b'; got %v", streamingOrder)
+	if len(streamingOrder) < 1 || streamingOrder[0] != "self_hosted_nemotron_3_5" {
+		t.Errorf("Expected streaming order to start with 'self_hosted_nemotron_3_5'; got %v", streamingOrder)
 	}
 
 	llmOrder := pCfg.GetActiveLLMFallbackOrder()

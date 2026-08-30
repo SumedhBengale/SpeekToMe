@@ -81,7 +81,7 @@ fn get_config() -> AppConfig {
 }
 
 #[tauri::command]
-fn save_config(config: AppConfig) {
+fn save_config(app: tauri::AppHandle, config: AppConfig) {
     sync_active_config_atomics(&config);
     {
         let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
@@ -89,8 +89,32 @@ fn save_config(config: AppConfig) {
     }
     config::save_config(&config);
     crate::win32::update_overlay_position();
+    crate::win32::update_tray_icon_for_theme(&config.theme);
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(hwnd_ptr) = window.hwnd() {
+            let hwnd = hwnd_ptr.0 as *mut std::ffi::c_void;
+            crate::win32::set_window_icon_for_theme(hwnd, &config.theme);
+        }
+    }
 }
 
+#[tauri::command]
+fn update_tray_theme(app: tauri::AppHandle, theme: String) {
+    crate::win32::update_tray_icon_for_theme(&theme);
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(hwnd_ptr) = window.hwnd() {
+            let hwnd = hwnd_ptr.0 as *mut std::ffi::c_void;
+            crate::win32::set_window_icon_for_theme(hwnd, &theme);
+        }
+    }
+}
+
+// INTENTIONAL DESIGN: hide_window and close_window destroy the WebView2 window
+// completely instead of just hiding it. This fully unloads the WebView2/Chromium runtime
+// (renderer, GPU, and network processes), saving ~100MB-200MB of RAM while the app runs in the background.
+// All background voice dictation, low-level OS hotkeys, tray icon, and audio recording run
+// in native Win32/Rust threads and remain 100% active. When the user re-opens settings via
+// the tray icon, show_or_create_settings_window() recreates the window instantly.
 #[tauri::command]
 fn hide_window(window: tauri::WebviewWindow) {
     if let Ok(pos) = window.outer_position() {
@@ -101,7 +125,29 @@ fn hide_window(window: tauri::WebviewWindow) {
         let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
         *size_lock = Some(size);
     }
-    let _ = window.destroy();
+    // Gracefully close the WebView2 window to completely unload it from RAM
+    let _ = window.close();
+}
+
+#[tauri::command]
+fn minimize_window(window: tauri::WebviewWindow) {
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+fn toggle_maximize_window(window: tauri::WebviewWindow) {
+    if let Ok(is_max) = window.is_maximized() {
+        if is_max {
+            let _ = window.unmaximize();
+        } else {
+            let _ = window.maximize();
+        }
+    }
+}
+
+#[tauri::command]
+fn close_window(window: tauri::WebviewWindow) {
+    hide_window(window);
 }
 
 #[tauri::command]
@@ -269,7 +315,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
             .title("SpeekTo.Me Settings")
             .resizable(true)
             .transparent(false)
-            .decorations(true)
+            .decorations(false)
             .skip_taskbar(false)
             .min_inner_size(840.0, 620.0);
 
@@ -282,11 +328,16 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         if let Some(size) = size_opt {
             builder = builder.inner_size(size.width as f64, size.height as f64);
         } else {
-            builder = builder.inner_size(900.0, 680.0);
+            builder = builder.inner_size(1200.0, 800.0);
         }
 
         match builder.build() {
             Ok(window) => {
+                if let Ok(hwnd_ptr) = window.hwnd() {
+                    let hwnd = hwnd_ptr.0 as *mut std::ffi::c_void;
+                    let current_theme = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).theme.clone();
+                    crate::win32::set_window_icon_for_theme(hwnd, &current_theme);
+                }
                 let _ = window.show();
                 let _ = window.set_focus();
                 println!("[WINDOW] Settings window built and displayed successfully.");
@@ -451,6 +502,7 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Save window coordinates and size so they can be restored on recreation
                 if let Ok(pos) = window.outer_position() {
                     let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *pos_lock = Some(pos);
@@ -459,7 +511,7 @@ fn main() {
                     let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
                     *size_lock = Some(size);
                 }
-                let _ = window.destroy();
+                // Allow default close/destroy flow so WebView2 completely unloads from RAM
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -486,7 +538,11 @@ fn main() {
             delete_local_meeting,
             get_api_url,
             open_external_url,
-            validate_prompt
+            validate_prompt,
+            minimize_window,
+            toggle_maximize_window,
+            close_window,
+            update_tray_theme
         ]);
 
     println!("[STARTUP 9] Running Tauri event loop...");
