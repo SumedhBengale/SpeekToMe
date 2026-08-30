@@ -158,11 +158,21 @@ pub fn start_streaming_session(
             return;
         }
 
+        let last_chunk_sent_ms = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let chunk_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let session_start = std::time::Instant::now();
+
+        let last_chunk_sent_writer = last_chunk_sent_ms.clone();
+        let chunk_count_writer = chunk_count.clone();
+
         // 2. Stream audio frames from channel
         let write_task = async move {
             while let Some(msg) = audio_rx.recv().await {
                 match msg {
                     StreamAudioMessage::AudioChunk(bytes) => {
+                        let sent_ms = session_start.elapsed().as_millis() as u64;
+                        last_chunk_sent_writer.store(sent_ms, std::sync::atomic::Ordering::Relaxed);
+                        chunk_count_writer.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if write.send(Message::Binary(bytes)).await.is_err() {
                             break;
                         }
@@ -178,6 +188,9 @@ pub fn start_streaming_session(
                 }
             }
         };
+
+        let last_chunk_sent_reader = last_chunk_sent_ms.clone();
+        let chunk_count_reader = chunk_count.clone();
 
         let read_task = async move {
             let mut final_res: Option<StreamFinalResult> = None;
@@ -206,7 +219,15 @@ pub fn start_streaming_session(
 
                             if event.event_type == "interim" {
                                 if !event.text.is_empty() {
-                                    println!("[STREAM INTERIM] Text: {:?}", event.text);
+                                    let sent_ms = last_chunk_sent_reader.load(std::sync::atomic::Ordering::Relaxed);
+                                    let now_ms = session_start.elapsed().as_millis() as u64;
+                                    let rtt_ms = if sent_ms > 0 && now_ms >= sent_ms {
+                                        now_ms - sent_ms
+                                    } else {
+                                        0
+                                    };
+                                    let current_chunk = chunk_count_reader.load(std::sync::atomic::Ordering::Relaxed);
+                                    println!("[STREAM E2E LATENCY] Chunk #{} -> Interim Return: {} ms | Text: {:?}", current_chunk, rtt_ms, event.text);
                                     crate::win32::set_preview_text(&event.text);
                                 }
                             } else if event.event_type == "final" {

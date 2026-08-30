@@ -208,6 +208,10 @@ func (a *App) handleRealStreamingSession(
 	var committedText string
 	var textMutex sync.Mutex
 
+	var lastChunkSentTime time.Time
+	var chunkCount int
+	var timingMutex sync.Mutex
+
 	// Goroutine to receive text tokens from upstream real-time model and forward to client
 	go func() {
 		for text := range upstream.TextChan {
@@ -216,9 +220,21 @@ func (a *App) handleRealStreamingSession(
 				normText, _, _ = a.VocabCache.ProcessText(user.ID, text, vocabTerms)
 			}
 
+			timingMutex.Lock()
+			rtt := time.Duration(0)
+			if !lastChunkSentTime.IsZero() {
+				rtt = time.Since(lastChunkSentTime)
+			}
+			currChunk := chunkCount
+			timingMutex.Unlock()
+
 			textMutex.Lock()
 			committedText = normText
 			textMutex.Unlock()
+
+			if rtt > 0 {
+				log.Printf("[STREAM REAL LATENCY] Chunk #%d -> Upstream GPU RTT: %v | Words: %d", currChunk, rtt.Round(time.Millisecond), len(strings.Fields(normText)))
+			}
 
 			_ = writeStreamJSON(ctx, conn, StreamEventMessage{
 				Type:     "interim",
@@ -250,6 +266,12 @@ func (a *App) handleRealStreamingSession(
 				_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Audio stream payload exceeded limit"})
 				break
 			}
+
+			timingMutex.Lock()
+			lastChunkSentTime = time.Now()
+			chunkCount++
+			timingMutex.Unlock()
+
 			if err := upstream.SendAudio(ctx, data); err != nil {
 				log.Printf("[STREAM REAL ERROR] Failed to forward audio to upstream: %v", err)
 				break
