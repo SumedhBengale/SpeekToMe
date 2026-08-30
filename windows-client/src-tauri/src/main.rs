@@ -441,6 +441,14 @@ fn cleanup_old_recordings() {
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        // Attach to parent console if running from terminal (PowerShell, CMD, Git Bash)
+        // so that println! logs are visible even in --release builds.
+        use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+
     println!("[STARTUP 1] Starting SpeekTo.Me Windows Client...");
 
     // Install process-level default CryptoProvider for rustls / tokio-tungstenite TLS
