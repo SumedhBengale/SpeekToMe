@@ -85,8 +85,8 @@ func BuildAhoCorasick(terms []CompiledTerm) *AhoCorasickTrie {
 		}
 		curr.Term = term
 
-		// If normalized single-string differs, also insert as single token
-		if len(tokens) > 1 && term.Normalized != "" {
+		// If normalized single-string differs and is a single word, also insert as single token
+		if len(tokens) > 1 && term.Normalized != "" && term.TokenCount == 1 {
 			if _, exists := root.Children[term.Normalized]; !exists {
 				root.Children[term.Normalized] = newTrieNode(1)
 			}
@@ -790,23 +790,25 @@ func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 		}
 		compiledTerms = append(compiledTerms, ct)
 
-		// Register distinctive sub-tokens (e.g. "Postgre" for "PostgreSQL")
-		for _, st := range subTokens {
-			if len(st) >= 3 && isSafeAutoExpandSubWord(st) {
-				stNorm := NormalizeString(st)
-				if stNorm != "" && stNorm != computedNormalized {
-					stPhonetic := doubleMetaphone(stNorm)
-					stCt := CompiledTerm{
-						Canonical:     vt.Canonical,
-						Normalized:    stNorm,
-						TokenCount:    1,
-						MinTokenCount: 1,
-						MaxTokenCount: 1,
-						SubTokens:     []string{st},
-						PhoneticKey:   stPhonetic,
-						AcousticClass: getAcousticClass(stPhonetic),
+		// Only register distinctive sub-tokens for single-token compound terms (e.g. "Postgre" for "PostgreSQL", "Fast" for "FastAPI")
+		if ct.TokenCount == 1 && len(subTokens) > 1 {
+			for _, st := range subTokens {
+				if len(st) >= 4 && isSafeAutoExpandSubWord(st) {
+					stNorm := NormalizeString(st)
+					if stNorm != "" && stNorm != computedNormalized {
+						stPhonetic := doubleMetaphone(stNorm)
+						stCt := CompiledTerm{
+							Canonical:     vt.Canonical,
+							Normalized:    stNorm,
+							TokenCount:    1,
+							MinTokenCount: 1,
+							MaxTokenCount: 1,
+							SubTokens:     []string{st},
+							PhoneticKey:   stPhonetic,
+							AcousticClass: getAcousticClass(stPhonetic),
+						}
+						compiledTerms = append(compiledTerms, stCt)
 					}
-					compiledTerms = append(compiledTerms, stCt)
 				}
 			}
 		}
