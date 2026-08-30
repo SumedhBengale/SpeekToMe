@@ -22,6 +22,7 @@ import (
 	"speektome-server/ratelimit"
 	"speektome-server/services"
 	"speektome-server/utils"
+	"speektome-server/vocab"
 )
 
 type StreamStartPayload struct {
@@ -86,6 +87,10 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "Unauthorized")
 		return
 	}
+
+	// TEMPORARY: Inject 1000 hardcoded terms for stress testing the vocabulary matcher
+	vocabTerms = append(vocabTerms, vocab.Generate1000TestTerms()...)
+	log.Printf("[STRESS TEST] Injected 1000 test terms. Total active vocab terms for user %d: %d", user.ID, len(vocabTerms))
 
 	// Rate limiting & quota check
 	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
@@ -215,11 +220,6 @@ func (a *App) handleRealStreamingSession(
 
 	var sessionVocabMutex sync.Mutex
 	sessionProtectedVocab := make(map[string]bool)
-	for _, vt := range vocabTerms {
-		if strings.TrimSpace(vt.Canonical) != "" {
-			sessionProtectedVocab[strings.TrimSpace(vt.Canonical)] = true
-		}
-	}
 
 	// Goroutine to receive text tokens from upstream real-time model and forward to client
 	go func() {
@@ -409,11 +409,6 @@ func (a *App) handlePseudoStreamingSession(
 	var chunkCount int
 
 	var sessionProtectedVocab = make(map[string]bool)
-	for _, vt := range vocabTerms {
-		if strings.TrimSpace(vt.Canonical) != "" {
-			sessionProtectedVocab[strings.TrimSpace(vt.Canonical)] = true
-		}
-	}
 
 	// Read audio chunks loop (VAD pause chunks)
 	for {

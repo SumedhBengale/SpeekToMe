@@ -65,6 +65,23 @@ func TestVocabMatching(t *testing.T) {
 	}
 }
 
+func TestAhoCorasickMultiWord(t *testing.T) {
+	terms := []db.VocabularyTerm{
+		{Canonical: "Microservices Architecture", Normalized: "microservicesarchitecture"},
+		{Canonical: "Zero-Knowledge Proof", Normalized: "zeroknowledgeproof"},
+		{Canonical: "Cerebras CS-3", Normalized: "cerebrascs3"},
+		{Canonical: "TensorRT-LLM", Normalized: "tensorrtllm"},
+	}
+
+	cache := NewVocabCache()
+	input := "Deploying our microservices architecture with zero knowledge proof on Cerebras CS-3 cluster using TensorRT-LLM."
+	res, repls, _ := cache.ProcessText(99, input, terms)
+
+	if len(repls) < 3 {
+		t.Fatalf("Expected at least 3 multi-word replacements, got %d (output: %q)", len(repls), res)
+	}
+}
+
 func TestVocabCacheInvalidate(t *testing.T) {
 	cache := NewVocabCache()
 	terms1 := []db.VocabularyTerm{
@@ -84,5 +101,16 @@ func TestVocabCacheInvalidate(t *testing.T) {
 	res2, r2, _ := cache.ProcessText(42, "Testing beta two here.", terms2)
 	if res2 != "Testing BetaTwo here." || len(r2) != 1 {
 		t.Fatalf("Expected BetaTwo, got %q", res2)
+	}
+}
+
+func Benchmark1000TermsStreamingMatching(b *testing.B) {
+	terms := Generate1000TestTerms()
+	cache := NewVocabCache()
+	input := "We are modernizing our microservices architecture by migrating our backend database to postgress and orchestrating deployments with kubernetes for real time inference."
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, _ = cache.ProcessStreamingText(1234, input, terms)
 	}
 }

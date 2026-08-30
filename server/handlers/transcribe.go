@@ -167,11 +167,6 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true"
 
 	protectedVocabMap := make(map[string]bool)
-	for _, vt := range vocabTerms {
-		if strings.TrimSpace(vt.Canonical) != "" {
-			protectedVocabMap[strings.TrimSpace(vt.Canonical)] = true
-		}
-	}
 
 	var vocabNormalized string = rawText
 	if rawText != "" && a.VocabCache != nil && len(vocabTerms) > 0 {

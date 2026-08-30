@@ -14,10 +14,10 @@ import (
 
 // Match distance thresholds
 const (
-	SingleWordThreshold = 0.88
-	TwoWordThreshold    = 0.84
-	ThreeWordThreshold  = 0.80
-	MultiWordThreshold  = 0.78
+	SingleWordThreshold = 0.82
+	TwoWordThreshold    = 0.78
+	ThreeWordThreshold  = 0.75
+	MultiWordThreshold  = 0.72
 )
 
 // Token wraps individual words and split punctuation bounds
@@ -38,16 +38,256 @@ type CompiledTerm struct {
 	MaxTokenCount int
 	SubTokens     []string
 	PhoneticKey   string
+	AcousticClass string
+}
+
+// TrieNode represents a node in the Aho-Corasick multi-word automaton
+type TrieNode struct {
+	Children map[string]*TrieNode
+	Fail     *TrieNode
+	Term     *CompiledTerm
+	Depth    int
+}
+
+func newTrieNode(depth int) *TrieNode {
+	return &TrieNode{
+		Children: make(map[string]*TrieNode),
+		Depth:    depth,
+	}
+}
+
+// AhoCorasickTrie handles O(L) multi-pattern exact matching across token sequences
+type AhoCorasickTrie struct {
+	Root *TrieNode
+}
+
+func BuildAhoCorasick(terms []CompiledTerm) *AhoCorasickTrie {
+	root := newTrieNode(0)
+
+	// Step 1: Insert all token sequences into the Trie
+	for i := range terms {
+		term := &terms[i]
+		tokens := term.SubTokens
+		if len(tokens) == 0 {
+			tokens = []string{term.Normalized}
+		}
+
+		curr := root
+		for _, tok := range tokens {
+			normTok := NormalizeString(tok)
+			if normTok == "" {
+				continue
+			}
+			if _, exists := curr.Children[normTok]; !exists {
+				curr.Children[normTok] = newTrieNode(curr.Depth + 1)
+			}
+			curr = curr.Children[normTok]
+		}
+		curr.Term = term
+
+		// If normalized single-string differs, also insert as single token
+		if len(tokens) > 1 && term.Normalized != "" {
+			if _, exists := root.Children[term.Normalized]; !exists {
+				root.Children[term.Normalized] = newTrieNode(1)
+			}
+			root.Children[term.Normalized].Term = term
+		}
+	}
+
+	// Step 2: Build BFS failure links
+	queue := make([]*TrieNode, 0)
+	for _, child := range root.Children {
+		child.Fail = root
+		queue = append(queue, child)
+	}
+
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+
+		for key, child := range curr.Children {
+			queue = append(queue, child)
+
+			failNode := curr.Fail
+			for failNode != nil && failNode.Children[key] == nil {
+				failNode = failNode.Fail
+			}
+			if failNode != nil {
+				child.Fail = failNode.Children[key]
+			} else {
+				child.Fail = root
+			}
+		}
+	}
+
+	return &AhoCorasickTrie{Root: root}
+}
+
+// TrieMatchResult describes a span matched by the Aho-Corasick automaton
+type TrieMatchResult struct {
+	StartIdx  int
+	EndIdx    int // inclusive
+	Canonical string
+}
+
+// FindMatches searches the token sequence in a single linear pass
+func (t *AhoCorasickTrie) FindMatches(tokens []Token) []TrieMatchResult {
+	if t == nil || t.Root == nil || len(tokens) == 0 {
+		return nil
+	}
+
+	var rawMatches []TrieMatchResult
+	curr := t.Root
+
+	for i, tok := range tokens {
+		norm := tok.Normalized
+		if norm == "" {
+			continue
+		}
+
+		for curr != nil && curr.Children[norm] == nil {
+			curr = curr.Fail
+		}
+
+		if curr == nil {
+			curr = t.Root
+			continue
+		}
+
+		curr = curr.Children[norm]
+
+		// Check output matches
+		check := curr
+		for check != nil && check != t.Root {
+			if check.Term != nil {
+				start := i - check.Depth + 1
+				if start >= 0 {
+					rawMatches = append(rawMatches, TrieMatchResult{
+						StartIdx:  start,
+						EndIdx:    i,
+						Canonical: check.Term.Canonical,
+					})
+				}
+			}
+			check = check.Fail
+		}
+	}
+
+	if len(rawMatches) == 0 {
+		return nil
+	}
+
+	// Resolve greedy longest non-overlapping matches
+	sort.Slice(rawMatches, func(i, j int) bool {
+		lenI := rawMatches[i].EndIdx - rawMatches[i].StartIdx
+		lenJ := rawMatches[j].EndIdx - rawMatches[j].StartIdx
+		if lenI != lenJ {
+			return lenI > lenJ // longest match first
+		}
+		return rawMatches[i].StartIdx < rawMatches[j].StartIdx
+	})
+
+	covered := make([]bool, len(tokens))
+	var finalMatches []TrieMatchResult
+
+	for _, m := range rawMatches {
+		overlap := false
+		for k := m.StartIdx; k <= m.EndIdx; k++ {
+			if covered[k] {
+				overlap = true
+				break
+			}
+		}
+		if !overlap {
+			for k := m.StartIdx; k <= m.EndIdx; k++ {
+				covered[k] = true
+			}
+			finalMatches = append(finalMatches, m)
+		}
+	}
+
+	sort.Slice(finalMatches, func(i, j int) bool {
+		return finalMatches[i].StartIdx < finalMatches[j].StartIdx
+	})
+
+	return finalMatches
+}
+
+// PhoneticSymSpellBucket holds symmetric delete variants partitioned by acoustic class
+type PhoneticSymSpellBucket struct {
+	// Map: AcousticClass -> Map: Key -> List of candidate terms
+	Buckets map[string]map[string][]CompiledTerm
+}
+
+func BuildPhoneticSymSpell(terms []CompiledTerm) *PhoneticSymSpellBucket {
+	buckets := make(map[string]map[string][]CompiledTerm)
+
+	for _, term := range terms {
+		if term.PhoneticKey == "" {
+			continue
+		}
+
+		acousticClass := getAcousticClass(term.PhoneticKey)
+		if buckets[acousticClass] == nil {
+			buckets[acousticClass] = make(map[string][]CompiledTerm)
+		}
+
+		// 1. Exact phonetic key
+		buckets[acousticClass][term.PhoneticKey] = append(buckets[acousticClass][term.PhoneticKey], term)
+
+		// 2. Phonetic prefix keys (length 2 and 3)
+		runes := []rune(term.PhoneticKey)
+		if len(runes) >= 2 {
+			p2 := string(runes[:2])
+			buckets[acousticClass][p2] = append(buckets[acousticClass][p2], term)
+		}
+		if len(runes) >= 3 {
+			p3 := string(runes[:3])
+			buckets[acousticClass][p3] = append(buckets[acousticClass][p3], term)
+		}
+
+		// 3. Symmetric Delete variants (edit distance 1 deletions)
+		if len(runes) > 1 {
+			for i := 0; i < len(runes); i++ {
+				delKey := string(runes[:i]) + string(runes[i+1:])
+				buckets[acousticClass][delKey] = append(buckets[acousticClass][delKey], term)
+			}
+		}
+	}
+
+	return &PhoneticSymSpellBucket{Buckets: buckets}
+}
+
+func getAcousticClass(phoneticKey string) string {
+	if phoneticKey == "" {
+		return "OTHER"
+	}
+	r := rune(phoneticKey[0])
+	switch r {
+	case 'P', 'B', 'F', 'V', 'W':
+		return "LABIAL"
+	case 'K', 'C', 'G', 'Q':
+		return "VELAR"
+	case 'T', 'D', '0':
+		return "DENTAL"
+	case 'S', 'Z', 'X', 'J':
+		return "SIBILANT"
+	case 'M', 'N', 'L', 'R':
+		return "NASAL_LIQUID"
+	case 'H', 'Y':
+		return "GLIDE"
+	default:
+		return "VOWEL"
+	}
 }
 
 // UserVocabulary holds precompiled index structures for fast matching
 type UserVocabulary struct {
-	NormalizedLookup map[string]string
-	TermsByCount     map[int][]CompiledTerm
-	TermsByLength    map[int][]CompiledTerm
-	TermsByPhonetic  map[string][]CompiledTerm
-	Terms            []CompiledTerm
-	MaxTokenCount    int
+	Trie            *AhoCorasickTrie
+	PhoneticSym     *PhoneticSymSpellBucket
+	NormalizedMap   map[string]string
+	Terms           []CompiledTerm
+	MaxTokenCount   int
 }
 
 // VocabCache provides thread-safe caching of compiled user vocabularies
@@ -205,17 +445,11 @@ func Tokenize(text string) []Token {
 	var tokens []Token
 	runes := []rune(text)
 	n := len(runes)
-
-	isWordChar := func(r rune) bool {
-		return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '+' || r == '#'
-	}
-	isSpace := func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '\n' || r == '\r'
-	}
-
 	i := 0
+
 	for i < n {
-		for i < n && isSpace(runes[i]) {
+		// Skip whitespace
+		for i < n && (runes[i] == ' ' || runes[i] == '\t' || runes[i] == '\n' || runes[i] == '\r') {
 			i++
 		}
 		if i >= n {
@@ -223,108 +457,152 @@ func Tokenize(text string) []Token {
 		}
 
 		start := i
-		for i < n && !isSpace(runes[i]) {
+		for i < n && !(runes[i] == ' ' || runes[i] == '\t' || runes[i] == '\n' || runes[i] == '\r') {
 			i++
 		}
 		end := i
 
-		firstWordIdx := -1
-		lastWordIdx := -1
-		for j := start; j < end; j++ {
-			if isWordChar(runes[j]) {
-				if firstWordIdx == -1 {
-					firstWordIdx = j
-				}
-				lastWordIdx = j
-			}
-		}
-
-		var tok Token
-		if firstWordIdx == -1 {
-			tok = Token{
-				Original:   string(runes[start:end]),
-				Prefix:     "",
-				Clean:      "",
-				Suffix:     string(runes[start:end]),
-				Normalized: "",
-			}
-		} else {
-			tok = Token{
-				Original:   string(runes[start:end]),
-				Prefix:     string(runes[start:firstWordIdx]),
-				Clean:      string(runes[firstWordIdx : lastWordIdx+1]),
-				Suffix:     string(runes[lastWordIdx+1 : end]),
-				Normalized: NormalizeString(string(runes[firstWordIdx : lastWordIdx+1])),
-			}
-		}
+		rawWord := string(runes[start:end])
+		tok := parseWordBoundaries(rawWord)
 		tokens = append(tokens, tok)
 	}
+
 	return tokens
 }
 
-// ExtractSubTokens splits terms on symbols and CamelCase boundaries
-func ExtractSubTokens(term string) []string {
-	var subTokens []string
-	var current strings.Builder
+func parseWordBoundaries(raw string) Token {
+	runes := []rune(raw)
+	n := len(runes)
+	if n == 0 {
+		return Token{}
+	}
 
-	runes := []rune(term)
+	leadingIdx := 0
+	for leadingIdx < n && isPunctuation(runes[leadingIdx]) {
+		leadingIdx++
+	}
+
+	trailingIdx := n - 1
+	for trailingIdx >= leadingIdx && isPunctuation(runes[trailingIdx]) {
+		trailingIdx--
+	}
+
+	if leadingIdx > trailingIdx {
+		return Token{
+			Original:   raw,
+			Prefix:     raw,
+			Clean:      "",
+			Suffix:     "",
+			Normalized: "",
+		}
+	}
+
+	prefix := string(runes[:leadingIdx])
+	clean := string(runes[leadingIdx : trailingIdx+1])
+	suffix := string(runes[trailingIdx+1:])
+
+	return Token{
+		Original:   raw,
+		Prefix:     prefix,
+		Clean:      clean,
+		Suffix:     suffix,
+		Normalized: NormalizeString(clean),
+	}
+}
+
+func isPunctuation(r rune) bool {
+	// Preserve specific symbols that can be part of identifiers (C#, C++)
+	if r == '#' || r == '+' {
+		return false
+	}
+	return (r >= 33 && r <= 47) || (r >= 58 && r <= 64) || (r >= 91 && r <= 96) || (r >= 123 && r <= 126)
+}
+
+// ExtractSubTokens splits camelCase, PascalCase, hyphenated, and snake_case terms
+func ExtractSubTokens(s string) []string {
+	var words []string
+	var curr strings.Builder
+	runes := []rune(s)
 	n := len(runes)
 
 	for i := 0; i < n; i++ {
 		r := runes[i]
-		if r == '.' || r == '-' || r == '_' || r == '/' || r == '@' || r == ':' || r == ';' {
-			if current.Len() > 0 {
-				subTokens = append(subTokens, NormalizeString(current.String()))
-				current.Reset()
+
+		if r == '-' || r == '_' || r == '.' || r == '/' || r == ' ' {
+			if curr.Len() > 0 {
+				words = append(words, curr.String())
+				curr.Reset()
 			}
 			continue
 		}
 
-		if i > 0 && r >= 'A' && r <= 'Z' && runes[i-1] >= 'a' && runes[i-1] <= 'z' {
-			if current.Len() > 0 {
-				subTokens = append(subTokens, NormalizeString(current.String()))
-				current.Reset()
+		if r >= 'A' && r <= 'Z' {
+			if curr.Len() > 0 {
+				prevIsLower := i > 0 && (runes[i-1] >= 'a' && runes[i-1] <= 'z')
+				nextIsLower := i+1 < n && (runes[i+1] >= 'a' && runes[i+1] <= 'z')
+				if prevIsLower || (curr.Len() > 1 && nextIsLower) {
+					words = append(words, curr.String())
+					curr.Reset()
+				}
 			}
 		}
 
-		current.WriteRune(r)
+		curr.WriteRune(r)
 	}
 
-	if current.Len() > 0 {
-		subTokens = append(subTokens, NormalizeString(current.String()))
+	if curr.Len() > 0 {
+		words = append(words, curr.String())
 	}
 
-	var cleaned []string
-	for _, st := range subTokens {
-		if st != "" {
-			cleaned = append(cleaned, st)
+	if len(words) == 1 {
+		tokens := Tokenize(s)
+		if len(tokens) > 1 {
+			out := make([]string, len(tokens))
+			for idx, tok := range tokens {
+				out[idx] = tok.Clean
+			}
+			return out
 		}
 	}
-	return cleaned
+
+	return words
 }
 
-// doubleMetaphone computes a simplified phonetic representation for fuzzy matching
+func isVowel(r rune) bool {
+	return r == 'a' || r == 'e' || r == 'i' || r == 'o' || r == 'u' || r == 'y'
+}
+
+func isSafeAutoExpandSubWord(word string) bool {
+	norm := NormalizeString(word)
+	if len(norm) < 3 {
+		return false
+	}
+
+	connectors := map[string]bool{
+		"the": true, "and": true, "for": true, "with": true,
+		"from": true, "that": true, "this": true, "have": true,
+		"are": true, "was": true, "were": true, "been": true,
+		"you": true, "your": true, "their": true, "there": true,
+		"they": true, "what": true, "when": true, "where": true,
+		"who": true, "how": true, "why": true, "which": true,
+		"will": true, "would": true, "could": true, "should": true,
+		"not": true, "but": true, "can": true, "all": true,
+	}
+	return !connectors[norm]
+}
+
 func doubleMetaphone(s string) string {
-	s = strings.ToLower(s)
-	runes := []rune(s)
-	n := len(runes)
-	if n == 0 {
+	s = NormalizeString(s)
+	if s == "" {
 		return ""
 	}
 
+	runes := []rune(s)
+	n := len(runes)
 	var sb strings.Builder
-
-	isVowel := func(r rune) bool {
-		return r == 'a' || r == 'e' || r == 'i' || r == 'o' || r == 'u' || r == 'y'
-	}
 
 	for i := 0; i < n; i++ {
 		r := runes[i]
-		if i == 0 && isVowel(r) {
-			sb.WriteRune('A')
-			continue
-		}
-
 		switch r {
 		case 'b':
 			sb.WriteRune('P')
@@ -339,6 +617,9 @@ func doubleMetaphone(s string) string {
 				i++
 			} else {
 				sb.WriteRune('K')
+			}
+			if i+1 < n && runes[i+1] == 'c' {
+				i++
 			}
 		case 'd':
 			if i+1 < n && runes[i+1] == 'g' {
@@ -358,17 +639,13 @@ func doubleMetaphone(s string) string {
 		case 'g':
 			if i+1 < n && (runes[i+1] == 'e' || runes[i+1] == 'i' || runes[i+1] == 'y') {
 				sb.WriteRune('J')
+			} else if i+1 < n && runes[i+1] == 'h' {
+				i++
 			} else {
 				sb.WriteRune('K')
 			}
 			if i+1 < n && runes[i+1] == 'g' {
 				i++
-			}
-		case 'h':
-			if i > 0 && !isVowel(runes[i-1]) {
-				// silent h after consonant
-			} else if i+1 < n && isVowel(runes[i+1]) {
-				sb.WriteRune('H')
 			}
 		case 'j':
 			sb.WriteRune('J')
@@ -452,32 +729,11 @@ func doubleMetaphone(s string) string {
 	return sb.String()
 }
 
-func isSafeAutoExpandSubWord(word string) bool {
-	norm := NormalizeString(word)
-	if len(norm) < 3 {
-		return false
-	}
-
-	connectors := map[string]bool{
-		"the": true, "and": true, "for": true, "with": true,
-		"from": true, "that": true, "this": true, "have": true,
-		"are": true, "was": true, "were": true, "been": true,
-		"you": true, "your": true, "their": true, "there": true,
-		"they": true, "what": true, "when": true, "where": true,
-		"who": true, "how": true, "why": true, "which": true,
-		"will": true, "would": true, "could": true, "should": true,
-		"not": true, "but": true, "can": true, "all": true,
-	}
-	return !connectors[norm]
-}
-
-// CompileUserVocabulary compiles database terms into lookup maps
+// CompileUserVocabulary compiles database terms into Trie + Phonetic SymSpell maps
 func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
-	normalizedLookup := make(map[string]string)
+	normalizedMap := make(map[string]string)
 	compiledTerms := make([]CompiledTerm, 0, len(dbTerms))
-	termsByCount := make(map[int][]CompiledTerm)
-	termsByLength := make(map[int][]CompiledTerm)
-	termsByPhonetic := make(map[string][]CompiledTerm)
+	maxTokenCount := 1
 
 	for _, vt := range dbTerms {
 		if strings.TrimSpace(vt.Canonical) == "" {
@@ -493,9 +749,9 @@ func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 		subTokens := ExtractSubTokens(vt.Canonical)
 		joinedSubTokens := strings.Join(subTokens, "")
 
-		normalizedLookup[computedNormalized] = vt.Canonical
+		normalizedMap[computedNormalized] = vt.Canonical
 		if joinedSubTokens != "" && joinedSubTokens != computedNormalized {
-			normalizedLookup[joinedSubTokens] = vt.Canonical
+			normalizedMap[joinedSubTokens] = vt.Canonical
 		}
 
 		minCount := len(normalizedTokens)
@@ -520,6 +776,7 @@ func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 		}
 
 		phoneticKey := doubleMetaphone(computedNormalized)
+		acousticClass := getAcousticClass(phoneticKey)
 
 		ct := CompiledTerm{
 			Canonical:     vt.Canonical,
@@ -529,33 +786,35 @@ func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 			MaxTokenCount: maxCount,
 			SubTokens:     subTokens,
 			PhoneticKey:   phoneticKey,
+			AcousticClass: acousticClass,
 		}
 		compiledTerms = append(compiledTerms, ct)
 
-		countsToRegister := map[int]bool{
-			len(normalizedTokens): true,
-		}
-		if len(subTokens) > 0 {
-			countsToRegister[len(subTokens)] = true
-		}
-		if maxCount > len(normalizedTokens) {
-			countsToRegister[maxCount] = true
-		}
-
-		for c := range countsToRegister {
-			termsByCount[c] = append(termsByCount[c], ct)
-		}
-
-		termLen := len(computedNormalized)
-		termsByLength[termLen] = append(termsByLength[termLen], ct)
-		if len(joinedSubTokens) > 0 && len(joinedSubTokens) != termLen {
-			termsByLength[len(joinedSubTokens)] = append(termsByLength[len(joinedSubTokens)], ct)
+		// Register distinctive sub-tokens (e.g. "Postgre" for "PostgreSQL")
+		for _, st := range subTokens {
+			if len(st) >= 3 && isSafeAutoExpandSubWord(st) {
+				stNorm := NormalizeString(st)
+				if stNorm != "" && stNorm != computedNormalized {
+					stPhonetic := doubleMetaphone(stNorm)
+					stCt := CompiledTerm{
+						Canonical:     vt.Canonical,
+						Normalized:    stNorm,
+						TokenCount:    1,
+						MinTokenCount: 1,
+						MaxTokenCount: 1,
+						SubTokens:     []string{st},
+						PhoneticKey:   stPhonetic,
+						AcousticClass: getAcousticClass(stPhonetic),
+					}
+					compiledTerms = append(compiledTerms, stCt)
+				}
+			}
 		}
 
 		// Support symbol expansions (e.g. C# -> c sharp, C++ -> c plus plus)
 		if strings.Contains(computedNormalized, "#") {
 			sharpNorm := strings.ReplaceAll(computedNormalized, "#", "sharp")
-			normalizedLookup[sharpNorm] = vt.Canonical
+			normalizedMap[sharpNorm] = vt.Canonical
 			sharpCt := CompiledTerm{
 				Canonical:     vt.Canonical,
 				Normalized:    sharpNorm,
@@ -564,14 +823,13 @@ func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 				MaxTokenCount: 2,
 				SubTokens:     []string{"c", "sharp"},
 				PhoneticKey:   doubleMetaphone(sharpNorm),
+				AcousticClass: getAcousticClass(doubleMetaphone(sharpNorm)),
 			}
 			compiledTerms = append(compiledTerms, sharpCt)
-			termsByCount[2] = append(termsByCount[2], sharpCt)
-			termsByLength[len(sharpNorm)] = append(termsByLength[len(sharpNorm)], sharpCt)
 		}
 		if strings.Contains(computedNormalized, "++") {
 			plusNorm := strings.ReplaceAll(computedNormalized, "++", "plusplus")
-			normalizedLookup[plusNorm] = vt.Canonical
+			normalizedMap[plusNorm] = vt.Canonical
 			plusCt := CompiledTerm{
 				Canonical:     vt.Canonical,
 				Normalized:    plusNorm,
@@ -580,75 +838,31 @@ func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 				MaxTokenCount: 3,
 				SubTokens:     []string{"c", "plus", "plus"},
 				PhoneticKey:   doubleMetaphone(plusNorm),
+				AcousticClass: getAcousticClass(doubleMetaphone(plusNorm)),
 			}
 			compiledTerms = append(compiledTerms, plusCt)
-			termsByCount[3] = append(termsByCount[3], plusCt)
-			termsByLength[len(plusNorm)] = append(termsByLength[len(plusNorm)], plusCt)
 		}
 
-		// Smart sub-word auto-expansion for multi-word entries ONLY
-		if len(normalizedTokens) > 1 {
-			var candidateWords []string
-			for _, tok := range tokens {
-				if tok.Clean != "" {
-					candidateWords = append(candidateWords, tok.Clean)
-				}
-			}
-
-			for _, word := range candidateWords {
-				if isSafeAutoExpandSubWord(word) {
-					subNorm := NormalizeString(word)
-					if subNorm != "" {
-						if _, exists := normalizedLookup[subNorm]; !exists {
-							runes := []rune(word)
-							if len(runes) > 0 && runes[0] >= 'a' && runes[0] <= 'z' {
-								runes[0] = runes[0] - 'a' + 'A'
-							}
-							subCanonical := string(runes)
-							normalizedLookup[subNorm] = subCanonical
-
-							subPhonetic := doubleMetaphone(subNorm)
-							subCt := CompiledTerm{
-								Canonical:     subCanonical,
-								Normalized:    subNorm,
-								TokenCount:    1,
-								MinTokenCount: 1,
-								MaxTokenCount: 1,
-								SubTokens:     []string{subNorm},
-								PhoneticKey:   subPhonetic,
-							}
-							compiledTerms = append(compiledTerms, subCt)
-							termsByCount[1] = append(termsByCount[1], subCt)
-							termsByLength[len(subNorm)] = append(termsByLength[len(subNorm)], subCt)
-							if subPhonetic != "" {
-								termsByPhonetic[subPhonetic] = append(termsByPhonetic[subPhonetic], subCt)
-							}
-						}
-					}
-				}
-			}
+		if maxCount > maxTokenCount {
+			maxTokenCount = maxCount
 		}
 	}
 
-	maxTokenCount := 0
-	for _, term := range compiledTerms {
-		if term.MaxTokenCount > maxTokenCount {
-			maxTokenCount = term.MaxTokenCount
-		}
-	}
+	trie := BuildAhoCorasick(compiledTerms)
+	phoneticSym := BuildPhoneticSymSpell(compiledTerms)
 
 	return &UserVocabulary{
-		NormalizedLookup: normalizedLookup,
-		TermsByCount:     termsByCount,
-		TermsByLength:    termsByLength,
-		TermsByPhonetic:  termsByPhonetic,
-		Terms:            compiledTerms,
-		MaxTokenCount:    maxTokenCount,
+		Trie:          trie,
+		PhoneticSym:   phoneticSym,
+		NormalizedMap: normalizedMap,
+		Terms:         compiledTerms,
+		MaxTokenCount: maxTokenCount,
 	}
 }
 
-// MatchAndReplace executes greedy longest-match lookup and fuzzy phonetic replacement.
-// Returns the transformed string, the slice of unique replaced canonical terms, and the input token count.
+// MatchAndReplace executes:
+// Phase 1: O(L) Aho-Corasick Multi-Pattern Trie exact matching.
+// Phase 2: O(1) Phonetic SymSpell with Acoustic Super-Bucketing on trailing window tokens.
 func MatchAndReplace(text string, vocab *UserVocabulary) (string, []string, int) {
 	tokens := Tokenize(text)
 	if len(tokens) == 0 {
@@ -656,179 +870,154 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, []string, int)
 	}
 
 	n := len(tokens)
-	var resultTokens []Token
-	maxK := vocab.MaxTokenCount
-	if maxK <= 0 {
-		maxK = 1
-	}
-
 	replacedMap := make(map[string]bool)
-	i := 0
 
-	// Sliding window optimization: for long streaming transcripts (> 12 tokens), words before the
-	// active trailing window are already stable. Fast O(1) exact map lookup runs across all tokens,
-	// while fuzzy phonetic matching focuses strictly on the active trailing context window.
-	windowSize := 12
-	if vocab.MaxTokenCount+4 > windowSize {
-		windowSize = vocab.MaxTokenCount + 4
+	// Step 1: Phase 1 Aho-Corasick Exact Multi-Word Matching in O(L)
+	trieMatches := vocab.Trie.FindMatches(tokens)
+	matchedSpans := make(map[int]TrieMatchResult) // Key: StartIdx -> Result
+	coveredIndices := make(map[int]bool)
+
+	for _, m := range trieMatches {
+		matchedSpans[m.StartIdx] = m
+		for k := m.StartIdx; k <= m.EndIdx; k++ {
+			coveredIndices[k] = true
+		}
+		replacedMap[m.Canonical] = true
 	}
-	prefixThreshold := n - windowSize
+
+	// Step 2: Phase 2 Phonetic SymSpell on uncovered tokens in trailing window
+	windowWords := 12
+	if vocab.MaxTokenCount+4 > windowWords {
+		windowWords = vocab.MaxTokenCount + 4
+	}
+	prefixThreshold := n - windowWords
 	if prefixThreshold < 0 {
 		prefixThreshold = 0
 	}
 
+	var resultTokens []Token
+	i := 0
+
 	for i < n {
-		matched := false
-
-		// Stage 1: Exact and Normalized N-Gram Lookup (O(1) Map Lookup)
-		for k := maxK; k >= 1; k-- {
-			if i+k <= n {
-				var sb strings.Builder
-				for j := 0; j < k; j++ {
-					sb.WriteString(tokens[i+j].Normalized)
-				}
-				joinedNorm := sb.String()
-
-				if canonical, ok := vocab.NormalizedLookup[joinedNorm]; ok {
-					leadTok := tokens[i]
-					trailTok := tokens[i+k-1]
-
-					resultTokens = append(resultTokens, Token{
-						Original:   canonical,
-						Prefix:     leadTok.Prefix,
-						Clean:      canonical,
-						Suffix:     trailTok.Suffix,
-						Normalized: joinedNorm,
-					})
-					i += k
-					replacedMap[canonical] = true
-					matched = true
-					break
-				}
-			}
-		}
-
-		if matched {
+		// If index is covered by exact Trie match
+		if m, exists := matchedSpans[i]; exists {
+			leadTok := tokens[m.StartIdx]
+			trailTok := tokens[m.EndIdx]
+			resultTokens = append(resultTokens, Token{
+				Original:   m.Canonical,
+				Prefix:     leadTok.Prefix,
+				Clean:      m.Canonical,
+				Suffix:     trailTok.Suffix,
+				Normalized: m.Canonical,
+			})
+			i = m.EndIdx + 1
 			continue
 		}
 
-		// In the stable prefix zone, exact lookup is sufficient
+		if coveredIndices[i] {
+			// Part of an ongoing multi-word match handled by StartIdx
+			i++
+			continue
+		}
+
+		// Fast Exact / Normalized Map check
+		if canonical, ok := vocab.NormalizedMap[tokens[i].Normalized]; ok {
+			leadTok := tokens[i]
+			resultTokens = append(resultTokens, Token{
+				Original:   canonical,
+				Prefix:     leadTok.Prefix,
+				Clean:      canonical,
+				Suffix:     leadTok.Suffix,
+				Normalized: canonical,
+			})
+			replacedMap[canonical] = true
+			i++
+			continue
+		}
+
+		// If in stable prefix zone, skip heavy fuzzy checking
 		if i < prefixThreshold {
 			resultTokens = append(resultTokens, tokens[i])
 			i++
 			continue
 		}
 
-		// Stage 2: Multi-stage Fuzzy / Phonetic matching
-		var bestCanonical string
-		var bestScore float64
-		var bestK int
+		// Phase 2: Phonetic SymSpell matching on window tokens (testing 1-word, 2-word, 3-word spans)
+		bestCanonical := ""
+		bestScore := 0.0
+		bestK := 0
+
+		maxK := vocab.MaxTokenCount
+		if maxK > 4 {
+			maxK = 4
+		}
 
 		for k := maxK; k >= 1; k-- {
 			if i+k <= n {
-				var sb strings.Builder
+				var sbNorm strings.Builder
 				for j := 0; j < k; j++ {
-					sb.WriteString(tokens[i+j].Normalized)
+					sbNorm.WriteString(tokens[i+j].Normalized)
 				}
-				joinedNorm := sb.String()
-				if joinedNorm == "" {
+				joinedNorm := sbNorm.String()
+				if len(joinedNorm) < 2 {
 					continue
 				}
 
-				threshold := MultiWordThreshold
-				if k == 1 {
-					threshold = SingleWordThreshold
-				} else if k == 2 {
-					threshold = TwoWordThreshold
-				} else if k == 3 {
-					threshold = ThreeWordThreshold
+				// Check exact normalized map for joined multi-tokens (e.g. "csharp" or "fastapi")
+				if canonical, ok := vocab.NormalizedMap[joinedNorm]; ok {
+					bestCanonical = canonical
+					bestK = k
+					break
 				}
 
-				// Check terms with token count k
-				if candidates, ok := vocab.TermsByCount[k]; ok {
-					for _, term := range candidates {
-						if len(joinedNorm) <= 2 && joinedNorm != term.Normalized {
-							continue
-						}
-						lenDiff := absVal(len(joinedNorm) - len(term.Normalized))
-						matchPrefix := false
-						if len(joinedNorm) >= 2 && len(term.Normalized) >= 2 {
-							matchPrefix = joinedNorm[:2] == term.Normalized[:2]
-						} else if len(joinedNorm) >= 1 && len(term.Normalized) >= 1 {
-							matchPrefix = joinedNorm[:1] == term.Normalized[:1]
+				// Phonetic SymSpell Bucket Lookup
+				phoneticQuery := doubleMetaphone(joinedNorm)
+				if phoneticQuery != "" {
+					acousticClass := getAcousticClass(phoneticQuery)
+					if bucket, ok := vocab.PhoneticSym.Buckets[acousticClass]; ok {
+						threshold := SingleWordThreshold
+						if k == 2 {
+							threshold = TwoWordThreshold
+						} else if k == 3 {
+							threshold = ThreeWordThreshold
+						} else if k >= 4 {
+							threshold = MultiWordThreshold
 						}
 
-						subTokenMatch := true
-						if k >= 2 {
-							if len(term.SubTokens) == k {
-								for j := 0; j < k; j++ {
-									tokSim := jaroWinkler(tokens[i+j].Normalized, term.SubTokens[j])
-									minTokSim := 0.70
-									if len(term.SubTokens[j]) <= 2 {
-										minTokSim = 0.88
-									}
-									if tokSim < minTokSim {
-										subTokenMatch = false
-										break
-									}
-								}
-							} else {
-								subTokenMatch = false
+						candidates := bucket[phoneticQuery]
+						qRunes := []rune(phoneticQuery)
+						if len(qRunes) >= 2 {
+							p2 := string(qRunes[:2])
+							if pMatches, ok := bucket[p2]; ok {
+								candidates = append(candidates, pMatches...)
 							}
-						} else {
-							subTokenMatch = (term.TokenCount == 1)
+						}
+						if len(qRunes) >= 3 {
+							p3 := string(qRunes[:3])
+							if pMatches, ok := bucket[p3]; ok {
+								candidates = append(candidates, pMatches...)
+							}
+						}
+						if len(qRunes) > 1 {
+							for d := 0; d < len(qRunes); d++ {
+								delQ := string(qRunes[:d]) + string(qRunes[d+1:])
+								if delMatches, hasDel := bucket[delQ]; hasDel {
+									candidates = append(candidates, delMatches...)
+								}
+							}
 						}
 
-						if lenDiff <= 2*k && matchPrefix && subTokenMatch {
-							sim := jaroWinkler(joinedNorm, term.Normalized)
+						// Evaluate candidates
+						for _, cand := range candidates {
+							if absVal(cand.TokenCount-k) > 1 && absVal(len(cand.SubTokens)-k) > 1 {
+								continue
+							}
+
+							sim := jaroWinkler(joinedNorm, cand.Normalized)
 							if sim >= threshold && sim > bestScore {
 								bestScore = sim
-								bestCanonical = term.Canonical
+								bestCanonical = cand.Canonical
 								bestK = k
-							}
-						}
-					}
-				}
-
-				// Check Phonetic Pool
-				if bestCanonical == "" {
-					windowPhonetic := doubleMetaphone(joinedNorm)
-					if windowPhonetic != "" {
-						if candidates, ok := vocab.TermsByPhonetic[windowPhonetic]; ok {
-							for _, term := range candidates {
-								if k > term.MaxTokenCount {
-									continue
-								}
-								subTokenMatch := true
-								if k >= 2 {
-									if len(term.SubTokens) == k {
-										for j := 0; j < k; j++ {
-											tokSim := jaroWinkler(tokens[i+j].Normalized, term.SubTokens[j])
-											if tokSim < 0.70 {
-												subTokenMatch = false
-												break
-											}
-										}
-									} else {
-										subTokenMatch = false
-									}
-								} else {
-									subTokenMatch = (term.TokenCount == 1)
-								}
-
-								matchPrefix := false
-								if len(joinedNorm) >= 1 && len(term.Normalized) >= 1 {
-									matchPrefix = joinedNorm[:1] == term.Normalized[:1]
-								}
-
-								if matchPrefix && subTokenMatch {
-									sim := jaroWinkler(joinedNorm, term.Normalized)
-									if sim >= threshold-0.05 && sim > bestScore {
-										bestScore = sim
-										bestCanonical = term.Canonical
-										bestK = k
-									}
-								}
 							}
 						}
 					}
@@ -839,7 +1028,6 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, []string, int)
 		if bestCanonical != "" && bestK > 0 {
 			leadTok := tokens[i]
 			trailTok := tokens[i+bestK-1]
-
 			resultTokens = append(resultTokens, Token{
 				Original:   bestCanonical,
 				Prefix:     leadTok.Prefix,
@@ -847,8 +1035,8 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, []string, int)
 				Suffix:     trailTok.Suffix,
 				Normalized: bestCanonical,
 			})
-			i += bestK
 			replacedMap[bestCanonical] = true
+			i += bestK
 		} else {
 			resultTokens = append(resultTokens, tokens[i])
 			i++
