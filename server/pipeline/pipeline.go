@@ -21,6 +21,7 @@ type PipelineContext struct {
 	UserID      int64
 	Debug       bool
 	LLMProvider string // Tracks which LLM provider was used
+	LLMModel    string // Tracks which exact model name was used (e.g. gpt-oss-120b, deepseek-chat)
 	LLMRouting  string // Tracks the routing/location of the LLM request
 }
 
@@ -219,6 +220,7 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 		if err == nil {
 			if pctx != nil {
 				pctx.LLMProvider = providerKey
+				pctx.LLMModel = useModel
 				pctx.LLMRouting = loc
 			}
 			return res, nil

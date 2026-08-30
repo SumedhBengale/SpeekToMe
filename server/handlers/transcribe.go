@@ -191,14 +191,14 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(protectedList)
 
-		enhancer := pipeline.NewAIEnhancementTransform(prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
+		enhancer := pipeline.NewAIEnhancementTransform(prompt, "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		tstart := time.Now()
 		enhancedText, terr := enhancer.Transform(ctx, vocabNormalized, pctx)
 		if terr != nil {
 			log.Printf("[PIPELINE ERROR] AI Enhancement failed: %v", terr)
 		} else if enhancedText != "" {
 			currentText = enhancedText
-			log.Printf("[TRANSCRIBE ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s, protected vocab: %d terms)", time.Since(tstart).Seconds(), "deepseek-v4-flash", pctx.LLMProvider, len(protectedList))
+			log.Printf("[TRANSCRIBE ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s, protected vocab: %d terms)", time.Since(tstart).Seconds(), pctx.LLMModel, pctx.LLMProvider, len(protectedList))
 		}
 		dsLatency = time.Since(tstart).Seconds()
 	}
@@ -222,7 +222,10 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	loggedModel := ""
 	if enhance {
-		loggedModel = "deepseek-v4-flash"
+		loggedModel = pctx.LLMModel
+		if loggedModel == "" {
+			loggedModel = pctx.LLMProvider
+		}
 	}
 	logID, err := a.DB.LogUsageAndUpdateQuota(user.ID, audioDuration, groqLatency, dsLatency, totalLatency, enhance, loggedModel, rawText, finalOutput, status, audioSizeBytes, whisperProvider, pctx.LLMProvider)
 	if err != nil {

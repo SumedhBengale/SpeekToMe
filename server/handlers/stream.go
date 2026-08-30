@@ -334,14 +334,14 @@ func (a *App) handleRealStreamingSession(
 
 	if startPayload.Enhance && finalRawTranscript != "" {
 		tstart := time.Now()
-		enhancer := pipeline.NewAIEnhancementTransform(startPayload.Prompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
+		enhancer := pipeline.NewAIEnhancementTransform(startPayload.Prompt, "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
 			log.Printf("[STREAM REAL ENHANCE ERROR] %v", terr)
 		} else if enhancedText != "" {
 			currentText = enhancedText
-			log.Printf("[STREAM REAL ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s, protected vocab: %d terms)", dsLatency, "deepseek-v4-flash", pctx.LLMProvider, len(protectedList))
+			log.Printf("[STREAM REAL ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s, protected vocab: %d terms)", dsLatency, pctx.LLMModel, pctx.LLMProvider, len(protectedList))
 		}
 	}
 
@@ -353,7 +353,10 @@ func (a *App) handleRealStreamingSession(
 	}
 	loggedModel := ""
 	if startPayload.Enhance {
-		loggedModel = "deepseek-v4-flash"
+		loggedModel = pctx.LLMModel
+		if loggedModel == "" {
+			loggedModel = pctx.LLMProvider
+		}
 	}
 
 	logID, err := a.DB.LogUsageAndUpdateQuota(
@@ -569,13 +572,13 @@ func (a *App) handlePseudoStreamingSession(
 	if enhance && finalRawTranscript != "" {
 		tstart := time.Now()
 		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Prompt: %q | Raw Input: %q | Protected Vocab: %d terms", user.ID, customPrompt, finalRawTranscript, len(protectedList))
-		enhancer := pipeline.NewAIEnhancementTransform(customPrompt, "deepseek-v4-flash", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
+		enhancer := pipeline.NewAIEnhancementTransform(customPrompt, "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
 			log.Printf("[STREAM AI ENHANCE ERROR] User ID: %d | Error: %v | Latency: %.2fs", user.ID, terr, dsLatency)
 		} else if enhancedText != "" {
-			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Enhanced: %q | Latency: %.2fs (model: %s, provider: %s)", user.ID, enhancedText, dsLatency, "deepseek-v4-flash", pctx.LLMProvider)
+			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Enhanced: %q | Latency: %.2fs (model: %s, provider: %s)", user.ID, enhancedText, dsLatency, pctx.LLMModel, pctx.LLMProvider)
 			currentText = enhancedText
 		}
 	}
@@ -590,7 +593,10 @@ func (a *App) handlePseudoStreamingSession(
 	}
 	loggedModel := ""
 	if enhance {
-		loggedModel = "deepseek-v4-flash"
+		loggedModel = pctx.LLMModel
+		if loggedModel == "" {
+			loggedModel = pctx.LLMProvider
+		}
 	}
 
 	logID, err := a.DB.LogUsageAndUpdateQuota(
