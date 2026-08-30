@@ -154,14 +154,19 @@ func main() {
 	mux.HandleFunc("POST /billing/cancel-subscription", app.HandleCancelSubscription)
 	mux.HandleFunc("POST /webhooks/razorpay", app.HandleRazorpayWebhook)
 
-	// Initialize and start the EC2 Spot Orchestrator
+	// Initialize and start the EC2 Spot Orchestrator only when explicitly enabled
 	spotAMI := os.Getenv("SPOT_AMI_ID")
 	spotKey := os.Getenv("SPOT_KEY_NAME")
 	spotSG := os.Getenv("SPOT_SECURITY_GROUP")
 	spotUserData := os.Getenv("SPOT_USER_DATA")
 	spotOrchestrator := orchestrator.NewOrchestrator(nil, spotAMI, spotKey, spotSG, spotUserData)
-	spotOrchestrator.Start()
-	defer spotOrchestrator.Stop()
+	if strings.ToLower(os.Getenv("ENABLE_SPOT_ORCHESTRATOR")) == "true" {
+		log.Printf("[ORCHESTRATOR] Starting background Spot instance orchestrator...")
+		spotOrchestrator.Start()
+		defer spotOrchestrator.Stop()
+	} else {
+		log.Printf("[ORCHESTRATOR] Spot instance orchestrator is disabled (ENABLE_SPOT_ORCHESTRATOR != true).")
+	}
 
 	mux.HandleFunc("GET /admin/users", app.HandleAdminGetUsers)
 	mux.HandleFunc("POST /admin/users/{id}/plan", app.HandleAdminUpdatePlan)
