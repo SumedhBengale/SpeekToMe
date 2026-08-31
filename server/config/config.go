@@ -596,7 +596,7 @@ func ParseRawConfigs(dbConfigs map[string]string) (ProviderConfig, map[string]st
 	newConfig.OnboardingPromo = promo
 
 	// Onboarding Demo Video URL
-	demoVideoURL := "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+	demoVideoURL := "https://vjs.zencdn.net/v/oceans.mp4"
 	if val, ok := dbConfigs["onboarding_demo_video_url"]; ok && strings.TrimSpace(val) != "" {
 		demoVideoURL = strings.TrimSpace(val)
 	} else if val, ok := dbConfigs["onboarding_video_url"]; ok && strings.TrimSpace(val) != "" {

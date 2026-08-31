@@ -160,7 +160,7 @@ const videoVolMutedIcon = document.getElementById('video-vol-muted-icon');
 const videoVolumeSlider = document.getElementById('video-volume-slider');
 const videoFullscreenBtn = document.getElementById('video-fullscreen-btn');
 const onboardVideoHotkeyBadge = document.getElementById('onboard-video-hotkey-badge');
-let cachedDemoVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
+let cachedDemoVideoUrl = "https://vjs.zencdn.net/v/oceans.mp4";
 
 // Onboarding Inputs
 const onboardHotkeySelect = document.getElementById('onboard-hotkey-select');
