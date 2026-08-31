@@ -226,7 +226,7 @@ function renderClientLanguageUI() {
 
   containers.forEach(({ chips: chipsContainer, count: countEl }) => {
     if (countEl) {
-      countEl.textContent = `${selectedLanguages.length}/5`;
+      countEl.textContent = `${selectedLanguages.length} / 5`;
     }
     if (!chipsContainer) return;
 
@@ -234,7 +234,7 @@ function renderClientLanguageUI() {
     selectedLanguages.forEach(code => {
       const chip = document.createElement('span');
       chip.className = 'lang-chip';
-      chip.innerHTML = `${escapeHtml(getLanguageName(code))} <button type="button" class="lang-chip-remove" title="Remove">&times;</button>`;
+      chip.innerHTML = `<span>${escapeHtml(getLanguageName(code))}</span> <button type="button" class="lang-chip-remove" title="Remove">&times;</button>`;
       
       chip.querySelector('button').addEventListener('click', () => {
         if (selectedLanguages.length <= 1) {
@@ -537,10 +537,23 @@ async function init() {
       console.error("Failed to bind auth-session-expired listener:", err);
     }
 
-    // 3.6. Bind Open Web Dashboard Sidebar Button
+    // 3.6. Bind Open Web Dashboard Sidebar Button & Manage Account Button
     const openWebDashboardNavBtn = document.getElementById('open-web-dashboard-nav-btn');
     if (openWebDashboardNavBtn) {
       openWebDashboardNavBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        try {
+          await invoke('open_external_url', { url: "https://speekto.me/dashboard" });
+        } catch (err) {
+          console.error("Failed to open web dashboard:", err);
+          window.open("https://speekto.me/dashboard", "_blank");
+        }
+      });
+    }
+
+    const manageAccountBtn = document.getElementById('manage-account-btn');
+    if (manageAccountBtn) {
+      manageAccountBtn.addEventListener('click', async (e) => {
         e.preventDefault();
         try {
           await invoke('open_external_url', { url: "https://speekto.me/dashboard" });
@@ -1494,8 +1507,17 @@ function updateAuthUI(userInfo) {
       selectedLanguages = userInfo.languages;
       renderClientLanguageUI();
     }
-    userNameEl.textContent = userInfo.name;
-    userEmailEl.textContent = userInfo.email;
+    if (userNameEl) userNameEl.textContent = userInfo.name || '';
+    if (userEmailEl) userEmailEl.textContent = userInfo.email || '';
+
+    const userProviderEl = document.getElementById('user-provider');
+    if (userProviderEl) {
+      if (userInfo.auth_provider === 'google' || (userInfo.email && userInfo.email.endsWith('@gmail.com'))) {
+        userProviderEl.textContent = 'Signed in with Google';
+      } else {
+        userProviderEl.textContent = 'Signed in with Email';
+      }
+    }
     
     // Bind subscription fields
     const subPlan = document.getElementById('sub-plan');
@@ -1506,11 +1528,11 @@ function updateAuthUI(userInfo) {
     if (subPlan) subPlan.textContent = (userInfo.plan_tier || 'Free').toUpperCase();
     if (subStatus) {
       if (userInfo.plan_active) {
-        subStatus.textContent = "Active";
-        subStatus.className = "sub-value badge-active";
+        subStatus.innerHTML = '<span class="status-pill-dot"></span>ACTIVE';
+        subStatus.className = "status-pill-tag active";
       } else {
-        subStatus.textContent = "Inactive";
-        subStatus.className = "sub-value badge-inactive";
+        subStatus.innerHTML = '<span class="status-pill-dot inactive"></span>INACTIVE';
+        subStatus.className = "status-pill-tag inactive";
       }
     }
     if (subActivated) subActivated.textContent = formatDate(userInfo.plan_activated_at);
@@ -1541,15 +1563,17 @@ function updateAuthUI(userInfo) {
     if (subUsagePercent) {
       const usage = formatUsageParts(usageSeconds, maxSeconds, isPaid);
       if (usage.isUnlimited) {
-        subUsagePercent.innerHTML = `${usage.usedStr} / ${usage.totalStr} <span class="fup-tooltip-badge" title="${usage.fupTooltip}" aria-label="${usage.fupTooltip}"><svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>`;
+        subUsagePercent.innerHTML = `${usage.usedStr} / ${usage.totalStr} <span class="info-bubble" title="${usage.fupTooltip}" aria-label="${usage.fupTooltip}">ⓘ</span>`;
       } else {
         subUsagePercent.textContent = usage.display;
       }
     }
     if (subUsageBar) subUsageBar.style.width = `${percent.toFixed(1)}%`;
 
-    // Hide descriptive text when user is successfully logged in
-    if (accountDesc) accountDesc.classList.add('hidden');
+    if (accountDesc) {
+      accountDesc.textContent = "Manage your account and subscription.";
+      accountDesc.classList.remove('hidden');
+    }
 
     authLoggedOut.classList.add('hidden');
     authLoggingIn.classList.add('hidden');

@@ -809,46 +809,87 @@
           <p class="section-desc">Configure real-time streaming dictation and spoken language preferences.</p>
         </div>
 
-        <div class="settings-card streaming-feature-card">
-          <div class="streaming-feature-header">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="streaming-mode-check">
-              <span class="checkmark"></span>
-              <span class="checkbox-title">Real-Time Streaming Dictation</span>
-            </label>
-            <span class="pro-tag">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-              </svg>
-              PRO
-            </span>
-          </div>
-          <span class="setting-hint" style="margin-left: 28px;">
-            Dictate with near-zero latency and instantaneous word-by-word pasting for a fast, responsive dictation experience.
-          </span>
-          <div id="streaming-pro-hint" class="streaming-pro-hint" style="display: none; margin-left: 28px; margin-top: 8px;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-right: 4px;">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+        <!-- Real-Time Streaming Dictation Card -->
+        <div class="settings-card dictation-feature-card">
+          <div class="dictation-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+              <line x1="12" y1="19" x2="12" y2="23"></line>
+              <line x1="8" y1="23" x2="16" y2="23"></line>
             </svg>
-            Pro plan feature. Upgrade on your Web Dashboard to unlock streaming dictation.
+          </div>
+          <div class="dictation-feature-content">
+            <div class="dictation-feature-title-row">
+              <span class="dictation-feature-title">Real-Time Streaming Dictation</span>
+              <span class="plan-pill-tag">PRO</span>
+            </div>
+            <p class="dictation-feature-desc">
+              Dictate with near-zero latency and instantaneous word-by-word pasting for a fast, responsive dictation experience.
+            </p>
+            <div id="streaming-pro-hint" class="streaming-pro-hint" style="display: none; margin-top: 6px;">
+              Pro plan feature. Upgrade on your Web Dashboard to unlock streaming dictation.
+            </div>
+          </div>
+          <div class="dictation-feature-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" id="streaming-mode-check">
+              <span class="toggle-slider"></span>
+            </label>
           </div>
         </div>
 
-        <div class="settings-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <label class="setting-title">Spoken Language Preferences</label>
-            <span id="client-lang-count" class="lang-count-badge">1/5</span>
-          </div>
-          <span class="setting-hint" style="margin-bottom: 12px; display: block;">1 language locks Whisper for max speed & accuracy. Multiple languages guide Whisper multi-lingual detection without translating.</span>
-          <div id="client-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;">
-            <!-- Rendered dynamically -->
-          </div>
-          <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
-            <div style="position: relative; flex: 1;">
-              <input type="text" id="client-lang-search-input" class="fluent-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
-              <div id="client-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
+        <!-- Spoken Language Preferences Card -->
+        <div class="settings-card languages-card">
+          <div class="languages-card-header">
+            <div class="dictation-icon-box">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
             </div>
-            <button type="button" id="client-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add</button>
+            <div class="languages-header-content">
+              <h3 class="languages-card-title">Spoken Language Preferences</h3>
+              <p class="languages-card-desc">
+                1 language locks Whisper for max speed & accuracy.<br>
+                Multiple languages guide Whisper multi-lingual detection without translating.
+              </p>
+            </div>
+            <span id="client-lang-count" class="lang-pill-count">1 / 5</span>
+          </div>
+
+          <div class="languages-section-group">
+            <div class="languages-section-label">Selected Languages</div>
+            <div id="client-lang-chips" class="languages-chips-list">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+
+          <div class="languages-divider"></div>
+
+          <div class="languages-section-group">
+            <div class="languages-section-label">Add a Language</div>
+            <div class="languages-search-row">
+              <div class="lang-combobox-wrapper">
+                <svg class="lang-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="client-lang-search-input" class="fluent-input lang-search-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off">
+                <div id="client-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
+              </div>
+              <button type="button" id="client-add-lang-btn" class="fluent-button accent lang-add-btn">Add</button>
+            </div>
+          </div>
+
+          <div class="languages-info-banner">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>You can add up to 5 languages.</span>
           </div>
         </div>
 
@@ -887,7 +928,7 @@
       <div class="tab-pane" id="tab-account">
         <div class="tab-header">
           <h2>Account</h2>
-          <p class="section-desc" id="account-desc">Sign in to unlock SpeekTo.Me transcription services.</p>
+          <p class="section-desc" id="account-desc">Manage your account and subscription.</p>
         </div>
 
         <div id="auth-logged-out" class="auth-section">
@@ -985,53 +1026,62 @@
         </div>
 
         <div id="auth-logged-in" class="auth-section hidden">
-          <div class="settings-card profile-card" style="margin-bottom: 16px;">
-            <div class="avatar">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
-                <circle cx="12" cy="7" r="4"></circle>
-              </svg>
-            </div>
-            <div class="profile-info">
-              <h3 id="user-name">User Profile</h3>
-              <p id="user-email">email@example.com</p>
+          <!-- Account Details Card -->
+          <div class="settings-card account-card">
+            <div class="account-card-header">Account Details</div>
+            <div class="account-details-row">
+              <div class="account-user-meta">
+                <div class="account-email" id="user-email">email@example.com</div>
+                <div class="account-provider" id="user-provider">Signed in with Google</div>
+                <span id="user-name" class="hidden"></span>
+              </div>
+              <button type="button" id="manage-account-btn" class="manage-acc-btn">
+                <span>Manage Account</span>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                  <polyline points="15 3 21 3 21 9"></polyline>
+                  <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+              </button>
             </div>
           </div>
 
-          <div class="settings-card subscription-card" style="margin-bottom: 16px;">
-            <div class="subscription-header">Plan & Subscription</div>
-            <div class="subscription-body" style="margin-top: 12px;">
-              <div class="sub-row">
-                <span class="sub-label">Current Plan:</span>
-                <span id="sub-plan" class="sub-value">Free</span>
+          <!-- Plan & Subscription Card -->
+          <div class="settings-card account-card">
+            <div class="account-card-header">Plan & Subscription</div>
+            <div class="account-table-body">
+              <div class="account-row">
+                <span class="account-row-label">Current Plan</span>
+                <span id="sub-plan" class="plan-pill-tag">PRO</span>
               </div>
-              <div class="sub-row">
-                <span class="sub-label">Status:</span>
-                <span id="sub-status" class="sub-value badge-inactive">Inactive</span>
+              <div class="account-row">
+                <span class="account-row-label">Status</span>
+                <span id="sub-status" class="status-pill-tag active"><span class="status-pill-dot"></span>ACTIVE</span>
               </div>
-              <div class="sub-row">
-                <span class="sub-label">Activated On:</span>
-                <span id="sub-activated" class="sub-value">N/A</span>
+              <div class="account-row">
+                <span class="account-row-label">Activated On</span>
+                <span id="sub-activated" class="account-row-val">N/A</span>
               </div>
-              <div class="sub-row">
-                <span class="sub-label">Transcribed:</span>
-                <span id="sub-usage" class="sub-value">0 seconds</span>
+              <div class="account-row">
+                <span class="account-row-label">Transcribed</span>
+                <span id="sub-usage" class="account-row-val">0 seconds</span>
               </div>
 
-              <!-- Usage Progress Bar -->
-              <div class="usage-progress-container">
-                <div class="usage-progress-header">
+              <div class="account-table-dashed-divider"></div>
+
+              <div class="account-usage-section">
+                <div class="account-usage-header">
                   <span>Usage</span>
-                  <span id="sub-usage-percent">0s / 1h</span>
+                  <span id="sub-usage-percent" class="account-usage-text">0s / 1h</span>
                 </div>
-                <div class="progress-bar-bg">
-                  <div id="sub-usage-bar" class="progress-bar-fill" style="width: 0%;"></div>
+                <div class="account-progress-track">
+                  <div id="sub-usage-bar" class="account-progress-fill" style="width: 0%;"></div>
                 </div>
               </div>
             </div>
           </div>
 
-          <button id="logout-btn" class="fluent-button danger">Log Out</button>
+          <button id="logout-btn" class="account-logout-btn">Log Out</button>
         </div>
       </div>
 
