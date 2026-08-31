@@ -2184,24 +2184,66 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   padding-bottom: 12px;
 }
 
+.step-tracker-container {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-card-subtle);
+  padding: 3px 6px;
+  border-radius: 20px;
+  border: 1px solid var(--border-subtle);
+}
+
 .step-tracker {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 0 2px;
+}
+
+.step-nav-arrow {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  padding: 0;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.step-nav-arrow:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--border-subtle);
+}
+
+.step-nav-arrow:disabled {
+  opacity: 0.22;
+  cursor: not-allowed;
 }
 
 .step-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--border-color);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
 }
 
+.step-dot:hover {
+  background: var(--text-muted);
+  transform: scale(1.15);
+}
+
 .step-dot.active {
   width: 20px;
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--accent-color);
   box-shadow: 0 0 8px var(--accent-tint);
 }
@@ -2746,28 +2788,6 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   border-radius: 50%;
   background: #fff;
   cursor: pointer;
-}
-
-.video-bottom-tip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--bg-card-subtle);
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border-subtle);
-}
-
-.video-bottom-tip kbd {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  padding: 2px 6px;
-  border-radius: 5px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent-color);
 }
 
 /* ==========================================

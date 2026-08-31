@@ -31,12 +31,24 @@
           <span class="logo-icon logo-img" aria-label="SpeekTo.Me Logo"></span>
           <span class="logo-text">SpeekTo.Me Setup</span>
         </div>
-        <div class="step-tracker">
-          <div class="step-dot active" data-step="1" title="Step 1: Sign In"></div>
-          <div class="step-dot" data-step="2" title="Step 2: Pro Plan"></div>
-          <div class="step-dot" data-step="3" title="Step 3: Preferences"></div>
-          <div class="step-dot" data-step="4" title="Step 4: AI & Languages"></div>
-          <div class="step-dot" data-step="5" title="Step 5: Voice Test"></div>
+        <div class="step-tracker-container">
+          <button type="button" id="onboard-prev-step-btn" class="step-nav-arrow" title="Previous Step" aria-label="Previous Step">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
+          </button>
+          <div class="step-tracker">
+            <div class="step-dot active" data-step="1" title="Step 1: Sign In"></div>
+            <div class="step-dot" data-step="2" title="Step 2: Pro Plan"></div>
+            <div class="step-dot" data-step="3" title="Step 3: Preferences"></div>
+            <div class="step-dot" data-step="4" title="Step 4: AI & Languages"></div>
+            <div class="step-dot" data-step="5" title="Step 5: Quick Demo"></div>
+          </div>
+          <button type="button" id="onboard-next-step-btn" class="step-nav-arrow" title="Next Step" aria-label="Next Step">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -479,13 +491,7 @@
             </div>
           </div>
 
-          <!-- Bottom Shortcut Tip -->
-          <div class="video-bottom-tip">
-            <span class="tip-icon">💡</span>
-            <span>Shortcut: Hold <kbd id="onboard-video-hotkey-badge">Ctrl + Win</kbd> anywhere in Windows to dictate text.</span>
-          </div>
-
-          <button id="onboard-finish-btn" class="onboard-nav-btn primary-glow" style="height: 44px; margin-top: 12px;">Finish & Launch SpeekTo.Me 🚀</button>
+          <button id="onboard-finish-btn" class="onboard-nav-btn primary-glow" style="height: 44px; margin-top: 14px;">Finish & Launch SpeekTo.Me 🚀</button>
         </div>
       </div>
     </div>

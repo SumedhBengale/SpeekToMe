@@ -126,6 +126,8 @@ const onboardNext3Btn = document.getElementById('onboard-next-3-btn');
 const onboardFinishBtn = document.getElementById('onboard-finish-btn');
 const onboardUpgradeProBtn = document.getElementById('onboard-upgrade-pro-btn');
 const onboardSkipProBtn = document.getElementById('onboard-skip-pro-btn');
+const onboardPrevStepBtn = document.getElementById('onboard-prev-step-btn');
+const onboardNextStepBtn = document.getElementById('onboard-next-step-btn');
 
 const onboardAuthLoggedOut = document.getElementById('onboard-auth-logged-out');
 const onboardAuthLoggingIn = document.getElementById('onboard-auth-logging-in');
@@ -159,7 +161,6 @@ const videoVolHighIcon = document.getElementById('video-vol-high-icon');
 const videoVolMutedIcon = document.getElementById('video-vol-muted-icon');
 const videoVolumeSlider = document.getElementById('video-volume-slider');
 const videoFullscreenBtn = document.getElementById('video-fullscreen-btn');
-const onboardVideoHotkeyBadge = document.getElementById('onboard-video-hotkey-badge');
 let cachedDemoVideoUrl = "https://vjs.zencdn.net/v/oceans.mp4";
 
 // Onboarding Inputs
@@ -635,6 +636,22 @@ async function init() {
         }
       });
     });
+
+    // Step arrow navigation buttons
+    if (onboardPrevStepBtn) {
+      onboardPrevStepBtn.addEventListener('click', () => {
+        if (currentStep > 1) {
+          goToStep(currentStep - 1);
+        }
+      });
+    }
+    if (onboardNextStepBtn) {
+      onboardNextStepBtn.addEventListener('click', () => {
+        if (currentStep < 5) {
+          goToStep(currentStep + 1);
+        }
+      });
+    }
 
     // Auto-sync onboarding preferences to Rust immediately on change
     const syncOnboardingConfig = async () => {
@@ -1315,6 +1332,10 @@ async function goToStep(step) {
   const dotEl = document.querySelector(`.step-dot[data-step="${step}"]`);
   if (dotEl) dotEl.classList.add('active');
 
+  // Update navigation arrow states
+  if (onboardPrevStepBtn) onboardPrevStepBtn.disabled = (step <= 1);
+  if (onboardNextStepBtn) onboardNextStepBtn.disabled = (step >= 5);
+
   // Pause demo video if user navigates away from Step 5
   if (step !== 5 && onboardDemoVideo) {
     onboardDemoVideo.pause();
@@ -1401,11 +1422,6 @@ async function initDemoVideoStep() {
     currentConfig = updated;
   } catch (err) {
     console.error("Failed to sync config before demo video step:", err);
-  }
-
-  const hotkey = (onboardHotkeySelect && onboardHotkeySelect.value) || (currentConfig && currentConfig.hotkey) || "Ctrl + Windows";
-  if (onboardVideoHotkeyBadge) {
-    onboardVideoHotkeyBadge.textContent = hotkey;
   }
 
   // Fetch demo video URL from backend /config/video or cached
