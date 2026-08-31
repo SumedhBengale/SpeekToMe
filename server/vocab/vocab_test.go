@@ -66,6 +66,57 @@ func TestVocabMatching(t *testing.T) {
 	}
 }
 
+func TestSpecialTab(t *testing.T) {
+	terms := []db.VocabularyTerm{
+		{Canonical: "SpeekTo.Me", Normalized: "speektome"},
+	}
+	cache := NewVocabCache()
+
+	falsePositiveTests := []string{
+		"there is a special tab for the web dashboard",
+		"I speak with my team every morning",
+		"The speed of the vehicle is high",
+		"Please specify the table name",
+		"We need a special tool for this",
+		"Can you speak up a bit louder",
+	}
+
+	for _, input := range falsePositiveTests {
+		result, repls, _ := cache.ProcessText(1, input, terms)
+		if len(repls) > 0 {
+			t.Errorf("False positive match for %q: got %v -> %q", input, repls, result)
+		}
+	}
+
+	truePositiveTests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			input:    "Welcome to speek to me dictation",
+			expected: "Welcome to SpeekTo.Me dictation",
+		},
+		{
+			input:    "Dictating with speak to me app",
+			expected: "Dictating with SpeekTo.Me app",
+		},
+		{
+			input:    "Using speektome today",
+			expected: "Using SpeekTo.Me today",
+		},
+	}
+
+	for _, tt := range truePositiveTests {
+		result, repls, _ := cache.ProcessText(1, tt.input, terms)
+		if len(repls) != 1 {
+			t.Errorf("Expected 1 replacement for %q, got %d (output: %q)", tt.input, len(repls), result)
+		}
+		if result != tt.expected {
+			t.Errorf("For input %q, expected %q, got %q", tt.input, tt.expected, result)
+		}
+	}
+}
+
 func TestAhoCorasickMultiWord(t *testing.T) {
 	terms := []db.VocabularyTerm{
 		{Canonical: "Microservices Architecture", Normalized: "microservicesarchitecture"},

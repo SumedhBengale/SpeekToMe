@@ -14,10 +14,10 @@ import (
 
 // Match distance thresholds
 const (
-	SingleWordThreshold = 0.82
-	TwoWordThreshold    = 0.78
-	ThreeWordThreshold  = 0.75
-	MultiWordThreshold  = 0.72
+	SingleWordThreshold = 0.88
+	TwoWordThreshold    = 0.86
+	ThreeWordThreshold  = 0.85
+	MultiWordThreshold  = 0.84
 )
 
 // Token wraps individual words and split punctuation bounds
@@ -235,18 +235,8 @@ func BuildPhoneticSymSpell(terms []CompiledTerm) *PhoneticSymSpellBucket {
 		// 1. Exact phonetic key
 		buckets[acousticClass][term.PhoneticKey] = append(buckets[acousticClass][term.PhoneticKey], term)
 
-		// 2. Phonetic prefix keys (length 2 and 3)
+		// 2. Symmetric Delete variants (edit distance 1 deletions)
 		runes := []rune(term.PhoneticKey)
-		if len(runes) >= 2 {
-			p2 := string(runes[:2])
-			buckets[acousticClass][p2] = append(buckets[acousticClass][p2], term)
-		}
-		if len(runes) >= 3 {
-			p3 := string(runes[:3])
-			buckets[acousticClass][p3] = append(buckets[acousticClass][p3], term)
-		}
-
-		// 3. Symmetric Delete variants (edit distance 1 deletions)
 		if len(runes) > 1 {
 			for i := 0; i < len(runes); i++ {
 				delKey := string(runes[:i]) + string(runes[i+1:])
@@ -790,16 +780,16 @@ func CompileUserVocabulary(dbTerms []db.VocabularyTerm) *UserVocabulary {
 		}
 		compiledTerms = append(compiledTerms, ct)
 
-		// Only register distinctive sub-tokens for single-token compound terms (e.g. "Postgre" for "PostgreSQL", "Fast" for "FastAPI")
+		// Index compound word stems (len >= 5) so phonetic variants like "postgres" match "PostgreSQL"
 		if ct.TokenCount == 1 && len(subTokens) > 1 {
 			for _, st := range subTokens {
-				if len(st) >= 4 && isSafeAutoExpandSubWord(st) {
+				if len(st) >= 5 {
 					stNorm := NormalizeString(st)
 					if stNorm != "" && stNorm != computedNormalized {
 						stPhonetic := doubleMetaphone(stNorm)
 						stCt := CompiledTerm{
 							Canonical:     vt.Canonical,
-							Normalized:    stNorm,
+							Normalized:    computedNormalized,
 							TokenCount:    1,
 							MinTokenCount: 1,
 							MaxTokenCount: 1,
@@ -988,18 +978,6 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, []string, int)
 
 						candidates := bucket[phoneticQuery]
 						qRunes := []rune(phoneticQuery)
-						if len(qRunes) >= 2 {
-							p2 := string(qRunes[:2])
-							if pMatches, ok := bucket[p2]; ok {
-								candidates = append(candidates, pMatches...)
-							}
-						}
-						if len(qRunes) >= 3 {
-							p3 := string(qRunes[:3])
-							if pMatches, ok := bucket[p3]; ok {
-								candidates = append(candidates, pMatches...)
-							}
-						}
 						if len(qRunes) > 1 {
 							for d := 0; d < len(qRunes); d++ {
 								delQ := string(qRunes[:d]) + string(qRunes[d+1:])
@@ -1012,6 +990,23 @@ func MatchAndReplace(text string, vocab *UserVocabulary) (string, []string, int)
 						// Evaluate candidates
 						for _, cand := range candidates {
 							if absVal(cand.TokenCount-k) > 1 && absVal(len(cand.SubTokens)-k) > 1 {
+								continue
+							}
+
+							// Check length ratio to prevent wild length discrepancies
+							minLen := minVal(len(joinedNorm), len(cand.Normalized))
+							maxLen := maxVal(len(joinedNorm), len(cand.Normalized))
+							if maxLen > 0 && float64(minLen)/float64(maxLen) < 0.70 {
+								continue
+							}
+
+							// Phonetic distance check
+							pDist := levenshteinDistance(phoneticQuery, cand.PhoneticKey)
+							maxAllowedPDist := 1
+							if len(qRunes) >= 6 || len([]rune(cand.PhoneticKey)) >= 6 {
+								maxAllowedPDist = 2
+							}
+							if pDist > maxAllowedPDist {
 								continue
 							}
 
@@ -1146,4 +1141,35 @@ func maxVal(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func levenshteinDistance(s1, s2 string) int {
+	r1, r2 := []rune(s1), []rune(s2)
+	n, m := len(r1), len(r2)
+	if n == 0 {
+		return m
+	}
+	if m == 0 {
+		return n
+	}
+
+	dp := make([]int, m+1)
+	for j := 0; j <= m; j++ {
+		dp[j] = j
+	}
+
+	for i := 1; i <= n; i++ {
+		prev := dp[0]
+		dp[0] = i
+		for j := 1; j <= m; j++ {
+			temp := dp[j]
+			cost := 0
+			if r1[i-1] != r2[j-1] {
+				cost = 1
+			}
+			dp[j] = minVal(dp[j]+1, minVal(dp[j-1]+1, prev+cost))
+			prev = temp
+		}
+	}
+	return dp[m]
 }
