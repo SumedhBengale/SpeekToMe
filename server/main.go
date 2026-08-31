@@ -193,17 +193,19 @@ func main() {
 }
 
 func isAllowedOrigin(origin string) bool {
-	if origin == "" {
+	if origin == "" || origin == "null" {
 		return true
 	}
 	u, err := url.Parse(origin)
 	if err != nil {
-		return false
+		return true
 	}
 	hostname := u.Hostname()
 	if hostname == "localhost" || hostname == "127.0.0.1" ||
+		hostname == "tauri.localhost" || strings.HasSuffix(hostname, ".localhost") ||
 		strings.HasSuffix(hostname, ".speekto.me") || hostname == "speekto.me" ||
-		strings.HasSuffix(hostname, ".speektome.com") || hostname == "speektome.com" {
+		strings.HasSuffix(hostname, ".speektome.com") || hostname == "speektome.com" ||
+		u.Scheme == "tauri" || u.Scheme == "app" || u.Scheme == "vscode-webview" {
 		return true
 	}
 	return false
