@@ -11,7 +11,7 @@
 
 <body>
   <!-- Onboarding Wizard Overlay -->
-  <div id="onboarding" class="hidden" data-tauri-drag-region>
+  <div id="onboarding" class="hidden">
     <!-- Top Drag & Window Controls for Onboarding -->
     <div class="window-titlebar" data-tauri-drag-region>
       <div class="window-titlebar-drag" data-tauri-drag-region></div>
@@ -32,10 +32,11 @@
           <span class="logo-text">SpeekTo.Me Setup</span>
         </div>
         <div class="step-tracker">
-          <div class="step-dot active" data-step="1"></div>
-          <div class="step-dot" data-step="2"></div>
-          <div class="step-dot" data-step="3"></div>
-          <div class="step-dot" data-step="4"></div>
+          <div class="step-dot active" data-step="1" title="Step 1: Sign In"></div>
+          <div class="step-dot" data-step="2" title="Step 2: Pro Plan"></div>
+          <div class="step-dot" data-step="3" title="Step 3: Preferences"></div>
+          <div class="step-dot" data-step="4" title="Step 4: AI & Languages"></div>
+          <div class="step-dot" data-step="5" title="Step 5: Voice Test"></div>
         </div>
       </div>
 
@@ -43,21 +44,21 @@
         <!-- Step 1: Login -->
         <div class="onboarding-step active" id="onboard-step-1">
           <h2>Welcome to SpeekTo.Me</h2>
-          <p class="step-desc">First, sign in to your SpeekTo.Me account to activate transcription services.</p>
+          <p class="step-desc">Sign in to your SpeekTo.Me account to activate voice dictation services.</p>
 
           <div id="onboard-auth-logged-out" class="auth-section">
             <div class="auth-card-modern" style="margin-top: 0;">
               <!-- Avatar Icon Badge -->
               <div class="auth-avatar-badge">
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
                   <circle cx="12" cy="7" r="4"></circle>
                 </svg>
               </div>
 
               <!-- Heading & Subheading -->
-              <h3 class="auth-card-title">You are currently signed out</h3>
-              <p class="auth-card-subtitle">Sign in to access your account and unlock premium features.</p>
+              <h3 class="auth-card-title">Sign In to SpeekTo.Me</h3>
+              <p class="auth-card-subtitle">Connect your account for high-speed AI voice transcription.</p>
 
               <!-- Google Sign In -->
               <button id="onboard-login-btn" class="auth-google-btn">
@@ -79,7 +80,7 @@
               <div class="auth-fields-stack" id="onboard-auth-form">
                 <div class="auth-input-group" id="onboard-name-group" style="display: none;">
                   <span class="auth-input-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
                       <circle cx="12" cy="7" r="4"></circle>
                     </svg>
@@ -89,7 +90,7 @@
 
                 <div class="auth-input-group">
                   <span class="auth-input-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="2" y="4" width="20" height="16" rx="2"></rect>
                       <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
                     </svg>
@@ -99,14 +100,14 @@
 
                 <div class="auth-input-group">
                   <span class="auth-input-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
                       <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
                     </svg>
                   </span>
                   <input type="password" id="onboard-password-input" class="auth-input" placeholder="Password">
                   <button type="button" class="auth-password-toggle-btn" id="onboard-password-toggle" title="Toggle password visibility">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                       <circle cx="12" cy="12" r="3"></circle>
                     </svg>
@@ -121,24 +122,57 @@
 
                 <div id="onboard-auth-error" class="auth-error-msg" style="display: none;"></div>
               </div>
-
-              <!-- Bottom Decorative Wave Illustration -->
-              <svg class="auth-card-wave" viewBox="0 0 460 70" preserveAspectRatio="none" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M-10 40 C 90 10, 180 65, 300 25 C 370 5, 420 50, 480 35" stroke="var(--accent-color)" stroke-width="1.2" stroke-opacity="0.22"/>
-                <path d="M-10 52 C 110 25, 210 70, 320 38 C 390 18, 440 55, 480 48" stroke="var(--accent-color)" stroke-width="0.9" stroke-opacity="0.16"/>
-                <path d="M-10 64 C 130 40, 230 75, 340 50 C 400 32, 450 62, 480 58" stroke="var(--accent-color)" stroke-width="0.7" stroke-opacity="0.10"/>
-              </svg>
             </div>
           </div>
 
+          <!-- Redesigned Auth Loading State -->
           <div id="onboard-auth-logging-in" class="auth-section hidden">
-            <div class="spinner"></div>
-            <p>Awaiting authorization in default browser...</p>
-            <button id="onboard-cancel-login-btn" class="fluent-button secondary">Cancel Login</button>
+            <div class="auth-waiting-card">
+              <div class="auth-radar-animation">
+                <div class="radar-circle radar-c1"></div>
+                <div class="radar-circle radar-c2"></div>
+                <div class="radar-circle radar-c3"></div>
+                <div class="radar-center-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                  </svg>
+                </div>
+              </div>
+              <h3 class="auth-waiting-title">Awaiting Browser Sign-In</h3>
+              <p class="auth-waiting-desc">We opened your default browser to authorize your SpeekTo.Me account.</p>
+
+              <div class="auth-waiting-steps">
+                <div class="auth-step-item active">
+                  <span class="auth-step-num">1</span>
+                  <span>Browser opened</span>
+                </div>
+                <div class="auth-step-divider"></div>
+                <div class="auth-step-item current">
+                  <span class="auth-step-num">2</span>
+                  <span>Approve Google Login</span>
+                </div>
+                <div class="auth-step-divider"></div>
+                <div class="auth-step-item">
+                  <span class="auth-step-num">3</span>
+                  <span>Instant Return</span>
+                </div>
+              </div>
+
+              <div class="auth-waiting-actions">
+                <button type="button" id="onboard-reopen-browser-btn" class="fluent-button secondary small-btn">
+                  <span>🌐 Reopen Browser</span>
+                </button>
+                <button type="button" id="onboard-cancel-login-btn" class="fluent-button secondary small-btn">
+                  <span>Cancel</span>
+                </button>
+              </div>
+            </div>
           </div>
 
           <div id="onboard-auth-logged-in" class="auth-section hidden">
-            <div class="settings-card profile-card" style="margin-bottom: 16px;">
+            <div class="settings-card profile-card" style="margin-bottom: 14px;">
               <div class="avatar">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
@@ -150,54 +184,86 @@
                 <p id="onboard-user-email">email@example.com</p>
               </div>
             </div>
-            <button id="onboard-next-1-btn" class="onboard-nav-btn">Next Step ➔</button>
+            <button id="onboard-next-1-btn" class="onboard-nav-btn">Continue ➔</button>
           </div>
         </div>
 
-        <!-- Step 2: General settings -->
+        <!-- Step 2: Pro Plan Promotion Screen -->
         <div class="onboarding-step" id="onboard-step-2">
+          <div class="promo-badge" id="onboard-promo-badge">⚡ SPEEKTO.ME PRO UNLIMITED</div>
+          <h2 id="onboard-promo-title" style="margin-top: 4px;">Transform the way you write.</h2>
+          <p class="step-desc" id="onboard-promo-subtitle">Unlock unlimited high-speed AI voice dictation across all your apps.</p>
+
+          <div class="promo-pricing-card">
+            <div class="promo-header-row">
+              <div class="promo-tier-info">
+                <h3 class="promo-plan-name">SpeekTo.Me Pro</h3>
+                <span class="promo-plan-tag">Most Popular</span>
+              </div>
+              <div class="promo-price-block">
+                <span class="promo-price-amount" id="onboard-promo-price">$2</span>
+                <span class="promo-price-period" id="onboard-promo-period">/ month</span>
+              </div>
+            </div>
+
+            <div class="promo-features-grid" id="onboard-promo-features">
+              <div class="promo-feat-item">
+                <span class="promo-check">✓</span>
+                <span><strong>Unlimited AI Voice Dictation</strong> (no 1-hour cap)</span>
+              </div>
+              <div class="promo-feat-item">
+                <span class="promo-check">✓</span>
+                <span><strong>Ultra-low latency priority queue</strong></span>
+              </div>
+              <div class="promo-feat-item">
+                <span class="promo-check">✓</span>
+                <span><strong>Advanced AI Enhancement & Formatting</strong></span>
+              </div>
+              <div class="promo-feat-item">
+                <span class="promo-check">✓</span>
+                <span><strong>Real-Time Streaming Word-by-Word Typing</strong></span>
+              </div>
+              <div class="promo-feat-item">
+                <span class="promo-check">✓</span>
+                <span><strong>Custom AI Prompts & Vocabulary</strong></span>
+              </div>
+              <div class="promo-feat-item">
+                <span class="promo-check">✓</span>
+                <span><strong>Priority 24/7 Email & Chat Support</strong></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="promo-actions-stack">
+            <button id="onboard-upgrade-pro-btn" class="onboard-nav-btn primary-glow" style="margin-top: 14px;">
+              <span id="onboard-promo-cta-text">Upgrade to Pro ($2/mo) →</span>
+            </button>
+            <button id="onboard-skip-pro-btn" class="onboard-skip-btn">
+              <span id="onboard-promo-skip-text">Continue with Free Starter Plan (1 hr/mo) ➔</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 3: Core Preferences (Clean Non-Scrolling Layout) -->
+        <div class="onboarding-step" id="onboard-step-3">
           <h2>Core Preferences</h2>
           <p class="step-desc">Configure your trigger hotkey and system behavior.</p>
 
-          <div class="settings-card" style="margin-bottom: 16px;">
-            <div class="streaming-feature-header" style="margin-bottom: 6px;">
-              <label class="fluent-checkbox-container">
-                <input type="checkbox" id="onboard-streaming-mode-check">
-                <span class="checkmark"></span>
-                <span class="checkbox-title">Real-Time Streaming</span>
-              </label>
-              <span class="pro-tag">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-                </svg>
-                PRO
-              </span>
-            </div>
-            <span class="setting-hint" style="margin-left: 28px;">
-              Dictate with near-zero latency and instantaneous word-by-word typing for a fluid experience.
-            </span>
-          </div>
-
-          <div class="settings-card">
-            <div class="setting-row">
+          <div class="settings-card compact-card">
+            <div class="setting-row compact-row">
               <div class="setting-left">
-                <div class="setting-icon-badge">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <div class="setting-icon-badge small-badge">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
                     <line x1="6" y1="8" x2="6.01" y2="8"></line>
                     <line x1="10" y1="8" x2="10.01" y2="8"></line>
                     <line x1="14" y1="8" x2="14.01" y2="8"></line>
                     <line x1="18" y1="8" x2="18.01" y2="8"></line>
-                    <line x1="6" y1="12" x2="6.01" y2="12"></line>
-                    <line x1="10" y1="12" x2="10.01" y2="12"></line>
-                    <line x1="14" y1="12" x2="14.01" y2="12"></line>
-                    <line x1="18" y1="12" x2="18.01" y2="12"></line>
-                    <line x1="8" y1="16" x2="16" y2="16"></line>
                   </svg>
                 </div>
                 <div class="setting-info">
                   <label for="onboard-hotkey-select" class="setting-title">Trigger Hotkey</label>
-                  <span class="setting-desc">Choose shortcut to activate SpeekTo.Me.</span>
+                  <span class="setting-desc">Activation shortcut</span>
                 </div>
               </div>
               <div class="setting-control">
@@ -215,10 +281,10 @@
               </div>
             </div>
 
-            <div class="setting-row">
+            <div class="setting-row compact-row">
               <div class="setting-left">
-                <div class="setting-icon-badge">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <div class="setting-icon-badge small-badge">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path>
                     <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path>
                     <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path>
@@ -227,7 +293,7 @@
                 </div>
                 <div class="setting-info">
                   <label for="onboard-hotkey-mode-select" class="setting-title">Trigger Mode</label>
-                  <span class="setting-desc">Choose how SpeekTo.Me is activated.</span>
+                  <span class="setting-desc">Hold vs Toggle</span>
                 </div>
               </div>
               <div class="setting-control">
@@ -238,20 +304,17 @@
               </div>
             </div>
 
-            <div class="setting-row">
+            <div class="setting-row compact-row">
               <div class="setting-left">
-                <div class="setting-icon-badge">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle>
-                    <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle>
-                    <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>
-                    <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>
-                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"></path>
+                <div class="setting-icon-badge small-badge">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M12 2a10 10 0 0 1 10 10c0 4-3 8-7 8a2 2 0 0 1-2-2c0-.5.2-1 .2-1.5a1.5 1.5 0 0 0-1.5-1.5H10a8 8 0 0 1-8-8z"></path>
                   </svg>
                 </div>
                 <div class="setting-info">
                   <label for="onboard-theme-select" class="setting-title">App Theme</label>
-                  <span class="setting-desc">Customize the look and feel.</span>
+                  <span class="setting-desc">UI color palette</span>
                 </div>
               </div>
               <div class="setting-control">
@@ -265,36 +328,41 @@
             </div>
           </div>
 
-          <div class="settings-card" style="margin-top: 14px;">
-            <div class="checkbox-row">
+          <div class="settings-card compact-card" style="margin-top: 10px;">
+            <div class="toggles-grid">
               <label class="fluent-checkbox-container">
-                <input type="checkbox" id="onboard-autostart-check">
+                <input type="checkbox" id="onboard-streaming-mode-check">
                 <span class="checkmark"></span>
                 <div class="checkbox-label-block">
-                  <span class="checkbox-title">Start SpeekTo.Me on system startup</span>
-                  <span class="setting-hint">Launches SpeekTo.Me in your system tray automatically.</span>
+                  <span class="checkbox-title">Real-Time Streaming <span class="pro-mini-tag">PRO</span></span>
+                  <span class="setting-hint">Word-by-word interim typing</span>
                 </div>
               </label>
-            </div>
 
-            <div class="checkbox-row">
               <label class="fluent-checkbox-container">
                 <input type="checkbox" id="onboard-typing-mode-check">
                 <span class="checkmark"></span>
                 <div class="checkbox-label-block">
-                  <span class="checkbox-title">Use keystroke simulation (typing)</span>
-                  <span class="setting-hint">Simulates typing to circumvent anti-paste mechanisms.</span>
+                  <span class="checkbox-title">Keystroke Simulation</span>
+                  <span class="setting-hint">Simulate typing for protected apps</span>
                 </div>
               </label>
-            </div>
 
-            <div class="checkbox-row">
               <label class="fluent-checkbox-container">
                 <input type="checkbox" id="onboard-sound-feedback-check">
                 <span class="checkmark"></span>
                 <div class="checkbox-label-block">
-                  <span class="checkbox-title">Enable audio feedback chimes</span>
-                  <span class="setting-hint">Plays a sound when you start and stop recording.</span>
+                  <span class="checkbox-title">Audio Chimes</span>
+                  <span class="setting-hint">Sound on start/stop dictation</span>
+                </div>
+              </label>
+
+              <label class="fluent-checkbox-container">
+                <input type="checkbox" id="onboard-autostart-check">
+                <span class="checkmark"></span>
+                <div class="checkbox-label-block">
+                  <span class="checkbox-title">Start on Boot</span>
+                  <span class="setting-hint">Auto-launch in system tray</span>
                 </div>
               </label>
             </div>
@@ -303,42 +371,20 @@
           <button id="onboard-next-2-btn" class="onboard-nav-btn">Next Step ➔</button>
         </div>
 
-        <!-- Step 3: AI Config -->
-        <div class="onboarding-step" id="onboard-step-3">
-          <h2>AI Settings</h2>
-          <p class="step-desc">Select your transcription engine and instructions.</p>
+        <!-- Step 4: AI Config & Spoken Languages -->
+        <div class="onboarding-step" id="onboard-step-4">
+          <h2>AI & Languages</h2>
+          <p class="step-desc">Select your spoken languages and optional AI instructions.</p>
 
           <input type="hidden" id="onboard-model-select" value="whisper-large-v3-turbo">
 
-          <div class="settings-card">
-            <div class="checkbox-row">
-              <label class="fluent-checkbox-container">
-                <input type="checkbox" id="onboard-enhance-check">
-                <span class="checkmark"></span>
-                <div class="checkbox-label-block">
-                  <span class="checkbox-title">Enhance transcription with DeepSeek AI</span>
-                  <span class="setting-hint">Uses DeepSeek to format grammar, fix context, or translate.</span>
-                </div>
-              </label>
-            </div>
-
-            <div class="setting-group" style="margin-top: 12px;">
-              <label for="onboard-custom-prompt-text" class="setting-title" style="margin-bottom: 6px; display: block;">Custom AI Instructions</label>
-              <textarea id="onboard-custom-prompt-text" class="fluent-textarea"
-                placeholder="e.g. Translate to French, rewrite as email..."></textarea>
-              <div id="onboard-prompt-validation-banner" class="validation-banner hidden"></div>
-            </div>
-          </div>
-
-          <div class="settings-card" style="margin-top: 14px;">
+          <div class="settings-card compact-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
               <label class="setting-title">Spoken Languages</label>
               <span id="onboard-lang-count" class="lang-count-badge">1/5</span>
             </div>
-            <span class="setting-hint" style="margin-bottom: 10px; display: block;">1 language locks Whisper for max speed. Multiple languages guide multi-lingual detection.</span>
-            <div id="onboard-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;">
-              <!-- Rendered dynamically -->
-            </div>
+            <span class="setting-hint" style="margin-bottom: 8px; display: block;">1 language locks engine for max speed. Multiple languages guide multi-lingual detection.</span>
+            <div id="onboard-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
             <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
               <div style="position: relative; flex: 1;">
                 <input type="text" id="onboard-lang-search-input" class="fluent-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
@@ -348,24 +394,109 @@
             </div>
           </div>
 
-          <button id="onboard-next-3-btn" class="onboard-nav-btn">Next Step ➔</button>
-        </div>
+          <div class="settings-card compact-card" style="margin-top: 10px;">
+            <div class="checkbox-row">
+              <label class="fluent-checkbox-container">
+                <input type="checkbox" id="onboard-enhance-check">
+                <span class="checkmark"></span>
+                <div class="checkbox-label-block">
+                  <span class="checkbox-title">AI Grammar & Context Enhancement</span>
+                  <span class="setting-hint">Polishes punctuation, fixes grammar, or formats technical terms.</span>
+                </div>
+              </label>
+            </div>
 
-        <!-- Step 4: Finish -->
-        <div class="onboarding-step" id="onboard-step-4">
-          <h2>You're All Set!</h2>
-          <p class="step-desc">Setup is complete. SpeekTo.Me will now run in the background as a system tray service.</p>
-
-          <div class="settings-card tutorial-card">
-            <p><strong>How to use SpeekTo.Me:</strong></p>
-            <ul>
-              <li><strong>Hold</strong> your hotkey to record audio.</li>
-              <li><strong>Speak</strong> normally (whispering works too!).</li>
-              <li><strong>Release</strong> the hotkey to automatically type/paste the text.</li>
-            </ul>
+            <div class="setting-group" style="margin-top: 8px;">
+              <textarea id="onboard-custom-prompt-text" class="fluent-textarea" style="height: 48px; min-height: 48px;"
+                placeholder="Optional AI instructions (e.g. Format as bullet points, rewrite as formal email)..."></textarea>
+              <div id="onboard-prompt-validation-banner" class="validation-banner hidden"></div>
+            </div>
           </div>
 
-          <button id="onboard-finish-btn" class="onboard-nav-btn" style="height: 46px; font-size: 14px;">Finish & Launch SpeekTo.Me</button>
+          <button id="onboard-next-3-btn" class="onboard-nav-btn">Next: Voice Test ➔</button>
+        </div>
+
+        <!-- Step 5: Interactive Live Voice Dictation Test -->
+        <div class="onboarding-step" id="onboard-step-5">
+          <h2>Test Voice Dictation</h2>
+          <p class="step-desc">Test your microphone and experience instant AI transcription live.</p>
+
+          <!-- Interactive Showcase & Sandbox -->
+          <div class="test-sandbox-card">
+            <!-- Sandbox Header -->
+            <div class="sandbox-header">
+              <div class="sandbox-status-indicator" id="sandbox-status-pill">
+                <span class="status-dot-pulse"></span>
+                <span id="sandbox-status-text">Ready to test</span>
+              </div>
+              <span class="sandbox-hint">Hold button or press <kbd id="sandbox-hotkey-badge">Ctrl + Win</kbd></span>
+            </div>
+
+            <!-- Sandbox Textarea Output -->
+            <div class="sandbox-input-wrapper">
+              <textarea id="sandbox-output-text" class="sandbox-textarea" placeholder="Your spoken words will appear here instantly... Click 'Hold to Speak' below to try it!"></textarea>
+              <div id="sandbox-interim-overlay" class="sandbox-interim-overlay hidden">
+                <span id="sandbox-interim-text"></span><span class="interim-cursor">|</span>
+              </div>
+            </div>
+
+            <!-- Simulated Pill Visualizer -->
+            <div class="sandbox-pill-container" id="sandbox-live-pill" style="display: none;">
+              <div class="sandbox-pill-badge">
+                <div class="mic-wave-bar bar-1"></div>
+                <div class="mic-wave-bar bar-2"></div>
+                <div class="mic-wave-bar bar-3"></div>
+                <div class="mic-wave-bar bar-4"></div>
+                <div class="mic-wave-bar bar-5"></div>
+                <span class="sandbox-pill-label">Listening...</span>
+              </div>
+            </div>
+
+            <!-- Interactive Mic Trigger Button -->
+            <div class="sandbox-control-row">
+              <button type="button" id="sandbox-mic-btn" class="sandbox-mic-button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <line x1="12" y1="19" x2="12" y2="23"></line>
+                  <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+                <span id="sandbox-mic-btn-label">Hold to Speak (or press hotkey)</span>
+              </button>
+            </div>
+
+            <div id="sandbox-success-banner" class="sandbox-success-banner hidden">
+              <span>🎉</span>
+              <span><strong>Voice test successful!</strong> You are ready to dictate into any Windows application.</span>
+            </div>
+          </div>
+
+          <!-- Feature Component Breakdown Cards -->
+          <div class="walkthrough-pills-row">
+            <div class="walkthrough-mini-card">
+              <span class="wt-icon">💊</span>
+              <div>
+                <strong>Floating Pill</strong>
+                <p>Mic volume visualizer</p>
+              </div>
+            </div>
+            <div class="walkthrough-mini-card">
+              <span class="wt-icon">⚡</span>
+              <div>
+                <strong>Streaming Preview</strong>
+                <p>Real-time interim words</p>
+              </div>
+            </div>
+            <div class="walkthrough-mini-card">
+              <span class="wt-icon">✍️</span>
+              <div>
+                <strong>Auto-Paste</strong>
+                <p>Formatted in focused app</p>
+              </div>
+            </div>
+          </div>
+
+          <button id="onboard-finish-btn" class="onboard-nav-btn primary-glow" style="height: 44px; margin-top: 12px;">Finish & Launch SpeekTo.Me 🚀</button>
         </div>
       </div>
     </div>

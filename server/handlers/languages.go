@@ -44,3 +44,14 @@ func HandleGetLanguages(w http.ResponseWriter, r *http.Request) {
 		ModelSupport: modelSupport,
 	})
 }
+
+func HandleGetOnboardingPromo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	promo := config.ConfigManager.Get().OnboardingPromo
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(promo)
+}
