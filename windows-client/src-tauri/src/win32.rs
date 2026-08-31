@@ -18,7 +18,8 @@ mod win32_impl {
         CS_HREDRAW, CS_VREDRAW, SW_HIDE, SW_SHOWNA, WS_POPUP,
         WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_NOACTIVATE,
         WNDCLASSW, SetTimer, KillTimer, WM_CREATE, WM_TIMER,
-        SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE, UpdateLayeredWindow,
+        SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+        HWND_TOPMOST, UpdateLayeredWindow,
         CreateIconIndirect, DestroyIcon, ICONINFO, SendMessageW,
     };
     use windows_sys::Win32::Graphics::Gdi::{
@@ -283,8 +284,19 @@ mod win32_impl {
     pub fn show_overlay() {
         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
             unsafe {
+                update_layered_overlay(send_hwnd.0);
                 ShowWindow(send_hwnd.0, SW_SHOWNA);
+                SetWindowPos(
+                    send_hwnd.0,
+                    HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
             }
+        }
+        if let Some(app) = crate::TAURI_APP.get() {
+            use tauri::Emitter;
+            let _ = app.emit("dictation-recording-started", ());
         }
     }
 
@@ -293,6 +305,10 @@ mod win32_impl {
             unsafe {
                 ShowWindow(send_hwnd.0, SW_HIDE);
             }
+        }
+        if let Some(app) = crate::TAURI_APP.get() {
+            use tauri::Emitter;
+            let _ = app.emit("dictation-recording-stopped", ());
         }
     }
 

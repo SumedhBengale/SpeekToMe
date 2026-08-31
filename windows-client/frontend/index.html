@@ -416,87 +416,74 @@
           <button id="onboard-next-3-btn" class="onboard-nav-btn">Next: Voice Test ➔</button>
         </div>
 
-        <!-- Step 5: Interactive Live Voice Dictation Test -->
+        <!-- Step 5: Interactive Live Voice Dictation Walkthrough -->
         <div class="onboarding-step" id="onboard-step-5">
-          <h2>Test Voice Dictation</h2>
-          <p class="step-desc">Test your microphone and experience instant AI transcription live.</p>
+          <h2>Try Your First Dictation</h2>
+          <p class="step-desc">Your global shortcut is active. Practice speaking right now.</p>
 
-          <!-- Interactive Showcase & Sandbox -->
-          <div class="test-sandbox-card">
-            <!-- Sandbox Header -->
-            <div class="sandbox-header">
+          <!-- Hotkey Callout Card -->
+          <div class="hotkey-instruction-card">
+            <div class="hotkey-instruction-header">
+              <div class="hotkey-badge-row">
+                <span class="hotkey-prefix-label">Press & Hold:</span>
+                <span class="hotkey-combo-badge" id="sandbox-hotkey-badge">Ctrl + Win</span>
+              </div>
               <div class="sandbox-status-indicator" id="sandbox-status-pill">
                 <span class="status-dot-pulse"></span>
-                <span id="sandbox-status-text">Ready to test</span>
-              </div>
-              <span class="sandbox-hint">Hold button or press <kbd id="sandbox-hotkey-badge">Ctrl + Win</kbd></span>
-            </div>
-
-            <!-- Sandbox Textarea Output -->
-            <div class="sandbox-input-wrapper">
-              <textarea id="sandbox-output-text" class="sandbox-textarea" placeholder="Your spoken words will appear here instantly... Click 'Hold to Speak' below to try it!"></textarea>
-              <div id="sandbox-interim-overlay" class="sandbox-interim-overlay hidden">
-                <span id="sandbox-interim-text"></span><span class="interim-cursor">|</span>
+                <span id="sandbox-status-text">Ready to dictate</span>
               </div>
             </div>
 
-            <!-- Simulated Pill Visualizer -->
-            <div class="sandbox-pill-container" id="sandbox-live-pill" style="display: none;">
-              <div class="sandbox-pill-badge">
-                <div class="mic-wave-bar bar-1"></div>
-                <div class="mic-wave-bar bar-2"></div>
-                <div class="mic-wave-bar bar-3"></div>
-                <div class="mic-wave-bar bar-4"></div>
-                <div class="mic-wave-bar bar-5"></div>
-                <span class="sandbox-pill-label">Listening...</span>
-              </div>
-            </div>
-
-            <!-- Interactive Mic Trigger Button -->
-            <div class="sandbox-control-row">
-              <button type="button" id="sandbox-mic-btn" class="sandbox-mic-button">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                  <line x1="12" y1="19" x2="12" y2="23"></line>
-                  <line x1="8" y1="23" x2="16" y2="23"></line>
-                </svg>
-                <span id="sandbox-mic-btn-label">Hold to Speak (or press hotkey)</span>
-              </button>
-            </div>
-
-            <div id="sandbox-success-banner" class="sandbox-success-banner hidden">
-              <span>🎉</span>
-              <span><strong>Voice test successful!</strong> You are ready to dictate into any Windows application.</span>
+            <!-- Top Pill Pointer Alert (Shows when recording is active) -->
+            <div id="sandbox-pill-pointer" class="pill-pointer-alert hidden">
+              <span class="pointer-arrow-up">▲</span>
+              <span><strong>Recording Active!</strong> Notice the floating pill listening at the top center of your screen.</span>
             </div>
           </div>
 
-          <!-- Feature Component Breakdown Cards -->
-          <div class="walkthrough-pills-row">
-            <div class="walkthrough-mini-card">
-              <span class="wt-icon">💊</span>
-              <div>
-                <strong>Floating Pill</strong>
-                <p>Mic volume visualizer</p>
+          <!-- Connected 3-Step Flow with Arrows -->
+          <div class="dictation-flow-stepper">
+            <div class="flow-step-card" id="flow-step-1">
+              <div class="flow-step-icon">🎙️</div>
+              <div class="flow-step-content">
+                <span class="flow-step-title">1. Hold Shortcut</span>
+                <span class="flow-step-desc">Floating Pill appears at screen top</span>
               </div>
             </div>
-            <div class="walkthrough-mini-card">
-              <span class="wt-icon">⚡</span>
-              <div>
-                <strong>Streaming Preview</strong>
-                <p>Real-time interim words</p>
+
+            <div class="flow-connector" id="flow-arrow-1">➔</div>
+
+            <div class="flow-step-card" id="flow-step-2">
+              <div class="flow-step-icon">⚡</div>
+              <div class="flow-step-content">
+                <span class="flow-step-title">2. Speak Naturally</span>
+                <span class="flow-step-desc">Streaming preview displays words</span>
               </div>
             </div>
-            <div class="walkthrough-mini-card">
-              <span class="wt-icon">✍️</span>
-              <div>
-                <strong>Auto-Paste</strong>
-                <p>Formatted in focused app</p>
+
+            <div class="flow-connector" id="flow-arrow-2">➔</div>
+
+            <div class="flow-step-card" id="flow-step-3">
+              <div class="flow-step-icon">✍️</div>
+              <div class="flow-step-content">
+                <span class="flow-step-title">3. Release to Paste</span>
+                <span class="flow-step-desc">Text is formatted and typed here</span>
               </div>
             </div>
           </div>
 
-          <button id="onboard-finish-btn" class="onboard-nav-btn primary-glow" style="height: 44px; margin-top: 12px;">Finish & Launch SpeekTo.Me 🚀</button>
+          <!-- Practice Notepad Area -->
+          <div class="practice-area-wrapper">
+            <label for="sandbox-output-text" class="practice-label">Practice Scratchpad (Focused):</label>
+            <textarea id="sandbox-output-text" class="practice-textarea" placeholder="Click here and hold your shortcut key to speak a sentence..."></textarea>
+          </div>
+
+          <div id="sandbox-success-banner" class="sandbox-success-banner hidden">
+            <span>🎉</span>
+            <span><strong>Voice dictation confirmed!</strong> You are ready to dictate into any Windows application.</span>
+          </div>
+
+          <button id="onboard-finish-btn" class="onboard-nav-btn primary-glow" style="height: 44px; margin-top: 10px;">Finish & Launch SpeekTo.Me 🚀</button>
         </div>
       </div>
     </div>

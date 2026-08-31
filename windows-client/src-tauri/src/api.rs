@@ -223,6 +223,11 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                     } else {
                         crate::keyboard::paste_text(text);
                     }
+
+                    if let Some(app) = crate::TAURI_APP.get() {
+                        use tauri::Emitter;
+                        let _ = app.emit("dictation-transcribed", text.to_string());
+                    }
                 }
                 crate::win32::hide_overlay();
                 crate::win32::hide_preview();

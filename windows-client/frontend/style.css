@@ -2577,22 +2577,48 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
 
 /* ==========================================
    Interactive Voice Dictation Test Sandbox
+/* ==========================================
+   Interactive Voice Dictation Walkthrough Flow
    ========================================== */
 
-.test-sandbox-card {
+.hotkey-instruction-card {
   background: var(--bg-card-subtle);
   border: 1.5px solid var(--border-color);
-  border-radius: 18px;
-  padding: 14px 18px;
+  border-radius: 16px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
-.sandbox-header {
+.hotkey-instruction-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.hotkey-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hotkey-prefix-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.hotkey-combo-badge {
+  background: var(--bg-card);
+  border: 1.5px solid var(--accent-soft);
+  color: var(--accent-color);
+  font-size: 13px;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 8px;
+  letter-spacing: 0.3px;
+  box-shadow: 0 1px 4px var(--accent-tint);
 }
 
 .sandbox-status-indicator {
@@ -2617,30 +2643,118 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   animation: radarPulse 1s infinite;
 }
 
-.sandbox-hint {
+/* Floating Pill Pointer Alert */
+.pill-pointer-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid var(--accent-soft);
+  border-radius: 10px;
+  padding: 6px 12px;
   font-size: 11.5px;
-  color: var(--text-muted);
+  color: var(--text-primary);
+  animation: fadeIn 0.2s ease-out;
 }
 
-.sandbox-hint kbd {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  padding: 2px 6px;
-  border-radius: 5px;
-  font-family: inherit;
+.pointer-arrow-up {
+  color: var(--accent-color);
+  font-size: 13px;
+  animation: bounceUp 1s infinite alternate ease-in-out;
+}
+
+@keyframes bounceUp {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-4px); }
+}
+
+/* 3-Step Flow Stepper with Arrows */
+.dictation-flow-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 2px 0;
+}
+
+.flow-step-card {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card-subtle);
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 8px 10px;
+  transition: all 0.2s ease;
+}
+
+.flow-step-card.active-recording {
+  border-color: var(--accent-color);
+  background: var(--accent-tint);
+  transform: translateY(-2px);
+  box-shadow: 0 0 12px var(--accent-tint);
+}
+
+.flow-step-card.active-processing {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+  transform: translateY(-2px);
+}
+
+.flow-step-card.active-success {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.flow-step-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.flow-step-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.flow-step-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.flow-step-desc {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.25;
+}
+
+.flow-connector {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: bold;
+  opacity: 0.6;
+}
+
+/* Practice Notepad Area */
+.practice-area-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.practice-label {
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.sandbox-input-wrapper {
-  position: relative;
+.practice-textarea {
   width: 100%;
-}
-
-.sandbox-textarea {
-  width: 100%;
-  height: 72px;
+  height: 64px;
   box-sizing: border-box;
   background: var(--bg-card);
   border: 1.5px solid var(--border-color);
@@ -2651,112 +2765,12 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   font-family: inherit;
   resize: none;
   outline: none;
-  transition: border-color 0.15s ease;
-}
-
-.sandbox-textarea:focus {
-  border-color: var(--accent-color);
-}
-
-.sandbox-interim-overlay {
-  position: absolute;
-  top: 10px;
-  left: 12px;
-  right: 12px;
-  pointer-events: none;
-  font-size: 13px;
-  color: var(--accent-color);
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-}
-
-.interim-cursor {
-  animation: blink 0.8s infinite;
-  color: var(--accent-color);
-  font-weight: bold;
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-.sandbox-pill-container {
-  display: flex;
-  justify-content: center;
-  margin: 2px 0;
-}
-
-.sandbox-pill-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: #27221f;
-  color: #fff;
-  padding: 5px 14px;
-  border-radius: 20px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.mic-wave-bar {
-  width: 3px;
-  height: 14px;
-  border-radius: 2px;
-  background: #57bf7c;
-  animation: waveBar 0.6s infinite ease-in-out alternate;
-}
-
-.bar-1 { animation-delay: 0.1s; height: 8px; }
-.bar-2 { animation-delay: 0.2s; height: 14px; }
-.bar-3 { animation-delay: 0.3s; height: 18px; }
-.bar-4 { animation-delay: 0.4s; height: 12px; }
-.bar-5 { animation-delay: 0.5s; height: 6px; }
-
-@keyframes waveBar {
-  0% { transform: scaleY(0.4); }
-  100% { transform: scaleY(1.2); }
-}
-
-.sandbox-pill-label {
-  font-size: 11px;
-  font-weight: 600;
-  margin-left: 4px;
-  color: #e5e7eb;
-}
-
-.sandbox-control-row {
-  display: flex;
-  justify-content: center;
-}
-
-.sandbox-mic-button {
-  background: var(--bg-card);
-  border: 1.5px solid var(--border-color);
-  border-radius: 12px;
-  padding: 8px 18px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   transition: all 0.15s ease;
-  font-family: inherit;
 }
 
-.sandbox-mic-button:hover {
-  background: var(--bg-card-subtle);
-  border-color: var(--accent-soft);
-  transform: translateY(-1px);
-}
-
-.sandbox-mic-button.active {
-  background: var(--accent-color);
-  color: var(--accent-text);
+.practice-textarea:focus {
   border-color: var(--accent-color);
-  box-shadow: 0 0 12px var(--accent-tint);
+  box-shadow: 0 0 0 3px var(--accent-tint);
 }
 
 .sandbox-success-banner {
@@ -2770,42 +2784,6 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   font-size: 12px;
   color: #065f46;
   animation: fadeIn 0.2s ease-out;
-}
-
-.walkthrough-pills-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.walkthrough-mini-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--bg-card-subtle);
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  padding: 8px 10px;
-}
-
-.walkthrough-mini-card .wt-icon {
-  font-size: 18px;
-  line-height: 1;
-}
-
-.walkthrough-mini-card strong {
-  display: block;
-  font-size: 11.5px;
-  color: var(--text-primary);
-  line-height: 1.2;
-}
-
-.walkthrough-mini-card p {
-  margin: 2px 0 0 0;
-  font-size: 10.5px;
-  color: var(--text-muted);
-  line-height: 1.2;
 }
 
 /* ==========================================

@@ -475,6 +475,11 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                             } else {
                                 crate::keyboard::paste_text(&normalized);
                             }
+
+                            if let Some(app) = crate::TAURI_APP.get() {
+                                use tauri::Emitter;
+                                let _ = app.emit("dictation-transcribed", normalized.clone());
+                            }
                         } else {
                             // If no text could be injected, notify the user if an error occurred
                             if let Some(err) = stream_error_msg {

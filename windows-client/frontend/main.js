@@ -143,17 +143,16 @@ const onboardPromoCtaText = document.getElementById('onboard-promo-cta-text');
 const onboardPromoSkipText = document.getElementById('onboard-promo-skip-text');
 let promoUpgradeUrl = "https://speekto.me/dashboard";
 
-// Sandbox Test UI Elements
+// Step 5 Walkthrough UI Elements
 const sandboxOutputText = document.getElementById('sandbox-output-text');
-const sandboxInterimOverlay = document.getElementById('sandbox-interim-overlay');
-const sandboxInterimText = document.getElementById('sandbox-interim-text');
-const sandboxLivePill = document.getElementById('sandbox-live-pill');
-const sandboxMicBtn = document.getElementById('sandbox-mic-btn');
-const sandboxMicBtnLabel = document.getElementById('sandbox-mic-btn-label');
 const sandboxStatusPill = document.getElementById('sandbox-status-pill');
 const sandboxStatusText = document.getElementById('sandbox-status-text');
 const sandboxSuccessBanner = document.getElementById('sandbox-success-banner');
 const sandboxHotkeyBadge = document.getElementById('sandbox-hotkey-badge');
+const sandboxPillPointer = document.getElementById('sandbox-pill-pointer');
+const flowStep1 = document.getElementById('flow-step-1');
+const flowStep2 = document.getElementById('flow-step-2');
+const flowStep3 = document.getElementById('flow-step-3');
 
 // Onboarding Inputs
 const onboardHotkeySelect = document.getElementById('onboard-hotkey-select');
@@ -628,6 +627,28 @@ async function init() {
         }
       });
     });
+
+    // Auto-sync onboarding preferences to Rust immediately on change
+    const syncOnboardingConfig = async () => {
+      try {
+        const updated = gatherConfigFromUI(true);
+        await invoke('save_config', { config: updated });
+        currentConfig = updated;
+      } catch (e) {
+        console.warn("Auto-syncing onboarding config:", e);
+      }
+    };
+
+    if (onboardHotkeySelect) onboardHotkeySelect.addEventListener('change', syncOnboardingConfig);
+    if (onboardHotkeyModeSelect) onboardHotkeyModeSelect.addEventListener('change', syncOnboardingConfig);
+    if (onboardThemeSelect) onboardThemeSelect.addEventListener('change', (e) => {
+      syncOnboardingConfig();
+      document.body.className = `theme-${e.target.value}`;
+    });
+    if (onboardAutostartCheck) onboardAutostartCheck.addEventListener('change', syncOnboardingConfig);
+    if (onboardTypingModeCheck) onboardTypingModeCheck.addEventListener('change', syncOnboardingConfig);
+    if (onboardSoundFeedbackCheck) onboardSoundFeedbackCheck.addEventListener('change', syncOnboardingConfig);
+    if (onboardEnhanceCheck) onboardEnhanceCheck.addEventListener('change', syncOnboardingConfig);
 
     // Sandbox Voice Tester setup
     setupSandboxTester();
@@ -1347,14 +1368,19 @@ async function handleUpgradeProFromOnboarding() {
 }
 
 // ==========================================
-// Interactive Voice Dictation Sandbox Tester
+// Real Voice Dictation Testing & Walkthrough
 // ==========================================
 
-let sandboxMediaRecorder = null;
-let sandboxAudioChunks = [];
-let sandboxIsRecording = false;
+async function initSandboxVoiceTester() {
+  // Sync the latest UI configuration to Rust backend immediately
+  try {
+    const updated = gatherConfigFromUI(true);
+    await invoke('save_config', { config: updated });
+    currentConfig = updated;
+  } catch (err) {
+    console.error("Failed to sync config before voice test:", err);
+  }
 
-function initSandboxVoiceTester() {
   const hotkey = (onboardHotkeySelect && onboardHotkeySelect.value) || (currentConfig && currentConfig.hotkey) || "Ctrl + Windows";
   if (sandboxHotkeyBadge) {
     sandboxHotkeyBadge.textContent = hotkey;
@@ -1366,112 +1392,58 @@ function initSandboxVoiceTester() {
   }
 }
 
-function setupSandboxTester() {
-  if (!sandboxMicBtn) return;
-
-  const startRecording = async () => {
-    if (sandboxIsRecording) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      sandboxAudioChunks = [];
-      sandboxMediaRecorder = new MediaRecorder(stream);
-      sandboxMediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) sandboxAudioChunks.push(e.data);
-      };
-      sandboxMediaRecorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        await processSandboxAudio();
-      };
-      sandboxMediaRecorder.start();
-      sandboxIsRecording = true;
-
-      // Update UI
+async function setupSandboxTester() {
+  // Listen for real Tauri dictation events from the Rust backend
+  try {
+    await listen('dictation-recording-started', () => {
       if (sandboxStatusPill) sandboxStatusPill.classList.add('recording');
-      if (sandboxStatusText) sandboxStatusText.textContent = "Listening to your voice...";
-      if (sandboxLivePill) sandboxLivePill.style.display = "flex";
-      if (sandboxMicBtn) sandboxMicBtn.classList.add('active');
-      if (sandboxMicBtnLabel) sandboxMicBtnLabel.textContent = "Listening... Release to transcribe";
-      if (sandboxInterimOverlay) sandboxInterimOverlay.classList.remove('hidden');
-      if (sandboxInterimText) sandboxInterimText.textContent = "Speaking detected...";
-    } catch (err) {
-      console.warn("Could not access microphone directly in webview, falling back to simulated dictation test:", err);
-      sandboxIsRecording = true;
-      if (sandboxStatusPill) sandboxStatusPill.classList.add('recording');
-      if (sandboxStatusText) sandboxStatusText.textContent = "Listening (Simulated)...";
-      if (sandboxLivePill) sandboxLivePill.style.display = "flex";
-      if (sandboxMicBtn) sandboxMicBtn.classList.add('active');
-      if (sandboxMicBtnLabel) sandboxMicBtnLabel.textContent = "Listening... Release to transcribe";
-      if (sandboxInterimOverlay) sandboxInterimOverlay.classList.remove('hidden');
-      if (sandboxInterimText) sandboxInterimText.textContent = "Testing voice transcription...";
-    }
-  };
+      if (sandboxStatusText) sandboxStatusText.textContent = "Recording audio... Speak now";
+      if (sandboxPillPointer) sandboxPillPointer.classList.remove('hidden');
+      if (flowStep1) flowStep1.classList.add('active-recording');
+      if (flowStep2) flowStep2.classList.add('active-recording');
+      if (flowStep3) flowStep3.classList.remove('active-processing', 'active-success');
+    });
 
-  const stopRecording = () => {
-    if (!sandboxIsRecording) return;
-    sandboxIsRecording = false;
-    if (sandboxMediaRecorder && sandboxMediaRecorder.state !== 'inactive') {
-      sandboxMediaRecorder.stop();
-    } else {
-      processSandboxAudio();
-    }
-  };
+    await listen('dictation-recording-stopped', () => {
+      if (sandboxStatusPill) sandboxStatusPill.classList.remove('recording');
+      if (sandboxStatusText) sandboxStatusText.textContent = "Processing audio with AI...";
+      if (sandboxPillPointer) sandboxPillPointer.classList.add('hidden');
+      if (flowStep1) flowStep1.classList.remove('active-recording');
+      if (flowStep2) flowStep2.classList.remove('active-recording');
+      if (flowStep3) flowStep3.classList.add('active-processing');
+    });
 
-  const processSandboxAudio = async () => {
-    if (sandboxStatusText) sandboxStatusText.textContent = "Transcribing with AI...";
-    if (sandboxLivePill) sandboxLivePill.style.display = "none";
-    if (sandboxMicBtn) sandboxMicBtn.classList.remove('active');
-    if (sandboxMicBtnLabel) sandboxMicBtnLabel.textContent = "Transcribing...";
-    if (sandboxInterimOverlay) sandboxInterimOverlay.classList.add('hidden');
+    await listen('dictation-transcribed', (event) => {
+      const text = event.payload;
+      if (flowStep3) {
+        flowStep3.classList.remove('active-processing');
+        flowStep3.classList.add('active-success');
+      }
+      if (sandboxStatusText) sandboxStatusText.textContent = "Transcribed & Pasted ✅";
+      if (sandboxSuccessBanner) sandboxSuccessBanner.classList.remove('hidden');
 
-    // Sample transcription demonstration
-    const sampleOutputs = [
-      "Hello! SpeekTo.Me voice dictation is tested and working flawlessly.",
-      "Testing real-time speech-to-text with AI formatting enabled.",
-      "SpeekTo.Me is ready. Hold your shortcut anywhere in Windows to dictate.",
-      "Voice dictation verified! Everything is set up and ready to go."
-    ];
-    const chosen = sampleOutputs[Math.floor(Math.random() * sampleOutputs.length)];
-
-    // Typewriter effect into sandbox
-    if (sandboxOutputText) {
-      sandboxOutputText.value = '';
-      let idx = 0;
-      const interval = setInterval(() => {
-        if (idx < chosen.length) {
-          sandboxOutputText.value += chosen[idx];
-          idx++;
-        } else {
-          clearInterval(interval);
-          if (sandboxStatusPill) sandboxStatusPill.classList.remove('recording');
-          if (sandboxStatusText) sandboxStatusText.textContent = "Test Successful ✅";
-          if (sandboxMicBtnLabel) sandboxMicBtnLabel.textContent = "Hold to Speak (or press hotkey)";
-          if (sandboxSuccessBanner) sandboxSuccessBanner.classList.remove('hidden');
+      if (sandboxOutputText && text) {
+        // If the cursor was outside the box during OS paste, insert it cleanly
+        if (!sandboxOutputText.value.includes(text)) {
+          if (sandboxOutputText.value.trim().length > 0) {
+            sandboxOutputText.value += "\n" + text;
+          } else {
+            sandboxOutputText.value = text;
+          }
         }
-      }, 25);
-    }
-  };
+      }
+    });
+  } catch (err) {
+    console.warn("Failed to attach Tauri dictation event listeners:", err);
+  }
 
-  // Mouse / touch events for hold-to-speak
-  sandboxMicBtn.addEventListener('mousedown', startRecording);
-  sandboxMicBtn.addEventListener('mouseup', stopRecording);
-  sandboxMicBtn.addEventListener('mouseleave', () => {
-    if (sandboxIsRecording) stopRecording();
-  });
-  sandboxMicBtn.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    startRecording();
-  });
-  sandboxMicBtn.addEventListener('touchend', (e) => {
-    e.preventDefault();
-    stopRecording();
-  });
-
-  // Also detect real OS hotkey paste into sandbox textarea
+  // Also detect real OS hotkey paste or typing into scratchpad textarea
   if (sandboxOutputText) {
     sandboxOutputText.addEventListener('input', () => {
       if (sandboxOutputText.value.trim().length > 0) {
         if (sandboxSuccessBanner) sandboxSuccessBanner.classList.remove('hidden');
-        if (sandboxStatusText) sandboxStatusText.textContent = "Real Dictation Received ✅";
+        if (flowStep3) flowStep3.classList.add('active-success');
+        if (sandboxStatusText) sandboxStatusText.textContent = "Dictation Received ✅";
       }
     });
   }
