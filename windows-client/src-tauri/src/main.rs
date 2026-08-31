@@ -317,7 +317,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
             .transparent(false)
             .decorations(false)
             .skip_taskbar(false)
-            .min_inner_size(840.0, 620.0);
+            .min_inner_size(840.0, 650.0);
 
         let pos_opt = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
         let size_opt = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -328,7 +328,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         if let Some(size) = size_opt {
             builder = builder.inner_size(size.width as f64, size.height as f64);
         } else {
-            builder = builder.inner_size(1200.0, 800.0);
+            builder = builder.inner_size(1200.0, 840.0);
         }
 
         match builder.build() {
