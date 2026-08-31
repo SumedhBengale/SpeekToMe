@@ -171,14 +171,15 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 
 	pctx := pipeline.NewPipelineContext(user.ID)
 	var polished string = rawText
-	var summary string = "AI Summary not available (DeepSeek key missing or request failed)."
+	var summary string = "AI Summary not available (no speech detected in recording)."
 	var actionItems string = "No action items extracted."
 
-	if config.DeepSeekAPIKey != "" && rawText != "" {
+	if rawText != "" {
 		polished, summary, actionItems, err = generateMeetingAIAnalysis(r.Context(), rawText, pctx)
 		if err != nil {
-			log.Printf("[DEEPSEEK ERROR] Failed to generate AI analysis: %v", err)
+			log.Printf("[MEETING AI ERROR] Failed to generate AI analysis: %v", err)
 			polished = rawText
+			summary = fmt.Sprintf("AI Summary generation failed: %v", err)
 		}
 	}
 
@@ -342,7 +343,7 @@ You must return your response in JSON format with exactly three fields:
 Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" + `json) or conversational text outside the JSON structure.`
 
 	client := &http.Client{Timeout: 60 * time.Second}
-	content, err := pipeline.RunDeepSeekChatCompletion(ctx, client, "deepseek-v4-flash", systemPrompt, transcript, pctx)
+	content, err := pipeline.RunDeepSeekChatCompletion(ctx, client, "", systemPrompt, transcript, pctx)
 	if err != nil {
 		return transcript, "", "", err
 	}
@@ -358,8 +359,8 @@ Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" 
 		ActionItems        interface{} `json:"action_items"`
 	}
 	if err := json.Unmarshal([]byte(content), &analysis); err != nil {
-		log.Printf("[DEEPSEEK PARSE WARNING] Failed to unmarshal JSON analysis: %v. Raw content: %s", err, content)
-		return transcript, "AI Summary parse error.", "No action items extracted.", nil
+		log.Printf("[MEETING AI WARNING] Failed to unmarshal JSON analysis: %v. Raw content: %s", err, content)
+		return transcript, content, "No action items extracted.", nil
 	}
 
 	actionItemsStr := "No action items extracted."
