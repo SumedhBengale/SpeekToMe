@@ -74,19 +74,19 @@ func main() {
 	valkeyClient := valkey.InitGlobalClient()
 	if valkeyClient != nil && valkeyClient.IsConnected() {
 		valkeyClient.SubscribeConfigReload(context.Background(), func() {
-			config.SyncConfigsFromDB(database, ratelimit.GroqRateLimiter.SetLimit)
+			config.SyncConfigsFromValkeyOrDB(database, ratelimit.GroqRateLimiter.SetLimit)
 		})
 		valkeyClient.SubscribeVocabInvalidate(context.Background(), func(userID int64) {
 			app.VocabCache.Invalidate(userID)
 		})
 	}
 
-	config.SyncConfigsFromDB(database, ratelimit.GroqRateLimiter.SetLimit)
+	config.SyncConfigsFromValkeyOrDB(database, ratelimit.GroqRateLimiter.SetLimit)
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			config.SyncConfigsFromDB(database, ratelimit.GroqRateLimiter.SetLimit)
+			config.SyncConfigsFromValkeyOrDB(database, ratelimit.GroqRateLimiter.SetLimit)
 		}
 	}()
 

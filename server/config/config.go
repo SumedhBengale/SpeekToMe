@@ -461,16 +461,7 @@ var ConfigManager = &CachedConfigManager{
 	rawConfigs: make(map[string]string),
 }
 
-func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int)) {
-	if database == nil {
-		return
-	}
-	dbConfigs, err := database.GetSaasConfig()
-	if err != nil {
-		log.Printf("[CONFIG SYNC ERROR] Failed to query saas_config: %v", err)
-		return
-	}
-
+func ParseRawConfigs(dbConfigs map[string]string) (ProviderConfig, map[string]string) {
 	models := DefaultModelsConfig()
 
 	// Parse JSON models_config_json if present in saas_config
@@ -564,13 +555,49 @@ func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int
 		}
 	}
 
-	ConfigManager.Set(newConfig, dbConfigs)
+	return newConfig, dbConfigs
+}
+
+// SyncConfigsFromValkeyOrDB checks Valkey L2 first, falling back to DB if empty.
+// Provides pure Valkey backing with 1-min background refresh.
+func SyncConfigsFromValkeyOrDB(database *db.Database, updateGroqLimitFunc func(limit int)) {
+	// 1. Try reading from Valkey L2
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		valkeyConfigs, err := valkey.GlobalClient.GetCachedSaaSConfig(ctx)
+		cancel()
+		if err == nil && len(valkeyConfigs) > 0 {
+			newConfig, updatedRaw := ParseRawConfigs(valkeyConfigs)
+			ConfigManager.Set(newConfig, updatedRaw)
+			if updateGroqLimitFunc != nil {
+				updateGroqLimitFunc(newConfig.GroqRateLimitRPM)
+			}
+			return
+		}
+	}
+
+	// 2. Fallback to Database if Valkey has no data or is disconnected
+	SyncConfigsFromDB(database, updateGroqLimitFunc)
+}
+
+func SyncConfigsFromDB(database *db.Database, updateGroqLimitFunc func(limit int)) {
+	if database == nil {
+		return
+	}
+	dbConfigs, err := database.GetSaasConfig()
+	if err != nil {
+		log.Printf("[CONFIG SYNC ERROR] Failed to query saas_config: %v", err)
+		return
+	}
+
+	newConfig, updatedRaw := ParseRawConfigs(dbConfigs)
+	ConfigManager.Set(newConfig, updatedRaw)
 
 	// L2 Valkey SaaS Config Cache
 	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-		_ = valkey.GlobalClient.SetCachedSaaSConfig(ctx, dbConfigs)
+		_ = valkey.GlobalClient.SetCachedSaaSConfig(ctx, updatedRaw)
 	}
 
 	if updateGroqLimitFunc != nil {

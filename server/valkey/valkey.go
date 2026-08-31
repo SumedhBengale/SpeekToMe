@@ -23,6 +23,7 @@ const (
 	KeyPrefixAuth         = "ratelimit:auth:"
 	KeyPrefixGeoIP        = "geoip:"
 	KeyPrefixSession      = "session:"
+	KeyPrefixUserSessions = "user_sessions:"
 	KeyPrefixVocab        = "vocab:user:"
 	KeyPrefixSaaSConfig   = "config:saas"
 	KeyModelsConfigJSON   = "config:models_config_json"
@@ -343,17 +344,20 @@ func (c *Client) SubscribeVocabInvalidate(ctx context.Context, invalidateFn func
 // ----------------------------------------------------------------------
 
 type CachedSessionUser struct {
-	ID                 int64     `json:"id"`
-	Email              string    `json:"email"`
-	Name               string    `json:"name"`
-	PlanTier           string    `json:"plan_tier"`
-	PlanActive         bool      `json:"plan_active"`
-	DailySecondsUsed   float64   `json:"daily_seconds_used"`
-	MonthlySecondsUsed float64   `json:"monthly_seconds_used"`
-	LastDailyReset     string    `json:"last_daily_reset"`
-	LastMonthlyReset   string    `json:"last_monthly_reset"`
-	Languages          []string  `json:"languages"`
-	ExpiresAt          time.Time `json:"expires_at"`
+	ID                     int64    `json:"id"`
+	Email                  string   `json:"email"`
+	Name                   string   `json:"name"`
+	PlanTier               string   `json:"plan_tier"`
+	PlanActive             int      `json:"plan_active"`
+	PlanActivatedAt        string   `json:"plan_activated_at"`
+	RazorpaySubscriptionID string   `json:"razorpay_subscription_id"`
+	RateLimitRPM           *int64   `json:"rate_limit_rpm,omitempty"`
+	IsAdmin                int      `json:"is_admin"`
+	IsTempSession          int      `json:"is_temp"`
+	MonthlyUsageSeconds    float64  `json:"monthly_usage_seconds"`
+	IsLocked               int      `json:"is_locked"`
+	Languages              []string `json:"languages"`
+	ExpiresAt              string   `json:"expires_at"`
 }
 
 func (c *Client) GetCachedSession(ctx context.Context, token string) (*CachedSessionUser, error) {
@@ -379,14 +383,49 @@ func (c *Client) SetCachedSession(ctx context.Context, token string, session *Ca
 	if err != nil {
 		return err
 	}
-	return c.rdb.Set(ctx, KeyPrefixSession+token, data, ttl).Err()
+	pipe := c.rdb.Pipeline()
+	pipe.Set(ctx, KeyPrefixSession+token, data, ttl)
+	if session.ID > 0 {
+		userSetKey := fmt.Sprintf("%s%d", KeyPrefixUserSessions, session.ID)
+		pipe.SAdd(ctx, userSetKey, token)
+		pipe.Expire(ctx, userSetKey, ttl+24*time.Hour)
+	}
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 func (c *Client) InvalidateSession(ctx context.Context, token string) error {
 	if !c.IsConnected() {
 		return nil
 	}
+	// Try to get session to clean user_sessions set
+	data, err := c.rdb.Get(ctx, KeyPrefixSession+token).Bytes()
+	if err == nil {
+		var u CachedSessionUser
+		if json.Unmarshal(data, &u) == nil && u.ID > 0 {
+			userSetKey := fmt.Sprintf("%s%d", KeyPrefixUserSessions, u.ID)
+			_ = c.rdb.SRem(ctx, userSetKey, token).Err()
+		}
+	}
 	return c.rdb.Del(ctx, KeyPrefixSession+token).Err()
+}
+
+func (c *Client) InvalidateUserSessions(ctx context.Context, userID int64) error {
+	if !c.IsConnected() || userID <= 0 {
+		return nil
+	}
+	userSetKey := fmt.Sprintf("%s%d", KeyPrefixUserSessions, userID)
+	tokens, err := c.rdb.SMembers(ctx, userSetKey).Result()
+	if err != nil {
+		return err
+	}
+	pipe := c.rdb.Pipeline()
+	for _, tok := range tokens {
+		pipe.Del(ctx, KeyPrefixSession+tok)
+	}
+	pipe.Del(ctx, userSetKey)
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 // ----------------------------------------------------------------------

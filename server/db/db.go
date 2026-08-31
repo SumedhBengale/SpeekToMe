@@ -359,20 +359,119 @@ type UserProfile struct {
 	Languages              []string
 }
 
+func invalidateCachedUserSessions(userID int64) {
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() && userID > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_ = valkey.GlobalClient.InvalidateUserSessions(ctx, userID)
+	}
+}
+
+func invalidateCachedSessionToken(token string) {
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() && token != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_ = valkey.GlobalClient.InvalidateSession(ctx, token)
+	}
+}
+
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
+	if token == "" {
+		return nil, fmt.Errorf("invalid or expired session token")
+	}
+
+	// 1. Check L2 Valkey Session Cache
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		cached, err := valkey.GlobalClient.GetCachedSession(ctx, token)
+		cancel()
+		if err == nil && cached != nil {
+			// Mitigation 3: Dynamic Expiration Check
+			if cached.ExpiresAt != "" {
+				if expTime, err := time.Parse(time.RFC3339, cached.ExpiresAt); err == nil && time.Now().After(expTime) {
+					invalidateCachedSessionToken(token)
+					return nil, fmt.Errorf("invalid or expired session token")
+				}
+			}
+			// Mitigation 1: Stale Lock / 2FA check
+			if cached.IsLocked == 1 {
+				return nil, fmt.Errorf("ACCOUNT_LOCKED")
+			}
+			if cached.IsTempSession == 1 {
+				return nil, fmt.Errorf("2FA_REQUIRED")
+			}
+			var rpm sql.NullInt64
+			if cached.RateLimitRPM != nil {
+				rpm = sql.NullInt64{Int64: *cached.RateLimitRPM, Valid: true}
+			}
+			return &UserProfile{
+				ID:                     cached.ID,
+				Email:                  cached.Email,
+				Name:                   cached.Name,
+				PlanTier:               cached.PlanTier,
+				PlanActive:             cached.PlanActive,
+				PlanActivatedAt:        cached.PlanActivatedAt,
+				RazorpaySubscriptionID: cached.RazorpaySubscriptionID,
+				RateLimitRPM:           rpm,
+				IsAdmin:                cached.IsAdmin,
+				IsTempSession:          cached.IsTempSession,
+				MonthlyUsageSeconds:    cached.MonthlyUsageSeconds,
+				IsLocked:               cached.IsLocked,
+				Languages:              cached.Languages,
+			}, nil
+		}
+	}
+
+	// 2. Query DB on Cache Miss
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
 	var langsStr sql.NullString
+	var expiresAtStr string
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked, COALESCE(u.languages, '["en"]')
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked, COALESCE(u.languages, '["en"]'), s.expires_at
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked, &langsStr)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked, &langsStr, &expiresAtStr)
 	if err != nil {
 		return nil, err
 	}
 	u.Languages = utils.ParseLanguagesJSON(langsStr.String)
+
+	// 3. Populate L2 Valkey Session Cache with Dynamic TTL
+	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		var rpmPtr *int64
+		if u.RateLimitRPM.Valid {
+			v := u.RateLimitRPM.Int64
+			rpmPtr = &v
+		}
+		var ttl time.Duration = 15 * 24 * time.Hour
+		if expTime, err := time.Parse(time.RFC3339, expiresAtStr); err == nil {
+			remaining := time.Until(expTime)
+			if remaining > 0 {
+				ttl = remaining
+			}
+		}
+		_ = valkey.GlobalClient.SetCachedSession(ctx, token, &valkey.CachedSessionUser{
+			ID:                     u.ID,
+			Email:                  u.Email,
+			Name:                   u.Name,
+			PlanTier:               u.PlanTier,
+			PlanActive:             u.PlanActive,
+			PlanActivatedAt:        u.PlanActivatedAt,
+			RazorpaySubscriptionID: u.RazorpaySubscriptionID,
+			RateLimitRPM:           rpmPtr,
+			IsAdmin:                u.IsAdmin,
+			IsTempSession:          u.IsTempSession,
+			MonthlyUsageSeconds:    u.MonthlyUsageSeconds,
+			IsLocked:               u.IsLocked,
+			Languages:              u.Languages,
+			ExpiresAt:              expiresAtStr,
+		}, ttl)
+		cancel()
+	}
+
 	if u.IsLocked == 1 {
 		return nil, fmt.Errorf("ACCOUNT_LOCKED")
 	}
@@ -383,81 +482,17 @@ func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 }
 
 func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []VocabularyTerm, error) {
-	now := time.Now().Format(time.RFC3339)
-	rows, err := d.db.Query(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, 
-		       COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), 
-		       u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked,
-		       COALESCE(u.languages, '["en"]'), v.canonical_term, v.normalized_term
-		FROM sessions s 
-		JOIN users u ON s.user_id = u.id 
-		LEFT JOIN vocabulary v ON u.id = v.user_id
-		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now)
+	u, err := d.GetUserBySession(token)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
 
-	var u UserProfile
-	var terms []VocabularyTerm
-	var langsStr sql.NullString
-	userParsed := false
-
-	for rows.Next() {
-		var canonical, normalized sql.NullString
-		err := rows.Scan(
-			&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, 
-			&u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, 
-			&u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked,
-			&langsStr, &canonical, &normalized,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		userParsed = true
-		if canonical.Valid {
-			terms = append(terms, VocabularyTerm{
-				Canonical:  canonical.String,
-				Normalized: normalized.String,
-			})
-		}
-	}
-	if userParsed {
-		u.Languages = utils.ParseLanguagesJSON(langsStr.String)
+	terms, err := d.GetVocabularyTerms(u.ID)
+	if err != nil {
+		return u, nil, nil
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, nil, err
-	}
-
-	if !userParsed {
-		return nil, nil, fmt.Errorf("invalid or expired session token")
-	}
-
-	if u.IsLocked == 1 {
-		return nil, nil, fmt.Errorf("ACCOUNT_LOCKED")
-	}
-
-	if u.IsTempSession == 1 {
-		return nil, nil, fmt.Errorf("2FA_REQUIRED")
-	}
-
-	// L2 Valkey Vocabulary Cache
-	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() && len(terms) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		defer cancel()
-		var vterms []valkey.CachedVocabTerm
-		for _, t := range terms {
-			vterms = append(vterms, valkey.CachedVocabTerm{
-				Canonical:  t.Canonical,
-				Normalized: t.Normalized,
-			})
-		}
-		_ = valkey.GlobalClient.SetCachedVocabulary(ctx, u.ID, vterms, 24*time.Hour)
-	}
-
-	return &u, terms, nil
+	return u, terms, nil
 }
 
 type UsageLogRecord struct {
@@ -534,6 +569,9 @@ func (d *Database) GetUsageLogByID(logID int64, userID int64) (*UsageLogRecord, 
 func (d *Database) UpdateUserLanguages(userID int64, languages []string) error {
 	jsonStr := utils.FormatLanguagesJSON(languages)
 	_, err := d.db.Exec("UPDATE users SET languages = ? WHERE id = ?", jsonStr, userID)
+	if err == nil {
+		invalidateCachedUserSessions(userID)
+	}
 	return err
 }
 
@@ -562,6 +600,9 @@ func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, err
 
 func (d *Database) PromoteSession(token string) error {
 	_, err := d.db.Exec("UPDATE sessions SET is_temp = 0 WHERE token = ?", token)
+	if err == nil {
+		invalidateCachedSessionToken(token)
+	}
 	return err
 }
 
@@ -577,11 +618,17 @@ func (d *Database) GetUserAdminStatus(userID int64) (bool, bool, error) {
 
 func (d *Database) SetUserTOTPSecret(userID int64, encryptedSecret string) error {
 	_, err := d.db.Exec("UPDATE users SET totp_secret = ? WHERE id = ?", encryptedSecret, userID)
+	if err == nil {
+		invalidateCachedUserSessions(userID)
+	}
 	return err
 }
 
 func (d *Database) DeleteSession(token string) error {
 	_, err := d.db.Exec("DELETE FROM sessions WHERE token = ?", token)
+	if err == nil {
+		invalidateCachedSessionToken(token)
+	}
 	return err
 }
 
@@ -627,11 +674,17 @@ func (d *Database) GetUserDurationLast24Hours(userID int64) (float64, error) {
 // Admin helpers
 func (d *Database) UpdateUserPlan(userID int64, planTier string, planActive int, subID string) error {
 	_, err := d.db.Exec("UPDATE users SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP, razorpay_subscription_id = ? WHERE id = ?", planTier, planActive, subID, userID)
+	if err == nil {
+		invalidateCachedUserSessions(userID)
+	}
 	return err
 }
 
 func (d *Database) SetPendingSubscription(userID int64, subID string) error {
 	_, err := d.db.Exec("UPDATE users SET razorpay_subscription_id = ?, razorpay_subscription_status = 'created', razorpay_current_start = 0, razorpay_current_end = 0 WHERE id = ?", subID, userID)
+	if err == nil {
+		invalidateCachedUserSessions(userID)
+	}
 	return err
 }
 
@@ -643,6 +696,9 @@ func (d *Database) UpdateSubscriptionState(userID int64, subID, status string, p
 				razorpay_current_start = ?, razorpay_current_end = ?
 			WHERE id = ?
 		`, subID, status, periodStart, periodEnd, userID)
+		if err == nil {
+			invalidateCachedUserSessions(userID)
+		}
 		return err
 	}
 	planTier := "pro"
@@ -656,6 +712,9 @@ func (d *Database) UpdateSubscriptionState(userID int64, subID, status string, p
 			plan_tier = ?
 		WHERE id = ?
 	`, subID, status, periodStart, periodEnd, *planActive, planTier, userID)
+	if err == nil {
+		invalidateCachedUserSessions(userID)
+	}
 	return err
 }
 
@@ -1133,6 +1192,9 @@ func (d *Database) AdminUpdateUserPlan(userID int64, planTier string, planActive
 		SET plan_tier = ?, plan_active = ?, plan_activated_at = CURRENT_TIMESTAMP, monthly_usage_seconds = 0.0 
 		WHERE id = ?
 	`, planTier, planActive, userID)
+	if err == nil {
+		invalidateCachedUserSessions(userID)
+	}
 	return err
 }
 
@@ -1144,6 +1206,9 @@ func (d *Database) AdminUpdateUserRateLimit(userID int64, rateLimit *int) error 
 		val = nil
 	}
 	_, err := d.db.Exec("UPDATE users SET rate_limit_rpm = ? WHERE id = ?", val, userID)
+	if err == nil {
+		invalidateCachedUserSessions(userID)
+	}
 	return err
 }
 
@@ -1539,6 +1604,7 @@ func (d *Database) ResetPasswordWithToken(token, newPasswordHash string) error {
 
 	// Security: Invalidate all existing active sessions upon password reset
 	_, _ = d.db.Exec("DELETE FROM sessions WHERE user_id = ?", id)
+	invalidateCachedUserSessions(id)
 
 	return nil
 }
@@ -1573,7 +1639,12 @@ func (d *Database) DeleteUserAccount(userID int64) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	invalidateCachedUserSessions(userID)
+	return nil
 }
 
 func (d *Database) SaveGeoIP(ip, location string) error {

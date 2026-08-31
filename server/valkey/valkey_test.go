@@ -34,25 +34,34 @@ func TestValkeyClientFallbackWhenDisconnected(t *testing.T) {
 		t.Error("Expected error from GetCachedSession when disconnected")
 	}
 
-	// Pub/Sub methods should not panic
-	_ = c.PublishConfigReload(ctx)
-	_ = c.PublishVocabInvalidate(ctx, 123)
-	c.SubscribeConfigReload(ctx, func() {})
-	c.SubscribeVocabInvalidate(ctx, func(uID int64) {})
+	// Invalidate methods should gracefully handle disconnected states
+	_ = c.InvalidateSession(ctx, "dummy_token")
+	_ = c.InvalidateUserSessions(ctx, 42)
+
+	// Invalidate vocab should gracefully return nil
+	_ = c.InvalidateCachedVocabulary(ctx, 42)
 }
 
 func TestCachedSessionSerialization(t *testing.T) {
+	rpm := int64(60)
 	u := CachedSessionUser{
-		ID:         42,
-		Email:      "user@example.com",
-		Name:       "Test User",
-		PlanTier:   "pro",
-		PlanActive: true,
-		Languages:  []string{"en", "es"},
-		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		ID:                     42,
+		Email:                  "user@example.com",
+		Name:                   "Test User",
+		PlanTier:               "pro",
+		PlanActive:             1,
+		PlanActivatedAt:        "2026-08-31T00:00:00Z",
+		RazorpaySubscriptionID: "sub_12345",
+		RateLimitRPM:           &rpm,
+		IsAdmin:                0,
+		IsTempSession:          0,
+		MonthlyUsageSeconds:    120.5,
+		IsLocked:               0,
+		Languages:              []string{"en", "es"},
+		ExpiresAt:              time.Now().Add(24 * time.Hour).Format(time.RFC3339),
 	}
 
-	if u.ID != 42 || u.PlanTier != "pro" {
+	if u.ID != 42 || u.PlanTier != "pro" || u.PlanActive != 1 || *u.RateLimitRPM != 60 {
 		t.Errorf("Unexpected user field values: %+v", u)
 	}
 }
