@@ -1134,7 +1134,6 @@ async function saveAndApply(e) {
       activeSaveBtn.disabled = false;
       activeSaveBtn.innerHTML = defaultContent;
     }
-    }
     showToast(formatAuthError(err), "Save Failed", "error");
   } finally {
     isSavingInProgress = false;
