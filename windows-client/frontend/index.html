@@ -383,10 +383,10 @@
           <button id="onboard-next-2-btn" class="onboard-nav-btn">Next Step ➔</button>
         </div>
 
-        <!-- Step 4: AI Config & Spoken Languages -->
+        <!-- Step 4: Spoken Languages -->
         <div class="onboarding-step" id="onboard-step-4">
-          <h2>AI & Languages</h2>
-          <p class="step-desc">Select your spoken languages and optional AI instructions.</p>
+          <h2>Spoken Languages</h2>
+          <p class="step-desc">Select your spoken languages to optimize speech recognition speed and accuracy.</p>
 
           <input type="hidden" id="onboard-model-select" value="whisper-large-v3-turbo">
 
@@ -406,26 +406,7 @@
             </div>
           </div>
 
-          <div class="settings-card compact-card" style="margin-top: 10px;">
-            <div class="checkbox-row">
-              <label class="fluent-checkbox-container">
-                <input type="checkbox" id="onboard-enhance-check">
-                <span class="checkmark"></span>
-                <div class="checkbox-label-block">
-                  <span class="checkbox-title">AI Grammar & Context Enhancement</span>
-                  <span class="setting-hint">Polishes punctuation, fixes grammar, or formats technical terms.</span>
-                </div>
-              </label>
-            </div>
-
-            <div class="setting-group" style="margin-top: 8px;">
-              <textarea id="onboard-custom-prompt-text" class="fluent-textarea" style="height: 48px; min-height: 48px;"
-                placeholder="Optional AI instructions (e.g. Format as bullet points, rewrite as formal email)..."></textarea>
-              <div id="onboard-prompt-validation-banner" class="validation-banner hidden"></div>
-            </div>
-          </div>
-
-          <button id="onboard-next-3-btn" class="onboard-nav-btn">Next: Quick Demo ➔</button>
+          <button id="onboard-next-3-btn" class="onboard-nav-btn" style="margin-top: 16px;">Next: Quick Demo ➔</button>
         </div>
 
         <!-- Step 5: Demo Video Walkthrough -->
@@ -537,16 +518,6 @@
             <line x1="8" y1="23" x2="16" y2="23"></line>
           </svg>
           <span>Dictation</span>
-        </a>
-        <a href="#" class="nav-item" data-tab="ai">
-          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"></path>
-            <path d="M20 3v4"></path>
-            <path d="M22 5h-4"></path>
-            <path d="M4 17v2"></path>
-            <path d="M5 18H3"></path>
-          </svg>
-          <span>AI Assistant</span>
         </a>
         <a href="#" class="nav-item" data-tab="vocabulary">
           <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -876,37 +847,6 @@
               <div id="client-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
             </div>
             <button type="button" id="client-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add</button>
-          </div>
-        </div>
-
-      </div>
-
-      <!-- AI Assistant Tab -->
-      <div class="tab-pane" id="tab-ai">
-        <div class="tab-header">
-          <h2>AI Assistant</h2>
-          <p class="section-desc">Manage voice-to-text models and enhancement options.</p>
-        </div>
-
-        <input type="hidden" id="model-select" value="whisper-large-v3-turbo">
-
-        <div class="settings-card">
-          <div class="checkbox-row">
-            <label class="fluent-checkbox-container">
-              <input type="checkbox" id="enhance-check">
-              <span class="checkmark"></span>
-              <div class="checkbox-label-block">
-                <span class="checkbox-title">Enhance transcription with DeepSeek AI</span>
-                <span class="setting-hint">Uses DeepSeek to format grammar, fix context, or translate.</span>
-              </div>
-            </label>
-          </div>
-
-          <div class="setting-group" style="margin-top: 14px;">
-            <label for="custom-prompt-text" class="setting-title" style="margin-bottom: 6px; display: block;">Custom AI Instructions</label>
-            <textarea id="custom-prompt-text" class="fluent-textarea"
-              placeholder="e.g. Translate to French, rewrite as email..."></textarea>
-            <div id="prompt-validation-banner" class="validation-banner hidden"></div>
           </div>
         </div>
 

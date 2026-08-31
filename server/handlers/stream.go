@@ -330,7 +330,7 @@ func (a *App) handleRealStreamingSession(
 
 	if startPayload.Enhance && finalRawTranscript != "" {
 		tstart := time.Now()
-		enhancer := pipeline.NewAIEnhancementTransform(startPayload.Prompt, "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
+		enhancer := pipeline.NewAIEnhancementTransform("", "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
@@ -562,8 +562,8 @@ func (a *App) handlePseudoStreamingSession(
 
 	if enhance && finalRawTranscript != "" {
 		tstart := time.Now()
-		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Prompt: %q | Raw Input: %q | Protected Vocab: %d terms", user.ID, customPrompt, finalRawTranscript, len(protectedList))
-		enhancer := pipeline.NewAIEnhancementTransform(customPrompt, "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
+		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Raw Input: %q | Protected Vocab: %d terms", user.ID, finalRawTranscript, len(protectedList))
+		enhancer := pipeline.NewAIEnhancementTransform("", "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {

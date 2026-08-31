@@ -138,8 +138,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enhance := r.FormValue("enhance") == "true"
-	prompt := r.FormValue("prompt")
+	enhance := r.FormValue("enhance") != "false"
 
 	model := "whisper-large-v3-turbo"
 
@@ -186,7 +185,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(protectedList)
 
-		enhancer := pipeline.NewAIEnhancementTransform(prompt, "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
+		enhancer := pipeline.NewAIEnhancementTransform("", "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
 		tstart := time.Now()
 		enhancedText, terr := enhancer.Transform(ctx, vocabNormalized, pctx)
 		if terr != nil {

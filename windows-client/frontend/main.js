@@ -85,11 +85,8 @@ const autostartCheck = document.getElementById('autostart-check');
 const typingModeCheck = document.getElementById('typing-mode-check');
 const soundFeedbackCheck = document.getElementById('sound-feedback-check');
 const modelSelect = document.getElementById('model-select');
-const enhanceCheck = document.getElementById('enhance-check');
 const streamingModeCheck = document.getElementById('streaming-mode-check');
 const streamingProHint = document.getElementById('streaming-pro-hint');
-const customPromptText = document.getElementById('custom-prompt-text');
-const promptValidationBanner = document.getElementById('prompt-validation-banner');
 const themeSelect = document.getElementById('theme-select');
 
 // Pill Position Elements
@@ -171,9 +168,6 @@ const onboardStreamingModeCheck = document.getElementById('onboard-streaming-mod
 const onboardTypingModeCheck = document.getElementById('onboard-typing-mode-check');
 const onboardSoundFeedbackCheck = document.getElementById('onboard-sound-feedback-check');
 const onboardModelSelect = document.getElementById('onboard-model-select');
-const onboardEnhanceCheck = document.getElementById('onboard-enhance-check');
-const onboardCustomPromptText = document.getElementById('onboard-custom-prompt-text');
-const onboardPromptValidationBanner = document.getElementById('onboard-prompt-validation-banner');
 const onboardThemeSelect = document.getElementById('onboard-theme-select');
 
 // ==========================================
@@ -470,9 +464,7 @@ async function init() {
     pillCustomX,
     pillCustomY,
     modelSelect,
-    enhanceCheck,
-    streamingModeCheck,
-    customPromptText
+    streamingModeCheck
   ];
 
   dashboardInputs.forEach(input => {
@@ -624,7 +616,7 @@ async function init() {
     if (onboardUpgradeProBtn) onboardUpgradeProBtn.addEventListener('click', handleUpgradeProFromOnboarding);
     if (onboardSkipProBtn) onboardSkipProBtn.addEventListener('click', () => goToStep(3));
     if (onboardNext2Btn) onboardNext2Btn.addEventListener('click', () => goToStep(4));
-    if (onboardNext3Btn) onboardNext3Btn.addEventListener('click', validateOnboardingPrompt);
+    if (onboardNext3Btn) onboardNext3Btn.addEventListener('click', () => goToStep(5));
     if (onboardFinishBtn) onboardFinishBtn.addEventListener('click', finishOnboarding);
 
     // Step dots navigation
@@ -673,7 +665,6 @@ async function init() {
     if (onboardAutostartCheck) onboardAutostartCheck.addEventListener('change', syncOnboardingConfig);
     if (onboardTypingModeCheck) onboardTypingModeCheck.addEventListener('change', syncOnboardingConfig);
     if (onboardSoundFeedbackCheck) onboardSoundFeedbackCheck.addEventListener('change', syncOnboardingConfig);
-    if (onboardEnhanceCheck) onboardEnhanceCheck.addEventListener('change', syncOnboardingConfig);
 
     // Demo Video Player setup
     setupDemoVideoPlayer();
@@ -894,9 +885,7 @@ function checkIfConfigDirty(a, b) {
   if (Boolean(a.sound_feedback) !== Boolean(b.sound_feedback)) return true;
   if (a.theme !== b.theme) return true;
   if (a.model !== b.model) return true;
-  if (Boolean(a.enhance) !== Boolean(b.enhance)) return true;
   if (a.transcription_mode !== b.transcription_mode) return true;
-  if ((a.custom_prompt || '').trim() !== (b.custom_prompt || '').trim()) return true;
   if (a.pill_position_mode !== b.pill_position_mode) return true;
   if (a.pill_predefined_position !== b.pill_predefined_position) return true;
   if (Number(a.pill_custom_x) !== Number(b.pill_custom_x)) return true;
@@ -953,11 +942,9 @@ function applyConfigToUI(config) {
   typingModeCheck.checked = config.typing_mode;
   soundFeedbackCheck.checked = config.sound_feedback;
   modelSelect.value = config.model;
-  enhanceCheck.checked = config.enhance;
   if (streamingModeCheck) {
     streamingModeCheck.checked = (config.transcription_mode === 'stream');
   }
-  customPromptText.value = config.custom_prompt;
   if (themeSelect) themeSelect.value = config.theme || 'forest';
 
   // Apply new pill positioning settings
@@ -991,8 +978,6 @@ function applyConfigToUI(config) {
   onboardTypingModeCheck.checked = config.typing_mode;
   onboardSoundFeedbackCheck.checked = config.sound_feedback;
   onboardModelSelect.value = config.model;
-  onboardEnhanceCheck.checked = config.enhance;
-  onboardCustomPromptText.value = config.custom_prompt;
   if (onboardThemeSelect) onboardThemeSelect.value = config.theme || 'forest';
 
   // Apply theme class to document
@@ -1067,9 +1052,9 @@ function gatherConfigFromUI(isOnboarding) {
       typing_mode: onboardTypingModeCheck.checked,
       sound_feedback: onboardSoundFeedbackCheck.checked,
       model: onboardModelSelect.value,
-      enhance: onboardEnhanceCheck.checked,
+      enhance: true,
       transcription_mode: (onboardStreamingModeCheck && onboardStreamingModeCheck.checked) ? "stream" : "batch",
-      custom_prompt: onboardCustomPromptText.value,
+      custom_prompt: "",
       session_token: currentConfig ? currentConfig.session_token : null,
       theme: themeName,
       pill_position_mode: currentConfig ? currentConfig.pill_position_mode : 'predefined',
@@ -1090,9 +1075,9 @@ function gatherConfigFromUI(isOnboarding) {
       typing_mode: typingModeCheck.checked,
       sound_feedback: soundFeedbackCheck.checked,
       model: modelSelect.value,
-      enhance: enhanceCheck.checked,
+      enhance: true,
       transcription_mode: (streamingModeCheck && streamingModeCheck.checked) ? "stream" : "batch",
-      custom_prompt: customPromptText.value,
+      custom_prompt: "",
       session_token: currentConfig ? currentConfig.session_token : null,
       theme: themeName,
       pill_position_mode: pillPosModeSelect ? pillPosModeSelect.value : 'predefined',
@@ -1100,7 +1085,7 @@ function gatherConfigFromUI(isOnboarding) {
       pill_custom_x: pillCustomX ? parseInt(pillCustomX.value, 10) || 0 : 0,
       pill_custom_y: pillCustomY ? parseInt(pillCustomY.value, 10) || 0 : 60,
       pill_bg_color: colors.bg,
-  pill_wave_color: colors.wave
+      pill_wave_color: colors.wave
     };
   }
 }
@@ -1113,16 +1098,8 @@ async function saveAndApply(e) {
   if (isSavingInProgress) return;
   isSavingInProgress = true;
 
-  const banner = promptValidationBanner;
-  const prompt = (customPromptText && customPromptText.value) ? customPromptText.value.trim() : '';
   const activeSaveBtn = document.getElementById('save-btn') || saveBtn;
   const defaultContent = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Save & Apply</span>';
-
-  if (banner) {
-    banner.classList.add('hidden');
-    banner.className = 'validation-banner hidden';
-    banner.innerHTML = '';
-  }
 
   if (activeSaveBtn) {
     activeSaveBtn.disabled = true;
@@ -1130,47 +1107,6 @@ async function saveAndApply(e) {
   }
 
   try {
-    // If enhance is enabled and prompt is not empty, validate it first
-    if (enhanceCheck && enhanceCheck.checked && prompt !== '') {
-      if (banner) {
-        banner.classList.remove('hidden');
-        banner.className = 'validation-banner info';
-        banner.innerHTML = '<div class="spinner"></div> Checking instruction safety...';
-      }
-
-      try {
-        const result = await invoke('validate_prompt', { prompt: prompt });
-        if (!result.safe) {
-          if (banner) {
-            banner.className = 'validation-banner error';
-            banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${escapeHtml(result.explanation || 'Not eligible to be a system prompt.')}`;
-          }
-          if (activeSaveBtn) {
-            activeSaveBtn.disabled = false;
-            activeSaveBtn.innerHTML = defaultContent;
-          }
-          return; // Block saving
-        }
-        
-        if (banner) {
-          banner.className = 'validation-banner success';
-          banner.innerHTML = '<span>✅</span> Instructions validated!';
-        }
-        await new Promise(resolve => setTimeout(resolve, 300));
-      } catch (valErr) {
-        console.error("Failed to validate custom prompt:", valErr);
-        if (banner) {
-          banner.className = 'validation-banner error';
-          banner.innerHTML = `<span>❌</span> Validation error: ${escapeHtml(formatAuthError(valErr))}`;
-        }
-        if (activeSaveBtn) {
-          activeSaveBtn.disabled = false;
-          activeSaveBtn.innerHTML = defaultContent;
-        }
-        return; // Block saving on validation error
-      }
-    }
-
     const updated = gatherConfigFromUI(false);
     await invoke('save_config', { config: updated });
     currentConfig = updated;
@@ -1180,20 +1116,12 @@ async function saveAndApply(e) {
       activeSaveBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Saved</span>';
     }
     showToast("Settings saved and applied successfully.", "Settings Saved", "success");
-    if (banner) {
-      banner.className = 'validation-banner success';
-      banner.innerHTML = '<span>✅</span> Settings saved and applied!';
-      banner.classList.remove('hidden');
-    }
     
     // Auto-hide the save button after a brief confirmation delay
     setTimeout(() => {
       if (activeSaveBtn) {
         activeSaveBtn.style.display = 'none';
         activeSaveBtn.innerHTML = defaultContent;
-      }
-      if (banner) {
-        banner.classList.add('hidden');
       }
     }, 1200);
   } catch (err) {
@@ -1202,10 +1130,6 @@ async function saveAndApply(e) {
       activeSaveBtn.disabled = false;
       activeSaveBtn.innerHTML = defaultContent;
     }
-    if (banner) {
-      banner.className = 'validation-banner error';
-      banner.innerHTML = `<span>❌</span> Save failed: ${escapeHtml(formatAuthError(err))}`;
-      banner.classList.remove('hidden');
     }
     showToast(formatAuthError(err), "Save Failed", "error");
   } finally {
@@ -1261,64 +1185,7 @@ window.hideWindow = hideWindow;
 window.refreshUserData = refreshUserData;
 window.markDirty = markDirty;
 
-async function validateOnboardingPrompt() {
-  const prompt = onboardCustomPromptText.value.trim();
-  const banner = onboardPromptValidationBanner;
-  
-  if (!banner) {
-    goToStep(5);
-    return;
-  }
-  
-  // Hide any previous validation state
-  banner.classList.add('hidden');
-  banner.className = 'validation-banner hidden';
-  banner.innerHTML = '';
-
-  // If prompt is empty or AI enhancement is disabled, proceed immediately
-  if (!onboardEnhanceCheck.checked || prompt === '') {
-    goToStep(5);
-    return;
-  }
-
-  // Validate the prompt
-  onboardNext3Btn.disabled = true;
-  const originalText = onboardNext3Btn.innerHTML;
-  onboardNext3Btn.innerHTML = '<span>⏳</span> Validating instructions...';
-  
-  banner.classList.remove('hidden');
-  banner.className = 'validation-banner info';
-  banner.innerHTML = '<div class="spinner"></div> Checking instruction safety...';
-
-  try {
-    const result = await invoke('validate_prompt', { prompt: prompt });
-    if (result.safe) {
-      banner.className = 'validation-banner success';
-      banner.innerHTML = '<span>✅</span> Instructions are safe and ready!';
-      
-      // Delay slightly so the user sees the success state, then transition
-      setTimeout(() => {
-        banner.classList.add('hidden');
-        onboardNext3Btn.disabled = false;
-        onboardNext3Btn.innerHTML = originalText;
-        goToStep(5);
-      }, 800);
-    } else {
-      banner.className = 'validation-banner error';
-      banner.innerHTML = `<span>⚠️</span> Safety Check Failed: ${escapeHtml(result.explanation || 'Not eligible to be a system prompt.')}`;
-      onboardNext3Btn.disabled = false;
-      onboardNext3Btn.innerHTML = originalText;
-    }
-  } catch (err) {
-    console.error("Failed to validate onboarding prompt:", err);
-    banner.className = 'validation-banner error';
-    banner.innerHTML = `<span>❌</span> Validation error: ${escapeHtml(formatAuthError(err))}`;
-    onboardNext3Btn.disabled = false;
-    onboardNext3Btn.innerHTML = originalText;
-  }
-}
-
-// ==========================================
+// ====================================================
 // Onboarding Wizard Progression
 // ==========================================
 

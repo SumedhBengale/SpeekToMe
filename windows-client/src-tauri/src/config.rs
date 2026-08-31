@@ -85,7 +85,7 @@ impl Default for AppConfig {
             hotkey: default_hotkey(),
             hotkey_mode: default_hotkey_mode(),
             model: "whisper-large-v3-turbo".to_string(),
-            enhance: false,
+            enhance: true,
             typing_mode: false,
             sound_feedback: true,
             custom_prompt: "".to_string(),
