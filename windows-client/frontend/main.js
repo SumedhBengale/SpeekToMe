@@ -429,20 +429,24 @@ async function init() {
   // 1. Tab selection setup (Dashboard)
   tabItems.forEach(item => {
     item.addEventListener('click', (e) => {
-      e.preventDefault();
       const tabId = item.getAttribute('data-tab');
+      if (!tabId) return;
+      e.preventDefault();
+
+      const targetPane = document.getElementById(`tab-${tabId}`);
+      if (!targetPane) return;
       
       tabItems.forEach(nav => nav.classList.remove('active'));
       tabPanes.forEach(pane => pane.classList.remove('active'));
       
       item.classList.add('active');
-      document.getElementById(`tab-${tabId}`).classList.add('active');
+      targetPane.classList.add('active');
 
       // Refresh user subscription status when visiting the account page
       if (tabId === 'account') {
         invoke('get_user_info').then(info => {
           updateAuthUI(info);
-        });
+        }).catch(err => console.warn("Failed to refresh user info on account tab:", err));
       } else if (tabId === 'vocabulary') {
         loadVocabulary();
       } else if (tabId === 'meetings') {
@@ -936,12 +940,12 @@ function applyConfigToUI(config) {
   }
 
   // General settings inputs
-  hotkeySelect.value = config.hotkey || 'Ctrl + Win';
-  hotkeyModeSelect.value = config.hotkey_mode || 'hold';
-  autostartCheck.checked = config.autostart;
-  typingModeCheck.checked = config.typing_mode;
-  soundFeedbackCheck.checked = config.sound_feedback;
-  modelSelect.value = config.model;
+  if (hotkeySelect) hotkeySelect.value = config.hotkey || 'Ctrl + Win';
+  if (hotkeyModeSelect) hotkeyModeSelect.value = config.hotkey_mode || 'hold';
+  if (autostartCheck) autostartCheck.checked = Boolean(config.autostart);
+  if (typingModeCheck) typingModeCheck.checked = Boolean(config.typing_mode);
+  if (soundFeedbackCheck) soundFeedbackCheck.checked = Boolean(config.sound_feedback);
+  if (modelSelect) modelSelect.value = config.model || 'whisper-large-v3-turbo';
   if (streamingModeCheck) {
     streamingModeCheck.checked = (config.transcription_mode === 'stream');
   }
@@ -971,13 +975,13 @@ function applyConfigToUI(config) {
   // Onboarding inputs
   if (onboardHotkeySelect) onboardHotkeySelect.value = config.hotkey || 'Ctrl + Win';
   if (onboardHotkeyModeSelect) onboardHotkeyModeSelect.value = config.hotkey_mode || 'hold';
-  onboardAutostartCheck.checked = config.autostart;
+  if (onboardAutostartCheck) onboardAutostartCheck.checked = Boolean(config.autostart);
   if (onboardStreamingModeCheck) {
     onboardStreamingModeCheck.checked = (config.transcription_mode === 'stream');
   }
-  onboardTypingModeCheck.checked = config.typing_mode;
-  onboardSoundFeedbackCheck.checked = config.sound_feedback;
-  onboardModelSelect.value = config.model;
+  if (onboardTypingModeCheck) onboardTypingModeCheck.checked = Boolean(config.typing_mode);
+  if (onboardSoundFeedbackCheck) onboardSoundFeedbackCheck.checked = Boolean(config.sound_feedback);
+  if (onboardModelSelect) onboardModelSelect.value = config.model || 'whisper-large-v3-turbo';
   if (onboardThemeSelect) onboardThemeSelect.value = config.theme || 'forest';
 
   // Apply theme class to document
@@ -1048,10 +1052,10 @@ function gatherConfigFromUI(isOnboarding) {
       api_url: api_url,
       hotkey: onboardHotkeySelect ? onboardHotkeySelect.value : 'Ctrl + Win',
       hotkey_mode: onboardHotkeyModeSelect ? onboardHotkeyModeSelect.value : 'hold',
-      autostart: onboardAutostartCheck.checked,
-      typing_mode: onboardTypingModeCheck.checked,
-      sound_feedback: onboardSoundFeedbackCheck.checked,
-      model: onboardModelSelect.value,
+      autostart: onboardAutostartCheck ? onboardAutostartCheck.checked : false,
+      typing_mode: onboardTypingModeCheck ? onboardTypingModeCheck.checked : false,
+      sound_feedback: onboardSoundFeedbackCheck ? onboardSoundFeedbackCheck.checked : true,
+      model: onboardModelSelect ? onboardModelSelect.value : 'whisper-large-v3-turbo',
       enhance: true,
       transcription_mode: (onboardStreamingModeCheck && onboardStreamingModeCheck.checked) ? "stream" : "batch",
       custom_prompt: "",
@@ -1071,10 +1075,10 @@ function gatherConfigFromUI(isOnboarding) {
       api_url: api_url,
       hotkey: hotkeySelect ? hotkeySelect.value : 'Ctrl + Win',
       hotkey_mode: hotkeyModeSelect ? hotkeyModeSelect.value : 'hold',
-      autostart: autostartCheck.checked,
-      typing_mode: typingModeCheck.checked,
-      sound_feedback: soundFeedbackCheck.checked,
-      model: modelSelect.value,
+      autostart: autostartCheck ? autostartCheck.checked : false,
+      typing_mode: typingModeCheck ? typingModeCheck.checked : false,
+      sound_feedback: soundFeedbackCheck ? soundFeedbackCheck.checked : true,
+      model: modelSelect ? modelSelect.value : 'whisper-large-v3-turbo',
       enhance: true,
       transcription_mode: (streamingModeCheck && streamingModeCheck.checked) ? "stream" : "batch",
       custom_prompt: "",
