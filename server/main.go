@@ -140,6 +140,8 @@ func main() {
 	mux.HandleFunc("GET /languages", handlers.HandleGetLanguages)
 	mux.HandleFunc("GET /config/promo", handlers.HandleGetOnboardingPromo)
 	mux.HandleFunc("GET /promo", handlers.HandleGetOnboardingPromo)
+	mux.HandleFunc("GET /config/video", handlers.HandleGetOnboardingVideo)
+	mux.HandleFunc("GET /video", handlers.HandleGetOnboardingVideo)
 	mux.HandleFunc("POST /validate-prompt", app.HandleValidatePrompt)
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("POST /newsletter/subscribe", app.HandleNewsletterSubscribe)

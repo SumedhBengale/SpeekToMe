@@ -413,77 +413,79 @@
             </div>
           </div>
 
-          <button id="onboard-next-3-btn" class="onboard-nav-btn">Next: Voice Test ➔</button>
+          <button id="onboard-next-3-btn" class="onboard-nav-btn">Next: Quick Demo ➔</button>
         </div>
 
-        <!-- Step 5: Interactive Live Voice Dictation Walkthrough -->
+        <!-- Step 5: Demo Video Walkthrough -->
         <div class="onboarding-step" id="onboard-step-5">
-          <h2>Try Your First Dictation</h2>
-          <p class="step-desc">Your global shortcut is active. Practice speaking right now.</p>
+          <h2>See SpeekTo.Me in Action</h2>
+          <p class="step-desc">Watch a quick walkthrough to see how voice dictation works across your desktop.</p>
 
-          <!-- Hotkey Callout Card -->
-          <div class="hotkey-instruction-card">
-            <div class="hotkey-instruction-header">
-              <div class="hotkey-badge-row">
-                <span class="hotkey-prefix-label">Press & Hold:</span>
-                <span class="hotkey-combo-badge" id="sandbox-hotkey-badge">Ctrl + Win</span>
-              </div>
-              <div class="sandbox-status-indicator" id="sandbox-status-pill">
-                <span class="status-dot-pulse"></span>
-                <span id="sandbox-status-text">Ready to dictate</span>
-              </div>
-            </div>
+          <!-- Custom Video Player Card -->
+          <div class="video-player-container" id="video-player-container">
+            <video id="onboard-demo-video" class="video-element" preload="metadata" playsinline></video>
+            
+            <!-- Big Center Play Button Overlay -->
+            <button type="button" id="video-center-play-btn" class="video-center-play-btn" title="Play Video">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+            </button>
 
-            <!-- Top Pill Pointer Alert (Shows when recording is active) -->
-            <div id="sandbox-pill-pointer" class="pill-pointer-alert hidden">
-              <span class="pointer-arrow-up">▲</span>
-              <span><strong>Recording Active!</strong> Notice the floating pill listening at the top center of your screen.</span>
+            <!-- Video Controls Bar -->
+            <div class="video-controls-bar">
+              <button type="button" id="video-play-pause-btn" class="video-ctrl-btn" title="Play / Pause">
+                <svg id="video-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <svg id="video-pause-icon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="4" width="4" height="16"></rect>
+                  <rect x="14" y="4" width="4" height="16"></rect>
+                </svg>
+              </button>
+
+              <span id="video-current-time" class="video-time-display">0:00</span>
+              
+              <!-- Timeline Scrubber -->
+              <div class="video-scrubber-wrapper">
+                <input type="range" id="video-scrubber" class="video-range-scrubber" min="0" max="100" value="0" step="0.1">
+                <div class="video-progress-fill" id="video-progress-fill"></div>
+              </div>
+
+              <span id="video-duration" class="video-time-display">0:00</span>
+
+              <!-- Volume Control -->
+              <div class="video-volume-group">
+                <button type="button" id="video-mute-btn" class="video-ctrl-btn" title="Mute / Unmute">
+                  <svg id="video-vol-high-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                  </svg>
+                  <svg id="video-vol-muted-icon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <line x1="23" y1="9" x2="17" y2="15"></line>
+                    <line x1="17" y1="9" x2="23" y2="15"></line>
+                  </svg>
+                </button>
+                <input type="range" id="video-volume-slider" class="video-volume-slider" min="0" max="1" step="0.05" value="1">
+              </div>
+
+              <!-- Fullscreen Button -->
+              <button type="button" id="video-fullscreen-btn" class="video-ctrl-btn" title="Fullscreen">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                </svg>
+              </button>
             </div>
           </div>
 
-          <!-- Connected 3-Step Flow with Arrows -->
-          <div class="dictation-flow-stepper">
-            <div class="flow-step-card" id="flow-step-1">
-              <div class="flow-step-icon">🎙️</div>
-              <div class="flow-step-content">
-                <span class="flow-step-title">1. Hold Shortcut</span>
-                <span class="flow-step-desc">Floating Pill appears at screen top</span>
-              </div>
-            </div>
-
-            <div class="flow-connector" id="flow-arrow-1">➔</div>
-
-            <div class="flow-step-card" id="flow-step-2">
-              <div class="flow-step-icon">⚡</div>
-              <div class="flow-step-content">
-                <span class="flow-step-title">2. Speak Naturally</span>
-                <span class="flow-step-desc">Streaming preview displays words</span>
-              </div>
-            </div>
-
-            <div class="flow-connector" id="flow-arrow-2">➔</div>
-
-            <div class="flow-step-card" id="flow-step-3">
-              <div class="flow-step-icon">✍️</div>
-              <div class="flow-step-content">
-                <span class="flow-step-title">3. Release to Paste</span>
-                <span class="flow-step-desc">Text is formatted and typed here</span>
-              </div>
-            </div>
+          <!-- Bottom Shortcut Tip -->
+          <div class="video-bottom-tip">
+            <span class="tip-icon">💡</span>
+            <span>Shortcut: Hold <kbd id="onboard-video-hotkey-badge">Ctrl + Win</kbd> anywhere in Windows to dictate text.</span>
           </div>
 
-          <!-- Practice Notepad Area -->
-          <div class="practice-area-wrapper">
-            <label for="sandbox-output-text" class="practice-label">Practice Scratchpad (Focused):</label>
-            <textarea id="sandbox-output-text" class="practice-textarea" placeholder="Click here and hold your shortcut key to speak a sentence..."></textarea>
-          </div>
-
-          <div id="sandbox-success-banner" class="sandbox-success-banner hidden">
-            <span>🎉</span>
-            <span><strong>Voice dictation confirmed!</strong> You are ready to dictate into any Windows application.</span>
-          </div>
-
-          <button id="onboard-finish-btn" class="onboard-nav-btn primary-glow" style="height: 44px; margin-top: 10px;">Finish & Launch SpeekTo.Me 🚀</button>
+          <button id="onboard-finish-btn" class="onboard-nav-btn primary-glow" style="height: 44px; margin-top: 12px;">Finish & Launch SpeekTo.Me 🚀</button>
         </div>
       </div>
     </div>

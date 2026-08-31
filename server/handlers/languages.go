@@ -51,7 +51,34 @@ func HandleGetOnboardingPromo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	promo := config.ConfigManager.Get().OnboardingPromo
+	cfg := config.ConfigManager.Get()
+	resp := struct {
+		config.OnboardingPromoConfig
+		DemoVideoURL string `json:"demo_video_url"`
+		VideoURL     string `json:"video_url"`
+	}{
+		OnboardingPromoConfig: cfg.OnboardingPromo,
+		DemoVideoURL:          cfg.OnboardingDemoVideoURL,
+		VideoURL:              cfg.OnboardingDemoVideoURL,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(promo)
+	w.Header().Set("Cache-Control", "public, max-age=30")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func HandleGetOnboardingVideo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg := config.ConfigManager.Get()
+	resp := map[string]string{
+		"video_url": cfg.OnboardingDemoVideoURL,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=30")
+	_ = json.NewEncoder(w).Encode(resp)
 }

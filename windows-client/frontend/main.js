@@ -143,16 +143,24 @@ const onboardPromoCtaText = document.getElementById('onboard-promo-cta-text');
 const onboardPromoSkipText = document.getElementById('onboard-promo-skip-text');
 let promoUpgradeUrl = "https://speekto.me/dashboard";
 
-// Step 5 Walkthrough UI Elements
-const sandboxOutputText = document.getElementById('sandbox-output-text');
-const sandboxStatusPill = document.getElementById('sandbox-status-pill');
-const sandboxStatusText = document.getElementById('sandbox-status-text');
-const sandboxSuccessBanner = document.getElementById('sandbox-success-banner');
-const sandboxHotkeyBadge = document.getElementById('sandbox-hotkey-badge');
-const sandboxPillPointer = document.getElementById('sandbox-pill-pointer');
-const flowStep1 = document.getElementById('flow-step-1');
-const flowStep2 = document.getElementById('flow-step-2');
-const flowStep3 = document.getElementById('flow-step-3');
+// Step 5 Demo Video UI Elements
+const onboardDemoVideo = document.getElementById('onboard-demo-video');
+const videoPlayerContainer = document.getElementById('video-player-container');
+const videoCenterPlayBtn = document.getElementById('video-center-play-btn');
+const videoPlayPauseBtn = document.getElementById('video-play-pause-btn');
+const videoPlayIcon = document.getElementById('video-play-icon');
+const videoPauseIcon = document.getElementById('video-pause-icon');
+const videoCurrentTime = document.getElementById('video-current-time');
+const videoDuration = document.getElementById('video-duration');
+const videoScrubber = document.getElementById('video-scrubber');
+const videoProgressFill = document.getElementById('video-progress-fill');
+const videoMuteBtn = document.getElementById('video-mute-btn');
+const videoVolHighIcon = document.getElementById('video-vol-high-icon');
+const videoVolMutedIcon = document.getElementById('video-vol-muted-icon');
+const videoVolumeSlider = document.getElementById('video-volume-slider');
+const videoFullscreenBtn = document.getElementById('video-fullscreen-btn');
+const onboardVideoHotkeyBadge = document.getElementById('onboard-video-hotkey-badge');
+let cachedDemoVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
 
 // Onboarding Inputs
 const onboardHotkeySelect = document.getElementById('onboard-hotkey-select');
@@ -650,8 +658,8 @@ async function init() {
     if (onboardSoundFeedbackCheck) onboardSoundFeedbackCheck.addEventListener('change', syncOnboardingConfig);
     if (onboardEnhanceCheck) onboardEnhanceCheck.addEventListener('change', syncOnboardingConfig);
 
-    // Sandbox Voice Tester setup
-    setupSandboxTester();
+    // Demo Video Player setup
+    setupDemoVideoPlayer();
 
     // 7. Setup OAuth event listeners
     setupOAuthListeners();
@@ -1307,10 +1315,15 @@ async function goToStep(step) {
   const dotEl = document.querySelector(`.step-dot[data-step="${step}"]`);
   if (dotEl) dotEl.classList.add('active');
 
+  // Pause demo video if user navigates away from Step 5
+  if (step !== 5 && onboardDemoVideo) {
+    onboardDemoVideo.pause();
+  }
+
   if (step === 2) {
     await renderOnboardingPromoUI();
   } else if (step === 5) {
-    initSandboxVoiceTester();
+    await initDemoVideoStep();
   }
 }
 
@@ -1339,6 +1352,8 @@ async function renderOnboardingPromoUI() {
       if (promo.primary_cta && onboardPromoCtaText) onboardPromoCtaText.textContent = promo.primary_cta;
       if (promo.secondary_cta && onboardPromoSkipText) onboardPromoSkipText.textContent = promo.secondary_cta;
       if (promo.upgrade_url) promoUpgradeUrl = promo.upgrade_url;
+      if (promo.video_url) cachedDemoVideoUrl = promo.video_url;
+      if (promo.demo_video_url) cachedDemoVideoUrl = promo.demo_video_url;
       if (promo.features && Array.isArray(promo.features) && promo.features.length > 0) {
         const featGrid = document.getElementById('onboard-promo-features');
         if (featGrid) {
@@ -1368,82 +1383,136 @@ async function handleUpgradeProFromOnboarding() {
 }
 
 // ==========================================
-// Real Voice Dictation Testing & Walkthrough
+// Demo Video Player (Step 5)
 // ==========================================
 
-async function initSandboxVoiceTester() {
+function formatVideoTime(seconds) {
+  if (isNaN(seconds) || seconds < 0) return "0:00";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
+
+async function initDemoVideoStep() {
   // Sync the latest UI configuration to Rust backend immediately
   try {
     const updated = gatherConfigFromUI(true);
     await invoke('save_config', { config: updated });
     currentConfig = updated;
   } catch (err) {
-    console.error("Failed to sync config before voice test:", err);
+    console.error("Failed to sync config before demo video step:", err);
   }
 
   const hotkey = (onboardHotkeySelect && onboardHotkeySelect.value) || (currentConfig && currentConfig.hotkey) || "Ctrl + Windows";
-  if (sandboxHotkeyBadge) {
-    sandboxHotkeyBadge.textContent = hotkey;
+  if (onboardVideoHotkeyBadge) {
+    onboardVideoHotkeyBadge.textContent = hotkey;
   }
-  if (sandboxOutputText) {
-    setTimeout(() => {
-      sandboxOutputText.focus();
-    }, 150);
+
+  // Fetch demo video URL from backend /config/video or cached
+  try {
+    const apiUrl = getApiUrl();
+    const res = await fetch(`${apiUrl}/config/video`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.video_url && data.video_url.trim() !== '') {
+        cachedDemoVideoUrl = data.video_url.trim();
+      }
+    }
+  } catch (e) {
+    console.warn("Could not fetch demo video URL from server, using cached:", e);
+  }
+
+  if (onboardDemoVideo && onboardDemoVideo.src !== cachedDemoVideoUrl) {
+    onboardDemoVideo.src = cachedDemoVideoUrl;
+    onboardDemoVideo.load();
   }
 }
 
-async function setupSandboxTester() {
-  // Listen for real Tauri dictation events from the Rust backend
-  try {
-    await listen('dictation-recording-started', () => {
-      if (sandboxStatusPill) sandboxStatusPill.classList.add('recording');
-      if (sandboxStatusText) sandboxStatusText.textContent = "Recording audio... Speak now";
-      if (sandboxPillPointer) sandboxPillPointer.classList.remove('hidden');
-      if (flowStep1) flowStep1.classList.add('active-recording');
-      if (flowStep2) flowStep2.classList.add('active-recording');
-      if (flowStep3) flowStep3.classList.remove('active-processing', 'active-success');
-    });
+function setupDemoVideoPlayer() {
+  if (!onboardDemoVideo) return;
 
-    await listen('dictation-recording-stopped', () => {
-      if (sandboxStatusPill) sandboxStatusPill.classList.remove('recording');
-      if (sandboxStatusText) sandboxStatusText.textContent = "Processing audio with AI...";
-      if (sandboxPillPointer) sandboxPillPointer.classList.add('hidden');
-      if (flowStep1) flowStep1.classList.remove('active-recording');
-      if (flowStep2) flowStep2.classList.remove('active-recording');
-      if (flowStep3) flowStep3.classList.add('active-processing');
-    });
+  const togglePlay = () => {
+    if (onboardDemoVideo.paused || onboardDemoVideo.ended) {
+      onboardDemoVideo.play().catch(e => console.warn("Auto-play error:", e));
+    } else {
+      onboardDemoVideo.pause();
+    }
+  };
 
-    await listen('dictation-transcribed', (event) => {
-      const text = event.payload;
-      if (flowStep3) {
-        flowStep3.classList.remove('active-processing');
-        flowStep3.classList.add('active-success');
+  if (videoCenterPlayBtn) videoCenterPlayBtn.addEventListener('click', togglePlay);
+  if (videoPlayPauseBtn) videoPlayPauseBtn.addEventListener('click', togglePlay);
+  onboardDemoVideo.addEventListener('click', togglePlay);
+
+  onboardDemoVideo.addEventListener('play', () => {
+    if (videoPlayIcon) videoPlayIcon.classList.add('hidden');
+    if (videoPauseIcon) videoPauseIcon.classList.remove('hidden');
+    if (videoCenterPlayBtn) videoCenterPlayBtn.classList.add('hidden');
+  });
+
+  onboardDemoVideo.addEventListener('pause', () => {
+    if (videoPlayIcon) videoPlayIcon.classList.remove('hidden');
+    if (videoPauseIcon) videoPauseIcon.classList.add('hidden');
+    if (videoCenterPlayBtn) videoCenterPlayBtn.classList.remove('hidden');
+  });
+
+  onboardDemoVideo.addEventListener('timeupdate', () => {
+    const curr = onboardDemoVideo.currentTime;
+    const dur = onboardDemoVideo.duration || 0;
+    if (videoCurrentTime) videoCurrentTime.textContent = formatVideoTime(curr);
+    if (videoDuration && dur > 0) videoDuration.textContent = formatVideoTime(dur);
+    if (videoScrubber && dur > 0) {
+      videoScrubber.value = (curr / dur) * 100;
+    }
+  });
+
+  onboardDemoVideo.addEventListener('loadedmetadata', () => {
+    const dur = onboardDemoVideo.duration || 0;
+    if (videoDuration && dur > 0) videoDuration.textContent = formatVideoTime(dur);
+  });
+
+  if (videoScrubber) {
+    videoScrubber.addEventListener('input', () => {
+      const dur = onboardDemoVideo.duration || 0;
+      if (dur > 0) {
+        onboardDemoVideo.currentTime = (videoScrubber.value / 100) * dur;
       }
-      if (sandboxStatusText) sandboxStatusText.textContent = "Transcribed & Pasted ✅";
-      if (sandboxSuccessBanner) sandboxSuccessBanner.classList.remove('hidden');
-
-      if (sandboxOutputText && text) {
-        // If the cursor was outside the box during OS paste, insert it cleanly
-        if (!sandboxOutputText.value.includes(text)) {
-          if (sandboxOutputText.value.trim().length > 0) {
-            sandboxOutputText.value += "\n" + text;
-          } else {
-            sandboxOutputText.value = text;
-          }
-        }
-      }
     });
-  } catch (err) {
-    console.warn("Failed to attach Tauri dictation event listeners:", err);
   }
 
-  // Also detect real OS hotkey paste or typing into scratchpad textarea
-  if (sandboxOutputText) {
-    sandboxOutputText.addEventListener('input', () => {
-      if (sandboxOutputText.value.trim().length > 0) {
-        if (sandboxSuccessBanner) sandboxSuccessBanner.classList.remove('hidden');
-        if (flowStep3) flowStep3.classList.add('active-success');
-        if (sandboxStatusText) sandboxStatusText.textContent = "Dictation Received ✅";
+  // Volume & Mute Controls
+  if (videoMuteBtn) {
+    videoMuteBtn.addEventListener('click', () => {
+      onboardDemoVideo.muted = !onboardDemoVideo.muted;
+      updateVolumeUI();
+    });
+  }
+
+  if (videoVolumeSlider) {
+    videoVolumeSlider.addEventListener('input', () => {
+      onboardDemoVideo.volume = parseFloat(videoVolumeSlider.value);
+      onboardDemoVideo.muted = onboardDemoVideo.volume === 0;
+      updateVolumeUI();
+    });
+  }
+
+  function updateVolumeUI() {
+    const isMuted = onboardDemoVideo.muted || onboardDemoVideo.volume === 0;
+    if (videoVolHighIcon) videoVolHighIcon.classList.toggle('hidden', isMuted);
+    if (videoVolMutedIcon) videoVolMutedIcon.classList.toggle('hidden', !isMuted);
+    if (videoVolumeSlider) {
+      videoVolumeSlider.value = isMuted ? 0 : onboardDemoVideo.volume;
+    }
+  }
+
+  // Fullscreen Control
+  if (videoFullscreenBtn && videoPlayerContainer) {
+    videoFullscreenBtn.addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        videoPlayerContainer.requestFullscreen().catch(err => {
+          console.warn("Fullscreen request failed:", err);
+        });
+      } else {
+        document.exitFullscreen().catch(err => console.warn(err));
       }
     });
   }
