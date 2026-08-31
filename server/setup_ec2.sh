@@ -16,7 +16,8 @@ fi
 sudo tee /etc/systemd/system/speektome.service > /dev/null <<EOF
 [Unit]
 Description=SpeekTo.Me Go Server
-After=network.target
+After=network.target network-online.target valkey.service
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -24,7 +25,7 @@ User=ec2-user
 WorkingDirectory=/home/ec2-user/speektome
 ExecStart=/home/ec2-user/speektome/speektome-server
 Restart=always
-RestartSec=5
+RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
@@ -34,5 +35,6 @@ EOF
 
 # Reload daemon and enable on boot
 sudo systemctl daemon-reload
+sudo systemctl enable valkey || true
 sudo systemctl enable speektome
-echo "Systemd service speektome configured successfully!"
+echo "Systemd service speektome configured and enabled on boot successfully!"
