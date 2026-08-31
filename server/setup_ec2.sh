@@ -35,6 +35,7 @@ EOF
 
 # Reload daemon and enable on boot
 sudo systemctl daemon-reload
+sudo systemctl enable nginx || true
 sudo systemctl enable valkey || true
 sudo systemctl enable speektome
-echo "Systemd service speektome configured and enabled on boot successfully!"
+echo "Systemd services (nginx, valkey, speektome) configured and enabled on boot successfully!"
