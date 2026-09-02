@@ -49,54 +49,50 @@ pub fn is_speech(samples: &[i16], sample_rate: u32, channels: u16) -> bool {
 }
 
 pub fn resample_to_16k_mono(samples: &[i16], source_rate: u32, source_channels: u16) -> Vec<i16> {
-    // Fast path: if the source sample rate is an integer multiple of 16,000 Hz
-    if source_rate % 16000 == 0 && source_rate >= 16000 {
-        let step = (source_rate / 16000) as usize;
-        let samples_per_frame = step * source_channels as usize;
-        let mut resampled = Vec::with_capacity(samples.len() / samples_per_frame);
-        
-        for frame in samples.chunks_exact(samples_per_frame) {
-            let mut sum: i32 = 0;
-            for &s in frame {
-                sum += s as i32;
-            }
-            resampled.push((sum / frame.len() as i32) as i16);
-        }
-        return resampled;
+    if samples.is_empty() {
+        return Vec::new();
     }
+    let channels = source_channels.max(1) as usize;
 
-    // Fallback: standard linear interpolation
-    let mono_samples: Vec<i16> = if source_channels == 2 {
+    // Step 1: Cleanly downmix multi-channel interleaved frames (e.g. Stereo) to mono
+    let mono_samples: Vec<i16> = if channels == 1 {
+        samples.to_vec()
+    } else if channels == 2 {
         samples.chunks_exact(2)
             .map(|chunk| ((chunk[0] as i32 + chunk[1] as i32) / 2) as i16)
             .collect()
-    } else if source_channels > 2 {
-        samples.chunks_exact(source_channels as usize)
-            .map(|chunk| chunk[0])
-            .collect()
     } else {
-        samples.to_vec()
+        samples.chunks_exact(channels)
+            .map(|chunk| {
+                let sum: i32 = chunk.iter().map(|&s| s as i32).sum();
+                (sum / channels as i32) as i16
+            })
+            .collect()
     };
 
     if source_rate == 16000 {
         return mono_samples;
     }
 
+    // Step 2: High-fidelity fractional linear interpolation
     let target_rate = 16000.0;
     let ratio = source_rate as f64 / target_rate;
-    let target_length = (mono_samples.len() as f64 / ratio) as usize;
+    let target_length = (mono_samples.len() as f64 / ratio).floor() as usize;
+    if target_length == 0 {
+        return Vec::new();
+    }
     let mut resampled = Vec::with_capacity(target_length);
 
     for i in 0..target_length {
         let pos = i as f64 * ratio;
-        let index = pos as usize;
-        let frac = pos - index as f64;
+        let index = pos.floor() as usize;
+        let frac = pos - (index as f64);
 
         if index + 1 < mono_samples.len() {
             let s0 = mono_samples[index] as f64;
             let s1 = mono_samples[index + 1] as f64;
             let interpolated = s0 + frac * (s1 - s0);
-            resampled.push(interpolated as i16);
+            resampled.push(interpolated.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16);
         } else if index < mono_samples.len() {
             resampled.push(mono_samples[index]);
         }
@@ -135,7 +131,9 @@ pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) 
     
     writer.write_packet(tags.into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0)?;
 
-    let chunk_size = 960; 
+    // Use exact 20ms frames (320 samples @ 16kHz)
+    // 560ms chunk (8,960 samples) divides into exactly 28 frames of 20ms with 0 remainder and 0 padding drift.
+    let chunk_size = 320; 
     let chunks = resampled.chunks(chunk_size);
     let chunks_len = chunks.len();
     let mut granule_pos: u64 = 0;
@@ -153,7 +151,7 @@ pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) 
 
         let len = encoder.encode(&frame, &mut encoded_buf)?;
         let packet = encoded_buf[..len].to_vec();
-        granule_pos += 2880; 
+        granule_pos += 960; // 20ms @ 48kHz Ogg master clock = 960 granules
 
         let end_info = if idx == chunks_len - 1 {
             ogg::writing::PacketWriteEndInfo::EndStream

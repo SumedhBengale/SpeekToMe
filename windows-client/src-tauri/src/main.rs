@@ -7,6 +7,7 @@ pub mod api;
 pub mod keyboard;
 pub mod win32;
 pub mod stream;
+pub mod meeting_stream;
 pub mod vad;
 pub mod lang;
 
@@ -542,6 +543,7 @@ fn main() {
             get_meeting_levels,
             upload_meeting,
             list_local_meetings,
+            get_local_meeting_audio,
             retry_upload_meeting,
             delete_local_meeting,
             get_api_url,
@@ -566,10 +568,11 @@ fn main() {
 }
 
 pub static CURRENT_MEETING_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+pub static CURRENT_MEETING_STREAM: Mutex<Option<crate::meeting_stream::MeetingStreamHandle>> = Mutex::new(None);
 
 #[tauri::command]
-fn start_meeting(title: String) -> Result<String, String> {
-    println!("Starting meeting: {}", title);
+async fn start_meeting(title: String) -> Result<String, String> {
+    println!("[MEETING LOG] >>> start_meeting command called with title: '{}'", title);
     
     let temp_dir = crate::config::get_config_path()
         .parent()
@@ -584,13 +587,47 @@ fn start_meeting(title: String) -> Result<String, String> {
     let filename = format!("meeting-{}-{}.ogg", std::process::id(), nonce);
     let path = temp_dir.join(filename);
     let path_str = path.to_string_lossy().to_string();
-    
-    if let Err(e) = crate::audio::start_meeting_recording(path.clone()) {
-        return Err(format!("Failed to start recording: {}", e));
+    println!("[MEETING LOG] Output path generated: {}", path_str);
+
+    let (token_opt, api_url) = {
+        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        (
+            config.session_token.clone(),
+            config.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
+        )
+    };
+    println!("[MEETING LOG] Auth token present: {}, API url: {}", token_opt.is_some(), api_url);
+
+    let mut stream_tx = None;
+    if let Some(token) = token_opt {
+        println!("[MEETING LOG] Initiating live WebSocket streaming session...");
+        match crate::meeting_stream::start_meeting_streaming_session(api_url, token, title.clone()) {
+            Ok(handle) => {
+                println!("[MEETING LOG] Live WebSocket streaming session established!");
+                stream_tx = Some(handle.tx.clone());
+                let mut stream_lock = CURRENT_MEETING_STREAM.lock().unwrap_or_else(|e| e.into_inner());
+                *stream_lock = Some(handle);
+            }
+            Err(e) => {
+                eprintln!("[MEETING LOG WARNING] Failed to establish live WebSocket stream: {}. Audio will record locally.", e);
+            }
+        }
+    } else {
+        println!("[MEETING LOG] No session token found. Audio will record locally without live stream.");
     }
     
-    let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
-    *path_lock = Some(path.clone());
+    println!("[MEETING LOG] Starting CPAL audio capture streams...");
+    if let Err(e) = crate::audio::start_meeting_recording(path.clone(), stream_tx) {
+        eprintln!("[MEETING LOG ERROR] start_meeting_recording failed: {}", e);
+        return Err(format!("Failed to start recording: {}", e));
+    }
+    println!("[MEETING LOG] Audio capture successfully started!");
+    
+    {
+        let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
+        *path_lock = Some(path.clone());
+        println!("[MEETING LOG] Stored CURRENT_MEETING_PATH = Some({})", path_str);
+    }
     
     let mut records = load_meeting_index();
     records.push(LocalMeetingRecord {
@@ -602,33 +639,162 @@ fn start_meeting(title: String) -> Result<String, String> {
         error: None,
     });
     save_meeting_index(&records);
+    println!("[MEETING LOG] Meeting record indexed locally. Returning path: {}", path_str);
 
     Ok(path_str)
 }
 
 #[tauri::command]
-fn stop_meeting() -> Result<String, String> {
-    println!("Stopping meeting...");
+async fn stop_meeting() -> Result<String, String> {
+    println!("[MEETING LOG] >>> stop_meeting command called!");
     crate::audio::stop_meeting_recording();
+    println!("[MEETING LOG] Audio recording stopped in audio engine.");
     
-    let path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(ref path) = *path_lock {
-        let path_str = path.to_string_lossy().to_string();
-        update_meeting_status(&path_str, "recorded", None);
-        Ok(path_str)
-    } else {
-        Err("No active meeting recording found".to_string())
+    let stream_handle = {
+        let mut lock = CURRENT_MEETING_STREAM.lock().unwrap_or_else(|e| e.into_inner());
+        lock.take()
+    };
+    println!("[MEETING LOG] Live stream handle present: {}", stream_handle.is_some());
+
+    let path_str = {
+        let path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref path) = *path_lock {
+            path.to_string_lossy().to_string()
+        } else {
+            eprintln!("[MEETING LOG ERROR] CURRENT_MEETING_PATH is None! Cannot stop meeting.");
+            return Err("No active meeting recording found".to_string());
+        }
+    };
+    println!("[MEETING LOG] Found active meeting path: {}", path_str);
+
+    if let Some(handle) = stream_handle {
+        println!("[MEETING LOG] Waiting up to 30s for live stream final result from server...");
+        match handle.rx_final.recv_timeout(std::time::Duration::from_secs(30)) {
+            Ok(Ok(final_json)) => {
+                println!("[MEETING LOG] Received finalized meeting json from server (len: {} bytes).", final_json.len());
+                print_meeting_review(&final_json);
+                update_meeting_status(&path_str, "uploaded", None);
+                return Ok(final_json);
+            }
+            Ok(Err(e)) => {
+                eprintln!("[MEETING LOG ERROR] Live stream finalize error: {}.", e);
+                update_meeting_status(&path_str, "failed", Some(e.clone()));
+                return Err(format!("Live stream finalize error: {}", e));
+            }
+            Err(e) => {
+                eprintln!("[MEETING LOG WARNING] Timed out waiting for live stream ({:?}).", e);
+                update_meeting_status(&path_str, "failed", Some(e.to_string()));
+                return Err(format!("Timed out waiting for server meeting finalization: {}", e));
+            }
+        }
     }
+
+    println!("[MEETING LOG] Returning local filepath for batch upload: {}", path_str);
+    update_meeting_status(&path_str, "recorded", None);
+    Ok(path_str)
+}
+
+pub fn print_meeting_review(json_str: &str) {
+    println!("\n================================================================================");
+    println!("🎯 COMPLETE MEETING DIARIZATION & TRANSCRIPTION DATA REVIEW");
+    println!("================================================================================");
+
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+        let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("Untitled Meeting");
+        let id = v.get("id").map(|i| i.to_string()).unwrap_or_else(|| "N/A".to_string());
+        let duration = v.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
+        let created_at = v.get("created_at").map(|c| c.to_string()).unwrap_or_else(|| "".to_string());
+        let audio_url = v.get("audio_url").and_then(|u| u.as_str()).unwrap_or("N/A");
+
+        println!("📋 Title:        {}", title);
+        println!("🆔 Meeting ID:   {}", id);
+        println!("⏱️  Duration:     {:.2} seconds", duration);
+        println!("📅 Created At:   {}", created_at);
+        println!("🎵 Audio URL:    {}", audio_url);
+        println!("--------------------------------------------------------------------------------");
+
+        // Diarized Segments / Turns
+        println!("\n👥 DIARIZED TRANSCRIPTION (SPEAKER SEPARATED):");
+        println!("--------------------------------------------------------------------------------");
+        
+        let mut segments_found = false;
+        if let Some(t_json) = v.get("transcript_json") {
+            let segs_val: Option<serde_json::Value> = if let Some(s) = t_json.as_str() {
+                serde_json::from_str(s).ok()
+            } else {
+                Some(t_json.clone())
+            };
+
+            if let Some(serde_json::Value::Array(segs)) = segs_val {
+                if !segs.is_empty() {
+                    segments_found = true;
+                    for (idx, seg) in segs.iter().enumerate() {
+                        let start = seg.get("start").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                        let end = seg.get("end").and_then(|e| e.as_f64()).unwrap_or(0.0);
+                        let spk = seg.get("speaker").and_then(|s| s.as_str()).unwrap_or("Unknown");
+                        let text = seg.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                        
+                        let start_min = (start / 60.0) as u32;
+                        let start_sec = (start % 60.0) as u32;
+                        let end_min = (end / 60.0) as u32;
+                        let end_sec = (end % 60.0) as u32;
+
+                        println!("{:3}. [{:02}:{:02} - {:02}:{:02}] {:<18} : \"{}\"", 
+                            idx + 1, start_min, start_sec, end_min, end_sec, spk, text);
+                    }
+                }
+            }
+        }
+
+        if !segments_found {
+            if let Some(raw) = v.get("raw_transcript").and_then(|r| r.as_str()) {
+                println!("{}", raw);
+            } else if let Some(tr) = v.get("transcript").and_then(|t| t.as_str()) {
+                println!("{}", tr);
+            } else {
+                println!("(No dialogue segments available)");
+            }
+        }
+
+        println!("\n--------------------------------------------------------------------------------");
+        println!("📝 AI SUMMARY & ACTION ITEMS:");
+        println!("--------------------------------------------------------------------------------");
+        if let Some(summary) = v.get("summary").and_then(|s| s.as_str()) {
+            println!("\n📌 Summary:\n{}", summary);
+        }
+        if let Some(actions) = v.get("action_items").and_then(|a| a.as_str()) {
+            println!("\n✅ Action Items:\n{}", actions);
+        }
+
+        println!("\n--------------------------------------------------------------------------------");
+        println!("📦 FULL RAW JSON PAYLOAD:");
+        println!("--------------------------------------------------------------------------------");
+        if let Ok(pretty) = serde_json::to_string_pretty(&v) {
+            println!("{}", pretty);
+        } else {
+            println!("{}", json_str);
+        }
+    } else {
+        println!("{}", json_str);
+    }
+
+    println!("================================================================================\n");
 }
 
 #[tauri::command]
-fn cancel_meeting() -> Result<(), String> {
-    println!("Cancelling meeting...");
+async fn cancel_meeting() -> Result<(), String> {
+    println!("[MEETING LOG] >>> cancel_meeting command called!");
     crate::audio::stop_meeting_recording();
     
+    {
+        let mut stream_lock = CURRENT_MEETING_STREAM.lock().unwrap_or_else(|e| e.into_inner());
+        *stream_lock = None;
+    }
+
     let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(path) = path_lock.take() {
         let path_str = path.to_string_lossy().to_string();
+        println!("[MEETING LOG] Cancelling and cleaning files for: {}", path_str);
         let mut records = load_meeting_index();
         records.retain(|r| r.filepath != path_str);
         save_meeting_index(&records);
@@ -637,6 +803,8 @@ fn cancel_meeting() -> Result<(), String> {
         let _ = std::fs::remove_file(path.with_extension("mic.ogg"));
         let _ = std::fs::remove_file(path.with_extension("loopback.ogg"));
         let _ = std::fs::remove_file(path.with_extension("energy.json"));
+    } else {
+        println!("[MEETING LOG] cancel_meeting: CURRENT_MEETING_PATH was already None.");
     }
     Ok(())
 }
@@ -651,6 +819,7 @@ fn get_meeting_levels() -> (u32, u32) {
 
 #[tauri::command]
 async fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
+    println!("[MEETING LOG] >>> upload_meeting called with title: '{}', filepath: '{}'", title, filepath);
     let token = {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
@@ -658,6 +827,7 @@ async fn upload_meeting(title: String, filepath: String) -> Result<String, Strin
 
     let path = std::path::PathBuf::from(&filepath);
     if !path.exists() {
+        eprintln!("[MEETING LOG ERROR] Meeting audio file not found on disk: {}", filepath);
         return Err(format!("Meeting audio file not found on disk: {}", filepath));
     }
 
@@ -667,13 +837,22 @@ async fn upload_meeting(title: String, filepath: String) -> Result<String, Strin
     let loopback_bytes = std::fs::read(path.with_extension("loopback.ogg")).ok();
     let energy_json = std::fs::read_to_string(path.with_extension("energy.json")).ok();
 
+    println!("[MEETING LOG] Audio sizes: mixed={}B, mic={}B, loopback={}B, energy={}", 
+        mixed_bytes.len(), 
+        mic_bytes.as_ref().map(|b| b.len()).unwrap_or(0), 
+        loopback_bytes.as_ref().map(|b| b.len()).unwrap_or(0), 
+        energy_json.is_some()
+    );
+
     match crate::api::upload_meeting(&api::get_api_url(), &token, &title, mixed_bytes, mic_bytes, loopback_bytes, energy_json).await {
         Ok(res) => {
+            println!("[MEETING LOG] upload_meeting successfully completed! Server response length: {} bytes", res.len());
+            print_meeting_review(&res);
             update_meeting_status(&filepath, "uploaded", None);
             Ok(res)
         }
         Err(e) => {
-            eprintln!("[MEETING UPLOAD FAILED] Audio safely preserved at {}. Error: {}", filepath, e);
+            eprintln!("[MEETING LOG ERROR] upload_meeting failed: {}", e);
             update_meeting_status(&filepath, "failed", Some(e.clone()));
             Err(e)
         }
@@ -707,6 +886,44 @@ fn delete_local_meeting(filepath: String) -> Result<(), String> {
     let _ = std::fs::remove_file(path.with_extension("loopback.ogg"));
     let _ = std::fs::remove_file(path.with_extension("energy.json"));
     Ok(())
+}
+
+#[tauri::command]
+async fn get_local_meeting_audio(_meeting_id: Option<i64>, timestamp: Option<u64>) -> Result<String, String> {
+    use base64::Engine;
+
+    let records = load_meeting_index();
+    if records.is_empty() {
+        return Err("No local meeting records found on disk".to_string());
+    }
+
+    // Try finding matching record by timestamp or take the most recent record
+    let record = if let Some(ts) = timestamp {
+        records.iter().min_by_key(|r| (r.created_at as i64 - ts as i64).abs())
+    } else {
+        records.last()
+    }.ok_or_else(|| "No matching local meeting record found".to_string())?;
+
+    let ogg_path = std::path::PathBuf::from(&record.filepath);
+    let wav_path = ogg_path.with_extension("wav");
+
+    // 1. If WAV file already exists on disk, read and return base64 data URI
+    if wav_path.exists() {
+        if let Ok(wav_bytes) = std::fs::read(&wav_path) {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
+            return Ok(format!("data:audio/wav;base64,{}", b64));
+        }
+    }
+
+    // 2. If only OGG file exists, decode it to WAV and save WAV on disk for instant future loading
+    if ogg_path.exists() {
+        let wav_bytes = crate::audio::decode_ogg_to_wav(&ogg_path)?;
+        let _ = std::fs::write(&wav_path, &wav_bytes);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
+        return Ok(format!("data:audio/wav;base64,{}", b64));
+    }
+
+    Err(format!("Local recording file not found at: {}", record.filepath))
 }
 
 #[tauri::command]

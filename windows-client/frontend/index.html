@@ -1138,9 +1138,22 @@
                 </div>
               </div>
 
-              <div class="setting-group" style="text-align: left; max-width: 400px; margin: 0 auto 25px auto;">
+              <div class="setting-group" style="text-align: left; max-width: 540px; margin: 0 auto 16px auto;">
                 <label for="meeting-title-input" class="setting-title" style="margin-bottom: 6px; display: block;">Meeting / Note Title</label>
                 <input type="text" id="meeting-title-input" class="fluent-input" placeholder="e.g. Project Sync with Team" style="width: 100%; box-sizing: border-box;">
+              </div>
+
+              <!-- Real-Time Live Transcript Feed -->
+              <div class="live-meeting-feed-wrapper" style="max-width: 540px; margin: 0 auto 20px auto; text-align: left;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <span style="font-size: 12px; font-weight: 600; color: var(--text-secondary);">⚡ LIVE TRANSCRIPTION & DIARIZATION</span>
+                  <span id="meetings-live-status-badge" class="live-status-pill">Dual-Server Active</span>
+                </div>
+                <div id="meetings-live-turns-list" class="live-turns-container">
+                  <div id="meetings-live-waiting-text" class="live-waiting-text">
+                    Listening for speech from microphone and remote attendees...
+                  </div>
+                </div>
               </div>
 
               <div class="recorder-actions" style="display: flex; gap: 10px; justify-content: center;">
@@ -1169,17 +1182,161 @@
                 <audio id="meeting-audio-player" controls style="width: 100%; height: 40px; border-radius: 6px;"></audio>
               </div>
 
-              <!-- Tabs: Transcript vs AI Summary -->
+              <!-- Tabs: Timeline vs Transcript vs AI Summary vs Action Items -->
               <div class="detail-tabs" style="display: flex; gap: 5px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px; margin-bottom: 15px; align-items: center;">
-                <button class="detail-tab-btn active" data-detail-tab="transcript">Transcript</button>
+                <button class="detail-tab-btn active" data-detail-tab="timeline">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 5px; vertical-align: -2px;">
+                    <line x1="4" y1="6" x2="20" y2="6"></line>
+                    <line x1="4" y1="12" x2="16" y2="12"></line>
+                    <line x1="4" y1="18" x2="18" y2="18"></line>
+                  </svg>
+                  Timeline
+                </button>
+                <button class="detail-tab-btn" data-detail-tab="transcript">Transcript</button>
                 <button class="detail-tab-btn" data-detail-tab="summary">AI Summary</button>
                 <button class="detail-tab-btn" data-detail-tab="actions">Action Items</button>
                 <button id="meeting-delete-btn" class="fluent-button danger small" style="margin-left: auto;">Delete</button>
               </div>
 
               <div class="detail-tab-content">
+                <!-- Timeline Pane (Default) -->
+                <div class="detail-tab-pane active" id="detail-pane-timeline">
+                  <div class="meeting-timeline-wrapper">
+                    <!-- Top Playback & Diagnostic Status Header -->
+                    <div class="timeline-header-card">
+                      <div class="timeline-header-top-row">
+                        <div class="timeline-meta-title-group">
+                          <div class="timeline-scale-badge">1:1 Exact Diarization Scale</div>
+                          <div class="timeline-audio-subtext" id="timeline-audio-subtext">
+                            Audio: <span id="timeline-audio-meta" class="font-mono">--</span> &bull; <span id="timeline-turns-count">0 Turns</span> &bull; Min width: 1px
+                          </div>
+                        </div>
+
+                        <!-- Transport Controls & Zoom -->
+                        <div class="timeline-transport-controls">
+                          <!-- Zoom Presets -->
+                          <div class="timeline-zoom-group">
+                            <span class="timeline-zoom-label">Zoom:</span>
+                            <button class="timeline-zoom-preset-btn active" data-zoom="1">1x</button>
+                            <button class="timeline-zoom-preset-btn" data-zoom="2">2x</button>
+                            <button class="timeline-zoom-preset-btn" data-zoom="4">4x</button>
+                          </div>
+
+                          <div class="timeline-playback-btn-group">
+                            <button id="timeline-btn-backward" class="timeline-ctrl-btn" title="Rewind 5s">
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.334 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"/></svg>
+                            </button>
+                            <button id="timeline-btn-play" class="timeline-play-main-btn" title="Play / Pause Audio">
+                              <svg id="timeline-play-icon" width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                              <span id="timeline-play-text">Play Audio</span>
+                            </button>
+                            <button id="timeline-btn-forward" class="timeline-ctrl-btn" title="Forward 5s">
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11.934 12.8a1 1 0 000-1.6l-5.334-4A1 1 0 005 8v8a1 1 0 001.6.8l5.334-4zM19.934 12.8a1 1 0 000-1.6l-5.334-4A1 1 0 0013 8v8a1 1 0 001.6.8l5.334-4z"/></svg>
+                            </button>
+                            <select id="timeline-speed-select" class="timeline-speed-dropdown">
+                              <option value="0.75">0.75x</option>
+                              <option value="1.0" selected>1.0x</option>
+                              <option value="1.25">1.25x</option>
+                              <option value="1.5">1.5x</option>
+                              <option value="2.0">2.0x</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Real-Time Status Bar: Digital Clock, Active Speaker Pill, Hover Tooltip, Legend -->
+                      <div class="timeline-header-bottom-row">
+                        <div class="timeline-clock-group">
+                          <div class="timeline-digital-clock">
+                            <span id="timeline-clock-current" class="clock-active">00:00.00</span>
+                            <span class="clock-slash">/</span>
+                            <span id="timeline-clock-total" class="clock-total">00:00.00</span>
+                          </div>
+                          <div id="timeline-active-speaker-pill" class="timeline-active-speaker-pill is-silence">
+                            <span class="status-dot"></span>
+                            <span id="timeline-active-speaker-text">Silence</span>
+                          </div>
+                          <div id="timeline-hover-badge" class="timeline-hover-badge hidden">
+                            Hover: <span id="timeline-hover-text">--</span>
+                          </div>
+                        </div>
+
+                        <!-- Dynamic Speaker Legend -->
+                        <div class="timeline-speaker-legend" id="timeline-speaker-legend">
+                          <!-- Injected Dynamically -->
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Main Multi-Track Diarization Timeline Canvas -->
+                    <div class="timeline-main-container" id="timeline-main-container">
+                      <!-- Left Sticky Track Headers Column -->
+                      <div class="timeline-tracks-header-col" id="timeline-tracks-header-col">
+                        <div class="timeline-ruler-header-spacer">
+                          <span>Speakers</span>
+                        </div>
+                        <div class="timeline-headers-list" id="timeline-headers-list">
+                          <!-- Injected Dynamically -->
+                        </div>
+                      </div>
+
+                      <!-- Right Scrollable Lanes & Ruler Area -->
+                      <div class="timeline-scroll-area" id="timeline-scroll-area">
+                        <div class="timeline-scroll-canvas" id="timeline-scroll-canvas">
+                          <!-- Time Ruler Track -->
+                          <div class="timeline-ruler-track" id="timeline-ruler-track">
+                            <!-- Injected Time Ticks -->
+                          </div>
+
+                          <!-- Multi-Track Lanes Container -->
+                          <div class="timeline-lanes-body" id="timeline-lanes-body">
+                            <!-- Injected Speaker Lanes & 1:1 Audio Segment Boxes -->
+                            <!-- Glowing Neon Playhead Needle -->
+                            <div class="timeline-playhead" id="timeline-playhead">
+                              <div class="timeline-playhead-handle"></div>
+                              <div class="timeline-playhead-line"></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Turn-by-Turn Segment Inspector Table (Interactive) -->
+                    <div class="timeline-inspector-card">
+                      <div class="inspector-card-top">
+                        <div>
+                          <h4 class="inspector-card-title">Turn-by-Turn Segment Inspector (<span id="inspector-total-turns-label">0</span> Turns)</h4>
+                          <p class="inspector-card-subtitle">Click any row below or segment above to jump audio playback directly to that turn.</p>
+                        </div>
+                        <div class="inspector-filter-group">
+                          <input id="timeline-search-speaker" type="text" placeholder="Filter speaker or text..." class="timeline-search-input" />
+                        </div>
+                      </div>
+
+                      <div class="inspector-table-scroll">
+                        <table class="inspector-table">
+                          <thead>
+                            <tr>
+                              <th style="width: 50px;">Turn</th>
+                              <th style="width: 140px;">Speaker</th>
+                              <th style="width: 75px;">Start</th>
+                              <th style="width: 75px;">End</th>
+                              <th style="width: 75px;">Duration</th>
+                              <th style="width: 140px;">Timeline Position</th>
+                              <th>Transcript Text</th>
+                            </tr>
+                          </thead>
+                          <tbody id="timeline-inspector-tbody">
+                            <!-- Injected Dynamically -->
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <!-- Transcript Pane -->
-                <div class="detail-tab-pane active" id="detail-pane-transcript">
+                <div class="detail-tab-pane" id="detail-pane-transcript">
                   <div id="meeting-transcript-text" class="transcript-view">
                     <!-- Loaded dynamically -->
                   </div>

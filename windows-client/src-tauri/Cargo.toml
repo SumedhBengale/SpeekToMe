@@ -30,10 +30,11 @@ keyring = "2.1.2"
 zeroize = { version = "1.8.1", features = ["derive"] }
 rand = "0.8"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-tokio = { version = "1", features = ["sync", "rt"] }
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util = "0.3"
 silero-vad-crs = { version = "0.4.0", features = ["auto"] }
+base64 = "0.22"
 
 [build-dependencies]
 tauri-build = { version = "2.0.3", features = [] }

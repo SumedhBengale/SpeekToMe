@@ -149,6 +149,8 @@ func main() {
 	mux.HandleFunc("POST /auth/vocabulary", app.HandleAddVocabulary)
 	mux.HandleFunc("DELETE /auth/vocabulary", app.HandleDeleteVocabulary)
 	mux.HandleFunc("POST /meetings", app.HandleUploadMeeting)
+	mux.HandleFunc("POST /v1/audio/transcriptions", app.HandleServer2BatchTranscription)
+	mux.HandleFunc("GET /v1/meetings/live", app.HandleMeetingStream)
 	mux.HandleFunc("GET /meetings", app.HandleGetMeetings)
 	mux.HandleFunc("GET /meetings/{id}", app.HandleGetMeetingDetail)
 	mux.HandleFunc("DELETE /meetings/{id}", app.HandleDeleteMeeting)

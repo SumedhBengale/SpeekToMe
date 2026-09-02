@@ -603,30 +603,26 @@ pub fn get_meeting_state() -> &'static Mutex<MeetingRecordingState> {
     })
 }
 
-pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+pub fn start_meeting_recording(
+    output_ogg_path: std::path::PathBuf,
+    stream_tx: Option<std::sync::mpsc::Sender<crate::meeting_stream::MeetingStreamAudioMessage>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("[AUDIO MEETING LOG] Querying default input (microphone) device...");
     let host = cpal::default_host();
     let mic_device = host.default_input_device().ok_or("No input device found")?;
+    let mic_name = mic_device.name().unwrap_or_else(|_| "Unknown Mic".to_string());
     let mic_config = mic_device.default_input_config()?;
     let mic_sample_format = mic_config.sample_format();
     let mic_rate = mic_config.sample_rate().0;
     let mic_channels = mic_config.channels();
-
-    let loopback_device = host.default_output_device().ok_or("No output device found")?;
-    let loopback_config = match loopback_device.default_input_config() {
-        Ok(cfg) => cfg,
-        Err(_) => loopback_device.default_output_config()?,
-    };
-    let loopback_sample_format = loopback_config.sample_format();
-    let loopback_rate = loopback_config.sample_rate().0;
-    let loopback_channels = loopback_config.channels();
+    println!("[AUDIO MEETING LOG] Microphone device: '{}', rate: {}Hz, channels: {}, format: {:?}", mic_name, mic_rate, mic_channels, mic_sample_format);
 
     let mic_buffer = Arc::new(Mutex::new(Vec::new()));
     let mic_buffer_clone = mic_buffer.clone();
 
     let loopback_buffer = Arc::new(Mutex::new(Vec::new()));
-    let loopback_buffer_clone = loopback_buffer.clone();
 
-    let mic_err_fn = |err| eprintln!("Microphone stream error: {}", err);
+    let mic_err_fn = |err| eprintln!("[AUDIO MEETING LOG ERROR] Microphone stream error: {}", err);
     let mic_stream = match mic_sample_format {
         cpal::SampleFormat::F32 => {
             mic_device.build_input_stream(
@@ -658,11 +654,11 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
                     if !data.is_empty() {
                         let mut sum_squares = 0.0;
                         for &sample in data {
-                            let val = sample as f32 / i16::MAX as f32;
-                            sum_squares += val * val;
+                            let normalized = sample as f32 / i16::MAX as f32;
+                            sum_squares += normalized * normalized;
                         }
                         let rms = (sum_squares / data.len() as f32).sqrt();
-                        MIC_VOLUME.store((rms * 1000.0) as u32, Ordering::Relaxed);
+                        MIC_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
                     }
                     if let Ok(mut buf) = mic_buffer_clone.lock() {
                         buf.extend_from_slice(data);
@@ -679,11 +675,11 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
                     if !data.is_empty() {
                         let mut sum_squares = 0.0;
                         for &sample in data {
-                            let val = (sample as f32 - 32768.0) / 32768.0;
-                            sum_squares += val * val;
+                            let normalized = (sample as f32 - 32768.0) / 32768.0;
+                            sum_squares += normalized * normalized;
                         }
                         let rms = (sum_squares / data.len() as f32).sqrt();
-                        MIC_VOLUME.store((rms * 1000.0) as u32, Ordering::Relaxed);
+                        MIC_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
                     }
                     if let Ok(mut buf) = mic_buffer_clone.lock() {
                         for &sample in data {
@@ -696,86 +692,153 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
                 None
             )?
         }
-        _ => return Err("Unsupported mic sample format".into()),
+        _ => return Err("Unsupported microphone sample format".into()),
     };
 
-    let loopback_err_fn = |err| eprintln!("Loopback stream error: {}", err);
-    let loopback_stream = match loopback_sample_format {
-        cpal::SampleFormat::F32 => {
-            loopback_device.build_input_stream(
-                &loopback_config.clone().into(),
-                move |data: &[f32], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            sum_squares += sample * sample;
+    println!("[AUDIO MEETING LOG] Querying default output (loopback) device...");
+    let mut loopback_rate = 48000;
+    let mut loopback_channels = 2;
+    let loopback_stream_opt = match host.default_output_device() {
+        Some(loopback_device) => {
+            let out_name = loopback_device.name().unwrap_or_else(|_| "Unknown Output".to_string());
+            match loopback_device.default_output_config() {
+                Ok(loopback_config) => {
+                    loopback_rate = loopback_config.sample_rate().0;
+                    loopback_channels = loopback_config.channels();
+                    let loopback_sample_format = loopback_config.sample_format();
+                    println!("[AUDIO MEETING LOG] Loopback output device: '{}', rate: {}Hz, channels: {}, format: {:?}", out_name, loopback_rate, loopback_channels, loopback_sample_format);
+                    let loopback_buf_c = loopback_buffer.clone();
+                    let loopback_err_fn = |err| eprintln!("[AUDIO MEETING LOG ERROR] Loopback stream error: {}", err);
+
+                    let built_stream = match loopback_sample_format {
+                        cpal::SampleFormat::F32 => {
+                            match loopback_device.build_input_stream(
+                                &loopback_config.clone().into(),
+                                move |data: &[f32], _| {
+                                    if !data.is_empty() {
+                                        let mut sum_squares = 0.0;
+                                        for &sample in data {
+                                            sum_squares += sample * sample;
+                                        }
+                                        let rms = (sum_squares / data.len() as f32).sqrt();
+                                        LOOPBACK_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
+                                    }
+                                    if let Ok(mut buf) = loopback_buf_c.lock() {
+                                        for &sample in data {
+                                            let i16_val = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                                            buf.push(i16_val);
+                                        }
+                                    }
+                                },
+                                loopback_err_fn,
+                                None
+                            ) {
+                                Ok(s) => {
+                                    println!("[AUDIO MEETING LOG] Successfully built F32 loopback input stream!");
+                                    Some(s)
+                                }
+                                Err(e) => {
+                                    eprintln!("[AUDIO MEETING LOG ERROR] Failed to build F32 loopback stream: {}", e);
+                                    None
+                                }
+                            }
                         }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        LOOPBACK_VOLUME.store((rms * 1000.0) as u32, Ordering::Relaxed);
-                    }
-                    if let Ok(mut buf) = loopback_buffer_clone.lock() {
-                        for &sample in data {
-                            let i16_val = (sample * i16::MAX as f32) as i16;
-                            buf.push(i16_val);
+                        cpal::SampleFormat::I16 => {
+                            match loopback_device.build_input_stream(
+                                &loopback_config.clone().into(),
+                                move |data: &[i16], _| {
+                                    if !data.is_empty() {
+                                        let mut sum_squares = 0.0;
+                                        for &sample in data {
+                                            let normalized = sample as f32 / i16::MAX as f32;
+                                            sum_squares += normalized * normalized;
+                                        }
+                                        let rms = (sum_squares / data.len() as f32).sqrt();
+                                        LOOPBACK_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
+                                    }
+                                    if let Ok(mut buf) = loopback_buf_c.lock() {
+                                        buf.extend_from_slice(data);
+                                    }
+                                },
+                                loopback_err_fn,
+                                None
+                            ) {
+                                Ok(s) => {
+                                    println!("[AUDIO MEETING LOG] Successfully built I16 loopback input stream!");
+                                    Some(s)
+                                }
+                                Err(e) => {
+                                    eprintln!("[AUDIO MEETING LOG ERROR] Failed to build I16 loopback stream: {}", e);
+                                    None
+                                }
+                            }
                         }
-                    }
-                },
-                loopback_err_fn,
-                None
-            )?
+                        cpal::SampleFormat::U16 => {
+                            match loopback_device.build_input_stream(
+                                &loopback_config.clone().into(),
+                                move |data: &[u16], _| {
+                                    if !data.is_empty() {
+                                        let mut sum_squares = 0.0;
+                                        for &sample in data {
+                                            let normalized = (sample as f32 - 32768.0) / 32768.0;
+                                            sum_squares += normalized * normalized;
+                                        }
+                                        let rms = (sum_squares / data.len() as f32).sqrt();
+                                        LOOPBACK_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
+                                    }
+                                    if let Ok(mut buf) = loopback_buf_c.lock() {
+                                        for &sample in data {
+                                            let i16_val = (sample as i32 - 32768) as i16;
+                                            buf.push(i16_val);
+                                        }
+                                    }
+                                },
+                                loopback_err_fn,
+                                None
+                            ) {
+                                Ok(s) => {
+                                    println!("[AUDIO MEETING LOG] Successfully built U16 loopback input stream!");
+                                    Some(s)
+                                }
+                                Err(e) => {
+                                    eprintln!("[AUDIO MEETING LOG ERROR] Failed to build U16 loopback stream: {}", e);
+                                    None
+                                }
+                            }
+                        }
+                        _ => {
+                            eprintln!("[AUDIO MEETING LOG WARNING] Unsupported loopback format: {:?}", loopback_sample_format);
+                            None
+                        }
+                    };
+                    built_stream
+                }
+                Err(e) => {
+                    eprintln!("[AUDIO MEETING LOG WARNING] Failed to query default output config for loopback: {}", e);
+                    None
+                }
+            }
         }
-        cpal::SampleFormat::I16 => {
-            loopback_device.build_input_stream(
-                &loopback_config.clone().into(),
-                move |data: &[i16], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            let val = sample as f32 / i16::MAX as f32;
-                            sum_squares += val * val;
-                        }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        LOOPBACK_VOLUME.store((rms * 1000.0) as u32, Ordering::Relaxed);
-                    }
-                    if let Ok(mut buf) = loopback_buffer_clone.lock() {
-                        buf.extend_from_slice(data);
-                    }
-                },
-                loopback_err_fn,
-                None
-            )?
+        None => {
+            eprintln!("[AUDIO MEETING LOG WARNING] No default output device found for loopback capture.");
+            None
         }
-        cpal::SampleFormat::U16 => {
-            loopback_device.build_input_stream(
-                &loopback_config.clone().into(),
-                move |data: &[u16], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            let val = (sample as f32 - 32768.0) / 32768.0;
-                            sum_squares += val * val;
-                        }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        LOOPBACK_VOLUME.store((rms * 1000.0) as u32, Ordering::Relaxed);
-                    }
-                    if let Ok(mut buf) = loopback_buffer_clone.lock() {
-                        for &sample in data {
-                            let i16_val = (sample as i32 - 32768) as i16;
-                            buf.push(i16_val);
-                        }
-                    }
-                },
-                loopback_err_fn,
-                None
-            )?
-        }
-        _ => return Err("Unsupported loopback sample format".into()),
     };
 
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
+    println!("[AUDIO MEETING LOG] Starting mic stream playback...");
     mic_stream.play()?;
-    loopback_stream.play()?;
+    println!("[AUDIO MEETING LOG] Mic stream playing!");
+
+    if let Some(ref lb) = loopback_stream_opt {
+        println!("[AUDIO MEETING LOG] Starting loopback stream playback...");
+        if let Err(e) = lb.play() {
+            eprintln!("[AUDIO MEETING LOG WARNING] Failed to start loopback stream playback: {}", e);
+        } else {
+            println!("[AUDIO MEETING LOG] Loopback stream playing!");
+        }
+    }
 
     std::thread::spawn(move || {
         let mic_path = {
@@ -842,9 +905,18 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
         let mut writer_mic = ogg::writing::PacketWriter::new(file_mic);
         let mut writer_loopback = ogg::writing::PacketWriter::new(file_loopback);
 
+        let wav_path = output_ogg_path.with_extension("wav");
+        let wav_spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut wav_writer = hound::WavWriter::create(&wav_path, wav_spec).ok();
+
         let serial_mixed = 987654321;
-        let serial_mic = 987654322;
-        let serial_lb = 987654323;
+        let serial_mic = 123456789;
+        let serial_lb = 555555555;
 
         let mut head = Vec::new();
         head.extend_from_slice(b"OpusHead");
@@ -862,46 +934,42 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
         tags.extend_from_slice(vendor);
         tags.extend_from_slice(&0u32.to_le_bytes());
 
-        // Write headers and tags to all three writers
-        for (w, serial) in [
-            (&mut writer_mixed, serial_mixed),
-            (&mut writer_mic, serial_mic),
-            (&mut writer_loopback, serial_lb)
-        ] {
-            if let Err(e) = w.write_packet(head.clone().into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0) {
-                eprintln!("Failed to write Ogg header for serial {}: {:?}", serial, e);
-                return;
-            }
-            if let Err(e) = w.write_packet(tags.clone().into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0) {
-                eprintln!("Failed to write Ogg tags for serial {}: {:?}", serial, e);
-                return;
-            }
-        }
+        let _ = writer_mixed.write_packet(head.clone().into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+        let _ = writer_mixed.write_packet(tags.clone().into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+
+        let _ = writer_mic.write_packet(head.clone().into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+        let _ = writer_mic.write_packet(tags.clone().into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+
+        let _ = writer_loopback.write_packet(head.clone().into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+        let _ = writer_loopback.write_packet(tags.clone().into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+
+        let mut mic_stream_buffer: Vec<i16> = Vec::new();
+        let mut loopback_stream_buffer: Vec<i16> = Vec::new();
 
         let mut mic_carry_encode: Vec<i16> = Vec::new();
         let mut loopback_carry_encode: Vec<i16> = Vec::new();
-        let mut mixed_carry: Vec<i16> = Vec::new();
-        
+
+        let mut granule_pos_mixed: u64 = 0;
         let mut granule_pos_mic: u64 = 0;
         let mut granule_pos_lb: u64 = 0;
-        let mut granule_pos_mixed: u64 = 0;
-
-        let mut total_mic_samples: usize = 0;
-        let mut total_lb_samples: usize = 0;
 
         let mut encoded_buf_mixed = [0u8; 512];
         let mut encoded_buf_mic = [0u8; 512];
         let mut encoded_buf_lb = [0u8; 512];
 
-        let mut energy_log: Vec<EnergySample> = Vec::new();
-        let mut loop_count: usize = 0;
+        let mut total_mic_samples = 0;
+        let mut total_lb_samples = 0;
+        let mut energy_log = Vec::new();
+        let mut loop_count: u64 = 0;
+        const CHUNK_560MS: usize = 8960; // 560ms @ 16kHz mono
+        const CHUNK_60MS: usize = 960;   // 60ms @ 16kHz mono (Opus standard frame)
 
         loop {
-            if shutdown_rx.recv_timeout(std::time::Duration::from_millis(100)).is_ok() {
+            if shutdown_rx.recv_timeout(std::time::Duration::from_millis(50)).is_ok() {
                 break;
             }
-
             loop_count += 1;
+
             let mic_raw = {
                 let mut lock = mic_buffer.lock().unwrap();
                 std::mem::take(&mut *lock)
@@ -915,7 +983,37 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
             let loopback_16k = resample_to_16k_mono(&loopback_raw, loopback_rate, loopback_channels);
 
             total_mic_samples += mic_16k.len();
+            total_lb_samples += loopback_16k.len();
+
+            mic_stream_buffer.extend_from_slice(&mic_16k);
+            loopback_stream_buffer.extend_from_slice(&loopback_16k);
+
             mic_carry_encode.extend_from_slice(&mic_16k);
+            loopback_carry_encode.extend_from_slice(&loopback_16k);
+
+            // Synchronize loopback time clock if WASAPI loopback device paused during silence
+            if total_lb_samples < total_mic_samples {
+                let missing = total_mic_samples - total_lb_samples;
+                loopback_stream_buffer.resize(loopback_stream_buffer.len() + missing, 0);
+                loopback_carry_encode.resize(loopback_carry_encode.len() + missing, 0);
+                total_lb_samples = total_mic_samples;
+            }
+
+            // Send 560ms chunks to live inference stream
+            if let Some(ref tx) = stream_tx {
+                while mic_stream_buffer.len() >= CHUNK_560MS {
+                    let chunk: Vec<i16> = mic_stream_buffer.drain(..CHUNK_560MS).collect();
+                    if let Ok(opus_bytes) = encode_opus_ogg(&chunk, 16000, 1) {
+                        let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, opus_bytes));
+                    }
+                }
+                while loopback_stream_buffer.len() >= CHUNK_560MS {
+                    let chunk: Vec<i16> = loopback_stream_buffer.drain(..CHUNK_560MS).collect();
+                    if let Ok(opus_bytes) = encode_opus_ogg(&chunk, 16000, 1) {
+                        let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x02, opus_bytes));
+                    }
+                }
+            }
 
             if loop_count % 5 == 0 {
                 let time_sec = total_mic_samples as f32 / 16000.0;
@@ -928,70 +1026,62 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
                 });
             }
 
-            if !loopback_16k.is_empty() {
-                let target_lb_pos = total_mic_samples.saturating_sub(loopback_16k.len());
-                if total_lb_samples < target_lb_pos {
-                    let missing = target_lb_pos - total_lb_samples;
-                    loopback_carry_encode.resize(loopback_carry_encode.len() + missing, 0);
-                    total_lb_samples = target_lb_pos;
-                }
-                loopback_carry_encode.extend_from_slice(&loopback_16k);
-                total_lb_samples += loopback_16k.len();
-            }
+            // Encode and save time-synchronized aligned audio chunks
+            let available = mic_carry_encode.len().min(loopback_carry_encode.len());
+            let num_chunks = available / CHUNK_60MS;
+            let encode_len = num_chunks * CHUNK_60MS;
 
-            // Mix audio for current 100ms frame
-            let mut mixed = Vec::with_capacity(mic_16k.len());
-            for i in 0..mic_16k.len() {
-                let m_val = mic_16k[i] as i32;
-                let lb_val = if i < loopback_16k.len() {
-                    loopback_16k[i] as i32
-                } else {
-                    0
-                };
-                mixed.push((m_val + lb_val).clamp(i16::MIN as i32, i16::MAX as i32) as i16);
-            }
-            mixed_carry.extend_from_slice(&mixed);
+            if encode_len > 0 {
+                let mic_block = &mic_carry_encode[..encode_len];
+                let lb_block = &loopback_carry_encode[..encode_len];
 
-            let chunk_size = 960;
-            
-            // Encode available mic chunks
-            let mic_chunks_count = mic_carry_encode.len() / chunk_size;
-            for c_idx in 0..mic_chunks_count {
-                let start = c_idx * chunk_size;
-                let end = start + chunk_size;
-                granule_pos_mic += 2880;
-                if let Ok(len) = encoder_mic.encode(&mic_carry_encode[start..end], &mut encoded_buf_mic) {
-                    let packet = encoded_buf_mic[..len].to_vec();
-                    let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mic);
+                // Write aligned samples directly to WAV file
+                if let Some(ref mut w) = wav_writer {
+                    for i in 0..encode_len {
+                        let s = (mic_block[i] as i32 + lb_block[i] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                        let _ = w.write_sample(s);
+                    }
                 }
-            }
-            mic_carry_encode = mic_carry_encode[mic_chunks_count * chunk_size..].to_vec();
 
-            // Encode available loopback chunks
-            let lb_chunks_count = loopback_carry_encode.len() / chunk_size;
-            for c_idx in 0..lb_chunks_count {
-                let start = c_idx * chunk_size;
-                let end = start + chunk_size;
-                granule_pos_lb += 2880;
-                if let Ok(len) = encoder_loopback.encode(&loopback_carry_encode[start..end], &mut encoded_buf_lb) {
-                    let packet = encoded_buf_lb[..len].to_vec();
-                    let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_lb);
+                // Encode Mic Opus packets
+                for c_idx in 0..num_chunks {
+                    let start = c_idx * CHUNK_60MS;
+                    let end = start + CHUNK_60MS;
+                    granule_pos_mic += 2880;
+                    if let Ok(len) = encoder_mic.encode(&mic_block[start..end], &mut encoded_buf_mic) {
+                        let packet = encoded_buf_mic[..len].to_vec();
+                        let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mic);
+                    }
                 }
-            }
-            loopback_carry_encode = loopback_carry_encode[lb_chunks_count * chunk_size..].to_vec();
 
-            // Encode available mixed chunks
-            let mixed_chunks_count = mixed_carry.len() / chunk_size;
-            for c_idx in 0..mixed_chunks_count {
-                let start = c_idx * chunk_size;
-                let end = start + chunk_size;
-                granule_pos_mixed += 2880;
-                if let Ok(len) = encoder_mixed.encode(&mixed_carry[start..end], &mut encoded_buf_mixed) {
-                    let packet = encoded_buf_mixed[..len].to_vec();
-                    let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mixed);
+                // Encode Loopback Opus packets
+                for c_idx in 0..num_chunks {
+                    let start = c_idx * CHUNK_60MS;
+                    let end = start + CHUNK_60MS;
+                    granule_pos_lb += 2880;
+                    if let Ok(len) = encoder_loopback.encode(&lb_block[start..end], &mut encoded_buf_lb) {
+                        let packet = encoded_buf_lb[..len].to_vec();
+                        let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_lb);
+                    }
                 }
+
+                // Encode Mixed Opus packets
+                for c_idx in 0..num_chunks {
+                    let start = c_idx * CHUNK_60MS;
+                    let mut mixed_frame = [0i16; CHUNK_60MS];
+                    for k in 0..CHUNK_60MS {
+                        mixed_frame[k] = (mic_block[start + k] as i32 + lb_block[start + k] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                    }
+                    granule_pos_mixed += 2880;
+                    if let Ok(len) = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed) {
+                        let packet = encoded_buf_mixed[..len].to_vec();
+                        let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mixed);
+                    }
+                }
+
+                mic_carry_encode = mic_carry_encode[encode_len..].to_vec();
+                loopback_carry_encode = loopback_carry_encode[encode_len..].to_vec();
             }
-            mixed_carry = mixed_carry[mixed_chunks_count * chunk_size..].to_vec();
         }
 
         // Final flush at end of recording
@@ -1006,101 +1096,105 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
         let mic_16k = resample_to_16k_mono(&mic_raw, mic_rate, mic_channels);
         let loopback_16k = resample_to_16k_mono(&loopback_raw, loopback_rate, loopback_channels);
 
-        total_mic_samples += mic_16k.len();
-        mic_carry_encode.extend_from_slice(&mic_16k);
+        mic_stream_buffer.extend_from_slice(&mic_16k);
+        loopback_stream_buffer.extend_from_slice(&loopback_16k);
 
-        if !loopback_16k.is_empty() {
-            let target_lb_pos = total_mic_samples.saturating_sub(loopback_16k.len());
-            if total_lb_samples < target_lb_pos {
-                let missing = target_lb_pos - total_lb_samples;
-                loopback_carry_encode.resize(loopback_carry_encode.len() + missing, 0);
+        mic_carry_encode.extend_from_slice(&mic_16k);
+        loopback_carry_encode.extend_from_slice(&loopback_16k);
+
+        if let Some(ref tx) = stream_tx {
+            if !mic_stream_buffer.is_empty() {
+                if let Ok(opus_bytes) = encode_opus_ogg(&mic_stream_buffer, 16000, 1) {
+                    let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, opus_bytes));
+                }
             }
-            loopback_carry_encode.extend_from_slice(&loopback_16k);
+            if !loopback_stream_buffer.is_empty() {
+                if let Ok(opus_bytes) = encode_opus_ogg(&loopback_stream_buffer, 16000, 1) {
+                    let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x02, opus_bytes));
+                }
+            }
+            let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::EndOfMeeting);
         }
 
-        // Align loopback length to match mic total length at shutdown
+        // Align remaining lengths
         if loopback_carry_encode.len() < mic_carry_encode.len() {
             loopback_carry_encode.resize(mic_carry_encode.len(), 0);
+        } else if mic_carry_encode.len() < loopback_carry_encode.len() {
+            mic_carry_encode.resize(loopback_carry_encode.len(), 0);
         }
 
-        let mut mixed = Vec::with_capacity(mic_16k.len());
-        for i in 0..mic_16k.len() {
-            let m_val = mic_16k[i] as i32;
-            let lb_val = if i < loopback_16k.len() {
-                loopback_16k[i] as i32
-            } else {
-                0
-            };
-            mixed.push((m_val + lb_val).clamp(i16::MIN as i32, i16::MAX as i32) as i16);
-        }
-        mixed_carry.extend_from_slice(&mixed);
+        let flush_len = mic_carry_encode.len();
+        if flush_len > 0 {
+            if let Some(ref mut w) = wav_writer {
+                for i in 0..flush_len {
+                    let s = (mic_carry_encode[i] as i32 + loopback_carry_encode[i] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                    let _ = w.write_sample(s);
+                }
+            }
 
-        let chunk_size = 960;
+            // Flush Opus chunks
+            let num_flush_chunks = flush_len / CHUNK_60MS;
+            for c_idx in 0..num_flush_chunks {
+                let start = c_idx * CHUNK_60MS;
+                let end = start + CHUNK_60MS;
 
-        // Flush mic
-        let mic_chunks_count = mic_carry_encode.len() / chunk_size;
-        for c_idx in 0..mic_chunks_count {
-            let start = c_idx * chunk_size;
-            let end = start + chunk_size;
-            granule_pos_mic += 2880;
-            if let Ok(len) = encoder_mic.encode(&mic_carry_encode[start..end], &mut encoded_buf_mic) {
-                let packet = encoded_buf_mic[..len].to_vec();
-                let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mic);
+                granule_pos_mic += 2880;
+                if let Ok(len) = encoder_mic.encode(&mic_carry_encode[start..end], &mut encoded_buf_mic) {
+                    let packet = encoded_buf_mic[..len].to_vec();
+                    let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mic);
+                }
+
+                granule_pos_lb += 2880;
+                if let Ok(len) = encoder_loopback.encode(&loopback_carry_encode[start..end], &mut encoded_buf_lb) {
+                    let packet = encoded_buf_lb[..len].to_vec();
+                    let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_lb);
+                }
+
+                let mut mixed_frame = [0i16; CHUNK_60MS];
+                for k in 0..CHUNK_60MS {
+                    mixed_frame[k] = (mic_carry_encode[start + k] as i32 + loopback_carry_encode[start + k] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                }
+                granule_pos_mixed += 2880;
+                if let Ok(len) = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed) {
+                    let packet = encoded_buf_mixed[..len].to_vec();
+                    let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mixed);
+                }
             }
-        }
-        let mic_rem = &mic_carry_encode[mic_chunks_count * chunk_size..];
-        if !mic_rem.is_empty() {
-            let mut final_chunk = mic_rem.to_vec();
-            final_chunk.resize(chunk_size, 0);
-            granule_pos_mic += 2880;
-            if let Ok(len) = encoder_mic.encode(&final_chunk, &mut encoded_buf_mic) {
-                let packet = encoded_buf_mic[..len].to_vec();
-                let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mic);
+
+            // Handle trailing partial frame if any
+            let rem_start = num_flush_chunks * CHUNK_60MS;
+            if rem_start < flush_len {
+                let mut mic_final = mic_carry_encode[rem_start..].to_vec();
+                let mut lb_final = loopback_carry_encode[rem_start..].to_vec();
+                mic_final.resize(CHUNK_60MS, 0);
+                lb_final.resize(CHUNK_60MS, 0);
+
+                granule_pos_mic += 2880;
+                if let Ok(len) = encoder_mic.encode(&mic_final, &mut encoded_buf_mic) {
+                    let packet = encoded_buf_mic[..len].to_vec();
+                    let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mic);
+                }
+
+                granule_pos_lb += 2880;
+                if let Ok(len) = encoder_loopback.encode(&lb_final, &mut encoded_buf_lb) {
+                    let packet = encoded_buf_lb[..len].to_vec();
+                    let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_lb);
+                }
+
+                let mut mixed_frame = [0i16; CHUNK_60MS];
+                for k in 0..CHUNK_60MS {
+                    mixed_frame[k] = (mic_final[k] as i32 + lb_final[k] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                }
+                granule_pos_mixed += 2880;
+                if let Ok(len) = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed) {
+                    let packet = encoded_buf_mixed[..len].to_vec();
+                    let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mixed);
+                }
             }
         }
 
-        // Flush loopback
-        let lb_chunks_count = loopback_carry_encode.len() / chunk_size;
-        for c_idx in 0..lb_chunks_count {
-            let start = c_idx * chunk_size;
-            let end = start + chunk_size;
-            granule_pos_lb += 2880;
-            if let Ok(len) = encoder_loopback.encode(&loopback_carry_encode[start..end], &mut encoded_buf_lb) {
-                let packet = encoded_buf_lb[..len].to_vec();
-                let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_lb);
-            }
-        }
-        let lb_rem = &loopback_carry_encode[lb_chunks_count * chunk_size..];
-        if !lb_rem.is_empty() {
-            let mut final_chunk = lb_rem.to_vec();
-            final_chunk.resize(chunk_size, 0);
-            granule_pos_lb += 2880;
-            if let Ok(len) = encoder_loopback.encode(&final_chunk, &mut encoded_buf_lb) {
-                let packet = encoded_buf_lb[..len].to_vec();
-                let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_lb);
-            }
-        }
-
-        // Flush mixed
-        let mixed_chunks_count = mixed_carry.len() / chunk_size;
-        for c_idx in 0..mixed_chunks_count {
-            let start = c_idx * chunk_size;
-            let end = start + chunk_size;
-            granule_pos_mixed += 2880;
-            if let Ok(len) = encoder_mixed.encode(&mixed_carry[start..end], &mut encoded_buf_mixed) {
-                let packet = encoded_buf_mixed[..len].to_vec();
-                let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mixed);
-            }
-        }
-        let mixed_rem = &mixed_carry[mixed_chunks_count * chunk_size..];
-        if !mixed_rem.is_empty() {
-            let mut final_chunk = mixed_rem.to_vec();
-            final_chunk.resize(chunk_size, 0);
-            granule_pos_mixed += 2880;
-            if let Ok(len) = encoder_mixed.encode(&final_chunk, &mut encoded_buf_mixed) {
-                let packet = encoded_buf_mixed[..len].to_vec();
-                let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mixed);
-            }
+        if let Some(w) = wav_writer {
+            let _ = w.finalize();
         }
 
         let energy_path = output_ogg_path.with_extension("energy.json");
@@ -1111,7 +1205,7 @@ pub fn start_meeting_recording(output_ogg_path: std::path::PathBuf) -> Result<()
 
     let mut state = get_meeting_state().lock().unwrap_or_else(|e| e.into_inner());
     state.mic_stream = Some(SendStream(mic_stream));
-    state.loopback_stream = Some(SendStream(loopback_stream));
+    state.loopback_stream = loopback_stream_opt.map(SendStream);
     state.shutdown_tx = Some(shutdown_tx);
 
     Ok(())
@@ -1130,4 +1224,44 @@ pub fn stop_meeting_recording() {
     MIC_VOLUME.store(0, Ordering::Relaxed);
     LOOPBACK_VOLUME.store(0, Ordering::Relaxed);
 }
+
+pub fn decode_ogg_to_wav(ogg_path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let file = std::fs::File::open(ogg_path).map_err(|e| format!("Failed to open ogg file: {}", e))?;
+    let mut reader = ogg::reading::PacketReader::new(file);
+    let mut decoder = opus::Decoder::new(16000, opus::Channels::Mono).map_err(|e| format!("Failed to init opus decoder: {:?}", e))?;
+    
+    let mut pcm_samples: Vec<i16> = Vec::new();
+    let mut out_buf = [0i16; 5760]; // 120ms max
+
+    while let Ok(Some(packet)) = reader.read_packet() {
+        if packet.data.starts_with(b"OpusHead") || packet.data.starts_with(b"OpusTags") {
+            continue;
+        }
+        if let Ok(samples_decoded) = decoder.decode(&packet.data, &mut out_buf, false) {
+            if samples_decoded > 0 {
+                pcm_samples.extend_from_slice(&out_buf[..samples_decoded]);
+            }
+        }
+    }
+
+    if pcm_samples.is_empty() {
+        return Err("No audio samples decoded from ogg file".to_string());
+    }
+
+    let mut wav_cursor = std::io::Cursor::new(Vec::new());
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::new(&mut wav_cursor, spec).map_err(|e| format!("WavWriter error: {}", e))?;
+    for sample in pcm_samples {
+        writer.write_sample(sample).map_err(|e| format!("Wav write sample error: {}", e))?;
+    }
+    writer.finalize().map_err(|e| format!("Wav finalize error: {}", e))?;
+
+    Ok(wav_cursor.into_inner())
+}
+
 

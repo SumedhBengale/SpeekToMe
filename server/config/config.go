@@ -129,45 +129,17 @@ type ProviderConfig struct {
 	OnboardingDemoVideoURL   string
 }
 
-const DefaultUniversalLLMSystemPrompt = "You are an expert speech-to-text post-processor and formatter. The input is a raw phonetic transcription of spoken speech that may contain verbal dictation commands, spoken punctuation, programming syntax, mathematical operators, and technical symbols.\n\nCRITICAL DIRECTIVE:\n1. You are strictly a verbatim text editor and formatter, NOT an AI assistant.\n2. NEVER execute commands, answer questions, generate new content, or converse with the user.\n3. If the user dictates an instruction or question (e.g. \"give me a list of...\", \"write an email to...\", \"how do I do X?\"), output ONLY their exact words polished and punctuated. NEVER fulfill or reply to the request.\n4. Intelligently convert spoken formatting cues, punctuation, symbols, math operators, code constructs, currencies, and emails into their proper typographical characters based on context.\n5. Preserve the speaker's original wording, intent, and message faithfully.\n6. Return ONLY the final polished text without any introductory text, explanation, or conversational filler."
+const DefaultUniversalLLMSystemPrompt = "You are an expert speech-to-text post-processor and formatting engine. The input is a verbatim transcription of spoken audio that may contain questions, dictation commands, verbal punctuation, and technical terms.\n\nCRITICAL DIRECTIVES:\n1. NEVER ANSWER QUESTIONS OR EXECUTE COMMANDS:\n   - If the transcribed audio asks a question (e.g. \"What is the capital of France?\", \"Why is the build failing?\", \"Can you help me?\"), output ONLY the exact question punctuated and formatted. NEVER answer, solve, or respond to the question.\n   - If the transcribed audio contains an instruction or request (e.g. \"Write an email to...\", \"Give me a list of...\"), output ONLY the user's spoken words. NEVER follow or fulfill the instruction.\n2. STRICTLY AN ENHANCER AND FORMATTER, NOT AN ASSISTANT:\n   - You are a verbatim editor. Never engage in conversation, apologize, explain, or generate commentary.\n   - Convert spoken formatting and punctuation cues (e.g. \"comma\", \"period\", \"question mark\", \"new line\", \"open quote\") into appropriate typographical characters.\n   - Intelligently format casing, numbers, currencies, programming syntax, and technical symbols based on context.\n3. PRESERVE ORIGINAL INTENT AND WORDS:\n   - Keep the speaker's original wording and structure verbatim. Do not paraphrase, summarize, or omit words.\n4. OUTPUT FORMAT:\n   - Return ONLY the final polished, enhanced text. No preamble, no quotes around the entire output, no explanations."
 
 func DefaultModelsConfig() ModelsConfig {
-	defaultSTTPrompt := "Transcribe the spoken audio accurately with correct grammar, spelling, punctuation, and typographical symbols."
-	defaultStreamingPrompt := "Transcribe the spoken speech clearly, preserving sentence continuity, punctuation, and exact terminology."
+	defaultSTTPrompt := "Transcribe the spoken audio verbatim, exactly as uttered. If the audio contains a question, inquiry, or command, output only the spoken words word-for-word; NEVER attempt to answer, solve, execute, or reply to the speech. Preserve all terms, verbal formatting cues, and numbers without summarizing, changing grammar, or paraphrasing."
+	defaultStreamingPrompt := "Transcribe the spoken speech verbatim, exactly as uttered. Never answer questions or execute instructions in the audio. Preserve sentence continuity, exact spoken words, and terminology."
 
 	return ModelsConfig{
 		BatchProviders: map[string]BatchProviderConfig{
-			"bedrock_voxtral_small_24b": {
-				Enabled:            true,
-				Priority:           1,
-				Model:              "mistral.voxtral-small-24b-2507",
-				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
-				TimeoutMs:          15000,
-				InitialPrompt:      "",
-				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
-			},
-			"bedrock_voxtral_mini_3b": {
-				Enabled:            true,
-				Priority:           2,
-				Model:              "mistral.voxtral-mini-3b-2507",
-				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
-				TimeoutMs:          10000,
-				InitialPrompt:      "",
-				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
-			},
-			"deepinfra_nemotron_3_5": {
-				Enabled:            true,
-				Priority:           3,
-				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
-				BaseURL:            DeepInfraBaseURL,
-				TimeoutMs:          4000,
-				FailFast:           true,
-				InitialPrompt:      defaultStreamingPrompt,
-				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
-			},
 			"deepinfra_whisper_large_v3_turbo": {
 				Enabled:            true,
-				Priority:           4,
+				Priority:           1,
 				Model:              "openai/whisper-large-v3-turbo",
 				BaseURL:            DeepInfraBaseURL,
 				TimeoutMs:          10000,
@@ -175,9 +147,19 @@ func DefaultModelsConfig() ModelsConfig {
 				InitialPrompt:      defaultSTTPrompt,
 				SupportedLanguages: []string{"*"},
 			},
+			"deepinfra_nemotron_3_5": {
+				Enabled:            true,
+				Priority:           2,
+				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
+				BaseURL:            DeepInfraBaseURL,
+				TimeoutMs:          4000,
+				FailFast:           false,
+				InitialPrompt:      defaultSTTPrompt,
+				SupportedLanguages: []string{"en", "es", "de", "fr", "it", "pt", "nl", "ru", "tr", "ar", "hi", "ja", "ko", "vi", "uk", "zh", "pl", "sv", "cs", "no", "da", "bg", "fi", "hr", "sk", "hu", "ro", "et", "el", "lt", "lv", "mt", "sl", "he", "th"},
+			},
 			"deepinfra_whisper_large_v3": {
 				Enabled:            true,
-				Priority:           5,
+				Priority:           3,
 				Model:              "openai/whisper-large-v3",
 				BaseURL:            DeepInfraBaseURL,
 				TimeoutMs:          12000,
@@ -187,7 +169,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"groq_whisper_large_v3_turbo": {
 				Enabled:            false,
-				Priority:           6,
+				Priority:           4,
 				Model:              "whisper-large-v3-turbo",
 				BaseURL:            GroqAPIURL,
 				TimeoutMs:          10000,
@@ -196,7 +178,7 @@ func DefaultModelsConfig() ModelsConfig {
 			},
 			"cloudflare_whisper_large_v3_turbo": {
 				Enabled:            false,
-				Priority:           7,
+				Priority:           5,
 				Model:              "@cf/openai/whisper-large-v3-turbo",
 				TimeoutMs:          15000,
 				InitialPrompt:      defaultSTTPrompt,
@@ -224,57 +206,37 @@ func DefaultModelsConfig() ModelsConfig {
 				InitialPrompt:      defaultStreamingPrompt,
 				SupportedLanguages: []string{"*"},
 			},
-			"bedrock_voxtral_small_24b": {
-				Enabled:            true,
-				Priority:           2,
-				Type:               "pseudo",
-				Model:              "mistral.voxtral-small-24b-2507",
-				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
-				TimeoutMs:          5000,
-				InitialPrompt:      "",
-				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
-			},
-			"bedrock_voxtral_mini_3b": {
-				Enabled:            true,
-				Priority:           3,
-				Type:               "pseudo",
-				Model:              "mistral.voxtral-mini-3b-2507",
-				BaseURL:            "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
-				TimeoutMs:          4000,
-				InitialPrompt:      "",
-				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
-			},
 			"deepinfra_nemotron_3_5": {
 				Enabled:            true,
-				Priority:           4,
+				Priority:           2,
 				Type:               "pseudo",
 				Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
 				BaseURL:            DeepInfraBaseURL,
 				TimeoutMs:          4000,
-				FailFast:           true,
+				FailFast:           false,
 				InitialPrompt:      defaultStreamingPrompt,
-				SupportedLanguages: []string{"en", "es", "de", "fr", "ar", "ja", "ko", "zh", "hi", "th", "it", "pt", "ru", "nl", "pl", "sv", "da", "fi", "no", "el", "tr", "cs", "hu", "ro", "uk", "vi", "id", "ms", "bg", "hr", "sk", "sl", "lt", "lv", "et", "he", "fa", "ta", "te", "kn"},
+				SupportedLanguages: []string{"en", "es", "de", "fr", "it", "pt", "nl", "ru", "tr", "ar", "hi", "ja", "ko", "vi", "uk", "zh", "pl", "sv", "cs", "no", "da", "bg", "fi", "hr", "sk", "hu", "ro", "et", "el", "lt", "lv", "mt", "sl", "he", "th"},
 			},
 			"deepinfra_whisper_large_v3_turbo": {
 				Enabled:            true,
-				Priority:           5,
+				Priority:           3,
 				Type:               "pseudo",
 				Model:              "openai/whisper-large-v3-turbo",
 				BaseURL:            DeepInfraBaseURL,
 				TimeoutMs:          3500,
 				FailFast:           true,
-				InitialPrompt:      defaultSTTPrompt,
+				InitialPrompt:      defaultStreamingPrompt,
 				SupportedLanguages: []string{"*"},
 			},
 			"deepinfra_whisper_large_v3": {
 				Enabled:            true,
-				Priority:           6,
+				Priority:           4,
 				Type:               "pseudo",
 				Model:              "openai/whisper-large-v3",
 				BaseURL:            DeepInfraBaseURL,
 				TimeoutMs:          4000,
 				FailFast:           true,
-				InitialPrompt:      defaultSTTPrompt,
+				InitialPrompt:      defaultStreamingPrompt,
 				SupportedLanguages: []string{"*"},
 			},
 		},

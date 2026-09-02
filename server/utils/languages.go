@@ -3,122 +3,76 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 )
 
 type Language struct {
-	Code string `json:"code"`
-	Name string `json:"name"`
-	Tier string `json:"tier,omitempty"`
+	Code   string `json:"code"`             // 2-letter ISO 639-1 code (e.g. "en", "hi")
+	Name   string `json:"name"`             // Display name (e.g. "English", "Hindi")
+	Locale string `json:"locale"`           // Inference locale (e.g. "en-US", "hi-IN")
+	Tier   string `json:"tier,omitempty"`   // Tier from model card ("transcription-ready", "broad-coverage", "adaptation-ready")
 }
 
+// SupportedLanguages defines the 35 languages supported by Nemotron 3.5 ASR Streaming 0.6b and Whisper.
 var SupportedLanguages = []Language{
-	{Code: "af", Name: "Afrikaans"},
-	{Code: "am", Name: "Amharic"},
-	{Code: "ar", Name: "Arabic"},
-	{Code: "as", Name: "Assamese"},
-	{Code: "az", Name: "Azerbaijani"},
-	{Code: "ba", Name: "Bashkir"},
-	{Code: "be", Name: "Belarusian"},
-	{Code: "bg", Name: "Bulgarian"},
-	{Code: "bn", Name: "Bengali"},
-	{Code: "bo", Name: "Tibetan"},
-	{Code: "br", Name: "Breton"},
-	{Code: "bs", Name: "Bosnian"},
-	{Code: "ca", Name: "Catalan"},
-	{Code: "cs", Name: "Czech"},
-	{Code: "cy", Name: "Welsh"},
-	{Code: "da", Name: "Danish"},
-	{Code: "de", Name: "German"},
-	{Code: "el", Name: "Greek"},
-	{Code: "en", Name: "English"},
-	{Code: "es", Name: "Spanish"},
-	{Code: "et", Name: "Estonian"},
-	{Code: "eu", Name: "Basque"},
-	{Code: "fa", Name: "Persian"},
-	{Code: "fi", Name: "Finnish"},
-	{Code: "fo", Name: "Faroese"},
-	{Code: "fr", Name: "French"},
-	{Code: "gl", Name: "Galician"},
-	{Code: "gu", Name: "Gujarati"},
-	{Code: "ha", Name: "Hausa"},
-	{Code: "haw", Name: "Hawaiian"},
-	{Code: "he", Name: "Hebrew"},
-	{Code: "hi", Name: "Hindi"},
-	{Code: "hr", Name: "Croatian"},
-	{Code: "ht", Name: "Haitian Creole"},
-	{Code: "hu", Name: "Hungarian"},
-	{Code: "hy", Name: "Armenian"},
-	{Code: "id", Name: "Indonesian"},
-	{Code: "is", Name: "Icelandic"},
-	{Code: "it", Name: "Italian"},
-	{Code: "ja", Name: "Japanese"},
-	{Code: "jw", Name: "Javanese"},
-	{Code: "ka", Name: "Georgian"},
-	{Code: "kk", Name: "Kazakh"},
-	{Code: "km", Name: "Khmer"},
-	{Code: "kn", Name: "Kannada"},
-	{Code: "ko", Name: "Korean"},
-	{Code: "la", Name: "Latin"},
-	{Code: "lb", Name: "Luxembourgish"},
-	{Code: "ln", Name: "Lingala"},
-	{Code: "lo", Name: "Lao"},
-	{Code: "lt", Name: "Lithuanian"},
-	{Code: "lv", Name: "Latvian"},
-	{Code: "mg", Name: "Malagasy"},
-	{Code: "mi", Name: "Maori"},
-	{Code: "mk", Name: "Macedonian"},
-	{Code: "ml", Name: "Malayalam"},
-	{Code: "mn", Name: "Mongolian"},
-	{Code: "mr", Name: "Marathi"},
-	{Code: "ms", Name: "Malay"},
-	{Code: "mt", Name: "Maltese"},
-	{Code: "my", Name: "Burmese"},
-	{Code: "ne", Name: "Nepali"},
-	{Code: "nl", Name: "Dutch"},
-	{Code: "nn", Name: "Nynorsk"},
-	{Code: "no", Name: "Norwegian"},
-	{Code: "oc", Name: "Occitan"},
-	{Code: "pa", Name: "Punjabi"},
-	{Code: "pl", Name: "Polish"},
-	{Code: "ps", Name: "Pashto"},
-	{Code: "pt", Name: "Portuguese"},
-	{Code: "ro", Name: "Romanian"},
-	{Code: "ru", Name: "Russian"},
-	{Code: "sa", Name: "Sanskrit"},
-	{Code: "sd", Name: "Sindhi"},
-	{Code: "si", Name: "Sinhala"},
-	{Code: "sk", Name: "Slovak"},
-	{Code: "sl", Name: "Slovenian"},
-	{Code: "sn", Name: "Shona"},
-	{Code: "so", Name: "Somali"},
-	{Code: "sq", Name: "Albanian"},
-	{Code: "sr", Name: "Serbian"},
-	{Code: "su", Name: "Sundanese"},
-	{Code: "sv", Name: "Swedish"},
-	{Code: "sw", Name: "Swahili"},
-	{Code: "ta", Name: "Tamil"},
-	{Code: "te", Name: "Telugu"},
-	{Code: "tg", Name: "Tajik"},
-	{Code: "th", Name: "Thai"},
-	{Code: "tk", Name: "Turkmen"},
-	{Code: "tl", Name: "Tagalog"},
-	{Code: "tr", Name: "Turkish"},
-	{Code: "tt", Name: "Tatar"},
-	{Code: "uk", Name: "Ukrainian"},
-	{Code: "ur", Name: "Urdu"},
-	{Code: "uz", Name: "Uzbek"},
-	{Code: "vi", Name: "Vietnamese"},
-	{Code: "yi", Name: "Yiddish"},
-	{Code: "yo", Name: "Yoruba"},
-	{Code: "yue", Name: "Cantonese"},
-	{Code: "zh", Name: "Chinese"},
+	// Transcription-ready (Highest-accuracy out of the box)
+	{Code: "en", Name: "English", Locale: "en-US", Tier: "transcription-ready"},
+	{Code: "es", Name: "Spanish", Locale: "es-ES", Tier: "transcription-ready"},
+	{Code: "de", Name: "German", Locale: "de-DE", Tier: "transcription-ready"},
+	{Code: "fr", Name: "French", Locale: "fr-FR", Tier: "transcription-ready"},
+	{Code: "it", Name: "Italian", Locale: "it-IT", Tier: "transcription-ready"},
+	{Code: "pt", Name: "Portuguese", Locale: "pt-BR", Tier: "transcription-ready"},
+	{Code: "nl", Name: "Dutch", Locale: "nl-NL", Tier: "transcription-ready"},
+	{Code: "ru", Name: "Russian", Locale: "ru-RU", Tier: "transcription-ready"},
+	{Code: "tr", Name: "Turkish", Locale: "tr-TR", Tier: "transcription-ready"},
+	{Code: "ar", Name: "Arabic", Locale: "ar-AR", Tier: "transcription-ready"},
+	{Code: "hi", Name: "Hindi", Locale: "hi-IN", Tier: "transcription-ready"},
+	{Code: "ja", Name: "Japanese", Locale: "ja-JP", Tier: "transcription-ready"},
+	{Code: "ko", Name: "Korean", Locale: "ko-KR", Tier: "transcription-ready"},
+	{Code: "vi", Name: "Vietnamese", Locale: "vi-VN", Tier: "transcription-ready"},
+	{Code: "uk", Name: "Ukrainian", Locale: "uk-UA", Tier: "transcription-ready"},
+
+	// Broad-coverage (Production ASR across 13 locales)
+	{Code: "zh", Name: "Chinese", Locale: "zh-CN", Tier: "broad-coverage"},
+	{Code: "pl", Name: "Polish", Locale: "pl-PL", Tier: "broad-coverage"},
+	{Code: "sv", Name: "Swedish", Locale: "sv-SE", Tier: "broad-coverage"},
+	{Code: "cs", Name: "Czech", Locale: "cs-CZ", Tier: "broad-coverage"},
+	{Code: "no", Name: "Norwegian", Locale: "nb-NO", Tier: "broad-coverage"},
+	{Code: "da", Name: "Danish", Locale: "da-DK", Tier: "broad-coverage"},
+	{Code: "bg", Name: "Bulgarian", Locale: "bg-BG", Tier: "broad-coverage"},
+	{Code: "fi", Name: "Finnish", Locale: "fi-FI", Tier: "broad-coverage"},
+	{Code: "hr", Name: "Croatian", Locale: "hr-HR", Tier: "broad-coverage"},
+	{Code: "sk", Name: "Slovak", Locale: "sk-SK", Tier: "broad-coverage"},
+	{Code: "hu", Name: "Hungarian", Locale: "hu-HU", Tier: "broad-coverage"},
+	{Code: "ro", Name: "Romanian", Locale: "ro-RO", Tier: "broad-coverage"},
+	{Code: "et", Name: "Estonian", Locale: "et-EE", Tier: "broad-coverage"},
+
+	// Adaptation-ready (Tokenizer recognized)
+	{Code: "el", Name: "Greek", Locale: "el-GR", Tier: "adaptation-ready"},
+	{Code: "lt", Name: "Lithuanian", Locale: "lt-LT", Tier: "adaptation-ready"},
+	{Code: "lv", Name: "Latvian", Locale: "lv-LV", Tier: "adaptation-ready"},
+	{Code: "mt", Name: "Maltese", Locale: "mt-MT", Tier: "adaptation-ready"},
+	{Code: "sl", Name: "Slovenian", Locale: "sl-SI", Tier: "adaptation-ready"},
+	{Code: "he", Name: "Hebrew", Locale: "he-IL", Tier: "adaptation-ready"},
+	{Code: "th", Name: "Thai", Locale: "th-TH", Tier: "adaptation-ready"},
+}
+
+// Secondary / Regional Locales recognized by Nemotron 3.5 that map to primary 2-letter codes
+var secondaryLocaleMap = map[string]string{
+	"en-gb": "en",
+	"es-us": "es",
+	"fr-ca": "fr",
+	"pt-pt": "pt",
+	"nn-no": "no",
 }
 
 var (
 	langMu          sync.RWMutex
 	currentLangs    = SupportedLanguages
-	languageCodeMap = make(map[string]string)
+	languageCodeMap = make(map[string]string) // "en" -> "English"
+	codeToLocaleMap = make(map[string]string) // "en" -> "en-US", "hi" -> "hi-IN"
+	localeToCodeMap = make(map[string]string) // "en-us" -> "en", "en-gb" -> "en", "hi-in" -> "hi"
 )
 
 func init() {
@@ -128,11 +82,37 @@ func init() {
 func rebuildLanguageMap(langs []Language) {
 	langMu.Lock()
 	defer langMu.Unlock()
+
 	currentLangs = make([]Language, len(langs))
 	copy(currentLangs, langs)
+
 	languageCodeMap = make(map[string]string, len(langs))
+	codeToLocaleMap = make(map[string]string, len(langs)*2)
+	localeToCodeMap = make(map[string]string, len(langs)*3)
+
+	// Populate primary entries
 	for _, l := range langs {
-		languageCodeMap[l.Code] = l.Name
+		codeLower := strings.ToLower(strings.TrimSpace(l.Code))
+		languageCodeMap[codeLower] = l.Name
+
+		locale := strings.TrimSpace(l.Locale)
+		if locale == "" {
+			locale = codeLower
+		}
+
+		codeToLocaleMap[codeLower] = locale
+		codeToLocaleMap[strings.ToLower(locale)] = locale
+
+		localeToCodeMap[codeLower] = codeLower
+		localeToCodeMap[strings.ToLower(locale)] = codeLower
+	}
+
+	// Populate secondary / dialect locales
+	for secLocale, code := range secondaryLocaleMap {
+		if _, ok := languageCodeMap[code]; ok {
+			localeToCodeMap[secLocale] = code
+			codeToLocaleMap[secLocale] = secLocale // preserve exact dialect if specified
+		}
 	}
 }
 
@@ -153,15 +133,71 @@ func GetSupportedLanguages() []Language {
 	return res
 }
 
-func GetLanguageName(code string) string {
+// GetSupportedLanguageCodes returns the 2-letter codes of the currently active languages
+func GetSupportedLanguageCodes() []string {
 	langMu.RLock()
 	defer langMu.RUnlock()
-	if name, ok := languageCodeMap[code]; ok {
-		return name
+	codes := make([]string, len(currentLangs))
+	for i, l := range currentLangs {
+		codes[i] = l.Code
 	}
-	return code
+	return codes
 }
 
+// GetLanguageName returns display name for a code or locale
+func GetLanguageName(codeOrLocale string) string {
+	langMu.RLock()
+	defer langMu.RUnlock()
+	key := strings.ToLower(strings.TrimSpace(codeOrLocale))
+	if code, ok := localeToCodeMap[key]; ok {
+		if name, ok := languageCodeMap[code]; ok {
+			return name
+		}
+	}
+	if name, ok := languageCodeMap[key]; ok {
+		return name
+	}
+	return codeOrLocale
+}
+
+// GetLocaleForCode maps a 2-letter code to its primary BCP-47 locale (e.g. "hi" -> "hi-IN", "en" -> "en-US")
+func GetLocaleForCode(codeOrLocale string) string {
+	langMu.RLock()
+	defer langMu.RUnlock()
+	key := strings.ToLower(strings.TrimSpace(codeOrLocale))
+	if loc, ok := codeToLocaleMap[key]; ok {
+		return loc
+	}
+	return codeOrLocale
+}
+
+// GetCodeForLocale maps a BCP-47 locale or dialect to its 2-letter ISO 639-1 code (e.g. "hi-IN" -> "hi", "en-US" -> "en")
+func GetCodeForLocale(localeOrCode string) string {
+	langMu.RLock()
+	defer langMu.RUnlock()
+	key := strings.ToLower(strings.TrimSpace(localeOrCode))
+	if code, ok := localeToCodeMap[key]; ok {
+		return code
+	}
+	return key
+}
+
+// ResolveNemotronLanguage determines the language parameter to pass to NeMo-Speech.cpp / Nemotron 3.5.
+// If a single language is specified, its exact BCP-47 locale is returned (e.g. "hi-IN", "en-US").
+// If multiple languages or zero are specified, "auto" is returned so Nemotron's built-in multi-lingual
+// classifier and language tagger runs dynamically.
+func ResolveNemotronLanguage(userLanguages []string) string {
+	if len(userLanguages) == 1 {
+		clean := strings.TrimSpace(userLanguages[0])
+		if clean != "" && clean != "auto" {
+			return GetLocaleForCode(clean)
+		}
+	}
+	return "auto"
+}
+
+// ValidateLanguages validates that given language codes/locales belong to the supported set,
+// normalizes them to their canonical 2-letter ISO code, and caps selection at 5.
 func ValidateLanguages(input []string) ([]string, error) {
 	if len(input) == 0 {
 		return []string{"en"}, nil
@@ -171,11 +207,19 @@ func ValidateLanguages(input []string) ([]string, error) {
 	}
 	langMu.RLock()
 	defer langMu.RUnlock()
+
 	var validated []string
 	seen := make(map[string]bool)
-	for _, code := range input {
-		if _, ok := languageCodeMap[code]; !ok {
-			return nil, fmt.Errorf("invalid language code: %s", code)
+	for _, raw := range input {
+		clean := strings.ToLower(strings.TrimSpace(raw))
+		code, ok := localeToCodeMap[clean]
+		if !ok {
+			// Also check if raw was directly in languageCodeMap
+			if _, exists := languageCodeMap[clean]; exists {
+				code = clean
+			} else {
+				return nil, fmt.Errorf("invalid language code: %s", raw)
+			}
 		}
 		if !seen[code] {
 			seen[code] = true
@@ -211,3 +255,4 @@ func FormatLanguagesJSON(langs []string) string {
 	b, _ := json.Marshal(valid)
 	return string(b)
 }
+

@@ -1082,7 +1082,7 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 		return nil, fmt.Errorf("failed to connect to upstream %s at %s: %w", providerName, provCfg.BaseURL, err)
 	}
 
-	langParam, promptStr := BuildWhisperPrompt(userLanguages)
+	_, promptStr := BuildWhisperPrompt(userLanguages)
 	if provCfg.InitialPrompt != "" {
 		promptStr = provCfg.InitialPrompt
 	}
@@ -1095,16 +1095,14 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 	}
 
 	// 1. Send OpenAI Realtime-style session.update configuration for NeMo-Speech.cpp
-	langConfig := "auto"
-	if langParam != "" {
-		langConfig = langParam
-	}
+	// Inference server expects exact BCP-47 locale (e.g. "en-US", "hi-IN") or "auto"
+	nemotronLang := utils.ResolveNemotronLanguage(userLanguages)
 	sessionUpdateMsg := map[string]interface{}{
 		"type": "session.update",
 		"session": map[string]interface{}{
 			"sample_rate":           16000,
 			"automatic_punctuation": true,
-			"language":              langConfig,
+			"language":              nemotronLang,
 			"model":                 provCfg.Model,
 			"initial_prompt":        promptStr,
 		},
@@ -1117,7 +1115,7 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 	startMsg := map[string]interface{}{
 		"type":           "start",
 		"model":          provCfg.Model,
-		"language":       langParam,
+		"language":       nemotronLang,
 		"initial_prompt": promptStr,
 		"sample_rate":    16000,
 		"channels":       1,

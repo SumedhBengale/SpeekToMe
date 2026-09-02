@@ -175,40 +175,41 @@ const onboardThemeSelect = document.getElementById('onboard-theme-select');
 // ==========================================
 
 let SUPPORTED_LANGUAGES = [
-  { code: "af", name: "Afrikaans" }, { code: "am", name: "Amharic" }, { code: "ar", name: "Arabic" },
-  { code: "as", name: "Assamese" }, { code: "az", name: "Azerbaijani" }, { code: "ba", name: "Bashkir" },
-  { code: "be", name: "Belarusian" }, { code: "bg", name: "Bulgarian" }, { code: "bn", name: "Bengali" },
-  { code: "bo", name: "Tibetan" }, { code: "br", name: "Breton" }, { code: "bs", name: "Bosnian" },
-  { code: "ca", name: "Catalan" }, { code: "cs", name: "Czech" }, { code: "cy", name: "Welsh" },
-  { code: "da", name: "Danish" }, { code: "de", name: "German" }, { code: "el", name: "Greek" },
-  { code: "en", name: "English" }, { code: "es", name: "Spanish" }, { code: "et", name: "Estonian" },
-  { code: "eu", name: "Basque" }, { code: "fa", name: "Persian" }, { code: "fi", name: "Finnish" },
-  { code: "fo", name: "Faroese" }, { code: "fr", name: "French" }, { code: "gl", name: "Galician" },
-  { code: "gu", name: "Gujarati" }, { code: "ha", name: "Hausa" }, { code: "haw", name: "Hawaiian" },
-  { code: "he", name: "Hebrew" }, { code: "hi", name: "Hindi" }, { code: "hr", name: "Croatian" },
-  { code: "ht", name: "Haitian Creole" }, { code: "hu", name: "Hungarian" }, { code: "hy", name: "Armenian" },
-  { code: "id", name: "Indonesian" }, { code: "is", name: "Icelandic" }, { code: "it", name: "Italian" },
-  { code: "ja", name: "Japanese" }, { code: "jw", name: "Javanese" }, { code: "ka", name: "Georgian" },
-  { code: "kk", name: "Kazakh" }, { code: "km", name: "Khmer" }, { code: "kn", name: "Kannada" },
-  { code: "ko", name: "Korean" }, { code: "la", name: "Latin" }, { code: "lb", name: "Luxembourgish" },
-  { code: "ln", name: "Lingala" }, { code: "lo", name: "Lao" }, { code: "lt", name: "Lithuanian" },
-  { code: "lv", name: "Latvian" }, { code: "mg", name: "Malagasy" }, { code: "mi", name: "Maori" },
-  { code: "mk", name: "Macedonian" }, { code: "ml", name: "Malayalam" }, { code: "mn", name: "Mongolian" },
-  { code: "mr", name: "Marathi" }, { code: "ms", name: "Malay" }, { code: "mt", name: "Maltese" },
-  { code: "my", name: "Burmese" }, { code: "ne", name: "Nepali" }, { code: "nl", name: "Dutch" },
-  { code: "nn", name: "Nynorsk" }, { code: "no", name: "Norwegian" }, { code: "oc", name: "Occitan" },
-  { code: "pa", name: "Punjabi" }, { code: "pl", name: "Polish" }, { code: "ps", name: "Pashto" },
-  { code: "pt", name: "Portuguese" }, { code: "ro", name: "Romanian" }, { code: "ru", name: "Russian" },
-  { code: "sa", name: "Sanskrit" }, { code: "sd", name: "Sindhi" }, { code: "si", name: "Sinhala" },
-  { code: "sk", name: "Slovak" }, { code: "sl", name: "Slovenian" }, { code: "sn", name: "Shona" },
-  { code: "so", name: "Somali" }, { code: "sq", name: "Albanian" }, { code: "sr", name: "Serbian" },
-  { code: "su", name: "Sundanese" }, { code: "sv", name: "Swedish" }, { code: "sw", name: "Swahili" },
-  { code: "ta", name: "Tamil" }, { code: "te", name: "Telugu" }, { code: "tg", name: "Tajik" },
-  { code: "th", name: "Thai" }, { code: "tk", name: "Turkmen" }, { code: "tl", name: "Tagalog" },
-  { code: "tr", name: "Turkish" }, { code: "tt", name: "Tatar" }, { code: "uk", name: "Ukrainian" },
-  { code: "ur", name: "Urdu" }, { code: "uz", name: "Uzbek" }, { code: "vi", name: "Vietnamese" },
-  { code: "yi", name: "Yiddish" }, { code: "yo", name: "Yoruba" }, { code: "yue", name: "Cantonese" },
-  { code: "zh", name: "Chinese" }
+  { code: "en", name: "English", locale: "en-US", tier: "transcription-ready" },
+  { code: "es", name: "Spanish", locale: "es-ES", tier: "transcription-ready" },
+  { code: "de", name: "German", locale: "de-DE", tier: "transcription-ready" },
+  { code: "fr", name: "French", locale: "fr-FR", tier: "transcription-ready" },
+  { code: "it", name: "Italian", locale: "it-IT", tier: "transcription-ready" },
+  { code: "pt", name: "Portuguese", locale: "pt-BR", tier: "transcription-ready" },
+  { code: "nl", name: "Dutch", locale: "nl-NL", tier: "transcription-ready" },
+  { code: "ru", name: "Russian", locale: "ru-RU", tier: "transcription-ready" },
+  { code: "tr", name: "Turkish", locale: "tr-TR", tier: "transcription-ready" },
+  { code: "ar", name: "Arabic", locale: "ar-AR", tier: "transcription-ready" },
+  { code: "hi", name: "Hindi", locale: "hi-IN", tier: "transcription-ready" },
+  { code: "ja", name: "Japanese", locale: "ja-JP", tier: "transcription-ready" },
+  { code: "ko", name: "Korean", locale: "ko-KR", tier: "transcription-ready" },
+  { code: "vi", name: "Vietnamese", locale: "vi-VN", tier: "transcription-ready" },
+  { code: "uk", name: "Ukrainian", locale: "uk-UA", tier: "transcription-ready" },
+  { code: "zh", name: "Chinese", locale: "zh-CN", tier: "broad-coverage" },
+  { code: "pl", name: "Polish", locale: "pl-PL", tier: "broad-coverage" },
+  { code: "sv", name: "Swedish", locale: "sv-SE", tier: "broad-coverage" },
+  { code: "cs", name: "Czech", locale: "cs-CZ", tier: "broad-coverage" },
+  { code: "no", name: "Norwegian", locale: "nb-NO", tier: "broad-coverage" },
+  { code: "da", name: "Danish", locale: "da-DK", tier: "broad-coverage" },
+  { code: "bg", name: "Bulgarian", locale: "bg-BG", tier: "broad-coverage" },
+  { code: "fi", name: "Finnish", locale: "fi-FI", tier: "broad-coverage" },
+  { code: "hr", name: "Croatian", locale: "hr-HR", tier: "broad-coverage" },
+  { code: "sk", name: "Slovak", locale: "sk-SK", tier: "broad-coverage" },
+  { code: "hu", name: "Hungarian", locale: "hu-HU", tier: "broad-coverage" },
+  { code: "ro", name: "Romanian", locale: "ro-RO", tier: "broad-coverage" },
+  { code: "et", name: "Estonian", locale: "et-EE", tier: "broad-coverage" },
+  { code: "el", name: "Greek", locale: "el-GR", tier: "adaptation-ready" },
+  { code: "lt", name: "Lithuanian", locale: "lt-LT", tier: "adaptation-ready" },
+  { code: "lv", name: "Latvian", locale: "lv-LV", tier: "adaptation-ready" },
+  { code: "mt", name: "Maltese", locale: "mt-MT", tier: "adaptation-ready" },
+  { code: "sl", name: "Slovenian", locale: "sl-SI", tier: "adaptation-ready" },
+  { code: "he", name: "Hebrew", locale: "he-IL", tier: "adaptation-ready" },
+  { code: "th", name: "Thai", locale: "th-TH", tier: "adaptation-ready" }
 ];
 
 let selectedLanguages = ["en"];
@@ -1885,6 +1886,7 @@ let timerInterval = null;
 let meetingSeconds = 0;
 let currentMeetingFile = null;
 let activeMeetingId = null;
+let liveMeetingTurnsMap = new Map();
 
 function setupMeetingsUI() {
   const startRecBtn = document.getElementById('meetings-start-rec-btn');
@@ -1916,6 +1918,40 @@ function setupMeetingsUI() {
         (m.summary && m.summary.toLowerCase().includes(query))
       );
       renderMeetingsList(filtered);
+    });
+  }
+
+  // Setup real-time meeting events from Tauri Rust backend
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    listen('meeting-turn-update', (event) => {
+      handleLiveMeetingTurn(event.payload);
+    });
+    listen('meeting-session-ready', () => {
+      const badge = document.getElementById('meetings-live-status-badge');
+      if (badge) {
+        badge.textContent = "Live Connected";
+        badge.style.color = "#57bf7c";
+      }
+    });
+    listen('meeting-completed', (event) => {
+      console.log("[MEETING EVENT] meeting-completed received from backend:", event.payload);
+      try {
+        const m = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
+        if (m && m.id) {
+          showDashboardView();
+          loadMeetings();
+          viewMeeting(m.id);
+        }
+      } catch (e) {
+        console.error("[MEETING EVENT ERROR] Failed to parse meeting-completed payload:", e);
+      }
+    });
+    listen('meeting-error', (event) => {
+      const badge = document.getElementById('meetings-live-status-badge');
+      if (badge) {
+        badge.textContent = "Stream Disconnected";
+        badge.style.color = "#ff453a";
+      }
     });
   }
 }
@@ -2037,26 +2073,51 @@ async function viewMeeting(id) {
     document.getElementById('meeting-detail-title').textContent = m.title;
     document.getElementById('meeting-detail-date').textContent = `${formatDate(m.timestamp)} • ${formatDuration(m.duration)}`;
 
-    // Set Audio source using Object URL to authorize playback request
+    // Set Audio source using local disk audio (fast seeking, accurate duration, 100% private)
     const player = document.getElementById('meeting-audio-player');
-    const audioRes = await fetch(`${API_URL}/meetings/${id}/audio`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    const blob = await audioRes.blob();
-    player.src = URL.createObjectURL(blob);
+    let audioLoaded = false;
+    try {
+      const ts = m.timestamp ? Math.floor(new Date(m.timestamp).getTime() / 1000) : null;
+      console.log(`[MEETING PLAYER] Requesting local audio for meeting ${id} (ts: ${ts})...`);
+      const audioDataUri = await invoke('get_local_meeting_audio', { 
+        meetingId: id,
+        timestamp: ts
+      });
+      if (audioDataUri) {
+        player.src = audioDataUri;
+        audioLoaded = true;
+        console.log("[MEETING PLAYER] Successfully loaded local meeting audio from local disk!");
+      }
+    } catch (localErr) {
+      console.warn("[MEETING PLAYER] Local audio loading failed, falling back to server audio:", localErr);
+    }
 
-    // Setup active tab
+    if (!audioLoaded) {
+      try {
+        const audioRes = await fetch(`${API_URL}/meetings/${id}/audio`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (audioRes.ok) {
+          const blob = await audioRes.blob();
+          player.src = URL.createObjectURL(blob);
+          console.log("[MEETING PLAYER] Loaded audio from server fallback.");
+        }
+      } catch (srvErr) {
+        console.error("[MEETING PLAYER ERROR] Failed to fetch server audio:", srvErr);
+      }
+    }
+
+    // Setup active tab (Timeline by default)
     const tabBtns = document.querySelectorAll('.detail-tab-btn');
     const panes = document.querySelectorAll('.detail-tab-pane');
     tabBtns.forEach(b => b.classList.remove('active'));
     panes.forEach(p => p.classList.remove('active'));
-    document.querySelector('.detail-tab-btn[data-detail-tab="transcript"]').classList.add('active');
-    document.getElementById('detail-pane-transcript').classList.add('active');
+    const defaultTimelineBtn = document.querySelector('.detail-tab-btn[data-detail-tab="timeline"]') || document.querySelector('.detail-tab-btn');
+    const defaultTimelinePane = document.getElementById('detail-pane-timeline') || document.getElementById('detail-pane-transcript');
+    if (defaultTimelineBtn) defaultTimelineBtn.classList.add('active');
+    if (defaultTimelinePane) defaultTimelinePane.classList.add('active');
 
-    // Parse and render transcripts with sync highlights
-    const transcriptTextEl = document.getElementById('meeting-transcript-text');
-    transcriptTextEl.innerHTML = '';
-    
+    // Parse segments
     let segments = [];
     try {
       segments = JSON.parse(m.segments_json);
@@ -2064,10 +2125,40 @@ async function viewMeeting(id) {
       segments = [];
     }
 
-    // Helper functions for avatars
+    // Determine local user name if available (from DOM or window state)
+    const domUserName = userNameEl && userNameEl.textContent ? userNameEl.textContent.trim() : '';
+    const userName = domUserName ? domUserName.toLowerCase() : '';
+
+    let maxSegEnd = 0;
+    if (segments && segments.length > 0) {
+      segments.forEach(s => {
+        if (s.end && s.end > maxSegEnd) maxSegEnd = s.end;
+      });
+    }
+    let totalDuration = Math.max(m.duration || 0, maxSegEnd, 1);
+
+    // Helper function to render or update timeline when audio duration is resolved
+    const doRenderTimeline = () => {
+      const audioDuration = player && player.duration && !isNaN(player.duration) && player.duration > 0 ? player.duration : 0;
+      totalDuration = audioDuration > 0 ? audioDuration : (m.duration > 0 ? m.duration : Math.max(maxSegEnd, 1));
+      renderMeetingTimeline(segments, totalDuration, player, domUserName);
+    };
+
+    if (player) {
+      player.onloadedmetadata = () => {
+        console.log(`[MEETING PLAYER] Audio loadedmetadata: duration = ${player.duration}s`);
+        doRenderTimeline();
+      };
+      player.ondurationchange = () => {
+        console.log(`[MEETING PLAYER] Audio durationchange: duration = ${player.duration}s`);
+        doRenderTimeline();
+      };
+    }
+
+    // Helper functions for avatars & time formatting
     const getInitials = (name) => {
       if (!name) return 'SP';
-      const cleanName = name.replace(/[\[\]]/g, ''); // strip brackets
+      const cleanName = name.replace(/[\[\]]/g, '').trim();
       const parts = cleanName.split(' ');
       if (parts.length >= 2) {
         return (parts[0][0] + parts[1][0]).toUpperCase();
@@ -2082,14 +2173,14 @@ async function viewMeeting(id) {
         hash = name.charCodeAt(i) + ((hash << 5) - hash);
       }
       const colors = [
-        '#5c6bc0', '#26a69a', '#ec407a', '#7e57c2', 
-        '#26c6da', '#ff7043', '#8d6e63', '#66bb6a'
+        '#7c3aed', '#0284c7', '#059669', '#d97706', 
+        '#e11d48', '#2563eb', '#4f46e5', '#0d9488'
       ];
       return colors[Math.abs(hash) % colors.length];
     };
 
     const formatOffset = (seconds) => {
-      if (isNaN(seconds)) return '0:00';
+      if (isNaN(seconds) || seconds < 0) return '0:00';
       const h = Math.floor(seconds / 3600);
       const m = Math.floor((seconds % 3600) / 60);
       const s = Math.floor(seconds % 60);
@@ -2101,26 +2192,28 @@ async function viewMeeting(id) {
       return `${m}:${sStr}`;
     };
 
+    // 1. RENDER AUDIO TIMELINE VIEW (DAW / Audio Editor Style)
+    doRenderTimeline();
+
+    // 2. RENDER TRANSCRIPT VIEW
+    const transcriptTextEl = document.getElementById('meeting-transcript-text');
+    transcriptTextEl.innerHTML = '';
+
     if (segments && segments.length > 0) {
       let currentSpeaker = null;
       let currentBlock = null;
       let currentBlockText = null;
-
-      // Determine local user name if available (from DOM or window state)
-      const domUserName = userNameEl && userNameEl.textContent ? userNameEl.textContent.trim() : '';
-      const userName = domUserName ? domUserName.toLowerCase() : '';
 
       segments.forEach(seg => {
         const speakerName = seg.speaker || 'Speaker';
         
         if (speakerName !== currentSpeaker) {
           currentSpeaker = speakerName;
-          
           currentBlock = document.createElement('div');
           
           const cleanLowerSpeaker = speakerName.toLowerCase().replace(/[\[\]]/g, '').trim();
-          const isRemote = cleanLowerSpeaker.includes('remote') || cleanLowerSpeaker.includes('system') || cleanLowerSpeaker.includes('participant') || cleanLowerSpeaker.includes('caller');
-          const isMe = !isRemote && (cleanLowerSpeaker === 'you' || cleanLowerSpeaker === 'me' || (userName && cleanLowerSpeaker.includes(userName)) || !cleanLowerSpeaker.includes('speaker 2'));
+          const isRemote = cleanLowerSpeaker.includes('speaker 1') || cleanLowerSpeaker.includes('speaker 2') || cleanLowerSpeaker.includes('speaker 3') || cleanLowerSpeaker.includes('speaker 4') || cleanLowerSpeaker.includes('remote') || cleanLowerSpeaker.includes('system') || cleanLowerSpeaker.includes('participant');
+          const isMe = !isRemote || (userName && cleanLowerSpeaker.includes(userName)) || cleanLowerSpeaker === 'you' || cleanLowerSpeaker === 'me';
 
           currentBlock.className = `meeting-speaker-block ${isRemote ? 'is-remote' : 'is-me'}`;
           
@@ -2130,11 +2223,11 @@ async function viewMeeting(id) {
           const avatar = document.createElement('div');
           avatar.className = 'meeting-speaker-avatar';
           avatar.textContent = getInitials(speakerName);
-          avatar.style.backgroundColor = isRemote ? '#2f80ed' : getAvatarColor(speakerName);
+          avatar.style.backgroundColor = isMe ? '#7c3aed' : getAvatarColor(speakerName);
           
           const nameSpan = document.createElement('span');
           nameSpan.className = 'meeting-speaker-name';
-          nameSpan.textContent = speakerName;
+          nameSpan.textContent = isMe ? `${speakerName} (You)` : speakerName;
           
           const timeSpan = document.createElement('span');
           timeSpan.className = 'meeting-speaker-time';
@@ -2178,8 +2271,110 @@ async function viewMeeting(id) {
 
     let lastActiveSpan = null;
 
+    // Synchronized Player Updates for Timeline, Inspector Table & Transcript
+    let isUserHoveringTable = false;
+    let lastActiveTableRow = null;
+
     player.ontimeupdate = () => {
       const time = player.currentTime;
+
+      // 1. Update Digital Monospace Clock
+      const clockCurrent = document.getElementById('timeline-clock-current');
+      if (clockCurrent) {
+        const m = Math.floor(time / 60);
+        const s = Math.floor(time % 60);
+        const ms = Math.floor((time % 1) * 100);
+        clockCurrent.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
+      }
+
+      // 2. Update Timeline Playhead Needle & Auto-Scroll
+      const playhead = document.getElementById('timeline-playhead');
+      const scrollArea = document.getElementById('timeline-scroll-area');
+      const scrollCanvas = document.getElementById('timeline-scroll-canvas');
+      const effectiveDuration = (player && player.duration && !isNaN(player.duration) && player.duration > 0)
+        ? player.duration
+        : totalDuration;
+
+      if (playhead && effectiveDuration > 0) {
+        const pct = Math.max(0, Math.min(100, (time / effectiveDuration) * 100));
+        playhead.style.left = `${pct}%`;
+
+        // Auto-scroll timeline when zoomed
+        if (scrollArea && scrollCanvas && scrollCanvas.offsetWidth > scrollArea.offsetWidth && !player.paused) {
+          const playheadPx = (pct / 100) * scrollCanvas.offsetWidth;
+          const targetScroll = playheadPx - (scrollArea.offsetWidth / 2);
+          scrollArea.scrollLeft = targetScroll;
+        }
+      }
+
+      // 3. Detect Active Speaker & Update Active Speaker Pill
+      const activePill = document.getElementById('timeline-active-speaker-pill');
+      const activeText = document.getElementById('timeline-active-speaker-text');
+      let activeSpkName = null;
+      let activeSpkTheme = null;
+
+      if (segments && segments.length > 0) {
+        for (const seg of segments) {
+          if (time >= seg.start && time <= seg.end) {
+            activeSpkName = seg.speaker || 'Speaker';
+            if (window.__currentSpeakerThemes && window.__currentSpeakerThemes[activeSpkName]) {
+              activeSpkTheme = window.__currentSpeakerThemes[activeSpkName];
+            }
+            break;
+          }
+        }
+      }
+
+      if (activePill && activeText) {
+        if (activeSpkName && activeSpkTheme) {
+          activePill.className = 'timeline-active-speaker-pill';
+          activePill.style.backgroundColor = activeSpkTheme.bg;
+          activePill.style.borderColor = activeSpkTheme.border;
+          activePill.style.color = activeSpkTheme.textColor;
+          activePill.innerHTML = `<span class="status-dot" style="background-color: ${activeSpkTheme.color};"></span><span>${activeSpkTheme.label} Speaking</span>`;
+        } else {
+          activePill.className = 'timeline-active-speaker-pill is-silence';
+          activePill.style.backgroundColor = '';
+          activePill.style.borderColor = '';
+          activePill.style.color = '';
+          activePill.innerHTML = '<span class="status-dot"></span><span>Silence</span>';
+        }
+      }
+
+      // 4. Update Timeline Active Segment Boxes
+      const segmentBoxes = document.querySelectorAll('.segment-box');
+      segmentBoxes.forEach(box => {
+        const start = parseFloat(box.dataset.start);
+        const end = parseFloat(box.dataset.end);
+        if (time >= start && time <= end) {
+          box.classList.add('active');
+        } else {
+          box.classList.remove('active');
+        }
+      });
+
+      // 5. Update Turn-by-Turn Inspector Table
+      const tableRows = document.querySelectorAll('.turn-table-row');
+      let currentActiveRow = null;
+      tableRows.forEach(row => {
+        const start = parseFloat(row.dataset.start);
+        const end = parseFloat(row.dataset.end);
+        if (time >= start && time <= end) {
+          row.classList.add('active-turn-row');
+          currentActiveRow = row;
+        } else {
+          row.classList.remove('active-turn-row');
+        }
+      });
+
+      if (currentActiveRow && currentActiveRow !== lastActiveTableRow) {
+        lastActiveTableRow = currentActiveRow;
+        if (!isUserHoveringTable) {
+          currentActiveRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }
+
+      // 6. Update Transcript Active Spans
       const spans = transcriptTextEl.querySelectorAll('.transcript-segment');
       let currentActiveSpan = null;
 
@@ -2202,13 +2397,21 @@ async function viewMeeting(id) {
       }
     };
 
+    // Inspector table hover lock
+    const inspectorScroll = document.querySelector('.inspector-table-scroll');
+    if (inspectorScroll) {
+      inspectorScroll.onmouseenter = () => { isUserHoveringTable = true; };
+      inspectorScroll.onmouseleave = () => { isUserHoveringTable = false; };
+      inspectorScroll.onwheel = () => { isUserHoveringTable = true; };
+    }
+
     // Render summary and actions
     document.getElementById('meeting-summary-text').innerHTML = parseMarkdownToHTML(m.summary);
     document.getElementById('meeting-actions-text').innerHTML = parseMarkdownToHTML(m.action_items);
 
     // Detail Tabs switching
-    tabBtns.forEach(btn => {
-      // Remove existing event listener if any (by cloning)
+    const currentTabBtns = document.querySelectorAll('.detail-tab-btn');
+    currentTabBtns.forEach(btn => {
       const newBtn = btn.cloneNode(true);
       btn.parentNode.replaceChild(newBtn, btn);
       newBtn.addEventListener('click', () => {
@@ -2219,7 +2422,8 @@ async function viewMeeting(id) {
         
         newBtn.classList.add('active');
         const targetPane = newBtn.getAttribute('data-detail-tab');
-        document.getElementById(`detail-pane-${targetPane}`).classList.add('active');
+        const paneEl = document.getElementById(`detail-pane-${targetPane}`);
+        if (paneEl) paneEl.classList.add('active');
       });
     });
 
@@ -2230,9 +2434,453 @@ async function viewMeeting(id) {
   }
 }
 
+// Dedicated High-Precision Visualizer & Timeline Renderer
+function renderMeetingTimeline(segments, totalDuration, player, currentUserName) {
+  const audioMeta = document.getElementById('timeline-audio-meta');
+  const turnsCount = document.getElementById('timeline-turns-count');
+  const clockTotal = document.getElementById('timeline-clock-total');
+  const clockCurrent = document.getElementById('timeline-clock-current');
+  const legendContainer = document.getElementById('timeline-speaker-legend');
+  const headersList = document.getElementById('timeline-headers-list');
+  const rulerTrack = document.getElementById('timeline-ruler-track');
+  const lanesBody = document.getElementById('timeline-lanes-body');
+  const scrollCanvas = document.getElementById('timeline-scroll-canvas');
+  const scrollArea = document.getElementById('timeline-scroll-area');
+  const hoverBadge = document.getElementById('timeline-hover-badge');
+  const hoverText = document.getElementById('timeline-hover-text');
+  const inspectorTbody = document.getElementById('timeline-inspector-tbody');
+  const turnsLabel = document.getElementById('inspector-total-turns-label');
+  const searchInput = document.getElementById('timeline-search-speaker');
+
+  // Media Buttons
+  const btnPlay = document.getElementById('timeline-btn-play');
+  const playIcon = document.getElementById('timeline-play-icon');
+  const playText = document.getElementById('timeline-play-text');
+  const btnBackward = document.getElementById('timeline-btn-backward');
+  const btnForward = document.getElementById('timeline-btn-forward');
+  const speedSelect = document.getElementById('timeline-speed-select');
+  const zoomBtns = document.querySelectorAll('.timeline-zoom-preset-btn');
+
+  if (!headersList || !lanesBody || !rulerTrack) return;
+
+  // Clear previous content
+  headersList.innerHTML = '';
+  rulerTrack.innerHTML = '';
+  if (legendContainer) legendContainer.innerHTML = '';
+  if (inspectorTbody) inspectorTbody.innerHTML = '';
+  lanesBody.innerHTML = `
+    <div class="timeline-playhead" id="timeline-playhead">
+      <div class="timeline-playhead-handle"></div>
+      <div class="timeline-playhead-line"></div>
+    </div>
+  `;
+
+  // Time format helpers
+  const formatTimeMs = (sec) => {
+    if (isNaN(sec) || sec < 0) return '00:00.00';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec % 1) * 100);
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
+  };
+
+  const formatOffset = (seconds) => {
+    if (isNaN(seconds) || seconds < 0) return '0:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s < 10 ? '0' + s : s}`;
+  };
+
+  // Sync with actual audio player duration when metadata loads
+  if (player && player.duration && player.duration > 0 && !isNaN(player.duration)) {
+    totalDuration = player.duration;
+  }
+
+  // Populate metadata badges
+  if (audioMeta) audioMeta.textContent = `${totalDuration.toFixed(1)}s`;
+  if (turnsCount) turnsCount.textContent = `${(segments || []).length} Turns`;
+  if (turnsLabel) turnsLabel.textContent = `${(segments || []).length}`;
+  if (clockTotal) clockTotal.textContent = formatTimeMs(totalDuration);
+  if (clockCurrent) clockCurrent.textContent = formatTimeMs(player ? player.currentTime : 0);
+
+  // Media Transport Bindings
+  if (btnPlay) {
+    btnPlay.onclick = () => {
+      if (player.paused) {
+        player.play();
+      } else {
+        player.pause();
+      }
+    };
+  }
+
+  const updatePlayBtnState = () => {
+    if (!btnPlay || !playIcon || !playText) return;
+    if (player.paused) {
+      playText.textContent = 'Play Audio';
+      playIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
+    } else {
+      playText.textContent = 'Pause';
+      playIcon.innerHTML = '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>';
+    }
+  };
+
+  player.onplay = updatePlayBtnState;
+  player.onpause = updatePlayBtnState;
+  player.onended = updatePlayBtnState;
+  updatePlayBtnState();
+
+  if (btnBackward) {
+    btnBackward.onclick = () => { player.currentTime = Math.max(0, player.currentTime - 5); };
+  }
+  if (btnForward) {
+    btnForward.onclick = () => { player.currentTime = Math.min(totalDuration, player.currentTime + 5); };
+  }
+  if (speedSelect) {
+    speedSelect.onchange = (e) => { player.playbackRate = parseFloat(e.target.value); };
+  }
+
+  // Zoom Handling
+  zoomBtns.forEach(btn => {
+    btn.onclick = () => {
+      zoomBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const z = parseInt(btn.dataset.zoom) || 1;
+      if (scrollCanvas) scrollCanvas.style.width = `${z * 100}%`;
+    };
+  });
+
+  if (!segments || segments.length === 0) {
+    lanesBody.innerHTML += '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-size: 13px; font-style: italic;">No audio segment data available for this recording.</div>';
+    return;
+  }
+
+  // Group segments by unique speaker
+  const uName = (currentUserName || '').toLowerCase().trim();
+  const speakerGroups = new Map();
+
+  segments.forEach((seg, idx) => {
+    const rawSpk = (seg.speaker || 'Speaker 1').trim();
+    if (!speakerGroups.has(rawSpk)) {
+      const cleanLower = rawSpk.toLowerCase().replace(/[\[\]]/g, '').trim();
+      const isRemote = cleanLower.includes('speaker 1') || cleanLower.includes('speaker 2') || cleanLower.includes('speaker 3') || cleanLower.includes('speaker 4') || cleanLower.includes('remote') || cleanLower.includes('system') || cleanLower.includes('participant');
+      const isMe = !isRemote || (uName && cleanLower.includes(uName)) || cleanLower === 'you' || cleanLower === 'me' || cleanLower === 'local speaker';
+
+      speakerGroups.set(rawSpk, {
+        name: rawSpk,
+        isMe: isMe,
+        segments: [],
+        totalTime: 0
+      });
+    }
+    const group = speakerGroups.get(rawSpk);
+    group.segments.push({ ...seg, turnIndex: idx + 1 });
+    group.totalTime += Math.max(0, (seg.end || 0) - (seg.start || 0));
+  });
+
+  // Sort speakers: Local user (isMe) ALWAYS at Row 0 (Top Track)
+  const sortedSpeakers = Array.from(speakerGroups.values()).sort((a, b) => {
+    if (a.isMe && !b.isMe) return -1;
+    if (!a.isMe && b.isMe) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  // Harmonic Application Theme Palette for Speakers
+  const palette = [
+    { color: '#38bdf8', border: 'rgba(56, 189, 248, 0.4)', bg: 'rgba(56, 189, 248, 0.14)', textColor: 'var(--text-primary)' }, // Sky
+    { color: '#34d399', border: 'rgba(52, 211, 153, 0.4)', bg: 'rgba(52, 211, 153, 0.14)', textColor: 'var(--text-primary)' }, // Emerald
+    { color: '#fbbf24', border: 'rgba(251, 191, 36, 0.4)', bg: 'rgba(251, 191, 36, 0.14)', textColor: 'var(--text-primary)' }, // Amber
+    { color: '#f472b6', border: 'rgba(244, 114, 182, 0.4)', bg: 'rgba(244, 114, 182, 0.14)', textColor: 'var(--text-primary)' }, // Pink
+  ];
+
+  window.__currentSpeakerThemes = {};
+
+  sortedSpeakers.forEach((spk, idx) => {
+    let theme;
+    if (spk.isMe) {
+      theme = {
+        color: 'var(--accent-color, #f43f5e)',
+        border: 'var(--border-focus, #fca5b7)',
+        bg: 'var(--accent-tint, rgba(244, 63, 94, 0.15))',
+        textColor: 'var(--text-primary, #240a12)',
+        label: `${spk.name} (Mic)`
+      };
+    } else {
+      const p = palette[(idx - (sortedSpeakers.some(s => s.isMe) ? 1 : 0)) % palette.length];
+      theme = {
+        ...p,
+        label: spk.name
+      };
+    }
+    window.__currentSpeakerThemes[spk.name] = theme;
+
+    // Add to Legend
+    if (legendContainer) {
+      const pill = document.createElement('span');
+      pill.className = 'legend-pill';
+      pill.style.backgroundColor = theme.bg;
+      pill.style.borderColor = theme.border;
+      pill.style.color = theme.textColor;
+      pill.innerHTML = `<span style="width: 6px; height: 6px; border-radius: 50%; background-color: ${theme.color};"></span><span>${theme.label}</span>`;
+      legendContainer.appendChild(pill);
+    }
+  });
+
+  // Render Time Ruler Ticks
+  const numTicks = 14;
+  const tickInterval = totalDuration / numTicks;
+  for (let i = 0; i <= numTicks; i++) {
+    const timeVal = i * tickInterval;
+    const percent = (timeVal / totalDuration) * 100;
+    const tickEl = document.createElement('div');
+    tickEl.className = 'timeline-ruler-tick';
+    tickEl.style.left = `${percent}%`;
+    tickEl.innerHTML = `
+      <span class="timeline-ruler-tick-label">${formatOffset(timeVal)}</span>
+      <div class="timeline-ruler-tick-line"></div>
+    `;
+    rulerTrack.appendChild(tickEl);
+  }
+
+  // Interactive Drag-to-Scrub Functionality
+  let isScrubbing = false;
+  const handleScrub = (e) => {
+    const effectiveTotalDuration = (player && player.duration && !isNaN(player.duration) && player.duration > 0) ? player.duration : totalDuration;
+    if (!scrollCanvas || effectiveTotalDuration <= 0) return;
+    const rect = scrollCanvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const pct = Math.max(0, Math.min(1, clickX / rect.width));
+    const seekTime = pct * effectiveTotalDuration;
+    player.currentTime = seekTime;
+    
+    // Immediate visual update
+    const playhead = document.getElementById('timeline-playhead');
+    if (playhead) playhead.style.left = `${pct * 100}%`;
+    const clockCurrent = document.getElementById('timeline-clock-current');
+    if (clockCurrent) clockCurrent.textContent = formatTimeMs(seekTime);
+  };
+
+  const startScrub = (e) => {
+    isScrubbing = true;
+    handleScrub(e);
+  };
+
+  rulerTrack.onmousedown = startScrub;
+  lanesBody.onmousedown = startScrub;
+
+  window.onmousemove = (e) => {
+    if (isScrubbing) {
+      handleScrub(e);
+    }
+  };
+
+  window.onmouseup = () => {
+    if (isScrubbing) {
+      isScrubbing = false;
+    }
+  };
+
+  // Render Tracks & Segment Boxes
+  sortedSpeakers.forEach((spk, idx) => {
+    const theme = window.__currentSpeakerThemes[spk.name];
+    const talkPercent = Math.round((spk.totalTime / totalDuration) * 100);
+
+    // 1. Left Sticky Header Item
+    const headerItem = document.createElement('div');
+    headerItem.className = 'timeline-header-item';
+    headerItem.innerHTML = `
+      <div class="timeline-header-swatch" style="background-color: ${theme.color};"></div>
+      <div class="timeline-header-info">
+        <div class="timeline-header-name" title="${theme.label}">${theme.label}</div>
+        <div class="timeline-header-meta">${spk.segments.length} turns &bull; ${talkPercent}% talk</div>
+      </div>
+    `;
+    headersList.appendChild(headerItem);
+
+    // 2. Right Track Lane Row
+    const laneRow = document.createElement('div');
+    laneRow.className = 'timeline-lane-row';
+    laneRow.dataset.speaker = spk.name;
+
+    spk.segments.forEach(seg => {
+      const leftPercent = (seg.start / totalDuration) * 100;
+      const widthPercent = ((seg.end - seg.start) / totalDuration) * 100;
+
+      const box = document.createElement('div');
+      box.className = 'segment-box';
+      box.style.left = `${leftPercent}%`;
+      box.style.width = `max(1px, ${widthPercent}%)`;
+      box.style.minWidth = '1px';
+      box.style.borderRadius = '0px';
+      box.style.backgroundColor = theme.bg;
+      box.style.border = `1px solid ${theme.color}`;
+      box.dataset.start = seg.start;
+      box.dataset.end = seg.end;
+      box.dataset.speaker = spk.name;
+      box.title = `${theme.label}: ${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s (${(seg.end - seg.start).toFixed(2)}s)\n"${seg.text || ''}"`;
+
+      // Hover feedback
+      box.onmouseenter = () => {
+        if (hoverBadge && hoverText) {
+          hoverText.textContent = `${theme.label}: ${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s (${(seg.end - seg.start).toFixed(2)}s)`;
+          hoverBadge.classList.remove('hidden');
+        }
+      };
+      box.onmouseleave = () => {
+        if (hoverBadge) hoverBadge.classList.add('hidden');
+      };
+
+      // Click to seek & play
+      box.onclick = (e) => {
+        e.stopPropagation();
+        player.currentTime = seg.start;
+        player.play();
+      };
+
+      laneRow.appendChild(box);
+    });
+
+    lanesBody.appendChild(laneRow);
+  });
+
+  // Render Turn-by-Turn Inspector Table
+  if (inspectorTbody) {
+    segments.forEach((seg, idx) => {
+      const spkName = (seg.speaker || 'Speaker 1').trim();
+      const theme = window.__currentSpeakerThemes[spkName] || {
+        color: 'var(--text-muted)',
+        border: 'var(--border-subtle)',
+        bg: 'var(--bg-card-subtle)',
+        textColor: 'var(--text-primary)',
+        label: spkName
+      };
+
+      const duration = Math.max(0, seg.end - seg.start);
+      const leftPct = (seg.start / totalDuration) * 100;
+      const widthPct = Math.max((duration / totalDuration) * 100, 1);
+
+      const tr = document.createElement('tr');
+      tr.className = 'turn-table-row';
+      tr.dataset.turnIdx = idx;
+      tr.dataset.start = seg.start;
+      tr.dataset.end = seg.end;
+      tr.dataset.speaker = spkName;
+
+      tr.innerHTML = `
+        <td style="font-family: monospace; color: var(--text-muted);">#${String(idx + 1).padStart(2, '0')}</td>
+        <td>
+          <span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 10.5px; font-weight: 600; font-family: monospace; background-color: ${theme.bg}; border: 1px solid ${theme.border}; color: ${theme.textColor};">
+            <span style="width: 5px; height: 5px; border-radius: 50%; background-color: ${theme.color};"></span>
+            ${theme.label}
+          </span>
+        </td>
+        <td style="font-family: monospace; color: var(--accent-color); font-weight: 600;">${seg.start.toFixed(2)}s</td>
+        <td style="font-family: monospace; color: var(--text-muted);">${seg.end.toFixed(2)}s</td>
+        <td style="font-family: monospace; color: var(--text-secondary); font-weight: 600;">${duration.toFixed(2)}s</td>
+        <td>
+          <div class="mini-timeline-bar">
+            <div class="mini-timeline-fill" style="left: ${leftPct}%; width: ${widthPct}%; background-color: ${theme.color};"></div>
+          </div>
+        </td>
+        <td style="color: var(--text-primary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${seg.text || ''}">
+          ${seg.text || '<span style="color: var(--text-muted); font-style: italic;">(No speech text)</span>'}
+        </td>
+      `;
+
+      tr.onclick = () => {
+        player.currentTime = seg.start;
+        player.play();
+      };
+
+      inspectorTbody.appendChild(tr);
+    });
+  }
+
+  // Filter input logic
+  if (searchInput) {
+    searchInput.oninput = (e) => {
+      const q = e.target.value.toLowerCase().trim();
+      document.querySelectorAll('.turn-table-row').forEach(row => {
+        const spk = (row.dataset.speaker || '').toLowerCase();
+        const text = (row.querySelector('td:last-child')?.textContent || '').toLowerCase();
+        if (!q || spk.includes(q) || text.includes(q)) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
+    };
+  }
+}
+
+function handleLiveMeetingTurn(turn) {
+  if (!turn || !turn.id) return;
+  const turnsList = document.getElementById('meetings-live-turns-list');
+  const waitingText = document.getElementById('meetings-live-waiting-text');
+  if (waitingText) waitingText.style.display = 'none';
+  if (!turnsList) return;
+
+  const isMe = turn.channel === 'mic';
+  const formatOffset = (seconds) => {
+    if (isNaN(seconds) || seconds < 0) return '0:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s < 10 ? '0' + s : s}`;
+  };
+
+  let turnEl = document.getElementById(`live-${turn.id}`);
+  if (!turnEl) {
+    turnEl = document.createElement('div');
+    turnEl.id = `live-${turn.id}`;
+    turnEl.className = `live-turn-item ${isMe ? 'is-me' : 'is-remote'}`;
+
+    const header = document.createElement('div');
+    header.className = 'live-turn-header';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'live-turn-avatar';
+    avatar.textContent = isMe ? 'ME' : (turn.speaker_name ? turn.speaker_name.slice(0, 2).toUpperCase() : 'SP');
+    avatar.style.backgroundColor = isMe ? '#57bf7c' : '#2f80ed';
+
+    const spkSpan = document.createElement('span');
+    spkSpan.className = 'live-turn-speaker';
+    spkSpan.textContent = turn.speaker_name || (isMe ? 'You' : 'Remote Speaker');
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'live-turn-time';
+    timeSpan.textContent = formatOffset(turn.start_time);
+
+    header.appendChild(avatar);
+    header.appendChild(spkSpan);
+    header.appendChild(timeSpan);
+    turnEl.appendChild(header);
+
+    const textEl = document.createElement('div');
+    textEl.className = 'live-turn-text';
+    turnEl.appendChild(textEl);
+
+    turnsList.appendChild(turnEl);
+  }
+
+  const textEl = turnEl.querySelector('.live-turn-text');
+  if (textEl) {
+    textEl.textContent = turn.text;
+    if (!turn.is_final) {
+      textEl.classList.add('interim');
+    } else {
+      textEl.classList.remove('interim');
+    }
+  }
+
+  // Smooth autoscroll down
+  turnsList.scrollTop = turnsList.scrollHeight;
+}
+
 async function startMeetingRecording() {
+  console.log("[MEETING FRONTEND] startMeetingRecording clicked");
   const token = currentConfig ? currentConfig.session_token : null;
   if (!token) {
+    console.warn("[MEETING FRONTEND] No session token found. Aborting.");
     showToast("Please sign in to record meeting notes.", "Sign-in Required", "info");
     return;
   }
@@ -2240,11 +2888,36 @@ async function startMeetingRecording() {
   showRecordingView();
   const titleInput = document.getElementById('meeting-title-input');
   titleInput.value = '';
-  
+
+  const turnsList = document.getElementById('meetings-live-turns-list');
+  if (turnsList) {
+    turnsList.innerHTML = `
+      <div id="meetings-live-waiting-text" class="live-waiting-text">
+        Listening for speech from microphone and remote attendees...
+      </div>
+    `;
+  }
+  const badge = document.getElementById('meetings-live-status-badge');
+  if (badge) {
+    badge.textContent = "Connecting...";
+    badge.style.color = "#888";
+  }
+
   const timerEl = document.getElementById('meetings-timer');
   timerEl.textContent = '00:00:00';
   meetingSeconds = 0;
-  
+
+  try {
+    console.log("[MEETING FRONTEND] Invoking start_meeting command on Tauri backend...");
+    currentMeetingFile = await invoke('start_meeting', { title: "Recording..." });
+    console.log("[MEETING FRONTEND] start_meeting returned successfully. Filepath:", currentMeetingFile);
+  } catch (err) {
+    console.error("[MEETING FRONTEND ERROR] Failed to start meeting recording:", err);
+    showToast(String(err), "Meeting Start Error", "error");
+    cancelMeetingRecording();
+    return;
+  }
+
   timerInterval = setInterval(() => {
     meetingSeconds++;
     const hrs = String(Math.floor(meetingSeconds / 3600)).padStart(2, '0');
@@ -2258,25 +2931,19 @@ async function startMeetingRecording() {
       const micFill = document.getElementById('mic-level-fill');
       const loopbackFill = document.getElementById('loopback-level-fill');
       const [mic, loopback] = await invoke('get_meeting_levels');
-      const micPercent = Math.min(100, mic / 10); // normalize 0-1000 to 0-100%
-      const loopbackPercent = Math.min(100, loopback / 10);
+      // Perceptual dynamic scaling (0-1000 RMS -> 0-100% meter bar)
+      const micPercent = mic > 0 ? Math.min(100, Math.max(3, Math.round(Math.pow(mic / 250, 0.5) * 100))) : 0;
+      const loopbackPercent = loopback > 0 ? Math.min(100, Math.max(3, Math.round(Math.pow(loopback / 250, 0.5) * 100))) : 0;
       if (micFill) micFill.style.width = `${micPercent}%`;
       if (loopbackFill) loopbackFill.style.width = `${loopbackPercent}%`;
     } catch (e) {
-      console.error(e);
+      console.error("[MEETING FRONTEND ERROR] get_meeting_levels failed:", e);
     }
-  }, 100);
-
-  try {
-    currentMeetingFile = await invoke('start_meeting', { title: "Recording..." });
-  } catch (err) {
-    console.error(err);
-    alert("Failed to start meeting: " + err);
-    cancelMeetingRecording();
-  }
+  }, 80);
 }
 
 async function stopMeetingRecording() {
+  console.log("[MEETING FRONTEND] stopMeetingRecording clicked");
   clearInterval(timerInterval);
   clearInterval(recordingInterval);
   
@@ -2287,17 +2954,33 @@ async function stopMeetingRecording() {
   if (!title) {
     title = `Meeting on ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
   }
+  console.log("[MEETING FRONTEND] Stopping meeting with title:", title);
 
   try {
-    const oggPath = await invoke('stop_meeting');
-    const resultJson = await invoke('upload_meeting', { title, filepath: oggPath });
-    const m = JSON.parse(resultJson);
-    
-    showDashboardView();
-    loadMeetings();
-    viewMeeting(m.id);
+    console.log("[MEETING FRONTEND] Invoking stop_meeting command on Tauri backend...");
+    const res = await invoke('stop_meeting');
+    console.log("[MEETING FRONTEND] stop_meeting returned:", res);
+    let m = null;
+    try {
+      m = JSON.parse(res);
+      console.log("[MEETING FRONTEND] Parsed meeting object from stop_meeting:", m);
+    } catch (_) {
+      console.log("[MEETING FRONTEND] stop_meeting returned audio filepath. Uploading audio to server via upload_meeting...", res);
+      const resultJson = await invoke('upload_meeting', { title, filepath: res });
+      console.log("[MEETING FRONTEND] upload_meeting returned:", resultJson);
+      m = JSON.parse(resultJson);
+    }
+
+    if (m && m.id) {
+      console.log("[MEETING FRONTEND] Successfully finalized meeting note! ID:", m.id);
+      showDashboardView();
+      loadMeetings();
+      viewMeeting(m.id);
+    } else {
+      throw new Error("Invalid meeting response from server");
+    }
   } catch (err) {
-    console.error(err);
+    console.error("[MEETING FRONTEND ERROR] Failed to finalize meeting note:", err);
     alert("Failed to finalize meeting note: " + err);
     showDashboardView();
     loadMeetings();
@@ -2305,6 +2988,7 @@ async function stopMeetingRecording() {
 }
 
 async function cancelMeetingRecording() {
+  console.log("[MEETING FRONTEND] cancelMeetingRecording called");
   clearInterval(timerInterval);
   clearInterval(recordingInterval);
   try {

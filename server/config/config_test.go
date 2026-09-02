@@ -13,8 +13,8 @@ func TestModelsConfigDefaultAndFallbacks(t *testing.T) {
 
 	pCfg := ProviderConfig{Models: cfg}
 	batchOrder := pCfg.GetActiveBatchFallbackOrder()
-	if len(batchOrder) < 2 || batchOrder[0] != "bedrock_voxtral_small_24b" {
-		t.Errorf("Expected batch order to start with 'bedrock_voxtral_small_24b'; got %v", batchOrder)
+	if len(batchOrder) < 2 || batchOrder[0] != "deepinfra_whisper_large_v3_turbo" {
+		t.Errorf("Expected batch order to start with 'deepinfra_whisper_large_v3_turbo'; got %v", batchOrder)
 	}
 
 	streamingOrder := pCfg.GetActiveStreamingFallbackOrder()
@@ -90,7 +90,7 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 	active := ConfigManager.Get()
 
 	batchOrder := active.GetActiveBatchFallbackOrder()
-	if len(batchOrder) < 2 || batchOrder[0] != "bedrock_voxtral_small_24b" {
-		t.Fatalf("Expected batch order to start with bedrock_voxtral_small_24b; got %v", batchOrder)
+	if len(batchOrder) < 2 || batchOrder[0] != "deepinfra_whisper_large_v3_turbo" {
+		t.Fatalf("Expected batch order to start with deepinfra_whisper_large_v3_turbo; got %v", batchOrder)
 	}
 }
