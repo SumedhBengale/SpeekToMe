@@ -67,6 +67,94 @@ pub fn simulate_paste() {
 }
 
 #[cfg(target_os = "windows")]
+pub fn simulate_copy() {
+    release_modifier_keys();
+    unsafe {
+        let mut inputs = [std::mem::zeroed::<INPUT>(); 4];
+
+        // 1. Ctrl Down
+        inputs[0].r#type = INPUT_KEYBOARD;
+        let mut ki0: KEYBDINPUT = std::mem::zeroed();
+        ki0.wVk = 0x11; // VK_CONTROL
+        inputs[0].Anonymous.ki = ki0;
+
+        // 2. C Down
+        inputs[1].r#type = INPUT_KEYBOARD;
+        let mut ki1: KEYBDINPUT = std::mem::zeroed();
+        ki1.wVk = 0x43; // 'C'
+        inputs[1].Anonymous.ki = ki1;
+
+        // 3. C Up
+        inputs[2].r#type = INPUT_KEYBOARD;
+        let mut ki2: KEYBDINPUT = std::mem::zeroed();
+        ki2.wVk = 0x43;
+        ki2.dwFlags = KEYEVENTF_KEYUP;
+        inputs[2].Anonymous.ki = ki2;
+
+        // 4. Ctrl Up
+        inputs[3].r#type = INPUT_KEYBOARD;
+        let mut ki3: KEYBDINPUT = std::mem::zeroed();
+        ki3.wVk = 0x11;
+        ki3.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].Anonymous.ki = ki3;
+
+        send_inputs(&inputs);
+    }
+}
+
+pub fn get_selected_text() -> Option<String> {
+    crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    // 1. Backup existing clipboard content
+    let original_clipboard = match Clipboard::new() {
+        Ok(mut c) => c.get_text().ok(),
+        Err(_) => None,
+    };
+
+    // 2. Clear clipboard text so we can reliably detect fresh selection
+    if let Ok(mut c) = Clipboard::new() {
+        let _ = c.clear();
+    }
+
+    // 3. Release physical modifiers so SendInput Ctrl+C is clean
+    #[cfg(target_os = "windows")]
+    {
+        release_modifier_keys();
+        thread::sleep(Duration::from_millis(30));
+        simulate_copy();
+    }
+
+    // 4. Poll clipboard up to 350ms for copied selection
+    let mut selected: Option<String> = None;
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_millis(350) {
+        thread::sleep(Duration::from_millis(25));
+        if let Ok(mut c) = Clipboard::new() {
+            if let Ok(text) = c.get_text() {
+                if !text.is_empty() {
+                    selected = Some(text);
+                    break;
+                }
+            }
+        }
+    }
+
+    // 5. If nothing was selected, restore original clipboard
+    if selected.is_none() {
+        if let Some(orig) = original_clipboard {
+            if let Ok(mut c) = Clipboard::new() {
+                let _ = c.set_text(orig);
+            }
+        }
+    }
+
+    thread::sleep(Duration::from_millis(60));
+    crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    selected
+}
+
+#[cfg(target_os = "windows")]
 pub fn simulate_single_key(vk: u32) {
     unsafe {
         let mut inputs = [std::mem::zeroed::<INPUT>(); 2];
@@ -116,11 +204,32 @@ pub fn simulate_key_up(vk: u32) {
 }
 
 #[cfg(target_os = "windows")]
+pub fn suppress_win_key_start_menu() {
+    unsafe {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP};
+        crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Virtual key 0x07 is unassigned in Windows. Sending it tells the Windows Shell
+        // that a key combination was executed with the Windows key, suppressing the Start Menu.
+        keybd_event(0x07, 0, 0, 0);
+        keybd_event(0x07, 0, KEYEVENTF_KEYUP, 0);
+        crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn suppress_win_key_start_menu() {}
+
+#[cfg(target_os = "windows")]
 pub fn release_modifier_keys() {
     unsafe {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY};
         
         crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
+        
+        // 1. Mask the Windows key BEFORE releasing so the Start Menu is never triggered
+        keybd_event(0x07, 0, 0, 0);
+        keybd_event(0x07, 0, KEYEVENTF_KEYUP, 0);
+
         // Generic Control
         keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0);
         // Left Control
@@ -137,13 +246,20 @@ pub fn release_modifier_keys() {
         keybd_event(0xA5, 0, KEYEVENTF_KEYUP, 0);
         // Shift
         keybd_event(0x10, 0, KEYEVENTF_KEYUP, 0);
+        // Left Shift
         keybd_event(0xA0, 0, KEYEVENTF_KEYUP, 0);
+        // Right Shift (Extended)
         keybd_event(0xA1, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
         keybd_event(0xA1, 0, KEYEVENTF_KEYUP, 0);
         // Windows Key
         keybd_event(0x5B, 0, KEYEVENTF_KEYUP, 0);
         keybd_event(0x5C, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
         keybd_event(0x5C, 0, KEYEVENTF_KEYUP, 0);
+
+        // 2. Mask again after release to ensure Windows Shell state is completely neutral
+        keybd_event(0x07, 0, 0, 0);
+        keybd_event(0x07, 0, KEYEVENTF_KEYUP, 0);
+
         crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -152,38 +268,67 @@ pub fn release_modifier_keys() {
 pub fn simulate_typing(text: &str) {
     release_modifier_keys();
     unsafe {
-        let utf16_chars: Vec<u16> = text.encode_utf16().collect();
-        if utf16_chars.is_empty() {
-            return;
-        }
-
         let mut chunk_inputs: Vec<INPUT> = Vec::with_capacity(32);
 
-        for &c in &utf16_chars {
-            let mut in_down: INPUT = std::mem::zeroed();
-            in_down.r#type = INPUT_KEYBOARD;
-            let mut ki0: KEYBDINPUT = std::mem::zeroed();
-            ki0.wVk = 0;
-            ki0.wScan = c;
-            ki0.dwFlags = KEYEVENTF_UNICODE;
-            in_down.Anonymous.ki = ki0;
+        for ch in text.chars() {
+            if ch == '\r' {
+                continue;
+            }
+            if ch == '\n' {
+                // Flush any buffered characters first before sending Enter
+                if !chunk_inputs.is_empty() {
+                    send_inputs(&chunk_inputs);
+                    chunk_inputs.clear();
+                }
 
-            let mut in_up: INPUT = std::mem::zeroed();
-            in_up.r#type = INPUT_KEYBOARD;
-            let mut ki1: KEYBDINPUT = std::mem::zeroed();
-            ki1.wVk = 0;
-            ki1.wScan = c;
-            ki1.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-            in_up.Anonymous.ki = ki1;
+                // Send true physical VK_RETURN (Enter key)
+                let mut in_down: INPUT = std::mem::zeroed();
+                in_down.r#type = INPUT_KEYBOARD;
+                let mut ki0: KEYBDINPUT = std::mem::zeroed();
+                ki0.wVk = 0x0D; // VK_RETURN
+                ki0.dwFlags = 0;
+                in_down.Anonymous.ki = ki0;
 
-            chunk_inputs.push(in_down);
-            chunk_inputs.push(in_up);
+                let mut in_up: INPUT = std::mem::zeroed();
+                in_up.r#type = INPUT_KEYBOARD;
+                let mut ki1: KEYBDINPUT = std::mem::zeroed();
+                ki1.wVk = 0x0D;
+                ki1.dwFlags = KEYEVENTF_KEYUP;
+                in_up.Anonymous.ki = ki1;
 
-            let ch = char::from_u32(c as u32).unwrap_or(' ');
+                send_inputs(&[in_down, in_up]);
+                thread::sleep(Duration::from_millis(15));
+                continue;
+            }
+
+            let mut utf16_buf = [0u16; 2];
+            let encoded = ch.encode_utf16(&mut utf16_buf);
+
+            for &c in encoded.iter() {
+                let mut in_down: INPUT = std::mem::zeroed();
+                in_down.r#type = INPUT_KEYBOARD;
+                let mut ki0: KEYBDINPUT = std::mem::zeroed();
+                ki0.wVk = 0;
+                ki0.wScan = c;
+                ki0.dwFlags = KEYEVENTF_UNICODE;
+                in_down.Anonymous.ki = ki0;
+
+                let mut in_up: INPUT = std::mem::zeroed();
+                in_up.r#type = INPUT_KEYBOARD;
+                let mut ki1: KEYBDINPUT = std::mem::zeroed();
+                ki1.wVk = 0;
+                ki1.wScan = c;
+                ki1.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+                in_up.Anonymous.ki = ki1;
+
+                chunk_inputs.push(in_down);
+                chunk_inputs.push(in_up);
+            }
+
             let is_space = ch == ' ';
-            let is_punct = matches!(ch, '.' | ',' | '!' | '?' | ';' | ':' | '\n');
+            let is_punct = matches!(ch, '.' | ',' | '!' | '?' | ';' | ':');
 
-            // Flush chunk at word boundaries, punctuation, or every ~8 characters
+            // Flush chunk at word boundaries, punctuation, or every ~16 characters
             if is_space || is_punct || chunk_inputs.len() >= 16 {
                 send_inputs(&chunk_inputs);
                 chunk_inputs.clear();
@@ -268,10 +413,15 @@ pub fn simulate_backspaces(count: usize) {
     println!("[KEYBOARD] simulate_backspaces: {}", count);
 }
 
+fn normalize_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
 // ==========================================
 // Shared Clipboard Injection Logic
 // ==========================================
 pub fn paste_text(text: &str) {
+    let normalized = normalize_newlines(text);
     let delays = [0, 50, 150];
     let mut clipboard_success = false;
 
@@ -290,7 +440,7 @@ pub fn paste_text(text: &str) {
 
         let original_text = ctx.get_text().ok();
 
-        if let Err(e) = ctx.set_text(text.to_owned()) {
+        if let Err(e) = ctx.set_text(normalized.clone()) {
             eprintln!("[CLIPBOARD WARNING] Attempt {} failed to set clipboard text: {:?}", attempt + 1, e);
             continue;
         }
@@ -324,5 +474,71 @@ pub fn paste_text(text: &str) {
             "Another application locked the clipboard. To bypass clipboard locks, enable \"Keystroke Simulation (Typing Mode)\" in Settings.",
             crate::win32::NotificationLevel::Warning,
         );
+    }
+}
+
+/// Pastes transformed text to replace the active selection.
+/// Crucially, this leaves the transformed text in the clipboard permanently
+/// so that if the selection was in a read-only context (e.g. a browser webpage),
+/// the user can paste it anywhere they want.
+pub fn paste_transformed_text(text: &str) {
+    let normalized = normalize_newlines(text);
+    let delays = [0, 50, 150];
+    let mut clipboard_success = false;
+
+    for (attempt, &delay_ms) in delays.iter().enumerate() {
+        if delay_ms > 0 {
+            thread::sleep(Duration::from_millis(delay_ms));
+        }
+
+        let mut ctx = match Clipboard::new() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[CLIPBOARD WARNING] Attempt {} failed to open clipboard: {:?}", attempt + 1, e);
+                continue;
+            }
+        };
+
+        if let Err(e) = ctx.set_text(normalized.clone()) {
+            eprintln!("[CLIPBOARD WARNING] Attempt {} failed to set clipboard text: {:?}", attempt + 1, e);
+            continue;
+        }
+
+        clipboard_success = true;
+        thread::sleep(Duration::from_millis(80));
+        simulate_paste();
+        // Intentionally DO NOT restore previous clipboard!
+        // The transformed text is kept in the user's clipboard as a fallback.
+        break;
+    }
+
+    if !clipboard_success {
+        eprintln!("[CLIPBOARD ERROR] All clipboard paste attempts failed for transformed text.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clipboard_lifecycle() {
+        if let Ok(mut c) = Clipboard::new() {
+            let sample = "SpeekToMe Test Selection";
+            let _ = c.set_text(sample.to_string());
+            assert_eq!(c.get_text().ok(), Some(sample.to_string()));
+            let _ = c.clear();
+            assert_eq!(c.get_text().unwrap_or_default(), "");
+        }
+    }
+
+    #[test]
+    fn test_normalize_newlines() {
+        let unix = "Line 1\nLine 2\n\nLine 3";
+        let expected = "Line 1\r\nLine 2\r\n\r\nLine 3";
+        assert_eq!(normalize_newlines(unix), expected);
+
+        let windows = "Line 1\r\nLine 2\r\n\r\nLine 3";
+        assert_eq!(normalize_newlines(windows), expected);
     }
 }

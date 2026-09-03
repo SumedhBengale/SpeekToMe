@@ -211,6 +211,11 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     let mut is_in_speech = false;
                     let mut is_aborted = false;
 
+                    let mut last_sound_time = std::time::Instant::now();
+                    let mut silence_countdown_active = false;
+                    let mut last_countdown_sec: Option<u64> = None;
+                    let mut had_ever_spoken = false;
+
                     match handle.mode {
                         crate::stream::NegotiatedStreamMode::ContinuousStream => {
                             let frame_samples = 8960; // 560ms @ 16kHz (aligned with native real-time ASR acoustic geometry)
@@ -226,6 +231,43 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                         break;
                                     }
                                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                        let current_vol = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed);
+                                        let is_active_sound = current_vol >= 6;
+                                        if is_active_sound {
+                                            last_sound_time = std::time::Instant::now();
+                                            had_ever_spoken = true;
+                                            if silence_countdown_active {
+                                                silence_countdown_active = false;
+                                                last_countdown_sec = None;
+                                                let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
+                                                if is_cmd {
+                                                    crate::win32::set_preview_text("✨ Command Mode (Listening...)");
+                                                } else {
+                                                    crate::win32::set_preview_text("");
+                                                }
+                                            }
+                                        } else {
+                                            let silence_dur = last_sound_time.elapsed();
+                                            if silence_dur >= std::time::Duration::from_secs(15) {
+                                                println!("[AUDIO STREAM] 15 seconds of silence detected. Auto-stopping recording...");
+                                                let mut st = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
+                                                st.is_key_held = false;
+                                                st.press_time = None;
+                                                st.stop_tx = None;
+                                                if !had_ever_spoken {
+                                                    is_aborted = true;
+                                                }
+                                                break;
+                                            } else if silence_dur >= std::time::Duration::from_secs(10) {
+                                                let remaining = 15 - silence_dur.as_secs();
+                                                if last_countdown_sec != Some(remaining) && remaining >= 1 {
+                                                    last_countdown_sec = Some(remaining);
+                                                    silence_countdown_active = true;
+                                                    crate::win32::set_preview_text(&format!("Silence detected — stopping in {}s...", remaining));
+                                                }
+                                            }
+                                        }
+
                                         let new_raw_samples: Vec<i16> = {
                                             if let Ok(buf) = samples_buf.lock() {
                                                 if buf.len() > raw_processed_len {
@@ -272,6 +314,43 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                         break;
                                     }
                                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                        let current_vol = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed);
+                                        let is_active_sound = is_in_speech || current_vol >= 6;
+                                        if is_active_sound {
+                                            last_sound_time = std::time::Instant::now();
+                                            had_ever_spoken = true;
+                                            if silence_countdown_active {
+                                                silence_countdown_active = false;
+                                                last_countdown_sec = None;
+                                                let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
+                                                if is_cmd {
+                                                    crate::win32::set_preview_text("✨ Command Mode (Listening...)");
+                                                } else {
+                                                    crate::win32::set_preview_text("");
+                                                }
+                                            }
+                                        } else {
+                                            let silence_dur = last_sound_time.elapsed();
+                                            if silence_dur >= std::time::Duration::from_secs(15) {
+                                                println!("[AUDIO CHUNKED] 15 seconds of silence detected. Auto-stopping recording...");
+                                                let mut st = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
+                                                st.is_key_held = false;
+                                                st.press_time = None;
+                                                st.stop_tx = None;
+                                                if !had_ever_spoken {
+                                                    is_aborted = true;
+                                                }
+                                                break;
+                                            } else if silence_dur >= std::time::Duration::from_secs(10) {
+                                                let remaining = 15 - silence_dur.as_secs();
+                                                if last_countdown_sec != Some(remaining) && remaining >= 1 {
+                                                    last_countdown_sec = Some(remaining);
+                                                    silence_countdown_active = true;
+                                                    crate::win32::set_preview_text(&format!("Silence detected — stopping in {}s...", remaining));
+                                                }
+                                            }
+                                        }
+
                                         // Incrementally grab ONLY newly arrived raw samples
                                         let new_raw_samples: Vec<i16> = {
                                             if let Ok(buf) = samples_buf.lock() {
@@ -377,6 +456,11 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     CURRENT_VOLUME.store(0, Ordering::Relaxed);
                     println!("Recording stopped.");
 
+                    let (is_command_mode, selected_text) = {
+                        let state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
+                        (state.is_command_mode, state.selected_text.clone())
+                    };
+
                     if !is_aborted {
                         crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
 
@@ -433,8 +517,22 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                             Ok(Ok(final_result)) => {
                                 println!("[STREAM SUCCESS] Live streaming completed. Final text: {}", final_result.text);
                                 let trimmed = final_result.text.trim().to_string();
-                                if !trimmed.is_empty() {
+                                let interim = crate::win32::get_preview_text();
+                                let interim_trimmed = interim.trim().to_string();
+
+                                let final_words = trimmed.split_whitespace().count();
+                                let interim_words = interim_trimmed.split_whitespace().count();
+
+                                // Truncation guard: if final result dropped more than 40% of interim words (when interim >= 6 words),
+                                // keep the fuller interim transcript to avoid losing sentences.
+                                if interim_words >= 6 && final_words < (interim_words * 6) / 10 {
+                                    println!("[STREAM TRUNCATION GUARD] Final text ({} words) dropped substantial text vs interim ({} words). Keeping interim transcript to prevent loss.",
+                                        final_words, interim_words);
+                                    Some(interim_trimmed)
+                                } else if !trimmed.is_empty() {
                                     Some(trimmed)
+                                } else if !interim_trimmed.is_empty() {
+                                    Some(interim_trimmed)
                                 } else {
                                     None
                                 }
@@ -461,24 +559,159 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                             }
                         };
 
+
+                        let (api_url, session_token) = {
+                            let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                            (
+                                cfg.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
+                                cfg.session_token.clone().unwrap_or_default(),
+                            )
+                        };
+
                         if let Some(normalized) = final_text_to_inject {
                             crate::win32::set_preview_text(&normalized);
 
-                            let typing_mode = {
-                                let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                                cfg.typing_mode
-                            };
+                            if is_command_mode {
+                                println!("\n=======================================================");
+                                println!("✨ [COMMAND MODE COMPLETED — EXECUTING LLM TRANSFORMATION]");
+                                println!("Target Selected Text:\n{}", selected_text.as_deref().unwrap_or("(none)"));
+                                println!("-------------------------------------------------------");
+                                println!("Spoken User Command: \"{}\"", normalized);
+                                println!("=======================================================\n");
 
-                            println!("[STREAM INJECTION] Single-shot inject (typing_mode: {}): {}", typing_mode, normalized);
-                            if typing_mode {
-                                crate::keyboard::simulate_typing(&normalized);
+                                // Dynamic word limit check
+                                let max_words = crate::get_transform_word_limit();
+                                if let Some(ref target) = selected_text {
+                                    let word_count = target.split_whitespace().count();
+                                    if word_count > max_words {
+                                        println!("[COMMAND MODE WARNING] Selected text exceeds {} words ({} words).", max_words, word_count);
+                                        crate::win32::set_preview_text(&format!("⚠️ Text exceeds {} words", max_words));
+                                        crate::win32::show_tray_notification(
+                                            "SpeekTo.Me — Text Too Long",
+                                            &format!("Text longer than {} words is not supported at the moment.", max_words),
+                                            crate::win32::NotificationLevel::Warning,
+                                        );
+                                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                                        crate::win32::hide_overlay();
+                                        crate::win32::hide_preview();
+                                        return;
+                                    }
+                                }
+
+                                let target_text = selected_text.unwrap_or_default();
+                                let has_target = !target_text.trim().is_empty();
+
+                                crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
+                                if has_target {
+                                    crate::win32::set_preview_text("✨ Transforming text...");
+                                } else {
+                                    crate::win32::set_preview_text("✨ Generating...");
+                                }
+
+                                let api_url_clone = api_url.clone();
+                                let token_clone = session_token.clone();
+                                let target_clone = target_text;
+                                let cmd_clone = normalized.clone();
+
+                                std::thread::spawn(move || {
+                                    let rt = match tokio::runtime::Builder::new_current_thread()
+                                        .enable_all()
+                                        .build()
+                                    {
+                                        Ok(r) => r,
+                                        Err(e) => {
+                                            eprintln!("[TRANSFORM ERROR] Failed to create runtime: {}", e);
+                                            crate::win32::hide_overlay();
+                                            crate::win32::hide_preview();
+                                            return;
+                                        }
+                                    };
+
+                                    match rt.block_on(crate::api::transform_text(
+                                        &api_url_clone,
+                                        &token_clone,
+                                        &target_clone,
+                                        &cmd_clone,
+                                    )) {
+                                        Ok(transformed) => {
+                                            println!("\n=======================================================");
+                                            println!("✨ [COMMAND MODE — LLM TRANSFORMATION COMPLETED]");
+                                            println!("Transformed Output ({} characters):", transformed.len());
+                                            println!("-------------------------------------------------------");
+                                            println!("{}", transformed);
+                                            println!("=======================================================\n");
+
+                                            crate::win32::set_preview_text("✨ Done!");
+
+                                            let typing_mode = {
+                                                let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                                                cfg.typing_mode
+                                            };
+
+                                            if typing_mode {
+                                                crate::keyboard::simulate_typing(&transformed);
+                                            } else {
+                                                crate::keyboard::paste_transformed_text(&transformed);
+                                            }
+
+                                            let (notify_title, notify_msg) = if has_target {
+                                                (
+                                                    "SpeekTo.Me — Transformed Text Ready",
+                                                    "Transformed text replaced selection and is copied to clipboard.",
+                                                )
+                                            } else {
+                                                (
+                                                    "SpeekTo.Me — AI Response Ready",
+                                                    "AI generated text inserted and is copied to clipboard.",
+                                                )
+                                            };
+
+                                            crate::win32::show_tray_notification(
+                                                notify_title,
+                                                notify_msg,
+                                                crate::win32::NotificationLevel::Info,
+                                            );
+
+                                            if let Some(app) = crate::TAURI_APP.get() {
+                                                use tauri::Emitter;
+                                                let _ = app.emit("command-transformed", transformed);
+                                            }
+
+                                            std::thread::sleep(std::time::Duration::from_millis(800));
+                                            crate::win32::hide_overlay();
+                                            crate::win32::hide_preview();
+                                        }
+                                        Err(err) => {
+                                            eprintln!("[TRANSFORM ERROR] {}", err);
+                                            crate::win32::set_preview_text("⚠️ Transformation failed");
+                                            crate::win32::show_tray_notification(
+                                                "SpeekTo.Me — Transformation Failed",
+                                                &err,
+                                                crate::win32::NotificationLevel::Warning,
+                                            );
+                                            std::thread::sleep(std::time::Duration::from_millis(1500));
+                                            crate::win32::hide_overlay();
+                                            crate::win32::hide_preview();
+                                        }
+                                    }
+                                });
                             } else {
-                                crate::keyboard::paste_text(&normalized);
-                            }
+                                let typing_mode = {
+                                    let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                                    cfg.typing_mode
+                                };
 
-                            if let Some(app) = crate::TAURI_APP.get() {
-                                use tauri::Emitter;
-                                let _ = app.emit("dictation-transcribed", normalized.clone());
+                                println!("[STREAM INJECTION] Single-shot inject (typing_mode: {}): {}", typing_mode, normalized);
+                                if typing_mode {
+                                    crate::keyboard::simulate_typing(&normalized);
+                                } else {
+                                    crate::keyboard::paste_text(&normalized);
+                                }
+
+                                if let Some(app) = crate::TAURI_APP.get() {
+                                    use tauri::Emitter;
+                                    let _ = app.emit("dictation-transcribed", normalized.clone());
+                                }
                             }
                         } else {
                             // If no text could be injected, notify the user if an error occurred
@@ -519,15 +752,78 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     } else {
                         println!("Recording aborted and discarded.");
                     }
-                    crate::win32::hide_overlay();
-                    crate::win32::hide_preview();
+                    if !is_command_mode {
+                        crate::win32::hide_overlay();
+                        crate::win32::hide_preview();
+                    }
                     crate::win32::play_chime(false);
                     return;
                 }
             }
 
-            // Fallback / standard batch mode: Wait for key release/abort signal
-            if let Ok(true) = rx.recv() {
+            // Fallback / standard batch mode: Wait for key release/abort signal with 15s silence detection
+            let mut last_sound_time = std::time::Instant::now();
+            let mut silence_countdown_active = false;
+            let mut last_countdown_sec: Option<u64> = None;
+            let mut had_ever_spoken = false;
+            let mut batch_aborted = false;
+
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(true) => {
+                        // Hotkey released normally
+                        break;
+                    }
+                    Ok(false) => {
+                        batch_aborted = true;
+                        break;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        let current_vol = CURRENT_VOLUME.load(Ordering::Relaxed);
+                        let is_active_sound = current_vol >= 6;
+                        if is_active_sound {
+                            last_sound_time = std::time::Instant::now();
+                            had_ever_spoken = true;
+                            if silence_countdown_active {
+                                silence_countdown_active = false;
+                                last_countdown_sec = None;
+                                let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
+                                if is_cmd {
+                                    crate::win32::set_preview_text("✨ Command Mode (Listening...)");
+                                } else {
+                                    crate::win32::set_preview_text("");
+                                }
+                            }
+                        } else {
+                            let silence_dur = last_sound_time.elapsed();
+                            if silence_dur >= std::time::Duration::from_secs(15) {
+                                println!("[AUDIO BATCH] 15 seconds of silence detected. Auto-stopping recording...");
+                                let mut st = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
+                                st.is_key_held = false;
+                                st.press_time = None;
+                                st.stop_tx = None;
+                                if !had_ever_spoken {
+                                    batch_aborted = true;
+                                }
+                                break;
+                            } else if silence_dur >= std::time::Duration::from_secs(10) {
+                                let remaining = 15 - silence_dur.as_secs();
+                                if last_countdown_sec != Some(remaining) && remaining >= 1 {
+                                    last_countdown_sec = Some(remaining);
+                                    silence_countdown_active = true;
+                                    crate::win32::set_preview_text(&format!("Silence detected — stopping in {}s...", remaining));
+                                }
+                            }
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        batch_aborted = true;
+                        break;
+                    }
+                }
+            }
+
+            if !batch_aborted {
                 // Drop stream to stop recording
                 drop(s);
                 CURRENT_VOLUME.store(0, Ordering::Relaxed);

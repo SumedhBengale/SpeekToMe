@@ -361,6 +361,7 @@ func (a *App) HandleAuthMe(w http.ResponseWriter, r *http.Request) {
 		"is_admin":              user.IsAdmin == 1,
 		"languages":             user.Languages,
 		"notification":          notificationStr,
+		"transform_input_tokens": config.ConfigManager.GetTransformInputWordLimit(),
 	})
 }
 

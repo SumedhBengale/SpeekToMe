@@ -12,7 +12,7 @@ pub mod vad;
 pub mod lang;
 
 use std::sync::{Mutex, OnceLock};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::thread;
 use zeroize::Zeroize;
 
@@ -37,6 +37,15 @@ pub static ACTIVE_PILL_BG_COLOR: AtomicU32 = AtomicU32::new(0x27221F);
 pub static ACTIVE_PILL_WAVE_COLOR: AtomicU32 = AtomicU32::new(0x57BF7C);
 pub static ACTIVE_SOUND_FEEDBACK: AtomicBool = AtomicBool::new(true);
 pub static ACTIVE_HAS_SESSION_TOKEN: AtomicBool = AtomicBool::new(false);
+pub static TRANSFORM_INPUT_WORD_LIMIT: AtomicUsize = AtomicUsize::new(10000);
+
+pub fn get_transform_word_limit() -> usize {
+    TRANSFORM_INPUT_WORD_LIMIT.load(Ordering::Relaxed)
+}
+
+pub fn set_transform_word_limit(limit: usize) {
+    TRANSFORM_INPUT_WORD_LIMIT.store(limit, Ordering::Relaxed);
+}
 
 pub fn sync_active_config_atomics(config: &AppConfig) {
     ACTIVE_HOTKEY_COMBO.store(config::parse_hotkey_combo(&config.hotkey), Ordering::SeqCst);
@@ -52,6 +61,8 @@ pub struct RecordingState {
     pub is_key_held: bool,
     pub press_time: Option<std::time::Instant>,
     pub stop_tx: Option<std::sync::mpsc::Sender<bool>>,
+    pub is_command_mode: bool,
+    pub selected_text: Option<String>,
 }
 
 pub fn get_state() -> &'static Mutex<RecordingState> {
@@ -60,6 +71,8 @@ pub fn get_state() -> &'static Mutex<RecordingState> {
             is_key_held: false,
             press_time: None,
             stop_tx: None,
+            is_command_mode: false,
+            selected_text: None,
         })
     })
 }
@@ -493,11 +506,13 @@ fn main() {
 
             let api_url = api::get_api_url();
             let api_url_lang = api_url.clone();
+            let api_url_cfg = api_url.clone();
             std::thread::spawn(move || {
                 tauri::async_runtime::block_on(async move {
-                    println!("[STARTUP] Syncing languages catalog from server in background thread...");
+                    println!("[STARTUP] Syncing languages catalog and client config from server in background thread...");
                     let _ = crate::lang::get_language_manager().sync_from_server(&api_url_lang).await;
-                    println!("[STARTUP] Languages sync finished.");
+                    let _ = crate::api::fetch_client_config(&api_url_cfg).await;
+                    println!("[STARTUP] Languages and config sync finished.");
                 });
             });
 

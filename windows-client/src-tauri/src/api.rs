@@ -11,6 +11,7 @@ pub struct UserInfo {
     pub monthly_limit_seconds: f64,
     pub languages: Option<Vec<String>>,
     pub notification: Option<String>,
+    pub transform_input_tokens: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -210,23 +211,119 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
             Ok(result) => {
                 let text = result.text.trim();
                 if !text.is_empty() {
-                    println!("Transcribed Text: {}", text);
                     crate::win32::set_preview_text(text);
 
-                    let typing_mode = {
-                        let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                        config.typing_mode
+                    let (is_command_mode, selected_text) = {
+                        let state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
+                        (state.is_command_mode, state.selected_text.clone())
                     };
 
-                    if typing_mode {
-                        crate::keyboard::simulate_typing(text);
-                    } else {
-                        crate::keyboard::paste_text(text);
-                    }
+                    if is_command_mode {
+                        println!("\n=======================================================");
+                        println!("✨ [COMMAND MODE COMPLETED — EXECUTING LLM TRANSFORMATION]");
+                        println!("Target Selected Text:\n{}", selected_text.as_deref().unwrap_or("(none)"));
+                        println!("-------------------------------------------------------");
+                        println!("Spoken User Command: \"{}\"", text);
+                        println!("=======================================================\n");
 
-                    if let Some(app) = crate::TAURI_APP.get() {
-                        use tauri::Emitter;
-                        let _ = app.emit("dictation-transcribed", text.to_string());
+                        // Check dynamic word limit
+                        let max_words = crate::get_transform_word_limit();
+                        if let Some(ref target) = selected_text {
+                            let word_count = target.split_whitespace().count();
+                            if word_count > max_words {
+                                println!("[COMMAND MODE WARNING] Selected text exceeds {} words ({} words).", max_words, word_count);
+                                crate::win32::set_preview_text(&format!("⚠️ Text exceeds {} words", max_words));
+                                crate::win32::show_tray_notification(
+                                    "SpeekTo.Me — Text Too Long",
+                                    &format!("Text longer than {} words is not supported at the moment.", max_words),
+                                    crate::win32::NotificationLevel::Warning,
+                                );
+                                return;
+                            }
+                        }
+
+                        let target_text = selected_text.unwrap_or_default();
+                        let has_target = !target_text.trim().is_empty();
+
+                        crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
+                        if has_target {
+                            crate::win32::set_preview_text("✨ Transforming text...");
+                        } else {
+                            crate::win32::set_preview_text("✨ Generating...");
+                        }
+
+                        match transform_text(&api_url, &token, &target_text, text).await {
+                            Ok(transformed) => {
+                                println!("\n=======================================================");
+                                println!("✨ [COMMAND MODE — LLM TRANSFORMATION COMPLETED]");
+                                println!("Transformed Output ({} characters):", transformed.len());
+                                println!("-------------------------------------------------------");
+                                println!("{}", transformed);
+                                println!("=======================================================\n");
+
+                                crate::win32::set_preview_text("✨ Done!");
+
+                                let typing_mode = {
+                                    let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                                    config.typing_mode
+                                };
+
+                                if typing_mode {
+                                    crate::keyboard::simulate_typing(&transformed);
+                                } else {
+                                    crate::keyboard::paste_transformed_text(&transformed);
+                                }
+
+                                let (notify_title, notify_msg) = if has_target {
+                                    (
+                                        "SpeekTo.Me — Transformed Text Ready",
+                                        "Transformed text replaced selection and is copied to clipboard.",
+                                    )
+                                } else {
+                                    (
+                                        "SpeekTo.Me — AI Response Ready",
+                                        "AI generated text inserted and is copied to clipboard.",
+                                    )
+                                };
+
+                                crate::win32::show_tray_notification(
+                                    notify_title,
+                                    notify_msg,
+                                    crate::win32::NotificationLevel::Info,
+                                );
+
+                                if let Some(app) = crate::TAURI_APP.get() {
+                                    use tauri::Emitter;
+                                    let _ = app.emit("command-transformed", transformed);
+                                }
+                            }
+                            Err(err) => {
+                                eprintln!("[TRANSFORM ERROR] {}", err);
+                                crate::win32::set_preview_text("⚠️ Transformation failed");
+                                crate::win32::show_tray_notification(
+                                    "SpeekTo.Me — Transformation Failed",
+                                    &err,
+                                    crate::win32::NotificationLevel::Warning,
+                                );
+                            }
+                        }
+                    } else {
+                        println!("Transcribed Text: {}", text);
+                        let typing_mode = {
+                            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                            config.typing_mode
+                        };
+
+                        if typing_mode {
+                            crate::keyboard::simulate_typing(text);
+                        } else {
+                            crate::keyboard::paste_text(text);
+                        }
+
+                        if let Some(app) = crate::TAURI_APP.get() {
+                            use tauri::Emitter;
+                            let _ = app.emit("dictation-transcribed", text.to_string());
+                        }
                     }
                 }
                 crate::win32::hide_overlay();
@@ -330,6 +427,28 @@ pub async fn stream_transcribe_audio(
     Err("Stream closed before receiving final transcription".to_string())
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ClientConfig {
+    pub transform_input_tokens: Option<usize>,
+    pub notification: Option<String>,
+}
+
+pub async fn fetch_client_config(api_url: &str) -> Result<ClientConfig, String> {
+    let client = create_client();
+    let url = format!("{}/v1/config", api_url.trim_end_matches('/'));
+    let res = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if res.status().is_success() {
+        if let Ok(cfg) = res.json::<ClientConfig>().await {
+            if let Some(limit) = cfg.transform_input_tokens {
+                crate::set_transform_word_limit(limit);
+                println!("[CONFIG SYNC] Dynamic transform input word limit set from server: {}", limit);
+            }
+            return Ok(cfg);
+        }
+    }
+    Err("Failed to fetch client config".to_string())
+}
+
 pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, String> {
     let client = create_client();
     let res = client.get(format!("{}/auth/me", api_url))
@@ -340,7 +459,12 @@ pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, Str
 
     let status = res.status();
     if status.is_success() {
-        res.json::<UserInfo>().await.map_err(|e| format!("Failed to parse user info: {}", e))
+        let info = res.json::<UserInfo>().await.map_err(|e| format!("Failed to parse user info: {}", e))?;
+        if let Some(limit) = info.transform_input_tokens {
+            crate::set_transform_word_limit(limit);
+            println!("[CONFIG SYNC] Dynamic transform input word limit updated from user info: {}", limit);
+        }
+        Ok(info)
     } else if status.as_u16() == 401 {
         crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
         Err("Session expired. Please sign in again.".to_string())
@@ -555,6 +679,57 @@ pub async fn transcribe_audio(
         } else {
             Err(format!("Server error with HTTP status {}", status))
         }
+    }
+}
+
+#[derive(Serialize)]
+struct TransformPayload<'a> {
+    selected_text: &'a str,
+    command: &'a str,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct TransformResponse {
+    text: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+}
+
+pub async fn transform_text(
+    api_url: &str,
+    token: &str,
+    selected_text: &str,
+    command: &str,
+) -> Result<String, String> {
+    let client = create_client();
+    let url = format!("{}/v1/transform", api_url.trim_end_matches('/'));
+
+    let payload = TransformPayload {
+        selected_text,
+        command,
+    };
+
+    let res = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .header("User-Agent", "SpeekToMe-WindowsClient/0.1.0")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    let status = res.status();
+    let body_text = res.text().await.unwrap_or_default();
+    if status.is_success() {
+        let resp: TransformResponse = serde_json::from_str(&body_text)
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(resp.text)
+    } else {
+        Err(format!("Transformation failed (HTTP {}): {}", status, body_text.trim()))
     }
 }
 

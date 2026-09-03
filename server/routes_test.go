@@ -52,6 +52,10 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 	mux.HandleFunc("GET /meetings/{id}", app.HandleGetMeetingDetail)
 	mux.HandleFunc("DELETE /meetings/{id}", app.HandleDeleteMeeting)
 	mux.HandleFunc("GET /meetings/{id}/audio", app.HandleGetMeetingAudio)
+	mux.HandleFunc("POST /v1/transform", app.HandleTransform)
+	mux.HandleFunc("POST /transform", app.HandleTransform)
+	mux.HandleFunc("GET /v1/config", handlers.HandleGetClientConfig)
+	mux.HandleFunc("GET /config", handlers.HandleGetClientConfig)
 	mux.HandleFunc("POST /billing/create-subscription", app.HandleCreateSubscription)
 	mux.HandleFunc("POST /billing/verify-subscription", app.HandleVerifySubscription)
 	mux.HandleFunc("POST /billing/cancel-subscription", app.HandleCancelSubscription)
@@ -122,6 +126,10 @@ func TestAllRouteRegistrations(t *testing.T) {
 		{"GET", "/admin/webhook-logs"},
 		{"GET", "/admin/cache/rate-limits"},
 		{"DELETE", "/admin/cache/rate-limits"},
+		{"POST", "/v1/transform"},
+		{"POST", "/transform"},
+		{"GET", "/v1/config"},
+		{"GET", "/config"},
 	}
 
 	for _, r := range routes {

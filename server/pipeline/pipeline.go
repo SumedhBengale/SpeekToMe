@@ -235,6 +235,93 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 	return "", fmt.Errorf("no LLM providers succeeded")
 }
 
+func RunCommandTransformation(ctx context.Context, client *http.Client, selectedText, command string, pctx *PipelineContext) (string, error) {
+	cfg := config.ConfigManager.Get()
+	fallbackOrder := cfg.GetActiveCommandLLMFallbackOrder()
+	if len(fallbackOrder) == 0 {
+		return "", fmt.Errorf("no enabled Command LLM provider available")
+	}
+
+	hasTarget := strings.TrimSpace(selectedText) != ""
+	var userMessage string
+	if hasTarget {
+		userMessage = fmt.Sprintf("Target Text:\n\"\"\"\n%s\n\"\"\"\n\nInstruction:\n%s", selectedText, command)
+	} else {
+		userMessage = fmt.Sprintf("Instruction:\n%s", command)
+	}
+
+	var lastErr error
+	for _, providerKey := range fallbackOrder {
+		provCfg, ok := cfg.Models.CommandLLMProviders[providerKey]
+		if !ok || !provCfg.Enabled {
+			provCfg, ok = cfg.Models.LLMProviders[providerKey]
+			if !ok || !provCfg.Enabled {
+				continue
+			}
+		}
+
+		systemPrompt := config.DefaultCommandLLMSystemPrompt
+		if !hasTarget {
+			systemPrompt = config.DefaultCommandGenerationSystemPrompt
+		}
+		if strings.TrimSpace(provCfg.SystemPrompt) != "" {
+			systemPrompt = strings.TrimSpace(provCfg.SystemPrompt)
+		}
+
+		apiKey := provCfg.APIKey
+		if apiKey == "" {
+			if strings.HasPrefix(providerKey, "deepinfra") {
+				apiKey = config.DeepInfraAPIKey
+			} else if strings.HasPrefix(providerKey, "deepseek") {
+				apiKey = config.DeepSeekAPIKey
+			} else if strings.HasPrefix(providerKey, "wafer") {
+				apiKey = config.WaferAPIKey
+			}
+		}
+
+		apiURL := provCfg.BaseURL
+		if apiURL == "" {
+			if strings.HasPrefix(providerKey, "deepinfra") {
+				apiURL = "https://api.deepinfra.com/v1/openai/chat/completions"
+			} else if strings.HasPrefix(providerKey, "deepseek") {
+				apiURL = config.DeepSeekAPIURL
+			} else if strings.HasPrefix(providerKey, "wafer") {
+				apiURL = config.WaferAPIURL
+			}
+		}
+
+		useModel := provCfg.Model
+		if apiKey == "" || apiURL == "" || useModel == "" {
+			continue
+		}
+
+		timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = 25 * time.Second
+		}
+		ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		isDeepSeek := strings.Contains(strings.ToLower(providerKey), "deepseek") || strings.Contains(strings.ToLower(useModel), "deepseek")
+		res, loc, err := callChatCompletionsAPI(ctxTimeout, client, apiURL, apiKey, useModel, systemPrompt, userMessage, isDeepSeek, provCfg.FailFast)
+		if err == nil {
+			if pctx != nil {
+				pctx.LLMProvider = providerKey
+				pctx.LLMModel = useModel
+				pctx.LLMRouting = loc
+			}
+			return res, nil
+		}
+		log.Printf("[COMMAND LLM FALLBACK] Provider %s (%s) failed: %v. Trying next in priority order.", providerKey, useModel, err)
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return "", fmt.Errorf("all configured Command LLM providers failed. Last error: %w", lastErr)
+	}
+	return "", fmt.Errorf("no Command LLM providers succeeded")
+}
+
 func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pctx *PipelineContext) (string, error) {
 	if text == "" {
 		return "", nil
@@ -275,5 +362,17 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 	res = strings.TrimPrefix(res, "<raw_transcript>")
 	res = strings.TrimSuffix(res, "</raw_transcript>")
 	res = strings.TrimSpace(res)
+
+	// Truncation safeguard: If the LLM returned significantly fewer words than the input
+	// (e.g. dropped more than 40% of words on transcripts with >= 6 words), reject the truncation
+	// and fall back to verbatim input text.
+	inputWords := len(strings.Fields(text))
+	outputWords := len(strings.Fields(res))
+	if inputWords >= 6 && outputWords < (inputWords*6)/10 {
+		log.Printf("[AI ENHANCEMENT TRUNCATION REJECTED] LLM output words (%d) < 60%% of input words (%d). Discarding truncated output:\n%q\nFalling back to raw text:\n%q",
+			outputWords, inputWords, res, text)
+		return text, nil
+	}
+
 	return res, nil
 }

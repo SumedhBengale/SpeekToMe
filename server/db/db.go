@@ -264,6 +264,12 @@ func NewDatabase(connStr string) (*Database, error) {
     "deepseek_deepseek_v4_flash": { "enabled": true, "priority": 3, "model": "deepseek-v4-flash", "base_url": "https://api.deepseek.com/chat/completions", "timeout_ms": 30000 },
     "wafer_deepseek_v4_flash": { "enabled": false, "priority": 4, "model": "DeepSeek-V4-Flash-0731-Fast", "base_url": "https://pass.wafer.ai/v1/chat/completions", "timeout_ms": 15000 },
     "custom_llm": { "enabled": false, "priority": 99, "model": "", "base_url": "", "api_key": "", "timeout_ms": 30000 }
+  },
+  "command_llm_providers": {
+    "deepinfra_deepseek_v4": { "enabled": true, "priority": 1, "model": "deepseek-ai/DeepSeek-V4-Flash", "base_url": "https://api.deepinfra.com/v1/openai/chat/completions", "timeout_ms": 15000, "fail_fast": true },
+    "deepseek_deepseek_v4_flash": { "enabled": true, "priority": 2, "model": "deepseek-v4-flash", "base_url": "https://api.deepseek.com/chat/completions", "timeout_ms": 30000 },
+    "wafer_deepseek_v4_flash": { "enabled": false, "priority": 3, "model": "DeepSeek-V4-Flash-0731-Fast", "base_url": "https://pass.wafer.ai/v1/chat/completions", "timeout_ms": 15000 },
+    "custom_llm": { "enabled": false, "priority": 99, "model": "", "base_url": "", "api_key": "", "timeout_ms": 30000 }
   }
 }`
 
@@ -285,6 +291,7 @@ func NewDatabase(connStr string) (*Database, error) {
 		"notification":                 "",
 		"whisper_base_prompt":          "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
 		"last_free_tier_quota_reset_month": time.Now().Format("2006-01"),
+		"transform_input_tokens":       "10000",
 	}
 	for k, v := range configs {
 		_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
