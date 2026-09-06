@@ -93,6 +93,17 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 	if len(batchOrder) < 2 || batchOrder[0] != "deepinfra_whisper_large_v3_turbo" {
 		t.Fatalf("Expected batch order to start with deepinfra_whisper_large_v3_turbo; got %v", batchOrder)
 	}
+
+	raw := ConfigManager.GetRawAll()
+	if raw["meeting_stream_url"] != "ws://GPU_HOST_IP:80/v1/stream" {
+		t.Errorf("Expected meeting_stream_url to be ws://GPU_HOST_IP:80/v1/stream; got %s", raw["meeting_stream_url"])
+	}
+	if raw["unified_stream_url"] != "ws://GPU_HOST_IP:80/v1/stream" {
+		t.Errorf("Expected unified_stream_url to be ws://GPU_HOST_IP:80/v1/stream; got %s", raw["unified_stream_url"])
+	}
+	if active.Models.StreamingProviders["self_hosted_nemotron_3_5"].BaseURL != "ws://GPU_HOST_IP:80/v1/stream" {
+		t.Errorf("Expected self_hosted_nemotron_3_5 BaseURL to be ws://GPU_HOST_IP:80/v1/stream; got %s", active.Models.StreamingProviders["self_hosted_nemotron_3_5"].BaseURL)
+	}
 }
 
 func TestEnhancementAndCommandModelsOrdering(t *testing.T) {

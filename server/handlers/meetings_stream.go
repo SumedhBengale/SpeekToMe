@@ -355,10 +355,18 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 		streamBaseURL = envURL
 	} else if envURL := os.Getenv("SERVER1_STREAM_URL"); envURL != "" {
 		streamBaseURL = envURL
-	}
-	mCfg := config.ConfigManager.Get().Models
-	if prov, ok := mCfg.StreamingProviders["self_hosted_nemotron_3_5"]; ok && prov.BaseURL != "" {
-		streamBaseURL = prov.BaseURL
+	} else {
+		rawCfg := config.ConfigManager.GetRawAll()
+		if u, ok := rawCfg["meeting_stream_url"]; ok && strings.TrimSpace(u) != "" {
+			streamBaseURL = strings.TrimSpace(u)
+		} else if u, ok := rawCfg["unified_stream_url"]; ok && strings.TrimSpace(u) != "" {
+			streamBaseURL = strings.TrimSpace(u)
+		} else {
+			mCfg := config.ConfigManager.Get().Models
+			if prov, ok := mCfg.StreamingProviders["self_hosted_nemotron_3_5"]; ok && prov.BaseURL != "" {
+				streamBaseURL = prov.BaseURL
+			}
+		}
 	}
 
 	nowNs := time.Now().UnixNano()
