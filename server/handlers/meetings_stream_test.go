@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -184,4 +185,62 @@ func TestResolveMultiSpeakerDiarization(t *testing.T) {
 		t.Errorf("Expected Speaker 1 fallback without direct overlap, got %q (hasOverlap=%v)", spkGap, hasOverlapGap)
 	}
 }
+
+func TestResolveUnifiedStreamURL(t *testing.T) {
+	// 1. Default URL with diarize=true
+	u1 := resolveUnifiedStreamURL("", true, "en", "session-1")
+	if !strings.Contains(u1, "diarize=true") || !strings.Contains(u1, "lang=en") || !strings.Contains(u1, "stream_id=session-1") {
+		t.Errorf("Unexpected default resolved URL: %s", u1)
+	}
+
+	// 2. HTTP URL converted to WS with legacy path normalized
+	u2 := resolveUnifiedStreamURL("http://GPU_HOST_IP:8000/v1/realtime", false, "es", "session-2")
+	if !strings.HasPrefix(u2, "ws://") || !strings.Contains(u2, "/v1/stream") || !strings.Contains(u2, "diarize=false") || !strings.Contains(u2, "lang=es") {
+		t.Errorf("Unexpected normalized URL: %s", u2)
+	}
+}
+
+func TestCollapseWordsToTurns(t *testing.T) {
+	words := []WordItem{
+		{Word: "Okay", Start: 1.28, End: 1.36, Speaker: 1, Confidence: 1.0},
+		{Word: "right", Start: 1.92, End: 2.00, Speaker: 1, Confidence: 1.0},
+		{Word: "we're", Start: 2.40, End: 2.48, Speaker: 1, Confidence: 1.0},
+		{Word: "gonna", Start: 2.64, End: 2.80, Speaker: 1, Confidence: 1.0},
+		{Word: "does", Start: 116.16, End: 116.24, Speaker: 3, Confidence: 1.0},
+		{Word: "this", Start: 116.24, End: 116.32, Speaker: 3, Confidence: 1.0},
+		{Word: "the", Start: 118.24, End: 118.40, Speaker: 1, Confidence: 1.0},
+		{Word: "old", Start: 118.40, End: 118.72, Speaker: 1, Confidence: 1.0},
+		{Word: "thank", Start: 120.96, End: 121.20, Speaker: 3, Confidence: 1.0},
+		{Word: "you", Start: 121.20, End: 121.40, Speaker: 3, Confidence: 1.0},
+	}
+
+	turns := collapseWordsToTurns(words, "turn_test")
+	if len(turns) != 4 {
+		t.Fatalf("Expected 4 turns, got %d", len(turns))
+	}
+
+	// Turn 1: Speaker 1
+	if turns[0].SpeakerName != "Speaker 1" || turns[0].Text != "Okay right we're gonna" {
+		t.Errorf("Turn 0 mismatch: spk=%s text=%s", turns[0].SpeakerName, turns[0].Text)
+	}
+	if turns[0].StartTime != 1.28 || turns[0].EndTime != 2.80 {
+		t.Errorf("Turn 0 time mismatch: %.2f - %.2f", turns[0].StartTime, turns[0].EndTime)
+	}
+
+	// Turn 2: Speaker 3
+	if turns[1].SpeakerName != "Speaker 3" || turns[1].Text != "does this" {
+		t.Errorf("Turn 1 mismatch: spk=%s text=%s", turns[1].SpeakerName, turns[1].Text)
+	}
+
+	// Turn 3: Speaker 1
+	if turns[2].SpeakerName != "Speaker 1" || turns[2].Text != "the old" {
+		t.Errorf("Turn 2 mismatch: spk=%s text=%s", turns[2].SpeakerName, turns[2].Text)
+	}
+
+	// Turn 4: Speaker 3
+	if turns[3].SpeakerName != "Speaker 3" || turns[3].Text != "thank you" {
+		t.Errorf("Turn 3 mismatch: spk=%s text=%s", turns[3].SpeakerName, turns[3].Text)
+	}
+}
+
 
