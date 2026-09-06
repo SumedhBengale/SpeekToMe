@@ -148,7 +148,7 @@ func dialUpstreamInferenceWS(ctx context.Context, rawURL, role string) (*Upstrea
 }
 
 // resolveUnifiedStreamURL normalizes and configures the streaming WebSocket URL
-func resolveUnifiedStreamURL(baseURL string, diarize bool, lang string, streamID string) string {
+func resolveUnifiedStreamURL(baseURL string, diarize bool, lang string, streamID string, phrases ...[]string) string {
 	base := strings.TrimSpace(baseURL)
 	if base == "" {
 		base = DefaultUnifiedStreamURL
@@ -175,6 +175,9 @@ func resolveUnifiedStreamURL(baseURL string, diarize bool, lang string, streamID
 	}
 	if streamID != "" {
 		q.Set("stream_id", streamID)
+	}
+	if len(phrases) > 0 && len(phrases[0]) > 0 {
+		q.Set("boosted_words", strings.Join(phrases[0], ","))
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
@@ -370,9 +373,16 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nowNs := time.Now().UnixNano()
+	var vocabPhrases []string
+	for _, term := range vocabTerms {
+		tTrimmed := strings.TrimSpace(term.Canonical)
+		if tTrimmed != "" {
+			vocabPhrases = append(vocabPhrases, tTrimmed)
+		}
+	}
 	micLang := utils.ResolveNemotronLanguage(user.Languages)
-	micURL := resolveUnifiedStreamURL(streamBaseURL, false, micLang, fmt.Sprintf("meeting-%d-%d-mic", user.ID, nowNs))
-	lbURL := resolveUnifiedStreamURL(streamBaseURL, true, "en", fmt.Sprintf("meeting-%d-%d-lb", user.ID, nowNs))
+	micURL := resolveUnifiedStreamURL(streamBaseURL, false, micLang, fmt.Sprintf("meeting-%d-%d-mic", user.ID, nowNs), vocabPhrases)
+	lbURL := resolveUnifiedStreamURL(streamBaseURL, true, "en", fmt.Sprintf("meeting-%d-%d-lb", user.ID, nowNs), vocabPhrases)
 
 	log.Printf("[MEETING STREAM UPSTREAM] Connecting Mic stream to: %s", micURL)
 	log.Printf("[MEETING STREAM UPSTREAM] Connecting Loopback stream to: %s", lbURL)

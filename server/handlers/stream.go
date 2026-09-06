@@ -162,7 +162,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Branch: Real Streaming Proxy vs Pseudo-Streaming (Chunked VAD)
 	if selectedType == "real" {
-		upstreamSess, uerr := services.CreateUpstreamStreamingSession(ctx, selectedProvider, user.Languages, startPayload.Prompt)
+		upstreamSess, uerr := services.CreateUpstreamStreamingSession(ctx, selectedProvider, user.Languages, startPayload.Prompt, vocabTerms)
 		if uerr == nil && upstreamSess != nil {
 			log.Printf("[STREAM NEGOTIATION] Selected REAL streaming provider: %s", selectedProvider)
 			_ = writeStreamJSON(ctx, conn, StreamEventMessage{

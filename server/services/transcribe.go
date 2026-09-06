@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -1085,7 +1086,7 @@ func (s *UpstreamStreamingSession) Close(status websocket.StatusCode, reason str
 	}
 }
 
-func CreateUpstreamStreamingSession(ctx context.Context, providerName string, userLanguages []string, prompt string) (*UpstreamStreamingSession, error) {
+func CreateUpstreamStreamingSession(ctx context.Context, providerName string, userLanguages []string, prompt string, vocabTerms ...[]db.VocabularyTerm) (*UpstreamStreamingSession, error) {
 	cfg := config.ConfigManager.Get()
 	provCfg, ok := cfg.Models.StreamingProviders[providerName]
 	if !ok || !provCfg.Enabled || provCfg.BaseURL == "" {
@@ -1099,11 +1100,31 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(dialCtx, provCfg.BaseURL, &websocket.DialOptions{
+	var phrases []string
+	if len(vocabTerms) > 0 {
+		for _, vt := range vocabTerms[0] {
+			c := strings.TrimSpace(vt.Canonical)
+			if c != "" {
+				phrases = append(phrases, c)
+			}
+		}
+	}
+
+	dialURL := provCfg.BaseURL
+	if len(phrases) > 0 {
+		if u, err := url.Parse(dialURL); err == nil {
+			q := u.Query()
+			q.Set("boosted_words", strings.Join(phrases, ","))
+			u.RawQuery = q.Encode()
+			dialURL = u.String()
+		}
+	}
+
+	conn, _, err := websocket.Dial(dialCtx, dialURL, &websocket.DialOptions{
 		Subprotocols: []string{},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to upstream %s at %s: %w", providerName, provCfg.BaseURL, err)
+		return nil, fmt.Errorf("failed to connect to upstream %s at %s: %w", providerName, dialURL, err)
 	}
 
 	_, promptStr := BuildWhisperPrompt(userLanguages)
@@ -1121,15 +1142,24 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 	// 1. Send OpenAI Realtime-style session.update configuration for NeMo-Speech.cpp
 	// Inference server expects exact BCP-47 locale (e.g. "en-US", "hi-IN") or "auto"
 	nemotronLang := utils.ResolveNemotronLanguage(userLanguages)
+	sessionMap := map[string]interface{}{
+		"sample_rate":           16000,
+		"automatic_punctuation": true,
+		"language":              nemotronLang,
+		"model":                 provCfg.Model,
+		"initial_prompt":        promptStr,
+	}
+	if len(phrases) > 0 {
+		sessionMap["speech_contexts"] = []map[string]interface{}{
+			{
+				"phrases": phrases,
+				"boost":   1.5,
+			},
+		}
+	}
 	sessionUpdateMsg := map[string]interface{}{
-		"type": "session.update",
-		"session": map[string]interface{}{
-			"sample_rate":           16000,
-			"automatic_punctuation": true,
-			"language":              nemotronLang,
-			"model":                 provCfg.Model,
-			"initial_prompt":        promptStr,
-		},
+		"type":    "session.update",
+		"session": sessionMap,
 	}
 	if sessionUpdateBytes, err := json.Marshal(sessionUpdateMsg); err == nil {
 		_ = conn.Write(ctx, websocket.MessageText, sessionUpdateBytes)
