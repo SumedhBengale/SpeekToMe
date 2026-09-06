@@ -94,3 +94,90 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 		t.Fatalf("Expected batch order to start with deepinfra_whisper_large_v3_turbo; got %v", batchOrder)
 	}
 }
+
+func TestEnhancementAndCommandModelsOrdering(t *testing.T) {
+	pCfg := ProviderConfig{Models: DefaultModelsConfig()}
+
+	enh := pCfg.GetActiveEnhancementModels()
+	if len(enh) < 3 {
+		t.Fatalf("Expected at least 3 active enhancement models, got %d", len(enh))
+	}
+	if enh[0].Provider != ProviderCerebras || enh[0].Model != "gpt-oss-120b" {
+		t.Errorf("Expected first enhancement model to be Cerebras gpt-oss-120b, got %s/%s", enh[0].Provider, enh[0].Model)
+	}
+
+	cmd := pCfg.GetActiveCommandModels()
+	if len(cmd) < 3 {
+		t.Fatalf("Expected at least 3 active command models, got %d", len(cmd))
+	}
+	if cmd[0].Provider != ProviderDeepInfra || cmd[0].Model != "deepseek-ai/DeepSeek-V4-Flash" {
+		t.Errorf("Expected first command model to be DeepInfra DeepSeek, got %s/%s", cmd[0].Provider, cmd[0].Model)
+	}
+}
+
+func TestCachedConfigManagerImmutability(t *testing.T) {
+	mgr := &CachedConfigManager{
+		config: ProviderConfig{
+			Models: DefaultModelsConfig(),
+		},
+		rawConfigs: make(map[string]string),
+	}
+
+	snap1 := mgr.Get()
+	if len(snap1.Models.EnhancementModels) == 0 {
+		t.Fatal("Expected non-empty EnhancementModels in snapshot")
+	}
+
+	// Mutate the returned slice
+	snap1.Models.EnhancementModels[0].Model = "mutated-model"
+
+	// Fetch a fresh snapshot
+	snap2 := mgr.Get()
+	if snap2.Models.EnhancementModels[0].Model == "mutated-model" {
+		t.Errorf("Immutability violated: mutation of returned slice affected CachedConfigManager internal state")
+	}
+}
+
+func TestSyncConfigsFromDBWithNewDecoupledSchema(t *testing.T) {
+	dbFile := "test_config_decoupled.db"
+	_ = os.Remove(dbFile)
+	database, err := db.NewDatabase(dbFile)
+	if err != nil {
+		t.Fatalf("Failed to initialize test DB: %v", err)
+	}
+	defer func() {
+		_ = database.Close()
+		_ = os.Remove(dbFile)
+	}()
+
+	customJSON := ModelsConfig{
+		EnhancementModels: []ModelSpec{
+			{Provider: ProviderGroq, Model: "llama-3.3-70b-versatile", Enabled: true, TimeoutMs: 12000},
+			{Provider: ProviderOpenRouter, Model: "deepseek/deepseek-chat", Enabled: true, TimeoutMs: 18000},
+		},
+		CommandModels: []ModelSpec{
+			{Provider: ProviderBedrock, Model: "nvidia.nemotron-super-3-120b", Enabled: true, TimeoutMs: 22000, Stream: true},
+		},
+	}
+
+	jsonBytes, err := json.Marshal(customJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = database.UpdateSaasConfig("models_config_json", string(jsonBytes))
+
+	SyncConfigsFromDB(database, nil)
+	active := ConfigManager.Get()
+
+	enh := active.GetActiveEnhancementModels()
+	if len(enh) != 2 || enh[0].Provider != ProviderGroq || enh[1].Provider != ProviderOpenRouter {
+		t.Errorf("Expected active enhancement models [groq, openrouter], got %v", enh)
+	}
+
+	cmd := active.GetActiveCommandModels()
+	if len(cmd) != 1 || cmd[0].Provider != ProviderBedrock {
+		t.Errorf("Expected active command models [bedrock], got %v", cmd)
+	}
+}
+

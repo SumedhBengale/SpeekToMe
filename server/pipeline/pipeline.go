@@ -67,27 +67,20 @@ func (t *AIEnhancementTransform) Name() string {
 	return "AI Enhancement"
 }
 
-func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, apiKey, model, systemPrompt, text string, includeThinking bool, failFast bool, priorityFlag bool) (string, string, error) {
-	payload := map[string]interface{}{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": text},
-		},
-	}
-	if includeThinking {
-		payload["thinking"] = map[string]string{"type": "disabled"}
-	}
-	if failFast {
-		payload["fail_fast"] = true
-	}
-	if priorityFlag {
-		payload["priority"] = true
-	}
+// ChunkCallback is invoked for each streaming text delta
+type ChunkCallback func(delta, accumulated string) error
 
+// callChatCompletionsAPIUnified executes a standard non-streaming HTTP chat completion request
+func callChatCompletionsAPIUnified(
+	ctx context.Context,
+	client *http.Client,
+	apiURL, apiKey string,
+	extraHeaders map[string]string,
+	payload map[string]interface{},
+) (string, string, int, http.Header, error) {
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal payload: %w", err)
+		return "", "", 0, nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
 	var remoteIP string
@@ -105,24 +98,28 @@ func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, ap
 
 	req, err := http.NewRequestWithContext(ctxTrace, "POST", apiURL, bytes.NewBuffer(jsonPayload))
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create request: %w", err)
+		return "", "", 0, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to make HTTP call: %w", err)
+		return "", "", 0, nil, fmt.Errorf("failed to make HTTP call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	routingLoc := getHTTPResponseRouting(resp, remoteIP)
+	respHeader := resp.Header.Clone()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("AI call failed: %d - %s", resp.StatusCode, string(bodyBytes))
+		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI call failed: %d - %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var result struct {
@@ -133,17 +130,149 @@ func callChatCompletionsAPI(ctx context.Context, client *http.Client, apiURL, ap
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", fmt.Errorf("failed to decode JSON response: %w", err)
+		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("failed to decode JSON response: %w", err)
 	}
 
 	if len(result.Choices) == 0 {
-		return "", "", fmt.Errorf("AI returned empty choices")
+		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI returned empty choices")
 	}
 
-	return strings.TrimSpace(result.Choices[0].Message.Content), routingLoc, nil
+	return strings.TrimSpace(result.Choices[0].Message.Content), routingLoc, resp.StatusCode, respHeader, nil
 }
 
-type ChunkCallback func(delta, accumulated string) error
+// callChatCompletionsAPIStreamUnified executes a streaming SSE HTTP chat completion request
+func callChatCompletionsAPIStreamUnified(
+	ctx context.Context,
+	client *http.Client,
+	apiURL, apiKey string,
+	extraHeaders map[string]string,
+	payload map[string]interface{},
+	onChunk ChunkCallback,
+) (string, string, int, http.Header, error) {
+	payload["stream"] = true
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", 0, nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	var remoteIP string
+	trace := &httptrace.ClientTrace{
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			addr := connInfo.Conn.RemoteAddr().String()
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				remoteIP = host
+			} else {
+				remoteIP = addr
+			}
+		},
+	}
+	ctxTrace := httptrace.WithClientTrace(ctx, trace)
+
+	req, err := http.NewRequestWithContext(ctxTrace, "POST", apiURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return "", "", 0, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", 0, nil, fmt.Errorf("failed to make HTTP call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	routingLoc := getHTTPResponseRouting(resp, remoteIP)
+	respHeader := resp.Header.Clone()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI stream call failed: %d - %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	var fullText strings.Builder
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return fullText.String(), routingLoc, resp.StatusCode, respHeader, fmt.Errorf("error reading stream: %w", err)
+		}
+
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+			if data == "[DONE]" {
+				break
+			}
+
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content          string `json:"content"`
+						ReasoningContent string `json:"reasoning_content,omitempty"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+
+			if err := json.Unmarshal([]byte(data), &chunk); err == nil {
+				if len(chunk.Choices) > 0 {
+					delta := chunk.Choices[0].Delta.Content
+					if delta != "" {
+						fullText.WriteString(delta)
+						if onChunk != nil {
+							if cbErr := onChunk(delta, fullText.String()); cbErr != nil {
+								return fullText.String(), routingLoc, resp.StatusCode, respHeader, cbErr
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if err == io.EOF {
+			break
+		}
+	}
+
+	return fullText.String(), routingLoc, resp.StatusCode, respHeader, nil
+}
+
+// Backward-compatible wrappers for direct unit tests
+func callChatCompletionsAPI(
+	ctx context.Context,
+	client *http.Client,
+	apiURL, apiKey, model, systemPrompt, text string,
+	includeThinking bool,
+	failFast bool,
+	priorityFlag bool,
+) (string, string, error) {
+	payload := map[string]interface{}{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": text},
+		},
+	}
+	if includeThinking {
+		payload["thinking"] = map[string]string{"type": "disabled"}
+	}
+	if failFast {
+		payload["fail_fast"] = true
+	}
+	if priorityFlag {
+		payload["priority"] = true
+	}
+
+	content, routing, _, _, err := callChatCompletionsAPIUnified(ctx, client, apiURL, apiKey, nil, payload)
+	return content, routing, err
+}
 
 func callChatCompletionsAPIStream(
 	ctx context.Context,
@@ -172,93 +301,8 @@ func callChatCompletionsAPIStream(
 		payload["priority"] = true
 	}
 
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	var remoteIP string
-	trace := &httptrace.ClientTrace{
-		GotConn: func(connInfo httptrace.GotConnInfo) {
-			addr := connInfo.Conn.RemoteAddr().String()
-			if host, _, err := net.SplitHostPort(addr); err == nil {
-				remoteIP = host
-			} else {
-				remoteIP = addr
-			}
-		},
-	}
-	ctxTrace := httptrace.WithClientTrace(ctx, trace)
-
-	req, err := http.NewRequestWithContext(ctxTrace, "POST", apiURL, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to make HTTP call: %w", err)
-	}
-	defer resp.Body.Close()
-
-	routingLoc := getHTTPResponseRouting(resp, remoteIP)
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("AI stream call failed: %d - %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	reader := bufio.NewReader(resp.Body)
-	var fullText strings.Builder
-
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return fullText.String(), routingLoc, fmt.Errorf("error reading stream: %w", err)
-		}
-
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
-			if data == "[DONE]" {
-				break
-			}
-
-			var chunk struct {
-				Choices []struct {
-					Delta struct {
-						Content          string `json:"content"`
-						ReasoningContent string `json:"reasoning_content,omitempty"`
-					} `json:"delta"`
-				} `json:"choices"`
-			}
-
-			if err := json.Unmarshal([]byte(data), &chunk); err == nil {
-				if len(chunk.Choices) > 0 {
-					delta := chunk.Choices[0].Delta.Content
-					if delta != "" {
-						fullText.WriteString(delta)
-						if onChunk != nil {
-							if cbErr := onChunk(delta, fullText.String()); cbErr != nil {
-								return fullText.String(), routingLoc, cbErr
-							}
-						}
-					}
-				}
-			}
-		}
-
-		if err == io.EOF {
-			break
-		}
-	}
-
-	return fullText.String(), routingLoc, nil
+	content, routing, _, _, err := callChatCompletionsAPIStreamUnified(ctx, client, apiURL, apiKey, nil, payload, onChunk)
+	return content, routing, err
 }
 
 func getHTTPResponseRouting(resp *http.Response, remoteIP string) string {
@@ -281,101 +325,141 @@ func getHTTPResponseRouting(resp *http.Response, remoteIP string) string {
 	return "Unknown Location (No routing headers)"
 }
 
+// executeModelAttempt performs a single model execution attempt with circuit breaking,
+// provider resolution, and error/cooldown feedback.
+func executeModelAttempt(
+	ctx context.Context,
+	client *http.Client,
+	spec config.ModelSpec,
+	systemPrompt, userPrompt string,
+	onChunk ChunkCallback,
+) (res string, routing string, err error) {
+	canExec, done := GlobalCircuitBreaker.CanExecute(spec.Provider, spec.Model)
+	if !canExec {
+		return "", "", fmt.Errorf("circuit breaker open / fast-failing for %s/%s", spec.Provider, spec.Model)
+	}
+
+	provDef, ok := config.GetLLMProvider(spec.Provider)
+	if !ok {
+		err := fmt.Errorf("unsupported LLM provider: %s", spec.Provider)
+		if done != nil {
+			done(false, 0, err, nil)
+		}
+		return "", "", err
+	}
+
+	apiKey := provDef.GetAPIKey()
+	if apiKey == "" {
+		err := fmt.Errorf("missing API key for LLM provider %s (check .env %s)", spec.Provider, provDef.EnvKeyName)
+		if done != nil {
+			done(false, 0, err, nil)
+		}
+		return "", "", err
+	}
+
+	apiURL := provDef.GetBaseURL(spec.EndpointOverride)
+	if apiURL == "" {
+		err := fmt.Errorf("missing API endpoint URL for LLM provider %s", spec.Provider)
+		if done != nil {
+			done(false, 0, err, nil)
+		}
+		return "", "", err
+	}
+
+	// Model-level prompt override if configured in spec
+	effectiveSystemPrompt := systemPrompt
+	if strings.TrimSpace(spec.SystemPrompt) != "" {
+		effectiveSystemPrompt = strings.TrimSpace(spec.SystemPrompt)
+	}
+
+	payload, err := provDef.FormatPayload(spec, effectiveSystemPrompt, userPrompt)
+	if err != nil {
+		if done != nil {
+			done(false, 0, err, nil)
+		}
+		return "", "", fmt.Errorf("failed to format payload for %s/%s: %w", spec.Provider, spec.Model, err)
+	}
+
+	timeout := time.Duration(spec.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var extraHeaders map[string]string
+	if provDef.ExtraHeaders != nil {
+		extraHeaders = provDef.ExtraHeaders(apiKey)
+	}
+
+	var statusCode int
+	var respHeader http.Header
+
+	if spec.Stream {
+		res, routing, statusCode, respHeader, err = callChatCompletionsAPIStreamUnified(
+			ctxTimeout, client, apiURL, apiKey, extraHeaders, payload, onChunk,
+		)
+	} else {
+		res, routing, statusCode, respHeader, err = callChatCompletionsAPIUnified(
+			ctxTimeout, client, apiURL, apiKey, extraHeaders, payload,
+		)
+	}
+
+	if done != nil {
+		done(err == nil, statusCode, err, respHeader)
+	}
+
+	return res, routing, err
+}
+
+// RunDeepSeekChatCompletion executes chat completions using the decoupled enhancement_models priority list.
 func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, systemPrompt, userPrompt string, pctx *PipelineContext) (string, error) {
+	if client == nil {
+		client = aiHTTPClient
+	}
 	cfg := config.ConfigManager.Get()
-	fallbackOrder := cfg.GetActiveLLMFallbackOrder()
-	if len(fallbackOrder) == 0 {
-		return "", fmt.Errorf("no enabled LLM provider available")
+	activeCandidates := cfg.GetActiveEnhancementModels()
+	if len(activeCandidates) == 0 {
+		return "", fmt.Errorf("no active enhancement models configured")
 	}
 
 	var lastErr error
-	for _, providerKey := range fallbackOrder {
-		provCfg, ok := cfg.Models.LLMProviders[providerKey]
-		if !ok || !provCfg.Enabled {
-			continue
+	for _, spec := range activeCandidates {
+		if spec.Model == "" && model != "" {
+			spec.Model = model
 		}
 
-		apiKey := provCfg.APIKey
-		if apiKey == "" {
-			if strings.HasPrefix(providerKey, "cerebras") {
-				apiKey = config.CerebrasAPIKey
-			} else if strings.HasPrefix(providerKey, "deepinfra") {
-				apiKey = config.DeepInfraAPIKey
-			} else if strings.HasPrefix(providerKey, "deepseek") {
-				apiKey = config.DeepSeekAPIKey
-			} else if strings.HasPrefix(providerKey, "wafer") {
-				apiKey = config.WaferAPIKey
-			} else if strings.Contains(providerKey, "bedrock") || strings.Contains(providerKey, "nemotron") || strings.Contains(provCfg.BaseURL, "bedrock") {
-				apiKey = config.AWSBearerTokenBedrock
-			}
-		}
+		log.Printf("[LLM ENHANCE] Attempting candidate provider=%s model=%s (stream=%v timeout=%dms)",
+			spec.Provider, spec.Model, spec.Stream, spec.TimeoutMs)
 
-		apiURL := provCfg.BaseURL
-		if apiURL == "" {
-			if strings.HasPrefix(providerKey, "cerebras") {
-				apiURL = config.CerebrasAPIURL
-			} else if strings.HasPrefix(providerKey, "deepinfra") {
-				apiURL = "https://api.deepinfra.com/v1/openai/chat/completions"
-			} else if strings.HasPrefix(providerKey, "deepseek") {
-				apiURL = config.DeepSeekAPIURL
-			} else if strings.HasPrefix(providerKey, "wafer") {
-				apiURL = config.WaferAPIURL
-			} else if strings.Contains(providerKey, "bedrock") || strings.Contains(providerKey, "nemotron") {
-				apiURL = config.AWSBedrockMantleURL
-			}
-		}
-
-		useModel := provCfg.Model
-		if useModel == "" && model != "" {
-			useModel = model
-		}
-
-		if apiKey == "" || apiURL == "" || useModel == "" {
-			continue
-		}
-
-		timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
-		if timeout <= 0 {
-			timeout = 15 * time.Second
-		}
-		ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-
-		isDeepSeek := strings.Contains(strings.ToLower(providerKey), "deepseek") || strings.Contains(strings.ToLower(useModel), "deepseek")
-
-		var res string
-		var loc string
-		var err error
-		if provCfg.PriorityFlag {
-			log.Printf("[LLM ENHANCE] Provider %s running on PRIORITY track (priority=true)", providerKey)
-		}
-		if provCfg.Stream {
-			res, loc, err = callChatCompletionsAPIStream(ctxTimeout, client, apiURL, apiKey, useModel, systemPrompt, userPrompt, isDeepSeek, provCfg.FailFast, provCfg.PriorityFlag, nil)
-		} else {
-			res, loc, err = callChatCompletionsAPI(ctxTimeout, client, apiURL, apiKey, useModel, systemPrompt, userPrompt, isDeepSeek, provCfg.FailFast, provCfg.PriorityFlag)
-		}
+		res, routing, err := executeModelAttempt(ctx, client, spec, systemPrompt, userPrompt, nil)
 		if err == nil {
 			if pctx != nil {
-				pctx.LLMProvider = providerKey
-				pctx.LLMModel = useModel
-				pctx.LLMRouting = loc
+				pctx.LLMProvider = spec.Provider
+				pctx.LLMModel = spec.Model
+				pctx.LLMRouting = routing
 			}
 			return res, nil
 		}
-		log.Printf("[LLM FALLBACK] Provider %s (%s) failed: %v. Trying next in priority order.", providerKey, useModel, err)
+
+		log.Printf("[LLM ENHANCE FALLBACK] Candidate %s/%s failed: %v. Falling back to next candidate in order.",
+			spec.Provider, spec.Model, err)
 		lastErr = err
 	}
 
 	if lastErr != nil {
-		return "", fmt.Errorf("all configured LLM providers failed. Last error: %w", lastErr)
+		return "", fmt.Errorf("all configured enhancement models failed. Last error: %w", lastErr)
 	}
-	return "", fmt.Errorf("no LLM providers succeeded")
+	return "", fmt.Errorf("no enhancement models succeeded")
 }
 
+// RunCommandTransformation executes command transforms synchronously
 func RunCommandTransformation(ctx context.Context, client *http.Client, selectedText, command string, pctx *PipelineContext) (string, error) {
 	return RunCommandTransformationStream(ctx, client, selectedText, command, pctx, nil)
 }
 
+// RunCommandTransformationStream executes command transformations using the decoupled command_models priority list,
+// streaming SSE deltas to onChunk with atomic [RESET] signaling if mid-stream fallback occurs.
 func RunCommandTransformationStream(
 	ctx context.Context,
 	client *http.Client,
@@ -383,13 +467,23 @@ func RunCommandTransformationStream(
 	pctx *PipelineContext,
 	onChunk ChunkCallback,
 ) (string, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	cfg := config.ConfigManager.Get()
-	fallbackOrder := cfg.GetActiveCommandLLMFallbackOrder()
-	if len(fallbackOrder) == 0 {
-		return "", fmt.Errorf("no enabled Command LLM provider available")
+	activeCandidates := cfg.GetActiveCommandModels()
+	if len(activeCandidates) == 0 {
+		return "", fmt.Errorf("no active command models configured")
 	}
 
 	hasTarget := strings.TrimSpace(selectedText) != ""
+	var defaultSystemPrompt string
+	if hasTarget {
+		defaultSystemPrompt = config.DefaultCommandLLMSystemPrompt
+	} else {
+		defaultSystemPrompt = config.DefaultCommandGenerationSystemPrompt
+	}
+
 	var userMessage string
 	if hasTarget {
 		userMessage = fmt.Sprintf("Target Text:\n\"\"\"\n%s\n\"\"\"\n\nInstruction:\n%s", selectedText, command)
@@ -398,68 +492,16 @@ func RunCommandTransformationStream(
 	}
 
 	var lastErr error
-	for _, providerKey := range fallbackOrder {
-		provCfg, ok := cfg.Models.CommandLLMProviders[providerKey]
-		if !ok || !provCfg.Enabled {
-			provCfg, ok = cfg.Models.LLMProviders[providerKey]
-			if !ok || !provCfg.Enabled {
-				continue
-			}
+	for _, spec := range activeCandidates {
+		systemPrompt := defaultSystemPrompt
+		if strings.TrimSpace(spec.SystemPrompt) != "" {
+			systemPrompt = strings.TrimSpace(spec.SystemPrompt)
 		}
 
-		systemPrompt := config.DefaultCommandLLMSystemPrompt
-		if !hasTarget {
-			systemPrompt = config.DefaultCommandGenerationSystemPrompt
-		}
-		if strings.TrimSpace(provCfg.SystemPrompt) != "" {
-			systemPrompt = strings.TrimSpace(provCfg.SystemPrompt)
-		}
+		log.Printf("[COMMAND LLM] Attempting candidate provider=%s model=%s (stream=%v timeout=%dms)",
+			spec.Provider, spec.Model, spec.Stream, spec.TimeoutMs)
 
-		apiKey := provCfg.APIKey
-		if apiKey == "" {
-			if strings.HasPrefix(providerKey, "deepinfra") {
-				apiKey = config.DeepInfraAPIKey
-			} else if strings.HasPrefix(providerKey, "deepseek") {
-				apiKey = config.DeepSeekAPIKey
-			} else if strings.HasPrefix(providerKey, "wafer") {
-				apiKey = config.WaferAPIKey
-			} else if strings.Contains(providerKey, "bedrock") || strings.Contains(providerKey, "nemotron") || strings.Contains(provCfg.BaseURL, "bedrock") {
-				apiKey = config.AWSBearerTokenBedrock
-			}
-		}
-
-		apiURL := provCfg.BaseURL
-		if apiURL == "" {
-			if strings.HasPrefix(providerKey, "deepinfra") {
-				apiURL = "https://api.deepinfra.com/v1/openai/chat/completions"
-			} else if strings.HasPrefix(providerKey, "deepseek") {
-				apiURL = config.DeepSeekAPIURL
-			} else if strings.HasPrefix(providerKey, "wafer") {
-				apiURL = config.WaferAPIURL
-			} else if strings.Contains(providerKey, "bedrock") || strings.Contains(providerKey, "nemotron") {
-				apiURL = config.AWSBedrockMantleURL
-			}
-		}
-
-		useModel := provCfg.Model
-		if apiKey == "" || apiURL == "" || useModel == "" {
-			continue
-		}
-
-		timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
-		if timeout <= 0 {
-			timeout = 25 * time.Second
-		}
-		ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-
-		isDeepSeek := strings.Contains(strings.ToLower(providerKey), "deepseek") || strings.Contains(strings.ToLower(useModel), "deepseek")
-
-		var res string
-		var loc string
-		var err error
 		var providerEmittedChunks bool
-
 		provChunkHandler := func(delta, accumulated string) error {
 			providerEmittedChunks = true
 			if onChunk != nil {
@@ -468,14 +510,14 @@ func RunCommandTransformationStream(
 			return nil
 		}
 
-		if provCfg.PriorityFlag {
-			log.Printf("[COMMAND LLM] Provider %s running on PRIORITY track (priority=true)", providerKey)
-		}
+		var res string
+		var routing string
+		var err error
 
-		if provCfg.Stream && onChunk != nil {
-			res, loc, err = callChatCompletionsAPIStream(ctxTimeout, client, apiURL, apiKey, useModel, systemPrompt, userMessage, isDeepSeek, provCfg.FailFast, provCfg.PriorityFlag, provChunkHandler)
+		if spec.Stream && onChunk != nil {
+			res, routing, err = executeModelAttempt(ctx, client, spec, systemPrompt, userMessage, provChunkHandler)
 		} else {
-			res, loc, err = callChatCompletionsAPI(ctxTimeout, client, apiURL, apiKey, useModel, systemPrompt, userMessage, isDeepSeek, provCfg.FailFast, provCfg.PriorityFlag)
+			res, routing, err = executeModelAttempt(ctx, client, spec, systemPrompt, userMessage, nil)
 			if err == nil && onChunk != nil && res != "" {
 				_ = onChunk(res, res)
 			}
@@ -483,24 +525,31 @@ func RunCommandTransformationStream(
 
 		if err == nil {
 			if pctx != nil {
-				pctx.LLMProvider = providerKey
-				pctx.LLMModel = useModel
-				pctx.LLMRouting = loc
+				pctx.LLMProvider = spec.Provider
+				pctx.LLMModel = spec.Model
+				pctx.LLMRouting = routing
 			}
 			return res, nil
 		}
-		log.Printf("[COMMAND LLM FALLBACK] Provider %s (%s) failed: %v. Trying next in priority order.", providerKey, useModel, err)
+
+		log.Printf("[COMMAND LLM FALLBACK] Candidate %s/%s failed: %v. Trying next candidate.",
+			spec.Provider, spec.Model, err)
+
+		// Mid-stream reset recovery: If this candidate already emitted partial chunks before failing,
+		// notify the client to clear accumulated output before falling back to the next candidate
 		if providerEmittedChunks && onChunk != nil {
-			log.Printf("[COMMAND LLM FALLBACK] Provider %s emitted partial chunks before failing. Signaling stream reset.", providerKey)
+			log.Printf("[COMMAND LLM FALLBACK] Candidate %s/%s emitted partial chunks before failing. Signaling [RESET].",
+				spec.Provider, spec.Model)
 			_ = onChunk("[RESET]", "")
 		}
+
 		lastErr = err
 	}
 
 	if lastErr != nil {
-		return "", fmt.Errorf("all configured Command LLM providers failed. Last error: %w", lastErr)
+		return "", fmt.Errorf("all configured command models failed. Last error: %w", lastErr)
 	}
-	return "", fmt.Errorf("no Command LLM providers succeeded")
+	return "", fmt.Errorf("no command models succeeded")
 }
 
 func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pctx *PipelineContext) (string, error) {
@@ -510,9 +559,8 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 
 	cfg := config.ConfigManager.Get()
 	baseSystemPrompt := config.DefaultUniversalLLMSystemPrompt
-	defaultProv := cfg.Models.DefaultLLMProvider
-	if provCfg, ok := cfg.Models.LLMProviders[defaultProv]; ok && strings.TrimSpace(provCfg.SystemPrompt) != "" {
-		baseSystemPrompt = strings.TrimSpace(provCfg.SystemPrompt)
+	if len(cfg.Models.EnhancementModels) > 0 && strings.TrimSpace(cfg.Models.EnhancementModels[0].SystemPrompt) != "" {
+		baseSystemPrompt = strings.TrimSpace(cfg.Models.EnhancementModels[0].SystemPrompt)
 	}
 
 	var sb strings.Builder

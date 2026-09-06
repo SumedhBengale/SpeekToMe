@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+
+	"speektome-server/config"
 )
 
 func TestPipelineContext(t *testing.T) {
@@ -275,3 +278,322 @@ func TestDeepInfraPriorityFlagMock(t *testing.T) {
 		t.Errorf("Unexpected result: %q", res)
 	}
 }
+
+func TestRunDeepSeekChatCompletionFallback(t *testing.T) {
+	origCfg := config.ConfigManager.Get()
+	origRaw := config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(origCfg, origRaw)
+
+	origCerebrasKey := config.CerebrasAPIKey
+	origDeepInfraKey := config.DeepInfraAPIKey
+	config.CerebrasAPIKey = "mock-cerebras-key"
+	config.DeepInfraAPIKey = "mock-deepinfra-key"
+	defer func() {
+		config.CerebrasAPIKey = origCerebrasKey
+		config.DeepInfraAPIKey = origDeepInfraKey
+	}()
+
+	GlobalCircuitBreaker.Reset()
+	defer GlobalCircuitBreaker.Reset()
+
+	// Server 1 (Cerebras) fails with 503
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv1.Close()
+
+	// Server 2 (DeepInfra) succeeds
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{
+					"message": map[string]string{
+						"content": "Polished text from candidate 2",
+					},
+				},
+			},
+		})
+	}))
+	defer srv2.Close()
+
+	testCfg := origCfg
+	testCfg.Models.EnhancementModels = []config.ModelSpec{
+		{
+			Provider:         config.ProviderCerebras,
+			Model:            "gpt-oss-120b",
+			Enabled:          true,
+			EndpointOverride: srv1.URL,
+			TimeoutMs:        2000,
+		},
+		{
+			Provider:         config.ProviderDeepInfra,
+			Model:            "deepseek-ai/DeepSeek-V4-Flash",
+			Enabled:          true,
+			EndpointOverride: srv2.URL,
+			TimeoutMs:        2000,
+		},
+	}
+	config.ConfigManager.Set(testCfg, origRaw)
+
+	pctx := NewPipelineContext(101)
+	res, err := RunDeepSeekChatCompletion(context.Background(), srv2.Client(), "", "system prompt", "raw transcript", pctx)
+	if err != nil {
+		t.Fatalf("Expected fallback success, got error: %v", err)
+	}
+
+	if res != "Polished text from candidate 2" {
+		t.Errorf("Expected candidate 2 output, got %q", res)
+	}
+	if pctx.LLMProvider != config.ProviderDeepInfra {
+		t.Errorf("Expected LLMProvider deepinfra, got %q", pctx.LLMProvider)
+	}
+	if pctx.LLMModel != "deepseek-ai/DeepSeek-V4-Flash" {
+		t.Errorf("Expected LLMModel deepseek-ai/DeepSeek-V4-Flash, got %q", pctx.LLMModel)
+	}
+}
+
+func TestRunCommandTransformationStreamMidStreamReset(t *testing.T) {
+	origCfg := config.ConfigManager.Get()
+	origRaw := config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(origCfg, origRaw)
+
+	origCerebrasKey := config.CerebrasAPIKey
+	origDeepInfraKey := config.DeepInfraAPIKey
+	config.CerebrasAPIKey = "mock-cerebras-key"
+	config.DeepInfraAPIKey = "mock-deepinfra-key"
+	defer func() {
+		config.CerebrasAPIKey = origCerebrasKey
+		config.DeepInfraAPIKey = origDeepInfraKey
+	}()
+
+	GlobalCircuitBreaker.Reset()
+	defer GlobalCircuitBreaker.Reset()
+
+	// Server 1 emits 1 chunk, then abruptly disconnects / fails
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		chunkJSON, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": "Partial bad chunk"}},
+			},
+		})
+		w.Write([]byte("data: " + string(chunkJSON) + "\n\n"))
+		flusher.Flush()
+		// Abruptly terminate connection by hijacking or returning error
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		conn.Close()
+	}))
+	defer srv1.Close()
+
+	// Server 2 emits clean complete response
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		chunkJSON, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": "Clean complete command output"}},
+			},
+		})
+		w.Write([]byte("data: " + string(chunkJSON) + "\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	defer srv2.Close()
+
+	testCfg := origCfg
+	testCfg.Models.CommandModels = []config.ModelSpec{
+		{
+			Provider:         config.ProviderCerebras,
+			Model:            "gpt-oss-120b",
+			Enabled:          true,
+			Stream:           true,
+			EndpointOverride: srv1.URL,
+			TimeoutMs:        2000,
+		},
+		{
+			Provider:         config.ProviderDeepInfra,
+			Model:            "deepseek-ai/DeepSeek-V4-Flash",
+			Enabled:          true,
+			Stream:           true,
+			EndpointOverride: srv2.URL,
+			TimeoutMs:        2000,
+		},
+	}
+	config.ConfigManager.Set(testCfg, origRaw)
+
+	var deltas []string
+	pctx := NewPipelineContext(102)
+	res, err := RunCommandTransformationStream(
+		context.Background(),
+		srv2.Client(),
+		"raw text",
+		"format this",
+		pctx,
+		func(delta, accumulated string) error {
+			deltas = append(deltas, delta)
+			return nil
+		},
+	)
+
+	if err != nil {
+		t.Fatalf("Expected stream fallback success, got error: %v", err)
+	}
+
+	if res != "Clean complete command output" {
+		t.Errorf("Expected final result 'Clean complete command output', got %q", res)
+	}
+
+	// Verify that [RESET] was sent between srv1 partial failure and srv2 clean output
+	foundReset := false
+	for _, d := range deltas {
+		if d == "[RESET]" {
+			foundReset = true
+			break
+		}
+	}
+	if !foundReset {
+		t.Errorf("Expected [RESET] chunk to be emitted upon mid-stream fallback, but got deltas: %v", deltas)
+	}
+}
+
+func TestCircuitBreakerFastFailInPipeline(t *testing.T) {
+	origCfg := config.ConfigManager.Get()
+	origRaw := config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(origCfg, origRaw)
+
+	origCerebrasKey := config.CerebrasAPIKey
+	origDeepInfraKey := config.DeepInfraAPIKey
+	config.CerebrasAPIKey = "mock-cerebras-key"
+	config.DeepInfraAPIKey = "mock-deepinfra-key"
+	defer func() {
+		config.CerebrasAPIKey = origCerebrasKey
+		config.DeepInfraAPIKey = origDeepInfraKey
+	}()
+
+	GlobalCircuitBreaker.Reset()
+	defer GlobalCircuitBreaker.Reset()
+
+	var srv1Hits int32
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&srv1Hits, 1)
+		w.Header().Set("Retry-After", "10")
+		http.Error(w, "Rate limit reached", http.StatusTooManyRequests)
+	}))
+	defer srv1.Close()
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{
+					"message": map[string]string{
+						"content": "Response from healthy candidate 2",
+					},
+				},
+			},
+		})
+	}))
+	defer srv2.Close()
+
+	testCfg := origCfg
+	testCfg.Models.EnhancementModels = []config.ModelSpec{
+		{
+			Provider:         config.ProviderCerebras,
+			Model:            "gpt-oss-120b",
+			Enabled:          true,
+			EndpointOverride: srv1.URL,
+			TimeoutMs:        2000,
+		},
+		{
+			Provider:         config.ProviderDeepInfra,
+			Model:            "deepseek-ai/DeepSeek-V4-Flash",
+			Enabled:          true,
+			EndpointOverride: srv2.URL,
+			TimeoutMs:        2000,
+		},
+	}
+	config.ConfigManager.Set(testCfg, origRaw)
+
+	// Attempt 1: Server 1 returns 429, trips breaker. Server 2 succeeds.
+	res1, err := RunDeepSeekChatCompletion(context.Background(), srv2.Client(), "", "system", "text", nil)
+	if err != nil {
+		t.Fatalf("Attempt 1 failed: %v", err)
+	}
+	if res1 != "Response from healthy candidate 2" {
+		t.Errorf("Unexpected res1: %q", res1)
+	}
+	if atomic.LoadInt32(&srv1Hits) != 1 {
+		t.Fatalf("Expected srv1Hits == 1, got %d", atomic.LoadInt32(&srv1Hits))
+	}
+
+	// Attempt 2: Server 1's circuit breaker is now OPEN.
+	// It should FAST-FAIL candidate 1 with 0ms delay and zero HTTP calls to srv1.
+	res2, err := RunDeepSeekChatCompletion(context.Background(), srv2.Client(), "", "system", "text", nil)
+	if err != nil {
+		t.Fatalf("Attempt 2 failed: %v", err)
+	}
+	if res2 != "Response from healthy candidate 2" {
+		t.Errorf("Unexpected res2: %q", res2)
+	}
+	if atomic.LoadInt32(&srv1Hits) != 1 {
+		t.Errorf("Expected srv1Hits to remain 1 due to fast-failing circuit breaker, got %d", atomic.LoadInt32(&srv1Hits))
+	}
+}
+
+func TestAIEnhancementTruncationSafeguard(t *testing.T) {
+	origCfg := config.ConfigManager.Get()
+	origRaw := config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(origCfg, origRaw)
+
+	origCerebrasKey := config.CerebrasAPIKey
+	config.CerebrasAPIKey = "mock-cerebras-key"
+	defer func() {
+		config.CerebrasAPIKey = origCerebrasKey
+	}()
+
+	GlobalCircuitBreaker.Reset()
+	defer GlobalCircuitBreaker.Reset()
+
+	// Server returns heavily truncated output (only 1 word)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{
+					"message": map[string]string{
+						"content": "<raw_transcript> truncated </raw_transcript>",
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	testCfg := origCfg
+	testCfg.Models.EnhancementModels = []config.ModelSpec{
+		{
+			Provider:         config.ProviderCerebras,
+			Model:            "gpt-oss-120b",
+			Enabled:          true,
+			EndpointOverride: srv.URL,
+			TimeoutMs:        2000,
+		},
+	}
+	config.ConfigManager.Set(testCfg, origRaw)
+
+	enhancer := NewAIEnhancementTransform("", "gpt-oss-120b", "key", srv.URL, nil)
+	inputText := "One two three four five six seven eight nine ten words in original transcript."
+
+	res, err := enhancer.Transform(context.Background(), inputText, nil)
+	if err != nil {
+		t.Fatalf("Transform failed: %v", err)
+	}
+
+	// Safeguard must reject the 1-word truncation and return the verbatim input text
+	if res != inputText {
+		t.Errorf("Safeguard failed to preserve raw text! Expected %q, got %q", inputText, res)
+	}
+}
+

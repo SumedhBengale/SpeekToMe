@@ -35,6 +35,7 @@ func main() {
 	config.DeepSeekAPIKey = os.Getenv("DEEPSEEK_API_KEY")
 	config.CerebrasAPIKey = os.Getenv("CEREBRAS_API_KEY")
 	config.WaferAPIKey = os.Getenv("WAFER_API_KEY")
+	config.OpenRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
 	config.CloudflareAPIToken = os.Getenv("CLOUDFLARE_API_TOKEN")
 	config.CloudflareAccountID = os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 	config.AWSBearerTokenBedrock = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")

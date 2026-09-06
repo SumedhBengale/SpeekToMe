@@ -22,6 +22,7 @@ import (
 
 	"speektome-server/config"
 	"speektome-server/db"
+	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/utils"
 	"speektome-server/valkey"
@@ -774,124 +775,140 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 	cfg := config.ConfigManager.Get()
 	langParam, promptStr := BuildWhisperPrompt(userLanguages)
 
-	fallbackOrder := cfg.GetActiveBatchFallbackOrder()
-	if len(fallbackOrder) == 0 {
-		return "", nil, "", "", fmt.Errorf("no batch transcription providers are enabled or configured")
+	activeCandidates := cfg.GetActiveBatchSTTModels()
+	if len(activeCandidates) == 0 {
+		return "", nil, "", "", fmt.Errorf("no batch transcription models are enabled or configured")
 	}
 
 	var lastErr error
-	for _, provider := range fallbackOrder {
-		provCfg, ok := cfg.Models.BatchProviders[provider]
-		if !ok || !provCfg.Enabled {
+	for _, spec := range activeCandidates {
+		useModel := spec.Model
+		if useModel == "" && model != "" {
+			useModel = model
+		}
+
+		// Check language capability for this candidate
+		if langParam != "" && !cfg.IsBatchSTTLanguageSupported(spec, langParam) {
+			log.Printf("[BATCH STT SKIP] Language %q not in %s/%s supported languages. Trying next candidate.", langParam, spec.Provider, useModel)
 			continue
 		}
 
-		if strings.HasPrefix(provider, "bedrock") || strings.Contains(provider, "voxtral") {
+		// Check circuit breaker
+		canExec, done := pipeline.GlobalCircuitBreaker.CanExecute(spec.Provider, useModel)
+		if !canExec {
+			log.Printf("[BATCH STT SKIP] Circuit breaker OPEN for %s/%s. Skipping to next candidate.", spec.Provider, useModel)
+			continue
+		}
+
+		timeout := time.Duration(spec.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+
+		var text string
+		var segments []WhisperSegment
+		var loc string
+		var err error
+
+		switch strings.ToLower(spec.Provider) {
+		case "bedrock":
 			apiKey := config.AWSBearerTokenBedrock
-			if provCfg.APIKey != "" {
-				apiKey = provCfg.APIKey
-			}
-			if apiKey != "" {
-				if langParam != "" && !cfg.IsBatchLanguageSupported(provider, langParam) {
-					log.Printf("[BEDROCK SKIP] Language %q not in %s supported languages. Trying fallback.", langParam, provider)
-					continue
+			if apiKey == "" {
+				err = fmt.Errorf("AWS_BEARER_TOKEN_BEDROCK not configured in .env")
+				if done != nil {
+					done(false, 0, err, nil)
 				}
-				modelName := provCfg.Model
-				if modelName == "" {
-					modelName = "mistral.voxtral-mini-3b-2507"
-				}
-				timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
-				if timeout <= 0 {
-					timeout = 10 * time.Second
-				}
-				log.Printf("[BEDROCK VOXTRAL] Attempting transcription using %s model %s (lang: %q, timeout: %v)", provider, modelName, langParam, timeout)
-				text, segments, loc, err := RunBedrockVoxtralTranscribe(ctx, audioBytes, provCfg.BaseURL, modelName, apiKey, promptStr, timeout)
-				if err == nil {
-					return text, segments, provider, loc, nil
-				}
-				log.Printf("[BEDROCK VOXTRAL ERROR] Transcription failed: %v. Trying fallback.", err)
 				lastErr = err
+				continue
+			}
+			apiURL := spec.EndpointOverride
+			if apiURL == "" {
+				apiURL = config.AWSBedrockMantleURL
+			}
+			effectivePrompt := promptStr
+			if strings.TrimSpace(spec.InitialPrompt) != "" {
+				effectivePrompt = strings.TrimSpace(spec.InitialPrompt)
+			}
+			log.Printf("[BEDROCK VOXTRAL] Attempting transcription using %s (lang: %q, timeout: %v)", useModel, langParam, timeout)
+			text, segments, loc, err = RunBedrockVoxtralTranscribe(ctx, audioBytes, apiURL, useModel, apiKey, effectivePrompt, timeout)
+
+		case "groq":
+			if config.GroqAPIKey == "" {
+				err = fmt.Errorf("GROQ_API_KEY not configured in .env")
+				if done != nil {
+					done(false, 0, err, nil)
+				}
+				lastErr = err
+				continue
+			}
+			if !ratelimit.GroqRateLimiter.Allow() {
+				err = fmt.Errorf("groq rate limit reached (limit: %d RPM)", cfg.GroqRateLimitRPM)
+				if done != nil {
+					done(false, 429, err, nil)
+				}
+				lastErr = err
+				continue
+			}
+			log.Printf("[GROQ] Attempting transcription using %s (lang: %q)", useModel, langParam)
+			text, segments, loc, err = RunGroqTranscribe(ctx, audioBytes, useModel, langParam, promptStr)
+
+		case "deepinfra":
+			if config.DeepInfraAPIKey == "" {
+				err = fmt.Errorf("DEEPINFRA_API_KEY not configured in .env")
+				if done != nil {
+					done(false, 0, err, nil)
+				}
+				lastErr = err
+				continue
+			}
+			apiURL := spec.EndpointOverride
+			if apiURL == "" {
+				apiURL = config.DeepInfraBaseURL
+			}
+			effectivePrompt := promptStr
+			if strings.TrimSpace(spec.InitialPrompt) != "" {
+				effectivePrompt = strings.TrimSpace(spec.InitialPrompt)
+			}
+			log.Printf("[DI INFRA] Attempting transcription using %s (lang: %q, fail_fast: %v, priority: %v, timeout: %v)",
+				useModel, langParam, spec.FailFast, spec.PriorityFlag, timeout)
+			text, segments, loc, err = RunDeepInfraTranscribe(ctx, audioBytes, apiURL, useModel, langParam, effectivePrompt, spec.FailFast, spec.PriorityFlag, timeout)
+
+		case "cloudflare":
+			if config.CloudflareAPIToken == "" || config.CloudflareAccountID == "" {
+				err = fmt.Errorf("Cloudflare credentials not configured in .env")
+				if done != nil {
+					done(false, 0, err, nil)
+				}
+				lastErr = err
+				continue
+			}
+			log.Printf("[CLOUDFLARE AI] Attempting transcription using %s (lang: %q)", useModel, langParam)
+			text, segments, loc, err = RunCloudflareTranscribe(ctx, audioBytes, useModel, langParam, promptStr)
+
+		default:
+			if spec.EndpointOverride != "" {
+				log.Printf("[CUSTOM BATCH] Attempting transcription on %s (model: %s)", spec.EndpointOverride, useModel)
+				text, segments, loc, err = RunCustomBatchTranscribe(ctx, audioBytes, spec.EndpointOverride, "", useModel, langParam, promptStr)
 			} else {
-				log.Printf("[BEDROCK SKIP] Provider %s is enabled but AWS_BEARER_TOKEN_BEDROCK is not configured in .env. Trying fallback.", provider)
-			}
-		} else if strings.HasPrefix(provider, "groq") {
-			if config.GroqAPIKey != "" {
-				if langParam != "" && !cfg.IsBatchLanguageSupported(provider, langParam) {
-					log.Printf("[GROQ SKIP] Language %q not in %s capabilities. Trying fallback.", langParam, provider)
-					continue
-				}
-				if ratelimit.GroqRateLimiter.Allow() {
-					useModel := provCfg.Model
-					if useModel == "" {
-						useModel = model
-					}
-					log.Printf("[GROQ] Attempting transcription using %s model %s (lang: %q)", provider, useModel, langParam)
-					text, segments, loc, err := RunGroqTranscribe(ctx, audioBytes, useModel, langParam, promptStr)
-					if err == nil {
-						return text, segments, provider, loc, nil
-					}
-					log.Printf("[GROQ ERROR] Transcription failed: %v. Trying fallback.", err)
-					lastErr = err
-				} else {
-					log.Printf("[GROQ LIMIT] Global rate limit reached (limit: %d RPM). Trying fallback.", cfg.GroqRateLimitRPM)
-					lastErr = fmt.Errorf("groq rate limit reached")
-				}
-			}
-		} else if strings.HasPrefix(provider, "deepinfra") {
-			if config.DeepInfraAPIKey != "" {
-				diModel := provCfg.Model
-				if diModel == "" {
-					diModel = "openai/whisper-large-v3-turbo"
-				}
-				diURL := config.DeepInfraBaseURL
-				if provCfg.BaseURL != "" {
-					diURL = provCfg.BaseURL
-				}
-
-				timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
-				if timeout <= 0 {
-					timeout = 10 * time.Second
-				}
-
-				log.Printf("[DI INFRA] Attempting transcription using %s model %s (lang: %q, fail_fast: %v, priority: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, provCfg.PriorityFlag, timeout)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, diModel, langParam, promptStr, provCfg.FailFast, provCfg.PriorityFlag, timeout)
-				if err == nil {
-					return text, segments, provider, loc, nil
-				}
-				log.Printf("[DI INFRA ERROR] Transcription failed: %v. Trying fallback.", err)
-				lastErr = err
-			}
-		} else if strings.HasPrefix(provider, "cloudflare") {
-			if config.CloudflareAPIToken != "" && config.CloudflareAccountID != "" {
-				cfModel := provCfg.Model
-				if cfModel == "" {
-					cfModel = "@cf/openai/whisper-large-v3-turbo"
-				}
-				log.Printf("[CLOUDFLARE AI] Attempting transcription using %s model %s (lang: %q)", provider, cfModel, langParam)
-				text, segments, loc, err := RunCloudflareTranscribe(ctx, audioBytes, cfModel, langParam, promptStr)
-				if err == nil {
-					return text, segments, provider, loc, nil
-				}
-				log.Printf("[CLOUDFLARE AI ERROR] Transcription failed: %v. Trying fallback.", err)
-				lastErr = err
-			}
-		} else {
-			if provCfg.BaseURL != "" {
-				log.Printf("[CUSTOM BATCH] Attempting transcription on custom server: %s (model: %s)", provCfg.BaseURL, provCfg.Model)
-				text, segments, loc, err := RunCustomBatchTranscribe(ctx, audioBytes, provCfg.BaseURL, provCfg.APIKey, provCfg.Model, langParam, promptStr)
-				if err == nil {
-					return text, segments, provider, loc, nil
-				}
-				log.Printf("[CUSTOM BATCH ERROR] Transcription failed: %v. Trying fallback.", err)
-				lastErr = err
+				err = fmt.Errorf("unsupported batch transcription provider %s with no endpoint_override", spec.Provider)
 			}
 		}
+
+		if done != nil {
+			done(err == nil, 0, err, nil)
+		}
+
+		if err == nil {
+			return text, segments, spec.Provider, loc, nil
+		}
+		log.Printf("[BATCH STT FALLBACK] Candidate %s/%s failed: %v. Trying next in priority order.", spec.Provider, useModel, err)
+		lastErr = err
 	}
 
 	if lastErr != nil {
 		return "", nil, "", "", fmt.Errorf("all enabled transcription providers failed. Last error: %v", lastErr)
 	}
-	return "", nil, "", "", fmt.Errorf("no transcription providers are enabled or configured")
+	return "", nil, "", "", fmt.Errorf("no transcription providers succeeded")
 }
 
 func RunStreamingTranscribe(ctx context.Context, audioBytes []byte, userLanguages []string) (string, []WhisperSegment, string, string, error) {
@@ -902,12 +919,9 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 	cfg := config.ConfigManager.Get()
 	langParam, promptStr := BuildWhisperPrompt(userLanguages)
 
-	fallbackOrder := cfg.GetActiveStreamingFallbackOrder()
-	if len(fallbackOrder) > 0 {
-		topProv := fallbackOrder[0]
-		if provCfg, ok := cfg.Models.StreamingProviders[topProv]; ok && strings.TrimSpace(provCfg.InitialPrompt) != "" {
-			promptStr = strings.TrimSpace(provCfg.InitialPrompt)
-		}
+	activeCandidates := cfg.GetActiveStreamingSTTModels()
+	if len(activeCandidates) == 0 {
+		return "", nil, "", "", fmt.Errorf("no streaming transcription models configured")
 	}
 
 	if promptContext != "" {
@@ -920,86 +934,93 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 	}
 
 	var lastErr error
-
-	for _, provider := range fallbackOrder {
-		provCfg, ok := cfg.Models.StreamingProviders[provider]
-		if !ok || !provCfg.Enabled {
+	for _, spec := range activeCandidates {
+		// Skip WebSocket real-streaming continuous models during chunked REST pseudo-streaming
+		if spec.Type == "real" || strings.HasPrefix(spec.EndpointOverride, "ws://") || strings.HasPrefix(spec.EndpointOverride, "wss://") {
 			continue
 		}
 
-		// Skip WebSocket real-streaming providers in HTTP chunk fallback
-		if provCfg.Type == "real" || strings.HasPrefix(provCfg.BaseURL, "ws://") || strings.HasPrefix(provCfg.BaseURL, "wss://") {
+		useModel := spec.Model
+
+		// Check language support
+		if langParam != "" && !cfg.IsStreamingSTTLanguageSupported(spec, langParam) {
+			log.Printf("[STREAM STT SKIP] Language %q not in %s/%s supported languages. Trying next candidate.", langParam, spec.Provider, useModel)
 			continue
 		}
 
-		if strings.HasPrefix(provider, "bedrock") || strings.Contains(provider, "voxtral") {
+		// Check circuit breaker
+		canExec, done := pipeline.GlobalCircuitBreaker.CanExecute(spec.Provider, useModel)
+		if !canExec {
+			log.Printf("[STREAM STT SKIP] Circuit breaker OPEN for %s/%s. Skipping to next candidate.", spec.Provider, useModel)
+			continue
+		}
+
+		timeout := time.Duration(spec.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = 4000 * time.Millisecond
+		}
+
+		effectivePrompt := promptStr
+		if strings.TrimSpace(spec.InitialPrompt) != "" {
+			effectivePrompt = strings.TrimSpace(spec.InitialPrompt)
+		}
+
+		var text string
+		var segments []WhisperSegment
+		var loc string
+		var err error
+
+		switch strings.ToLower(spec.Provider) {
+		case "bedrock":
 			apiKey := config.AWSBearerTokenBedrock
-			if provCfg.APIKey != "" {
-				apiKey = provCfg.APIKey
-			}
-			if apiKey != "" {
-				if langParam != "" && !cfg.IsStreamingLanguageSupported(provider, langParam) {
-					log.Printf("[BEDROCK STREAM SKIP] Language %q not in %s supported languages. Trying fallback.", langParam, provider)
-					continue
+			if apiKey == "" {
+				err = fmt.Errorf("AWS_BEARER_TOKEN_BEDROCK not configured in .env")
+				if done != nil {
+					done(false, 0, err, nil)
 				}
-				modelName := provCfg.Model
-				if modelName == "" {
-					modelName = "mistral.voxtral-mini-3b-2507"
-				}
-				timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
-				if timeout <= 0 {
-					timeout = 4000 * time.Millisecond
-				}
-				voxtralPrompt := strings.TrimSpace(provCfg.InitialPrompt)
-				log.Printf("[BEDROCK STREAM ASR] Attempting pseudo-streaming transcription using %s model %s (lang: %q, timeout: %v)", provider, modelName, langParam, timeout)
-				text, segments, loc, err := RunBedrockVoxtralTranscribe(ctx, audioBytes, provCfg.BaseURL, modelName, apiKey, voxtralPrompt, timeout)
-				if err == nil {
-					return text, segments, provider, loc, nil
-				}
-				log.Printf("[BEDROCK STREAM ASR ERROR] %v. Trying fallback.", err)
 				lastErr = err
+				continue
+			}
+			apiURL := spec.EndpointOverride
+			if apiURL == "" {
+				apiURL = config.AWSBedrockMantleURL
+			}
+			log.Printf("[BEDROCK STREAM ASR] Attempting pseudo-streaming using %s (lang: %q, timeout: %v)", useModel, langParam, timeout)
+			text, segments, loc, err = RunBedrockVoxtralTranscribe(ctx, audioBytes, apiURL, useModel, apiKey, effectivePrompt, timeout)
+
+		case "deepinfra":
+			if config.DeepInfraAPIKey == "" {
+				err = fmt.Errorf("DEEPINFRA_API_KEY not configured in .env")
+				if done != nil {
+					done(false, 0, err, nil)
+				}
+				lastErr = err
+				continue
+			}
+			apiURL := spec.EndpointOverride
+			if apiURL == "" {
+				apiURL = config.DeepInfraBaseURL
+			}
+			log.Printf("[DI STREAM ASR] Attempting pseudo-streaming using %s (lang: %q, fail_fast: %v, timeout: %v)", useModel, langParam, spec.FailFast, timeout)
+			text, segments, loc, err = RunDeepInfraTranscribe(ctx, audioBytes, apiURL, useModel, langParam, effectivePrompt, spec.FailFast, spec.PriorityFlag, timeout)
+
+		default:
+			if spec.EndpointOverride != "" {
+				text, segments, loc, err = RunCustomBatchTranscribe(ctx, audioBytes, spec.EndpointOverride, "", useModel, langParam, effectivePrompt)
 			} else {
-				log.Printf("[BEDROCK STREAM SKIP] Provider %s is enabled but AWS_BEARER_TOKEN_BEDROCK is not configured in .env. Trying fallback.", provider)
-			}
-		} else if strings.HasPrefix(provider, "deepinfra") || strings.Contains(provider, "nemotron") {
-			if config.DeepInfraAPIKey != "" {
-				if langParam != "" && !cfg.IsStreamingLanguageSupported(provider, langParam) {
-					log.Printf("[NEMOTRON SKIP] Language %q not in %s supported languages. Auto-routing to full Whisper engine.", langParam, provider)
-					continue
-				}
-				diModel := provCfg.Model
-				if diModel == "" {
-					diModel = "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b"
-				}
-				diURL := config.DeepInfraBaseURL
-				if provCfg.BaseURL != "" {
-					diURL = provCfg.BaseURL
-				}
-
-				timeout := time.Duration(provCfg.TimeoutMs) * time.Millisecond
-				if timeout <= 0 {
-					timeout = 3500 * time.Millisecond
-				}
-
-				log.Printf("[DEEPINFRA STREAM ASR] Attempting streaming transcription using %s model %s (lang: %q, fail_fast: %v, priority: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, provCfg.PriorityFlag, timeout)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, diModel, langParam, promptStr, provCfg.FailFast, provCfg.PriorityFlag, timeout)
-				if err == nil {
-					return text, segments, provider, loc, nil
-				}
-				log.Printf("[DEEPINFRA STREAM ASR ERROR] %v. Trying fallback.", err)
-				lastErr = err
-			}
-		} else {
-			if provCfg.BaseURL != "" {
-				log.Printf("[CUSTOM STREAMING] Attempting transcription on custom streaming server: %s", provCfg.BaseURL)
-				text, segments, loc, err := RunCustomBatchTranscribe(ctx, audioBytes, provCfg.BaseURL, provCfg.APIKey, provCfg.Model, langParam, promptStr)
-				if err == nil {
-					return text, segments, provider, loc, nil
-				}
-				log.Printf("[CUSTOM STREAMING ERROR] %v. Trying fallback.", err)
-				lastErr = err
+				err = fmt.Errorf("unsupported streaming provider %s", spec.Provider)
 			}
 		}
+
+		if done != nil {
+			done(err == nil, 0, err, nil)
+		}
+
+		if err == nil {
+			return text, segments, spec.Provider, loc, nil
+		}
+		log.Printf("[STREAM STT FALLBACK] Candidate %s/%s failed: %v. Trying next in priority order.", spec.Provider, useModel, err)
+		lastErr = err
 	}
 
 	// Fallback to active batch STT providers if streaming endpoints fail

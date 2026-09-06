@@ -26,16 +26,20 @@ var (
 	AWSBedrockRegion      string
 	GoogleClientID        string
 	GoogleClientSecret    string
+	OpenRouterAPIKey      string
 	BackendURL            string
 	DatabaseURL           string
 	FrontendURL           string
 
 	GroqAPIURL          = "https://api.groq.com/openai/v1/audio/transcriptions"
+	GroqChatAPIURL      = "https://api.groq.com/openai/v1/chat/completions"
 	DeepInfraBaseURL    = "https://api.deepinfra.com/v1/openai/audio/transcriptions"
+	DeepInfraChatAPIURL = "https://api.deepinfra.com/v1/openai/chat/completions"
 	DeepSeekAPIURL      = "https://api.deepseek.com/chat/completions"
 	CerebrasAPIURL      = "https://api.cerebras.ai/v1/chat/completions"
 	WaferAPIURL         = "https://pass.wafer.ai/v1/chat/completions"
 	AWSBedrockMantleURL = "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions"
+	OpenRouterAPIURL    = "https://openrouter.ai/api/v1/chat/completions"
 )
 
 // Provider descriptor structs
@@ -169,14 +173,37 @@ func (c *LLMProviderConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// STTModelSpec defines a decoupled batch or pseudo-streaming transcription model candidate.
+type STTModelSpec struct {
+	Provider           string   `json:"provider"`                      // "bedrock" | "groq" | "deepinfra" | "cloudflare" | "self_hosted" | "custom"
+	Model              string   `json:"model"`                         // e.g. "openai/whisper-large-v3-turbo", "mistral.voxtral-mini-3b-2507"
+	Enabled            bool     `json:"enabled"`
+	TimeoutMs          int      `json:"timeout_ms,omitempty"`
+	FailFast           bool     `json:"fail_fast,omitempty"`
+	PriorityFlag       bool     `json:"priority_flag,omitempty"`       // (DeepInfra priority)
+	SupportedLanguages []string `json:"supported_languages,omitempty"` // e.g. ["*"] or ["en", "es", ...]
+	InitialPrompt      string   `json:"initial_prompt,omitempty"`
+	EndpointOverride   string   `json:"endpoint_override,omitempty"`
+}
+
+// STTStreamingModelSpec defines a streaming model candidate with stream type ("real" vs "pseudo")
+type STTStreamingModelSpec struct {
+	STTModelSpec
+	Type string `json:"type"` // "real" (WebSocket Opus continuous) | "pseudo" (chunked VAD via REST)
+}
+
 type ModelsConfig struct {
-	DefaultBatchProvider      string                             `json:"default_batch_provider,omitempty"`
-	DefaultStreamingProvider  string                             `json:"default_streaming_provider,omitempty"`
-	DefaultLLMProvider        string                             `json:"default_llm_provider,omitempty"`
-	BatchProviders            map[string]BatchProviderConfig     `json:"batch_providers"`
-	StreamingProviders        map[string]StreamingProviderConfig `json:"streaming_providers"`
-	LLMProviders              map[string]LLMProviderConfig       `json:"llm_providers"`
-	CommandLLMProviders       map[string]LLMProviderConfig       `json:"command_llm_providers,omitempty"`
+	DefaultBatchProvider     string                             `json:"default_batch_provider,omitempty"`
+	DefaultStreamingProvider string                             `json:"default_streaming_provider,omitempty"`
+	DefaultLLMProvider       string                             `json:"default_llm_provider,omitempty"`
+	EnhancementModels        []ModelSpec                        `json:"enhancement_models,omitempty"`
+	CommandModels            []ModelSpec                        `json:"command_models,omitempty"`
+	BatchSTTModels           []STTModelSpec                     `json:"batch_stt_models,omitempty"`
+	StreamingSTTModels       []STTStreamingModelSpec            `json:"streaming_stt_models,omitempty"`
+	BatchProviders           map[string]BatchProviderConfig     `json:"batch_providers,omitempty"`
+	StreamingProviders       map[string]StreamingProviderConfig `json:"streaming_providers,omitempty"`
+	LLMProviders             map[string]LLMProviderConfig       `json:"llm_providers,omitempty"`
+	CommandLLMProviders      map[string]LLMProviderConfig       `json:"command_llm_providers,omitempty"`
 }
 
 type OnboardingPromoConfig struct {
@@ -338,6 +365,161 @@ func DefaultModelsConfig() ModelsConfig {
 				FailFast:           true,
 				InitialPrompt:      defaultStreamingPrompt,
 				SupportedLanguages: []string{"*"},
+			},
+		},
+		EnhancementModels: []ModelSpec{
+			{
+				Provider:  ProviderCerebras,
+				Model:     "gpt-oss-120b",
+				Enabled:   true,
+				TimeoutMs: 15000,
+			},
+			{
+				Provider:  ProviderDeepInfra,
+				Model:     "deepseek-ai/DeepSeek-V4-Flash",
+				Enabled:   true,
+				TimeoutMs: 15000,
+				FailFast:  true,
+				Reasoning: "disabled",
+			},
+			{
+				Provider:  ProviderDeepSeek,
+				Model:     "deepseek-v4-flash",
+				Enabled:   true,
+				TimeoutMs: 30000,
+				Reasoning: "disabled",
+			},
+			{
+				Provider:  ProviderWafer,
+				Model:     "DeepSeek-V4-Flash-0731-Fast",
+				Enabled:   false,
+				TimeoutMs: 15000,
+				Reasoning: "disabled",
+			},
+		},
+		CommandModels: []ModelSpec{
+			{
+				Provider:    ProviderDeepInfra,
+				Model:       "deepseek-ai/DeepSeek-V4-Flash",
+				Enabled:     true,
+				TimeoutMs:   15000,
+				Stream:      true,
+				ServiceTier: "priority",
+				FailFast:    true,
+				Reasoning:   "disabled",
+			},
+			{
+				Provider:  ProviderBedrock,
+				Model:     "nvidia.nemotron-super-3-120b",
+				Enabled:   true,
+				TimeoutMs: 25000,
+				Stream:    true,
+			},
+			{
+				Provider:  ProviderDeepSeek,
+				Model:     "deepseek-v4-flash",
+				Enabled:   true,
+				TimeoutMs: 30000,
+				Stream:    true,
+				Reasoning: "disabled",
+			},
+			{
+				Provider:  ProviderWafer,
+				Model:     "DeepSeek-V4-Flash-0731-Fast",
+				Enabled:   false,
+				TimeoutMs: 15000,
+				Stream:    true,
+				Reasoning: "disabled",
+			},
+		},
+		BatchSTTModels: []STTModelSpec{
+			{
+				Provider:           "bedrock",
+				Model:              "mistral.voxtral-mini-3b-2507",
+				Enabled:            true,
+				TimeoutMs:          10000,
+				SupportedLanguages: []string{"en", "fr", "de", "es", "it", "pt", "nl", "pl", "ru", "ar", "hi"},
+			},
+			{
+				Provider:           "groq",
+				Model:              "whisper-large-v3-turbo",
+				Enabled:            true,
+				TimeoutMs:          8000,
+				SupportedLanguages: []string{"*"},
+			},
+			{
+				Provider:           "deepinfra",
+				Model:              "openai/whisper-large-v3-turbo",
+				Enabled:            true,
+				TimeoutMs:          10000,
+				FailFast:           true,
+				PriorityFlag:       true,
+				SupportedLanguages: []string{"*"},
+			},
+			{
+				Provider:           "deepinfra",
+				Model:              "openai/whisper-large-v3",
+				Enabled:            true,
+				TimeoutMs:          12000,
+				FailFast:           true,
+				SupportedLanguages: []string{"*"},
+			},
+			{
+				Provider:           "cloudflare",
+				Model:              "@cf/openai/whisper-large-v3-turbo",
+				Enabled:            true,
+				TimeoutMs:          15000,
+				SupportedLanguages: []string{"*"},
+			},
+		},
+		StreamingSTTModels: []STTStreamingModelSpec{
+			{
+				STTModelSpec: STTModelSpec{
+					Provider:           "self_hosted",
+					Model:              "nemotron-3.5-asr-streaming-0.6b.planar.q8_0",
+					Enabled:            true,
+					TimeoutMs:          5000,
+					InitialPrompt:      defaultStreamingPrompt,
+					SupportedLanguages: []string{"*"},
+					EndpointOverride:   "ws://GPU_HOST_IP:8080/v1/realtime/opus",
+				},
+				Type: "real",
+			},
+			{
+				STTModelSpec: STTModelSpec{
+					Provider:           "deepinfra",
+					Model:              "nvidia/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b",
+					Enabled:            true,
+					TimeoutMs:          4000,
+					FailFast:           false,
+					InitialPrompt:      defaultStreamingPrompt,
+					SupportedLanguages: []string{"en", "es", "de", "fr", "it", "pt", "nl", "ru", "tr", "ar", "hi", "ja", "ko", "vi", "uk", "zh", "pl", "sv", "cs", "no", "da", "bg", "fi", "hr", "sk", "hu", "ro", "et", "el", "lt", "lv", "mt", "sl", "he", "th"},
+				},
+				Type: "pseudo",
+			},
+			{
+				STTModelSpec: STTModelSpec{
+					Provider:           "deepinfra",
+					Model:              "openai/whisper-large-v3-turbo",
+					Enabled:            true,
+					TimeoutMs:          3500,
+					FailFast:           true,
+					InitialPrompt:      defaultStreamingPrompt,
+					SupportedLanguages: []string{"*"},
+				},
+				Type: "pseudo",
+			},
+			{
+				STTModelSpec: STTModelSpec{
+					Provider:           "deepinfra",
+					Model:              "openai/whisper-large-v3",
+					Enabled:            true,
+					TimeoutMs:          4000,
+					FailFast:           true,
+					InitialPrompt:      defaultStreamingPrompt,
+					SupportedLanguages: []string{"*"},
+				},
+				Type: "pseudo",
 			},
 		},
 		LLMProviders: map[string]LLMProviderConfig{
@@ -549,6 +731,98 @@ func (p *ProviderConfig) GetActiveCommandLLMFallbackOrder() []string {
 	return sortProviderRanks(ranks)
 }
 
+func (p *ProviderConfig) GetActiveEnhancementModels() []ModelSpec {
+	var active []ModelSpec
+	for _, spec := range p.Models.EnhancementModels {
+		if spec.Enabled && strings.TrimSpace(spec.Model) != "" {
+			active = append(active, spec)
+		}
+	}
+	if len(active) == 0 {
+		for _, spec := range DefaultModelsConfig().EnhancementModels {
+			if spec.Enabled {
+				active = append(active, spec)
+			}
+		}
+	}
+	return active
+}
+
+func (p *ProviderConfig) GetActiveCommandModels() []ModelSpec {
+	var active []ModelSpec
+	for _, spec := range p.Models.CommandModels {
+		if spec.Enabled && strings.TrimSpace(spec.Model) != "" {
+			active = append(active, spec)
+		}
+	}
+	if len(active) == 0 {
+		for _, spec := range DefaultModelsConfig().CommandModels {
+			if spec.Enabled {
+				active = append(active, spec)
+			}
+		}
+	}
+	return active
+}
+
+func (p *ProviderConfig) GetActiveBatchSTTModels() []STTModelSpec {
+	var active []STTModelSpec
+	for _, spec := range p.Models.BatchSTTModels {
+		if spec.Enabled && strings.TrimSpace(spec.Model) != "" {
+			active = append(active, spec)
+		}
+	}
+	if len(active) == 0 {
+		for _, spec := range DefaultModelsConfig().BatchSTTModels {
+			if spec.Enabled {
+				active = append(active, spec)
+			}
+		}
+	}
+	return active
+}
+
+func (p *ProviderConfig) GetActiveStreamingSTTModels() []STTStreamingModelSpec {
+	var active []STTStreamingModelSpec
+	for _, spec := range p.Models.StreamingSTTModels {
+		if spec.Enabled && strings.TrimSpace(spec.Model) != "" {
+			active = append(active, spec)
+		}
+	}
+	if len(active) == 0 {
+		for _, spec := range DefaultModelsConfig().StreamingSTTModels {
+			if spec.Enabled {
+				active = append(active, spec)
+			}
+		}
+	}
+	return active
+}
+
+func (p *ProviderConfig) IsBatchSTTLanguageSupported(spec STTModelSpec, langCode string) bool {
+	if langCode == "" || len(spec.SupportedLanguages) == 0 {
+		return true
+	}
+	for _, l := range spec.SupportedLanguages {
+		if l == "*" || strings.EqualFold(l, langCode) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *ProviderConfig) IsStreamingSTTLanguageSupported(spec STTStreamingModelSpec, langCode string) bool {
+	if langCode == "" || len(spec.SupportedLanguages) == 0 {
+		return true
+	}
+	for _, l := range spec.SupportedLanguages {
+		if l == "*" || strings.EqualFold(l, langCode) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *ProviderConfig) IsStreamingLanguageSupported(providerName, langCode string) bool {
 	if langCode == "" {
 		return true
@@ -596,7 +870,24 @@ type CachedConfigManager struct {
 func (m *CachedConfigManager) Get() ProviderConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.config
+	c := m.config
+	if len(m.config.Models.EnhancementModels) > 0 {
+		c.Models.EnhancementModels = make([]ModelSpec, len(m.config.Models.EnhancementModels))
+		copy(c.Models.EnhancementModels, m.config.Models.EnhancementModels)
+	}
+	if len(m.config.Models.CommandModels) > 0 {
+		c.Models.CommandModels = make([]ModelSpec, len(m.config.Models.CommandModels))
+		copy(c.Models.CommandModels, m.config.Models.CommandModels)
+	}
+	if len(m.config.Models.BatchSTTModels) > 0 {
+		c.Models.BatchSTTModels = make([]STTModelSpec, len(m.config.Models.BatchSTTModels))
+		copy(c.Models.BatchSTTModels, m.config.Models.BatchSTTModels)
+	}
+	if len(m.config.Models.StreamingSTTModels) > 0 {
+		c.Models.StreamingSTTModels = make([]STTStreamingModelSpec, len(m.config.Models.StreamingSTTModels))
+		copy(c.Models.StreamingSTTModels, m.config.Models.StreamingSTTModels)
+	}
+	return c
 }
 
 func (m *CachedConfigManager) GetRawAll() map[string]string {
@@ -612,6 +903,26 @@ func (m *CachedConfigManager) GetRawAll() map[string]string {
 func (m *CachedConfigManager) Set(c ProviderConfig, raw map[string]string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(c.Models.EnhancementModels) > 0 {
+		enh := make([]ModelSpec, len(c.Models.EnhancementModels))
+		copy(enh, c.Models.EnhancementModels)
+		c.Models.EnhancementModels = enh
+	}
+	if len(c.Models.CommandModels) > 0 {
+		cmd := make([]ModelSpec, len(c.Models.CommandModels))
+		copy(cmd, c.Models.CommandModels)
+		c.Models.CommandModels = cmd
+	}
+	if len(c.Models.BatchSTTModels) > 0 {
+		bstt := make([]STTModelSpec, len(c.Models.BatchSTTModels))
+		copy(bstt, c.Models.BatchSTTModels)
+		c.Models.BatchSTTModels = bstt
+	}
+	if len(c.Models.StreamingSTTModels) > 0 {
+		sstt := make([]STTStreamingModelSpec, len(c.Models.StreamingSTTModels))
+		copy(sstt, c.Models.StreamingSTTModels)
+		c.Models.StreamingSTTModels = sstt
+	}
 	m.config = c
 	m.rawConfigs = raw
 }
@@ -623,8 +934,14 @@ func (m *CachedConfigManager) UpdateSelfHostedStreamingURL(rawURL string) {
 		prov.BaseURL = rawURL
 		prov.Enabled = true
 		m.config.Models.StreamingProviders["self_hosted_nemotron_3_5"] = prov
-		log.Printf("[CONFIG] Dynamic worker URL updated in memory for self_hosted_nemotron_3_5: %s", rawURL)
 	}
+	for i := range m.config.Models.StreamingSTTModels {
+		if m.config.Models.StreamingSTTModels[i].Provider == "self_hosted" || m.config.Models.StreamingSTTModels[i].Type == "real" {
+			m.config.Models.StreamingSTTModels[i].EndpointOverride = rawURL
+			m.config.Models.StreamingSTTModels[i].Enabled = true
+		}
+	}
+	log.Printf("[CONFIG] Dynamic worker URL updated in memory for self_hosted_nemotron_3_5: %s", rawURL)
 }
 
 func (m *CachedConfigManager) GetTransformInputWordLimit() int {
@@ -656,6 +973,18 @@ func ParseRawConfigs(dbConfigs map[string]string) (ProviderConfig, map[string]st
 	if jsonStr, ok := dbConfigs["models_config_json"]; ok && strings.TrimSpace(jsonStr) != "" {
 		var parsed ModelsConfig
 		if err := json.Unmarshal([]byte(jsonStr), &parsed); err == nil {
+			if len(parsed.EnhancementModels) > 0 {
+				models.EnhancementModels = parsed.EnhancementModels
+			}
+			if len(parsed.CommandModels) > 0 {
+				models.CommandModels = parsed.CommandModels
+			}
+			if len(parsed.BatchSTTModels) > 0 {
+				models.BatchSTTModels = parsed.BatchSTTModels
+			}
+			if len(parsed.StreamingSTTModels) > 0 {
+				models.StreamingSTTModels = parsed.StreamingSTTModels
+			}
 			if len(parsed.BatchProviders) > 0 {
 				models.BatchProviders = parsed.BatchProviders
 			}
