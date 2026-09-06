@@ -20,8 +20,8 @@ mod win32_impl {
         CS_HREDRAW, CS_VREDRAW, SW_HIDE, SW_SHOWNA, WS_POPUP,
         WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_NOACTIVATE,
         WNDCLASSW, SetTimer, KillTimer, WM_CREATE, WM_TIMER,
-        SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-        HWND_TOPMOST, UpdateLayeredWindow,
+        SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SWP_NOMOVE,
+        HWND_TOPMOST, UpdateLayeredWindow, BringWindowToTop, WINDOWPOS, WM_WINDOWPOSCHANGING,
         CreateIconIndirect, DestroyIcon, ICONINFO, SendMessageW,
     };
     use windows_sys::Win32::Graphics::Gdi::{
@@ -54,6 +54,26 @@ mod win32_impl {
     const DT_WORDBREAK: u32 = 0x00000010;
     const DT_CALCRECT: u32 = 0x00000400;
     const DT_NOPREFIX: u32 = 0x00000800;
+    const DT_VCENTER: u32 = 0x00000004;
+    const DT_SINGLELINE: u32 = 0x00000020;
+    const FW_SEMIBOLD: i32 = 600;
+
+    const GWL_EXSTYLE: i32 = -20;
+    const CS_DBLCLKS: u32 = 0x0008;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const WM_MOUSEMOVE: u32 = 0x0200;
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_LBUTTONUP: u32 = 0x0202;
+    const WM_LBUTTONDBLCLK: u32 = 0x0203;
+    const WM_RBUTTONUP: u32 = 0x0205;
+    const WM_SETCURSOR: u32 = 0x0020;
+    const WM_CAPTURECHANGED: u32 = 0x0215;
+
+    static IS_DRAGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static DRAG_OFFSET_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    static DRAG_OFFSET_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    static MEETING_DRAGGED_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+    static MEETING_DRAGGED_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
     #[link(name = "user32")]
     extern "system" {
@@ -64,6 +84,14 @@ mod win32_impl {
             lprect: *mut RECT,
             uformat: u32,
         ) -> i32;
+        fn GetWindowLongW(hWnd: HWND, nIndex: i32) -> i32;
+        fn SetWindowLongW(hWnd: HWND, nIndex: i32, dwNewLong: i32) -> i32;
+        fn GetWindowRect(hWnd: HWND, lpRect: *mut RECT) -> i32;
+        fn ReleaseCapture() -> i32;
+        fn SetCapture(hWnd: HWND) -> HWND;
+        fn GetCursorPos(lpPoint: *mut windows_sys::Win32::Foundation::POINT) -> i32;
+        fn LoadCursorW(hInstance: *mut std::ffi::c_void, lpCursorName: *const u16) -> *mut std::ffi::c_void;
+        fn SetCursor(hCursor: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
     }
 
     pub struct SendHWND(pub HWND);
@@ -75,6 +103,7 @@ mod win32_impl {
         Hidden = 0,
         Listening = 1,
         Processing = 2,
+        Meeting = 3,
     }
 
     impl From<u8> for PreviewState {
@@ -82,6 +111,7 @@ mod win32_impl {
             match val {
                 1 => PreviewState::Listening,
                 2 => PreviewState::Processing,
+                3 => PreviewState::Meeting,
                 _ => PreviewState::Hidden,
             }
         }
@@ -171,7 +201,7 @@ mod win32_impl {
     pub fn set_preview_state(state: PreviewState) {
         PREVIEW_STATE.store(state as u8, Ordering::SeqCst);
         match state {
-            PreviewState::Hidden => {
+            PreviewState::Hidden | PreviewState::Meeting => {
                 hide_preview();
             }
             PreviewState::Listening | PreviewState::Processing => {
@@ -285,15 +315,24 @@ mod win32_impl {
 
     pub fn show_overlay() {
         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+            let hwnd = send_hwnd.0;
             unsafe {
-                update_layered_overlay(send_hwnd.0);
-                ShowWindow(send_hwnd.0, SW_SHOWNA);
+                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                if (ex_style & (WS_EX_TRANSPARENT as i32)) == 0 {
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | (WS_EX_TRANSPARENT as i32) | (WS_EX_TOPMOST as i32));
+                }
+                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                let (x, y) = calculate_pill_position(&config, 62, 24);
                 SetWindowPos(
-                    send_hwnd.0,
+                    hwnd,
                     HWND_TOPMOST,
-                    0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    x, y, 62, 24,
+                    SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
+                BringWindowToTop(hwnd);
+                update_layered_overlay(hwnd);
+                ShowWindow(hwnd, SW_SHOWNA);
+                SetTimer(hwnd, 1, 30, None);
             }
         }
         if let Some(app) = crate::TAURI_APP.get() {
@@ -314,6 +353,89 @@ mod win32_impl {
         }
     }
 
+    pub fn update_tray_tooltip(text: &str) {
+        if let Some(send_hwnd) = TRAY_HWND.get() {
+            unsafe {
+                let mut nid: NOTIFYICONDATAW = mem::zeroed();
+                nid.cbSize = mem::size_of::<NOTIFYICONDATAW>() as u32;
+                nid.hWnd = send_hwnd.0;
+                nid.uID = 1;
+                nid.uFlags = NIF_TIP;
+                let wide_tip = encode_wide(text);
+                for (i, &c) in wide_tip.iter().enumerate() {
+                    if i < nid.szTip.len() {
+                        nid.szTip[i] = c;
+                    }
+                }
+                Shell_NotifyIconW(NIM_MODIFY, &nid);
+            }
+        }
+    }
+
+    pub fn show_meeting_overlay() {
+        set_preview_state(PreviewState::Meeting);
+        MEETING_DRAGGED_X.store(-1, Ordering::Relaxed);
+        MEETING_DRAGGED_Y.store(-1, Ordering::Relaxed);
+        if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+            let hwnd = send_hwnd.0;
+            unsafe {
+                // Remove WS_EX_TRANSPARENT so the overlay pill can be clicked & dragged by the user; ensure WS_EX_TOPMOST
+                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                SetWindowLongW(hwnd, GWL_EXSTYLE, (ex_style & !(WS_EX_TRANSPARENT as i32)) | (WS_EX_TOPMOST as i32));
+
+                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                let (x, y) = calculate_pill_position(&config, 104, 24);
+
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    x, y, 104, 24,
+                    SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+                );
+                BringWindowToTop(hwnd);
+                update_layered_overlay(hwnd);
+                ShowWindow(hwnd, SW_SHOWNA);
+                SetTimer(hwnd, 1, 30, None);
+            }
+        }
+        update_tray_tooltip("SpeekTo.Me - 🔴 Scribing Meeting...");
+        if let Some(app) = crate::TAURI_APP.get() {
+            use tauri::Emitter;
+            let _ = app.emit("meeting-recording-started", ());
+        }
+    }
+
+    pub fn hide_meeting_overlay() {
+        MEETING_DRAGGED_X.store(-1, Ordering::Relaxed);
+        MEETING_DRAGGED_Y.store(-1, Ordering::Relaxed);
+        if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
+            let hwnd = send_hwnd.0;
+            unsafe {
+                // Restore WS_EX_TRANSPARENT for normal click-through dictation; ensure WS_EX_TOPMOST
+                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | (WS_EX_TRANSPARENT as i32) | (WS_EX_TOPMOST as i32));
+
+                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                let (def_x, def_y) = calculate_pill_position(&config, 62, 24);
+
+                // Reposition back to default position and 62x24 size, then hide
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    def_x, def_y, 62, 24,
+                    SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
+                ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        set_preview_state(PreviewState::Hidden);
+        update_tray_tooltip("SpeekTo.Me (Hold Shortcut to transcribe)");
+        if let Some(app) = crate::TAURI_APP.get() {
+            use tauri::Emitter;
+            let _ = app.emit("meeting-recording-stopped", ());
+        }
+    }
+
     pub fn show_preview() {
         if let Some(send_hwnd) = PREVIEW_HWND.get() {
             unsafe {
@@ -323,7 +445,10 @@ mod win32_impl {
     }
 
     pub fn hide_preview() {
-        PREVIEW_STATE.store(PreviewState::Hidden as u8, Ordering::SeqCst);
+        let current_state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+        if current_state != PreviewState::Meeting {
+            PREVIEW_STATE.store(PreviewState::Hidden as u8, Ordering::SeqCst);
+        }
         if let Some(lock) = PREVIEW_TEXT.get() {
             if let Ok(mut t) = lock.lock() {
                 t.clear();
@@ -339,20 +464,25 @@ mod win32_impl {
     pub fn update_overlay_position() {
         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
             let hwnd = send_hwnd.0;
-            let (x, y) = {
+            let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+            let pill_width = if state == PreviewState::Meeting { 104 } else { 62 };
+            let (x, y) = if state == PreviewState::Meeting && MEETING_DRAGGED_X.load(Ordering::Relaxed) >= 0 {
+                (MEETING_DRAGGED_X.load(Ordering::Relaxed), MEETING_DRAGGED_Y.load(Ordering::Relaxed))
+            } else {
                 let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                calculate_pill_position(&config, 62, 24)
+                calculate_pill_position(&config, pill_width, 24)
             };
             unsafe {
                 SetWindowPos(
                     hwnd,
-                    std::ptr::null_mut(),
+                    HWND_TOPMOST,
                     x,
                     y,
-                    62,
+                    pill_width,
                     24,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
+                    SWP_NOACTIVATE,
                 );
+                BringWindowToTop(hwnd);
                 update_layered_overlay(hwnd);
             }
         }
@@ -388,12 +518,132 @@ mod win32_impl {
                 SetTimer(hwnd, 1, 30, None);
                 0
             }
+            WM_WINDOWPOSCHANGING => {
+                let wp = lparam as *mut WINDOWPOS;
+                if !wp.is_null() {
+                    (*wp).hwndInsertAfter = HWND_TOPMOST;
+                    (*wp).flags &= !SWP_NOZORDER;
+                }
+                0
+            }
             WM_TIMER => {
                 let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
                 if state != PreviewState::Hidden {
+                    static TOPMOST_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    let count = TOPMOST_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    if count % 10 == 0 {
+                        SetWindowPos(
+                            hwnd,
+                            HWND_TOPMOST,
+                            0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                        BringWindowToTop(hwnd);
+                    }
                     update_layered_overlay(hwnd);
                 }
                 0
+            }
+            WM_SETCURSOR => {
+                let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+                if state == PreviewState::Meeting {
+                    const IDC_SIZEALL: usize = 32646;
+                    let cursor = LoadCursorW(std::ptr::null_mut(), IDC_SIZEALL as *const u16);
+                    if !cursor.is_null() {
+                        SetCursor(cursor);
+                        return 1;
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_LBUTTONDOWN => {
+                let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+                if state == PreviewState::Meeting {
+                    SetCapture(hwnd);
+                    let mut pt: windows_sys::Win32::Foundation::POINT = mem::zeroed();
+                    GetCursorPos(&mut pt);
+                    let mut rect: RECT = mem::zeroed();
+                    GetWindowRect(hwnd, &mut rect);
+                    DRAG_OFFSET_X.store(pt.x - rect.left, Ordering::Relaxed);
+                    DRAG_OFFSET_Y.store(pt.y - rect.top, Ordering::Relaxed);
+                    IS_DRAGGING.store(true, Ordering::Relaxed);
+                    0
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_MOUSEMOVE => {
+                if IS_DRAGGING.load(Ordering::Relaxed) {
+                    let mut pt: windows_sys::Win32::Foundation::POINT = mem::zeroed();
+                    GetCursorPos(&mut pt);
+                    let off_x = DRAG_OFFSET_X.load(Ordering::Relaxed);
+                    let off_y = DRAG_OFFSET_Y.load(Ordering::Relaxed);
+                    let new_x = pt.x - off_x;
+                    let new_y = pt.y - off_y;
+                    let screen_w = GetSystemMetrics(SM_CXSCREEN);
+                    let screen_h = GetSystemMetrics(SM_CYSCREEN);
+                    let clamped_x = new_x.clamp(2, screen_w - 106);
+                    let clamped_y = new_y.clamp(2, screen_h - 26);
+                    SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        clamped_x,
+                        clamped_y,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                    0
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_LBUTTONUP => {
+                if IS_DRAGGING.swap(false, Ordering::Relaxed) {
+                    ReleaseCapture();
+                    let mut rect: RECT = mem::zeroed();
+                    GetWindowRect(hwnd, &mut rect);
+                    let (new_x, new_y) = (rect.left, rect.top);
+                    println!("[OVERLAY] Pill placed at ({}, {}) for this meeting session.", new_x, new_y);
+                    MEETING_DRAGGED_X.store(new_x, Ordering::Relaxed);
+                    MEETING_DRAGGED_Y.store(new_y, Ordering::Relaxed);
+                    SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        new_x,
+                        new_y,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                    BringWindowToTop(hwnd);
+                    0
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_CAPTURECHANGED => {
+                if IS_DRAGGING.swap(false, Ordering::Relaxed) {
+                    let mut rect: RECT = mem::zeroed();
+                    GetWindowRect(hwnd, &mut rect);
+                    let (new_x, new_y) = (rect.left, rect.top);
+                    MEETING_DRAGGED_X.store(new_x, Ordering::Relaxed);
+                    MEETING_DRAGGED_Y.store(new_y, Ordering::Relaxed);
+                }
+                0
+            }
+            WM_LBUTTONDBLCLK | WM_RBUTTONUP => {
+                let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+                if state == PreviewState::Meeting {
+                    IS_DRAGGING.store(false, Ordering::Relaxed);
+                    ReleaseCapture();
+                    if let Some(app) = crate::TAURI_APP.get() {
+                        crate::show_or_create_settings_window(app);
+                    }
+                    0
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
             }
             WM_PAINT => {
                 let mut ps: PAINTSTRUCT = mem::zeroed();
@@ -519,7 +769,14 @@ mod win32_impl {
             }
 
             static SMOOTHED_VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let raw_vol = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed);
+            let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+            let raw_vol = if state == PreviewState::Meeting {
+                let mic = crate::audio::MIC_VOLUME.load(Ordering::Relaxed);
+                let lb = crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed);
+                mic.max(lb)
+            } else {
+                crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed)
+            };
             let mut smoothed = SMOOTHED_VOLUME.load(Ordering::Relaxed);
             smoothed = ((smoothed as f32 * 0.8) + (raw_vol as f32 * 0.2)) as u32;
             SMOOTHED_VOLUME.store(smoothed, Ordering::Relaxed);
@@ -539,9 +796,12 @@ mod win32_impl {
             let bar_width = 2.5;
             let gap = 2.0;
             let total_width = 5.0 * bar_width + 4.0 * gap;
-            let start_x = (width as f32 - total_width) / 2.0;
+            let start_x = if state == PreviewState::Meeting {
+                14.0
+            } else {
+                (width as f32 - total_width) / 2.0
+            };
 
-            let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
             let is_processing = state == PreviewState::Processing;
 
             for i in 0..5 {
@@ -604,6 +864,100 @@ mod win32_impl {
                         }
                     }
                 }
+            }
+
+            if state == PreviewState::Meeting {
+                let hdc_mask = CreateCompatibleDC(hdc_screen);
+                let mut mask_bits: *mut std::ffi::c_void = ptr::null_mut();
+                let mask_dib = CreateDIBSection(
+                    hdc_mask,
+                    &bmi as *const _,
+                    0,
+                    &mut mask_bits,
+                    ptr::null_mut(),
+                    0,
+                );
+
+                if !mask_dib.is_null() && !mask_bits.is_null() {
+                    let old_mask_bitmap = SelectObject(hdc_mask, mask_dib);
+                    let mask_slice = std::slice::from_raw_parts_mut(mask_bits as *mut u32, pixel_count);
+                    for p in mask_slice.iter_mut() {
+                        *p = 0;
+                    }
+
+                    let font_name = encode_wide("Segoe UI");
+                    let hfont = CreateFontW(
+                        -11, 0, 0, 0,
+                        FW_SEMIBOLD, 0, 0, 0,
+                        DEFAULT_CHARSET,
+                        OUT_DEFAULT_PRECIS,
+                        CLIP_DEFAULT_PRECIS,
+                        CLEARTYPE_QUALITY,
+                        DEFAULT_PITCH | FF_DONTCARE,
+                        font_name.as_ptr(),
+                    );
+
+                    let old_font = SelectObject(hdc_mask, hfont);
+                    SetBkMode(hdc_mask, TRANSPARENT as i32);
+                    SetTextColor(hdc_mask, 0x00FFFFFF);
+
+                    let wide_display = encode_wide("Scribing");
+                    let mut text_rect = RECT {
+                        left: 41,
+                        top: 0,
+                        right: width - 8,
+                        bottom: height,
+                    };
+
+                    DrawTextW(
+                        hdc_mask,
+                        wide_display.as_ptr(),
+                        (wide_display.len() - 1) as i32,
+                        &mut text_rect,
+                        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+                    );
+
+                    let luminance = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b;
+                    let (text_r, text_g, text_b) = if luminance > 128.0 {
+                        (24u32, 16u32, 34u32)
+                    } else {
+                        (245u32, 245u32, 250u32)
+                    };
+
+                    for idx in 0..pixel_count {
+                        let mask_val = mask_slice[idx];
+                        let glyph_alpha = (mask_val & 0xFF) as u32;
+                        if glyph_alpha > 0 {
+                            let dst = pixel_slice[idx];
+                            let dst_a = dst >> 24;
+                            if dst_a >= 100 {
+                                let dst_r = ((dst >> 16 & 0xFF) * 255) / dst_a;
+                                let dst_g = ((dst >> 8 & 0xFF) * 255) / dst_a;
+                                let dst_b = (dst & 0xFF) * 255 / dst_a;
+
+                                let src_a = (glyph_alpha * 245) / 255;
+                                let out_a = src_a + (dst_a * (255 - src_a)) / 255;
+                                if out_a > 0 {
+                                    let out_r = ((text_r * src_a) + (dst_r * dst_a * (255 - src_a) / 255)) / out_a;
+                                    let out_g = ((text_g * src_a) + (dst_g * dst_a * (255 - src_a) / 255)) / out_a;
+                                    let out_b = ((text_b * src_a) + (dst_b * dst_a * (255 - src_a) / 255)) / out_a;
+
+                                    let pr = ((out_r.min(255) * out_a) / 255).min(255);
+                                    let pg = ((out_g.min(255) * out_a) / 255).min(255);
+                                    let pb = ((out_b.min(255) * out_a) / 255).min(255);
+
+                                    pixel_slice[idx] = (out_a << 24) | (pr << 16) | (pg << 8) | pb;
+                                }
+                            }
+                        }
+                    }
+
+                    SelectObject(hdc_mask, old_font);
+                    DeleteObject(hfont);
+                    SelectObject(hdc_mask, old_mask_bitmap);
+                    DeleteObject(mask_dib);
+                }
+                DeleteDC(hdc_mask);
             }
 
             let psize = windows_sys::Win32::Foundation::SIZE { cx: width, cy: height };
@@ -974,7 +1328,13 @@ mod win32_impl {
                         crate::show_or_create_settings_window(app);
                     }
                 } else if event == windows_sys::Win32::UI::WindowsAndMessaging::WM_RBUTTONUP {
+                    let is_meeting = crate::ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()).is_some();
                     let menu = windows_sys::Win32::UI::WindowsAndMessaging::CreatePopupMenu();
+
+                    if is_meeting {
+                        let meeting_str = encode_wide("🔴 Open Active Meeting");
+                        windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING, 3, meeting_str.as_ptr());
+                    }
                     let settings_str = encode_wide("Settings");
                     let exit_str = encode_wide("Exit");
                     windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING, 1, settings_str.as_ptr());
@@ -995,7 +1355,7 @@ mod win32_impl {
                     );
                     windows_sys::Win32::UI::WindowsAndMessaging::DestroyMenu(menu);
                     
-                    if cmd == 1 {
+                    if cmd == 1 || cmd == 3 {
                         if let Some(app) = crate::TAURI_APP.get() {
                             crate::show_or_create_settings_window(app);
                         }
@@ -1075,11 +1435,17 @@ mod win32_impl {
     }
 
     fn should_suppress_key(vk_code: u32) -> bool {
+        // Windows key (0x5B = VK_LWIN, 0x5C = VK_RWIN) must ALWAYS be suppressed
+        // when part of our hotkey so the Windows Start Menu NEVER triggers.
+        if vk_code == 0x5B || vk_code == 0x5C {
+            return true;
+        }
         !is_modifier_key(vk_code)
     }
 
     static LAST_HOTKEY_PRESS_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
     static LAST_HOTKEY_RELEASE_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    static LAST_WIN_HOTKEY_ACTIVE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
     pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 {
@@ -1116,6 +1482,9 @@ mod win32_impl {
 
                 if is_toggle_mode {
                     if trigger_match {
+                        if crate::ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+                            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+                        }
                         if (req_modifiers & crate::config::HOTKEY_WIN) != 0 {
                             crate::keyboard::suppress_win_key_start_menu();
                         }
@@ -1206,6 +1575,9 @@ mod win32_impl {
                     // Hold Mode (Push-to-Talk)
                     if state.is_key_held {
                         if is_key_part_of_combo(vk_code, req_modifiers, req_vk) {
+                            if (req_modifiers & crate::config::HOTKEY_WIN) != 0 && (vk_code == 0x5B || vk_code == 0x5C) {
+                                *LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+                            }
                             // Suppress auto-repeat for action keys and Win key so characters/Start menu never trigger
                             if should_suppress_key(vk_code) {
                                 return 1;
@@ -1222,7 +1594,11 @@ mod win32_impl {
                             return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
                         }
                     } else if trigger_match {
+                        if crate::ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+                            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+                        }
                         if (req_modifiers & crate::config::HOTKEY_WIN) != 0 {
+                            *LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
                             crate::keyboard::suppress_win_key_start_menu();
                         }
                         let has_token = crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::Relaxed);
@@ -1318,10 +1694,57 @@ mod win32_impl {
                     }
                 }
             } else if is_up {
+                // If our hotkey combo uses the Windows key and a Win key is released,
+                // check if the hotkey was active or released within the last 600ms.
+                // This ensures trailing Win key releases (when user releases Ctrl slightly before Win)
+                // NEVER trigger the Windows Start Menu!
+                if (req_modifiers & crate::config::HOTKEY_WIN) != 0 && (vk_code == 0x5B || vk_code == 0x5C) {
+                    let was_active_recently = {
+                        let last_active = LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+                        last_active.map(|t| t.elapsed() < Duration::from_millis(600)).unwrap_or(false)
+                    };
+                    let is_held = {
+                        let state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
+                        state.is_key_held
+                    };
+                    if was_active_recently || is_held {
+                        crate::keyboard::suppress_win_key_start_menu();
+                        if !is_toggle_mode && is_held {
+                            let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
+                            let now = std::time::Instant::now();
+                            let press_dur = state.press_time.map(|t| now.duration_since(t)).unwrap_or_default();
+                            if state.is_command_mode {
+                                *LAST_HOTKEY_RELEASE_TIME.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                                *LAST_HOTKEY_PRESS_TIME.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                            } else {
+                                *LAST_HOTKEY_RELEASE_TIME.lock().unwrap_or_else(|e| e.into_inner()) = Some(now);
+                            }
+                            state.is_key_held = false;
+                            state.press_time = None;
+
+                            if press_dur < Duration::from_millis(350) && !state.is_command_mode {
+                                if let Some(tx) = state.stop_tx.take() {
+                                    let _ = tx.send(false);
+                                }
+                                hide_overlay();
+                                hide_preview();
+                                return 1;
+                            }
+
+                            set_preview_state(PreviewState::Processing);
+                            if let Some(tx) = state.stop_tx.take() {
+                                let _ = tx.send(true);
+                            }
+                        }
+                        return 1;
+                    }
+                }
+
                 if !is_toggle_mode {
                     let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
                     if state.is_key_held && is_key_part_of_combo(vk_code, req_modifiers, req_vk) {
                         if (req_modifiers & crate::config::HOTKEY_WIN) != 0 {
+                            *LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
                             crate::keyboard::suppress_win_key_start_menu();
                         }
                         let now = std::time::Instant::now();
@@ -1518,7 +1941,7 @@ mod win32_impl {
         
         let overlay_class = encode_wide("SpeekTo.MeOverlayClass");
         let wnd_class_overlay = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW,
+            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfnWndProc: Some(wnd_proc_overlay),
             cbClsExtra: 0,
             cbWndExtra: 0,
@@ -1676,6 +2099,7 @@ pub use win32_impl::{
     SendHWND, PreviewState, PREVIEW_HWND, PREVIEW_TEXT, PREVIEW_STATE, TRAY_HWND, NotificationLevel,
     calculate_pill_position, update_overlay_position, play_chime,
     show_overlay, hide_overlay, show_preview, hide_preview,
+    show_meeting_overlay, hide_meeting_overlay, update_tray_tooltip,
     set_preview_text, get_preview_text, set_preview_state, update_preview_position,
     show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance,
     update_tray_icon_for_theme, set_window_icon_for_theme
@@ -1695,6 +2119,7 @@ mod win32_stub {
         Hidden = 0,
         Listening = 1,
         Processing = 2,
+        Meeting = 3,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1715,6 +2140,12 @@ mod win32_stub {
     pub fn show_overlay() {}
 
     pub fn hide_overlay() {}
+
+    pub fn show_meeting_overlay() {}
+
+    pub fn hide_meeting_overlay() {}
+
+    pub fn update_tray_tooltip(_text: &str) {}
 
     pub fn show_preview() {}
 
@@ -1748,7 +2179,9 @@ mod win32_stub {
 #[cfg(not(target_os = "windows"))]
 pub use win32_stub::{
     SendHWND, PreviewState, NotificationLevel, calculate_pill_position, update_overlay_position, play_chime,
-    show_overlay, hide_overlay, show_preview, hide_preview, set_preview_text, get_preview_text,
-    set_preview_state, update_preview_position, show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance,
+    show_overlay, hide_overlay, show_preview, hide_preview,
+    show_meeting_overlay, hide_meeting_overlay, update_tray_tooltip,
+    set_preview_text, get_preview_text, set_preview_state, update_preview_position,
+    show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance,
     update_tray_icon_for_theme, set_window_icon_for_theme
 };

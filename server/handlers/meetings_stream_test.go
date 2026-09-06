@@ -112,3 +112,76 @@ func TestMathOverlapCalculation(t *testing.T) {
 		t.Errorf("Expected overlapA > overlapB, so segment A is selected")
 	}
 }
+
+func TestResolveMultiSpeakerDiarization(t *testing.T) {
+	// Simulate Sortformer emitting segments for 3 distinct speakers
+	segments := []DiarizationSegment{
+		{Start: 0.0, End: 5.2, Speaker: "speaker_1"},
+		{Start: 6.0, End: 10.5, Speaker: "speaker_2"},
+		{Start: 11.0, End: 16.0, Speaker: "speaker_3"},
+	}
+
+	resolveSpeaker := func(startTime, endTime float64) (string, bool) {
+		if len(segments) == 0 {
+			return "Speaker 1", false
+		}
+		bestSpeaker := ""
+		var maxOverlap float64 = 0.0
+
+		for _, seg := range segments {
+			overlap := mathMax(0, mathMin(endTime, seg.End)-mathMax(startTime, seg.Start))
+			if overlap > maxOverlap {
+				maxOverlap = overlap
+				bestSpeaker = formatSpeakerDisplayName(seg.Speaker)
+			}
+		}
+		if maxOverlap > 0.0 {
+			return bestSpeaker, true
+		}
+
+		var minDistance float64 = 1e9
+		for _, seg := range segments {
+			var dist float64
+			if endTime < seg.Start {
+				dist = seg.Start - endTime
+			} else if startTime > seg.End {
+				dist = startTime - seg.End
+			} else {
+				dist = 0
+			}
+			if dist < minDistance {
+				minDistance = dist
+				bestSpeaker = formatSpeakerDisplayName(seg.Speaker)
+			}
+		}
+		if bestSpeaker == "" {
+			bestSpeaker = "Speaker 1"
+		}
+		return bestSpeaker, false
+	}
+
+	// Case 1: Utterance in [1.0, 4.0] should resolve to Speaker 1 with direct overlap
+	spk1, hasOverlap1 := resolveSpeaker(1.0, 4.0)
+	if spk1 != "Speaker 1" || !hasOverlap1 {
+		t.Errorf("Expected Speaker 1 with overlap, got %q (hasOverlap=%v)", spk1, hasOverlap1)
+	}
+
+	// Case 2: Utterance in [7.0, 9.5] should resolve to Speaker 2 with direct overlap
+	spk2, hasOverlap2 := resolveSpeaker(7.0, 9.5)
+	if spk2 != "Speaker 2" || !hasOverlap2 {
+		t.Errorf("Expected Speaker 2 with overlap, got %q (hasOverlap=%v)", spk2, hasOverlap2)
+	}
+
+	// Case 3: Utterance in [12.0, 15.0] should resolve to Speaker 3 with direct overlap
+	spk3, hasOverlap3 := resolveSpeaker(12.0, 15.0)
+	if spk3 != "Speaker 3" || !hasOverlap3 {
+		t.Errorf("Expected Speaker 3 with overlap, got %q (hasOverlap=%v)", spk3, hasOverlap3)
+	}
+
+	// Case 4: Utterance in gap [5.3, 5.8] closest to Speaker 1 (dist = 0.1) vs Speaker 2 (dist = 0.2)
+	spkGap, hasOverlapGap := resolveSpeaker(5.3, 5.8)
+	if spkGap != "Speaker 1" || hasOverlapGap {
+		t.Errorf("Expected Speaker 1 fallback without direct overlap, got %q (hasOverlap=%v)", spkGap, hasOverlapGap)
+	}
+}
+

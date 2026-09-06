@@ -131,13 +131,15 @@ fn update_tray_theme(app: tauri::AppHandle, theme: String) {
 // the tray icon, show_or_create_settings_window() recreates the window instantly.
 #[tauri::command]
 fn hide_window(window: tauri::WebviewWindow) {
-    if let Ok(pos) = window.outer_position() {
-        let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-        *pos_lock = Some(pos);
-    }
-    if let Ok(size) = window.inner_size() {
-        let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-        *size_lock = Some(size);
+    if window.is_maximized().unwrap_or(false) == false {
+        if let Ok(pos) = window.outer_position() {
+            let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+            *pos_lock = Some(pos);
+        }
+        if let Ok(size) = window.inner_size() {
+            let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+            *size_lock = Some(size);
+        }
     }
     // Gracefully close the WebView2 window to completely unload it from RAM
     let _ = window.close();
@@ -148,14 +150,34 @@ fn minimize_window(window: tauri::WebviewWindow) {
     let _ = window.minimize();
 }
 
+static LAST_MAXIMIZE_TOGGLE: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+
 #[tauri::command]
-fn toggle_maximize_window(window: tauri::WebviewWindow) {
+fn is_window_maximized(window: tauri::WebviewWindow) -> bool {
+    window.is_maximized().unwrap_or(false)
+}
+
+#[tauri::command]
+fn toggle_maximize_window(window: tauri::WebviewWindow) -> bool {
+    let mut toggle_lock = LAST_MAXIMIZE_TOGGLE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    if let Some(last_time) = *toggle_lock {
+        if now.duration_since(last_time) < std::time::Duration::from_millis(250) {
+            return window.is_maximized().unwrap_or(false);
+        }
+    }
+    *toggle_lock = Some(now);
+
     if let Ok(is_max) = window.is_maximized() {
         if is_max {
             let _ = window.unmaximize();
+            false
         } else {
             let _ = window.maximize();
+            true
         }
+    } else {
+        false
     }
 }
 
@@ -322,8 +344,10 @@ pub fn handle_session_expired(reason: Option<&str>) {
 
 pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.emit("open-meeting-view", ());
     } else {
         let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
             .title("SpeekTo.Me Settings")
@@ -527,13 +551,15 @@ fn main() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 // Save window coordinates and size so they can be restored on recreation
-                if let Ok(pos) = window.outer_position() {
-                    let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-                    *pos_lock = Some(pos);
-                }
-                if let Ok(size) = window.inner_size() {
-                    let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-                    *size_lock = Some(size);
+                if window.is_maximized().unwrap_or(false) == false {
+                    if let Ok(pos) = window.outer_position() {
+                        let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+                        *pos_lock = Some(pos);
+                    }
+                    if let Ok(size) = window.inner_size() {
+                        let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+                        *size_lock = Some(size);
+                    }
                 }
                 // Allow default close/destroy flow so WebView2 completely unloads from RAM
             }
@@ -555,6 +581,7 @@ fn main() {
             start_meeting,
             stop_meeting,
             cancel_meeting,
+            get_active_meeting,
             get_meeting_levels,
             upload_meeting,
             list_local_meetings,
@@ -565,6 +592,7 @@ fn main() {
             open_external_url,
             validate_prompt,
             minimize_window,
+            is_window_maximized,
             toggle_maximize_window,
             close_window,
             update_tray_theme
@@ -585,6 +613,44 @@ fn main() {
 pub static CURRENT_MEETING_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 pub static CURRENT_MEETING_STREAM: Mutex<Option<crate::meeting_stream::MeetingStreamHandle>> = Mutex::new(None);
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ActiveMeetingInfo {
+    pub is_recording: bool,
+    pub title: String,
+    pub filepath: String,
+    pub elapsed_seconds: u64,
+    pub start_time_unix: u64,
+    pub turns: Vec<crate::meeting_stream::ClientMeetingTurn>,
+}
+
+pub struct ActiveMeetingState {
+    pub title: String,
+    pub filepath: String,
+    pub start_instant: std::time::Instant,
+    pub start_unix: u64,
+    pub turns: std::sync::Arc<Mutex<Vec<crate::meeting_stream::ClientMeetingTurn>>>,
+}
+
+pub static ACTIVE_MEETING: Mutex<Option<ActiveMeetingState>> = Mutex::new(None);
+
+#[tauri::command]
+fn get_active_meeting() -> Option<ActiveMeetingInfo> {
+    let lock = ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ref s) = *lock {
+        let turns = s.turns.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        Some(ActiveMeetingInfo {
+            is_recording: true,
+            title: s.title.clone(),
+            filepath: s.filepath.clone(),
+            elapsed_seconds: s.start_instant.elapsed().as_secs(),
+            start_time_unix: s.start_unix,
+            turns,
+        })
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 async fn start_meeting(title: String) -> Result<String, String> {
     println!("[MEETING LOG] >>> start_meeting command called with title: '{}'", title);
@@ -604,6 +670,10 @@ async fn start_meeting(title: String) -> Result<String, String> {
     let path_str = path.to_string_lossy().to_string();
     println!("[MEETING LOG] Output path generated: {}", path_str);
 
+    let start_instant = std::time::Instant::now();
+    let start_unix = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let turns_cache = std::sync::Arc::new(Mutex::new(Vec::new()));
+
     let (token_opt, api_url) = {
         let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         (
@@ -616,7 +686,7 @@ async fn start_meeting(title: String) -> Result<String, String> {
     let mut stream_tx = None;
     if let Some(token) = token_opt {
         println!("[MEETING LOG] Initiating live WebSocket streaming session...");
-        match crate::meeting_stream::start_meeting_streaming_session(api_url, token, title.clone()) {
+        match crate::meeting_stream::start_meeting_streaming_session(api_url, token, title.clone(), Some(turns_cache.clone())) {
             Ok(handle) => {
                 println!("[MEETING LOG] Live WebSocket streaming session established!");
                 stream_tx = Some(handle.tx.clone());
@@ -643,12 +713,26 @@ async fn start_meeting(title: String) -> Result<String, String> {
         *path_lock = Some(path.clone());
         println!("[MEETING LOG] Stored CURRENT_MEETING_PATH = Some({})", path_str);
     }
+
+    {
+        let mut act_lock = ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner());
+        *act_lock = Some(ActiveMeetingState {
+            title: title.clone(),
+            filepath: path_str.clone(),
+            start_instant,
+            start_unix,
+            turns: turns_cache,
+        });
+    }
+
+    // Show native floating meeting overlay pill on desktop
+    crate::win32::show_meeting_overlay();
     
     let mut records = load_meeting_index();
     records.push(LocalMeetingRecord {
         id: format!("meeting-{}-{}", std::process::id(), nonce),
         title: title.clone(),
-        created_at: now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        created_at: start_unix,
         filepath: path_str.clone(),
         status: "recording".to_string(),
         error: None,
@@ -662,6 +746,9 @@ async fn start_meeting(title: String) -> Result<String, String> {
 #[tauri::command]
 async fn stop_meeting() -> Result<String, String> {
     println!("[MEETING LOG] >>> stop_meeting command called!");
+    crate::win32::hide_meeting_overlay();
+    *ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
     crate::audio::stop_meeting_recording();
     println!("[MEETING LOG] Audio recording stopped in audio engine.");
     
@@ -672,8 +759,8 @@ async fn stop_meeting() -> Result<String, String> {
     println!("[MEETING LOG] Live stream handle present: {}", stream_handle.is_some());
 
     let path_str = {
-        let path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ref path) = *path_lock {
+        let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(path) = path_lock.take() {
             path.to_string_lossy().to_string()
         } else {
             eprintln!("[MEETING LOG ERROR] CURRENT_MEETING_PATH is None! Cannot stop meeting.");
@@ -799,6 +886,9 @@ pub fn print_meeting_review(json_str: &str) {
 #[tauri::command]
 async fn cancel_meeting() -> Result<(), String> {
     println!("[MEETING LOG] >>> cancel_meeting command called!");
+    crate::win32::hide_meeting_overlay();
+    *ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
     crate::audio::stop_meeting_recording();
     
     {

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -331,17 +332,92 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	// Diarization segment cache for remote loopback speakers
 	var remoteSegmentsMu sync.Mutex
 	var remoteSegments []DiarizationSegment
+	var incomingBatchSegs []DiarizationSegment
+	var diarizeInFlight atomic.Bool
+	var isMeetingEnding atomic.Bool
 	diarDoneChan := make(chan struct{})
+	var closeDiarOnce sync.Once
+	closeDiarDone := func() {
+		closeDiarOnce.Do(func() {
+			close(diarDoneChan)
+		})
+	}
 
 	// Monotonic Session Clock Tracking (560ms chunks)
 	var micChunkCount int64
 	var loopbackChunkCount int64
 	var chunkCountMu sync.Mutex
 
+	// Trigger non-blocking diarization commit pass to upstream Sortformer
+	triggerDiarizeCommit := func() {
+		if s1LoopbackDiarize == nil || isMeetingEnding.Load() {
+			return
+		}
+		if diarizeInFlight.CompareAndSwap(false, true) {
+			commitMsg := map[string]interface{}{"type": "input_audio_buffer.commit"}
+			if err := s1LoopbackDiarize.SendControl(ctx, commitMsg); err != nil {
+				diarizeInFlight.Store(false)
+			}
+		}
+	}
+
+	// Helper function to resolve speaker for a phrase timestamp window with exact overlap check
+	resolveRemoteSpeakerWithOverlap := func(startTime, endTime float64) (string, bool) {
+		remoteSegmentsMu.Lock()
+		defer remoteSegmentsMu.Unlock()
+
+		if len(remoteSegments) == 0 {
+			return "Speaker 1", false
+		}
+
+		bestSpeaker := ""
+		var maxOverlap float64 = 0.0
+
+		for _, seg := range remoteSegments {
+			// Overlap formula: max(0, min(wEnd, dEnd) - max(wStart, dStart))
+			overlap := mathMax(0, mathMin(endTime, seg.End)-mathMax(startTime, seg.Start))
+			if overlap > maxOverlap {
+				maxOverlap = overlap
+				bestSpeaker = formatSpeakerDisplayName(seg.Speaker)
+			}
+		}
+
+		if maxOverlap > 0.0 {
+			return bestSpeaker, true
+		}
+
+		// Fallback to nearest segment in time if no direct temporal overlap
+		var minDistance float64 = 1e9
+		for _, seg := range remoteSegments {
+			var dist float64
+			if endTime < seg.Start {
+				dist = seg.Start - endTime
+			} else if startTime > seg.End {
+				dist = startTime - seg.End
+			} else {
+				dist = 0
+			}
+			if dist < minDistance {
+				minDistance = dist
+				bestSpeaker = formatSpeakerDisplayName(seg.Speaker)
+			}
+		}
+
+		if bestSpeaker == "" {
+			bestSpeaker = "Speaker 1"
+		}
+		return bestSpeaker, false
+	}
+
+	resolveRemoteSpeaker := func(startTime, endTime float64) string {
+		spk, _ := resolveRemoteSpeakerWithOverlap(startTime, endTime)
+		return spk
+	}
+
 	// Goroutine to listen to Server 1 Loopback Diarizer (Sortformer)
 	if s1LoopbackDiarize != nil {
 		go func() {
-			defer close(diarDoneChan)
+			defer closeDiarDone()
 			for {
 				msgType, data, err := s1LoopbackDiarize.Conn.Read(ctx)
 				if err != nil {
@@ -358,70 +434,88 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 							spk, _ := event["speaker"].(string)
 							conf, _ := event["confidence"].(float64)
 							if spk != "" {
-								remoteSegmentsMu.Lock()
-								remoteSegments = append(remoteSegments, DiarizationSegment{
+								incomingBatchSegs = append(incomingBatchSegs, DiarizationSegment{
 									Type:       evtType,
 									Start:      start,
 									End:        end,
 									Speaker:    spk,
 									Confidence: conf,
 								})
-								remoteSegmentsMu.Unlock()
 							}
 						} else if evtType == "diarization.completed" {
-							log.Printf("[SERVER DIARIZE] Sortformer completed. Segments count: %d", len(remoteSegments))
-							return
+							log.Printf("[SERVER DIARIZE] Sortformer completed batch. Segments in batch: %d", len(incomingBatchSegs))
+							remoteSegmentsMu.Lock()
+							remoteSegments = make([]DiarizationSegment, len(incomingBatchSegs))
+							copy(remoteSegments, incomingBatchSegs)
+							remoteSegmentsMu.Unlock()
+							incomingBatchSegs = nil
+							diarizeInFlight.Store(false)
+
+							// Retroactive speaker re-attribution on recent loopback turns
+							if !isMeetingEnding.Load() {
+								var turnsToUpdate []ClientMeetingTurn
+								turnsMu.Lock()
+								for i := range activeTurns {
+									if activeTurns[i].Channel == "system" {
+										resolved := resolveRemoteSpeaker(activeTurns[i].StartTime, activeTurns[i].EndTime)
+										if resolved != "" && resolved != activeTurns[i].SpeakerName {
+											log.Printf("[SERVER DIARIZE RETROACTIVE] Turn %s updated: %s -> %s",
+												activeTurns[i].ID, activeTurns[i].SpeakerName, resolved)
+											activeTurns[i].SpeakerName = resolved
+											activeTurns[i].SpeakerID = sanitizeSpeakerID(resolved)
+											turnsToUpdate = append(turnsToUpdate, activeTurns[i])
+										}
+									}
+								}
+								turnsMu.Unlock()
+
+								for _, turn := range turnsToUpdate {
+									turnCopy := turn
+									_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{
+										Type: "turn",
+										Turn: &turnCopy,
+									})
+								}
+							} else {
+								// Final meeting diarization pass complete
+								closeDiarDone()
+								return
+							}
+						} else if evtType == "error" {
+							log.Printf("[SERVER DIARIZE ERROR] Upstream error: %v", event["error"])
+							diarizeInFlight.Store(false)
 						}
 					}
 				}
 			}
 		}()
 	} else {
-		close(diarDoneChan)
+		closeDiarDone()
 	}
 
-	// Helper function to resolve speaker for a phrase timestamp window
-	resolveRemoteSpeaker := func(startTime, endTime float64) string {
-		remoteSegmentsMu.Lock()
-		defer remoteSegmentsMu.Unlock()
-
-		if len(remoteSegments) == 0 {
-			return "Speaker 1"
-		}
-
-		bestSpeaker := "Speaker 1"
-		var maxOverlap float64 = 0.0
-
-		for _, seg := range remoteSegments {
-			// Overlap formula: max(0, min(wEnd, dEnd) - max(wStart, dStart))
-			overlap := mathMax(0, mathMin(endTime, seg.End)-mathMax(startTime, seg.Start))
-			if overlap > maxOverlap {
-				maxOverlap = overlap
-				bestSpeaker = formatSpeakerDisplayName(seg.Speaker)
-			}
-		}
-
-		// Fallback to nearest segment in time if no direct temporal overlap
-		if maxOverlap == 0.0 && len(remoteSegments) > 0 {
-			var minDistance float64 = 1e9
-			for _, seg := range remoteSegments {
-				var dist float64
-				if endTime < seg.Start {
-					dist = seg.Start - endTime
-				} else if startTime > seg.End {
-					dist = startTime - seg.End
-				} else {
-					dist = 0
+	// Periodic background ticker to keep Sortformer diarization refreshed during active speech
+	go func() {
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		var lastCheckChunks int64 = 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if isMeetingEnding.Load() {
+					return
 				}
-				if dist < minDistance {
-					minDistance = dist
-					bestSpeaker = formatSpeakerDisplayName(seg.Speaker)
+				chunkCountMu.Lock()
+				currentChunks := loopbackChunkCount
+				chunkCountMu.Unlock()
+				if currentChunks > lastCheckChunks+3 {
+					lastCheckChunks = currentChunks
+					triggerDiarizeCommit()
 				}
 			}
 		}
-
-		return bestSpeaker
-	}
+	}()
 
 	type TimedWordToken struct {
 		Text      string
@@ -544,6 +638,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 			var turnStartTime float64 = 0.0
 			var turnID string = fmt.Sprintf("turn_lb_%d", time.Now().UnixNano())
 			var lastDeltaTime time.Time = time.Now()
+			var currentTurnSpeaker string = ""
 
 			for {
 				msgType, data, err := s1LoopbackASR.Conn.Read(ctx)
@@ -559,11 +654,13 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 							now := time.Now()
 
 							var tokenStart float64
-							if currentTurnText == "" || now.Sub(lastDeltaTime) > 800*time.Millisecond {
+							isNewUtterance := currentTurnText == "" || now.Sub(lastDeltaTime) > 800*time.Millisecond
+							if isNewUtterance {
 								turnStartTime = mathMax(0, audioProc-1.90)
 								tokenStart = turnStartTime
 								turnID = fmt.Sprintf("turn_lb_%d", now.UnixNano())
 								currentTurnText = ""
+								currentTurnSpeaker = ""
 							} else {
 								tokenStart = mathMax(0, audioProc-1.12)
 							}
@@ -578,10 +675,44 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 							})
 							loopbackTokensMu.Unlock()
 
+							spkName, hasDirectOverlap := resolveRemoteSpeakerWithOverlap(turnStartTime, audioProc)
+							if spkName == "" {
+								spkName = "Speaker 1"
+							}
+
+							// Turn split detection: If a known speaker transition occurs during speech
+							if !isNewUtterance && currentTurnSpeaker != "" && hasDirectOverlap && spkName != currentTurnSpeaker {
+								cleanPrev := strings.TrimSpace(currentTurnText)
+								if cleanPrev != "" {
+									prevTurn := ClientMeetingTurn{
+										ID:          turnID,
+										Channel:     "system",
+										SpeakerID:   sanitizeSpeakerID(currentTurnSpeaker),
+										SpeakerName: currentTurnSpeaker,
+										StartTime:   turnStartTime,
+										EndTime:     tokenStart,
+										Text:        cleanPrev,
+										IsFinal:     true,
+									}
+									turnsMu.Lock()
+									upsertMeetingTurn(&activeTurns, prevTurn)
+									turnsMu.Unlock()
+
+									_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{
+										Type: "turn",
+										Turn: &prevTurn,
+									})
+								}
+								// Start new turn for the transitioning speaker
+								turnStartTime = tokenStart
+								turnID = fmt.Sprintf("turn_lb_%d", now.UnixNano())
+								currentTurnText = ""
+							}
+
+							currentTurnSpeaker = spkName
 							currentTurnText += delta
 							cleanText := strings.TrimSpace(currentTurnText)
 							if cleanText != "" {
-								spkName := resolveRemoteSpeaker(turnStartTime, audioProc)
 								spkID := sanitizeSpeakerID(spkName)
 
 								turn := ClientMeetingTurn{
@@ -635,6 +766,9 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 								})
 							}
 							currentTurnText = ""
+							currentTurnSpeaker = ""
+							// Trigger diarization commit to catch up with newly completed utterance
+							go triggerDiarizeCommit()
 						}
 					}
 				}
@@ -697,6 +831,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. Finalize session & Commit upstream engines
+	isMeetingEnding.Store(true)
 	commitMsg := map[string]interface{}{"type": "input_audio_buffer.commit"}
 	if s1MicASR != nil {
 		_ = s1MicASR.SendControl(ctx, commitMsg)

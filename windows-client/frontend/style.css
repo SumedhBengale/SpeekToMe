@@ -2145,8 +2145,9 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   border-radius: 8px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--border-subtle);
   animation: fadeIn 0.2s ease-out;
-  transition: border-color 0.2s ease;
+  transition: border-color 0.2s ease, border-left-color 0.2s ease;
 }
 
 .live-turn-item.is-me {
@@ -2154,7 +2155,7 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
 }
 
 .live-turn-item.is-remote {
-  border-left: 3px solid #2f80ed;
+  border-left: 3px solid #2563eb;
 }
 
 .live-turn-header {

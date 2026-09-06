@@ -49,6 +49,37 @@ type BatchProviderConfig struct {
 	FailFast           bool     `json:"fail_fast,omitempty"`
 	InitialPrompt      string   `json:"initial_prompt,omitempty"`
 	SupportedLanguages []string `json:"supported_languages,omitempty"`
+	PriorityFlag       bool     `json:"priority_flag,omitempty"`
+}
+
+func (c *BatchProviderConfig) UnmarshalJSON(data []byte) error {
+	type Alias BatchProviderConfig
+	aux := struct {
+		RawPriority  interface{} `json:"priority"`
+		PriorityFlag *bool       `json:"priority_flag"`
+		PriorityTier *bool       `json:"priority_tier"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.PriorityFlag != nil {
+		c.PriorityFlag = *aux.PriorityFlag
+	} else if aux.PriorityTier != nil {
+		c.PriorityFlag = *aux.PriorityTier
+	}
+	switch v := aux.RawPriority.(type) {
+	case float64:
+		c.Priority = int(v)
+	case bool:
+		c.PriorityFlag = v
+		if c.Priority == 0 {
+			c.Priority = 1
+		}
+	}
+	return nil
 }
 
 type StreamingProviderConfig struct {
@@ -62,6 +93,37 @@ type StreamingProviderConfig struct {
 	FailFast           bool     `json:"fail_fast,omitempty"`
 	InitialPrompt      string   `json:"initial_prompt,omitempty"`
 	SupportedLanguages []string `json:"supported_languages,omitempty"`
+	PriorityFlag       bool     `json:"priority_flag,omitempty"`
+}
+
+func (c *StreamingProviderConfig) UnmarshalJSON(data []byte) error {
+	type Alias StreamingProviderConfig
+	aux := struct {
+		RawPriority  interface{} `json:"priority"`
+		PriorityFlag *bool       `json:"priority_flag"`
+		PriorityTier *bool       `json:"priority_tier"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.PriorityFlag != nil {
+		c.PriorityFlag = *aux.PriorityFlag
+	} else if aux.PriorityTier != nil {
+		c.PriorityFlag = *aux.PriorityTier
+	}
+	switch v := aux.RawPriority.(type) {
+	case float64:
+		c.Priority = int(v)
+	case bool:
+		c.PriorityFlag = v
+		if c.Priority == 0 {
+			c.Priority = 1
+		}
+	}
+	return nil
 }
 
 type LLMProviderConfig struct {
@@ -73,6 +135,38 @@ type LLMProviderConfig struct {
 	TimeoutMs    int    `json:"timeout_ms,omitempty"`
 	FailFast     bool   `json:"fail_fast,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
+	Stream       bool   `json:"stream"`
+	PriorityFlag bool   `json:"priority_flag,omitempty"`
+}
+
+func (c *LLMProviderConfig) UnmarshalJSON(data []byte) error {
+	type Alias LLMProviderConfig
+	aux := struct {
+		RawPriority  interface{} `json:"priority"`
+		PriorityFlag *bool       `json:"priority_flag"`
+		PriorityTier *bool       `json:"priority_tier"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.PriorityFlag != nil {
+		c.PriorityFlag = *aux.PriorityFlag
+	} else if aux.PriorityTier != nil {
+		c.PriorityFlag = *aux.PriorityTier
+	}
+	switch v := aux.RawPriority.(type) {
+	case float64:
+		c.Priority = int(v)
+	case bool:
+		c.PriorityFlag = v
+		if c.Priority == 0 {
+			c.Priority = 1
+		}
+	}
+	return nil
 }
 
 type ModelsConfig struct {
@@ -254,6 +348,7 @@ func DefaultModelsConfig() ModelsConfig {
 				BaseURL:      CerebrasAPIURL,
 				TimeoutMs:    15000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
+				Stream:       false,
 			},
 			"deepinfra_deepseek_v4": {
 				Enabled:      true,
@@ -263,6 +358,7 @@ func DefaultModelsConfig() ModelsConfig {
 				TimeoutMs:    15000,
 				FailFast:     true,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
+				Stream:       false,
 			},
 			"deepseek_deepseek_v4_flash": {
 				Enabled:      true,
@@ -271,6 +367,7 @@ func DefaultModelsConfig() ModelsConfig {
 				BaseURL:      DeepSeekAPIURL,
 				TimeoutMs:    30000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
+				Stream:       false,
 			},
 			"wafer_deepseek_v4_flash": {
 				Enabled:      false,
@@ -279,6 +376,7 @@ func DefaultModelsConfig() ModelsConfig {
 				BaseURL:      WaferAPIURL,
 				TimeoutMs:    15000,
 				SystemPrompt: DefaultUniversalLLMSystemPrompt,
+				Stream:       false,
 			},
 			"custom_llm": {
 				Enabled:   false,
@@ -287,6 +385,7 @@ func DefaultModelsConfig() ModelsConfig {
 				BaseURL:   "",
 				APIKey:    "",
 				TimeoutMs: 30000,
+				Stream:    false,
 			},
 		},
 		CommandLLMProviders: map[string]LLMProviderConfig{
@@ -298,22 +397,35 @@ func DefaultModelsConfig() ModelsConfig {
 				TimeoutMs:    15000,
 				FailFast:     true,
 				SystemPrompt: DefaultCommandLLMSystemPrompt,
+				Stream:       true,
+				PriorityFlag: true,
+			},
+			"bedrock_nemotron_super_120b": {
+				Enabled:      true,
+				Priority:     2,
+				Model:        "nvidia.nemotron-super-3-120b",
+				BaseURL:      AWSBedrockMantleURL,
+				TimeoutMs:    25000,
+				SystemPrompt: DefaultCommandLLMSystemPrompt,
+				Stream:       true,
 			},
 			"deepseek_deepseek_v4_flash": {
 				Enabled:      true,
-				Priority:     2,
+				Priority:     3,
 				Model:        "deepseek-v4-flash",
 				BaseURL:      DeepSeekAPIURL,
 				TimeoutMs:    30000,
 				SystemPrompt: DefaultCommandLLMSystemPrompt,
+				Stream:       true,
 			},
 			"wafer_deepseek_v4_flash": {
 				Enabled:      false,
-				Priority:     3,
+				Priority:     4,
 				Model:        "DeepSeek-V4-Flash-0731-Fast",
 				BaseURL:      WaferAPIURL,
 				TimeoutMs:    15000,
 				SystemPrompt: DefaultCommandLLMSystemPrompt,
+				Stream:       true,
 			},
 			"custom_llm": {
 				Enabled:   false,
@@ -322,6 +434,7 @@ func DefaultModelsConfig() ModelsConfig {
 				BaseURL:   "",
 				APIKey:    "",
 				TimeoutMs: 30000,
+				Stream:    false,
 			},
 		},
 	}

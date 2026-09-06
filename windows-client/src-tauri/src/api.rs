@@ -147,12 +147,13 @@ pub fn listen_for_token() -> Option<String> {
 }
 
 pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
+    let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
     let (token_opt, model, enhance, custom_prompt, transcription_mode, api_url) = {
         let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         (
             config.session_token.clone(),
             config.model.clone(),
-            config.enhance,
+            if is_cmd { false } else { config.enhance },
             config.custom_prompt.clone(),
             config.transcription_mode.clone(),
             config.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
@@ -252,7 +253,47 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
                             crate::win32::set_preview_text("✨ Generating...");
                         }
 
-                        match transform_text(&api_url, &token, &target_text, text).await {
+                        let typing_mode = {
+                            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                            config.typing_mode
+                        };
+
+                        let mut is_first_chunk = true;
+                        let mut last_ui_update = std::time::Instant::now();
+
+                        let res = transform_text_stream(&api_url, &token, &target_text, text, move |delta, accumulated| {
+                            if delta == "[RESET]" {
+                                println!("[STREAM] Received [RESET], resetting stream UI preview");
+                                crate::win32::set_preview_text("✨ Retrying with backup AI...");
+                                is_first_chunk = true;
+                                return;
+                            }
+
+                            if is_first_chunk {
+                                if has_target && typing_mode {
+                                    crate::keyboard::simulate_single_key(0x08);
+                                    std::thread::sleep(std::time::Duration::from_millis(20));
+                                }
+                                is_first_chunk = false;
+                            }
+
+                            if typing_mode {
+                                crate::keyboard::simulate_typing(delta);
+                            }
+
+                            if last_ui_update.elapsed() >= std::time::Duration::from_millis(80) {
+                                last_ui_update = std::time::Instant::now();
+                                let preview_display = if let Some((start_byte, _)) = accumulated.char_indices().rev().nth(31) {
+                                    let tail = &accumulated[start_byte..];
+                                    format!("✨ ...{}", tail.trim_start())
+                                } else {
+                                    format!("✨ {}", accumulated)
+                                };
+                                crate::win32::set_preview_text(&preview_display);
+                            }
+                        }).await;
+
+                        match res {
                             Ok(transformed) => {
                                 println!("\n=======================================================");
                                 println!("✨ [COMMAND MODE — LLM TRANSFORMATION COMPLETED]");
@@ -263,15 +304,13 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
 
                                 crate::win32::set_preview_text("✨ Done!");
 
-                                let typing_mode = {
-                                    let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                                    config.typing_mode
-                                };
-
-                                if typing_mode {
-                                    crate::keyboard::simulate_typing(&transformed);
-                                } else {
+                                if !typing_mode {
                                     crate::keyboard::paste_transformed_text(&transformed);
+                                } else {
+                                    // Permanently retain full transformed text in clipboard as a fallback
+                                    if let Ok(mut ctx) = arboard::Clipboard::new() {
+                                        let _ = ctx.set_text(crate::keyboard::normalize_newlines(&transformed));
+                                    }
                                 }
 
                                 let (notify_title, notify_msg) = if has_target {
@@ -686,6 +725,8 @@ pub async fn transcribe_audio(
 struct TransformPayload<'a> {
     selected_text: &'a str,
     command: &'a str,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 #[derive(Deserialize)]
@@ -698,24 +739,47 @@ struct TransformResponse {
     provider: Option<String>,
 }
 
-pub async fn transform_text(
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct StreamChunk {
+    #[serde(default)]
+    delta: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    done: Option<bool>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    reset: Option<bool>,
+}
+
+pub async fn transform_text_stream<F>(
     api_url: &str,
     token: &str,
     selected_text: &str,
     command: &str,
-) -> Result<String, String> {
+    mut on_chunk: F,
+) -> Result<String, String>
+where
+    F: FnMut(&str, &str) + Send,
+{
+    use futures_util::StreamExt;
+
     let client = create_client();
     let url = format!("{}/v1/transform", api_url.trim_end_matches('/'));
 
     let payload = TransformPayload {
         selected_text,
         command,
+        stream: true,
     };
 
     let res = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
         .header("User-Agent", "SpeekToMe-WindowsClient/0.1.0")
         .json(&payload)
         .send()
@@ -723,14 +787,100 @@ pub async fn transform_text(
         .map_err(|e| format!("Network error: {}", e))?;
 
     let status = res.status();
-    let body_text = res.text().await.unwrap_or_default();
-    if status.is_success() {
+    if !status.is_success() {
+        let err_text = res.text().await.unwrap_or_default();
+        return Err(format!("Transformation failed (HTTP {}): {}", status, err_text.trim()));
+    }
+
+    let is_event_stream = res.headers()
+        .get("content-type")
+        .and_then(|h| h.to_str().ok())
+        .map(|ct| ct.contains("text/event-stream"))
+        .unwrap_or(false);
+
+    if !is_event_stream {
+        let body_text = res.text().await.unwrap_or_default();
         let resp: TransformResponse = serde_json::from_str(&body_text)
             .map_err(|e| format!("Failed to parse response: {}", e))?;
-        Ok(resp.text)
-    } else {
-        Err(format!("Transformation failed (HTTP {}): {}", status, body_text.trim()))
+        on_chunk(&resp.text, &resp.text);
+        return Ok(resp.text);
     }
+
+    let mut stream = res.bytes_stream();
+    let mut buffer = String::new();
+    let mut accumulated = String::new();
+
+    while let Some(chunk_res) = stream.next().await {
+        let bytes = chunk_res.map_err(|e| format!("Stream error: {}", e))?;
+        let text_chunk = String::from_utf8_lossy(&bytes);
+        buffer.push_str(&text_chunk);
+
+        while let Some(newline_pos) = buffer.find('\n') {
+            let line = buffer[..newline_pos].trim().to_string();
+            buffer = buffer[newline_pos + 1..].to_string();
+
+            if line.starts_with("data: ") {
+                let data = line.trim_start_matches("data: ").trim();
+                if data == "[DONE]" {
+                    break;
+                }
+
+                if let Ok(parsed) = serde_json::from_str::<StreamChunk>(data) {
+                    if let Some(ref err_msg) = parsed.error {
+                        return Err(err_msg.clone());
+                    }
+
+                    if parsed.reset.unwrap_or(false) {
+                        println!("[STREAM RESET] Server signaled stream reset due to provider fallback.");
+                        accumulated.clear();
+                        on_chunk("[RESET]", "");
+                        continue;
+                    }
+
+                    if let Some(ref delta) = parsed.delta {
+                        if !delta.is_empty() {
+                            accumulated.push_str(delta);
+                            on_chunk(delta, &accumulated);
+                        }
+                    }
+
+                    if parsed.done.unwrap_or(false) {
+                        if let Some(ref full) = parsed.text {
+                            if !full.is_empty() {
+                                accumulated = full.clone();
+                            }
+                        }
+                    } else if let Some(ref full) = parsed.text {
+                        if !full.is_empty() && accumulated.is_empty() {
+                            accumulated = full.clone();
+                            on_chunk(&accumulated, &accumulated);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if accumulated.is_empty() && !buffer.trim().is_empty() {
+        let data = buffer.trim().trim_start_matches("data: ").trim();
+        if let Ok(parsed) = serde_json::from_str::<StreamChunk>(data) {
+            if let Some(ref delta) = parsed.delta {
+                accumulated.push_str(delta);
+                on_chunk(delta, &accumulated);
+            }
+        }
+    }
+
+    Ok(accumulated)
+}
+
+pub async fn transform_text(
+    api_url: &str,
+    token: &str,
+    selected_text: &str,
+    command: &str,
+) -> Result<String, String> {
+    transform_text_stream(api_url, token, selected_text, command, |_, _| {}).await
 }
 
 pub async fn send_transcribe_ack(

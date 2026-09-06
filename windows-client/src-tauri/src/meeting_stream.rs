@@ -55,6 +55,7 @@ pub fn start_meeting_streaming_session(
     api_url: String,
     token: String,
     title: String,
+    turns_cache: Option<std::sync::Arc<std::sync::Mutex<Vec<ClientMeetingTurn>>>>,
 ) -> Result<MeetingStreamHandle, String> {
     let ws_url = get_meeting_stream_ws_url(&api_url, &token);
     println!("[MEETING STREAM] Connecting to live meeting WebSocket: {}", ws_url);
@@ -155,6 +156,15 @@ pub fn start_meeting_streaming_session(
                                         }
                                         "turn" => {
                                             if let Some(ref turn) = event.turn {
+                                                if let Some(ref cache_arc) = turns_cache {
+                                                    if let Ok(mut cache) = cache_arc.lock() {
+                                                        if let Some(existing) = cache.iter_mut().find(|t| t.id == turn.id) {
+                                                            *existing = turn.clone();
+                                                        } else {
+                                                            cache.push(turn.clone());
+                                                        }
+                                                    }
+                                                }
                                                 println!("[CLIENT PARSED TURN] ID='{}' ch={} spk='{}' [{:.2}s - {:.2}s] (is_final={}) text=\"{}\"",
                                                     turn.id, turn.channel, turn.speaker_name, turn.start_time, turn.end_time, turn.is_final, turn.text);
                                                 if let Some(app) = crate::TAURI_APP.get() {

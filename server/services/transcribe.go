@@ -323,7 +323,7 @@ func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model strin
 	return rawText, response.Result.Segments, routingLoc, nil
 }
 
-func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string, model string, langParam, promptStr string, failFast bool, timeout time.Duration) (string, []WhisperSegment, string, error) {
+func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr string, model string, langParam, promptStr string, failFast bool, priorityFlag bool, timeout time.Duration) (string, []WhisperSegment, string, error) {
 	if urlStr == "" {
 		urlStr = config.DeepInfraBaseURL
 	}
@@ -352,6 +352,9 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	}
 	if failFast {
 		_ = writer.WriteField("fail_fast", "true")
+	}
+	if priorityFlag {
+		_ = writer.WriteField("priority", "true")
 	}
 	_ = writer.Close()
 
@@ -850,8 +853,8 @@ func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model
 					timeout = 10 * time.Second
 				}
 
-				log.Printf("[DI INFRA] Attempting transcription using %s model %s (lang: %q, fail_fast: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, timeout)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, diModel, langParam, promptStr, provCfg.FailFast, timeout)
+				log.Printf("[DI INFRA] Attempting transcription using %s model %s (lang: %q, fail_fast: %v, priority: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, provCfg.PriorityFlag, timeout)
+				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, diModel, langParam, promptStr, provCfg.FailFast, provCfg.PriorityFlag, timeout)
 				if err == nil {
 					return text, segments, provider, loc, nil
 				}
@@ -978,8 +981,8 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 					timeout = 3500 * time.Millisecond
 				}
 
-				log.Printf("[DEEPINFRA STREAM ASR] Attempting streaming transcription using %s model %s (lang: %q, fail_fast: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, timeout)
-				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, diModel, langParam, promptStr, provCfg.FailFast, timeout)
+				log.Printf("[DEEPINFRA STREAM ASR] Attempting streaming transcription using %s model %s (lang: %q, fail_fast: %v, priority: %v, timeout: %v)", provider, diModel, langParam, provCfg.FailFast, provCfg.PriorityFlag, timeout)
+				text, segments, loc, err := RunDeepInfraTranscribe(ctx, audioBytes, diURL, diModel, langParam, promptStr, provCfg.FailFast, provCfg.PriorityFlag, timeout)
 				if err == nil {
 					return text, segments, provider, loc, nil
 				}

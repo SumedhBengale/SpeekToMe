@@ -413,19 +413,83 @@ async function init() {
   if (refreshBtnEl) refreshBtnEl.addEventListener('click', refreshUserData);
 
   const winMinBtn = document.getElementById('win-min-btn');
-  if (winMinBtn) winMinBtn.addEventListener('click', () => invoke('minimize_window'));
+  if (winMinBtn) winMinBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    invoke('minimize_window');
+  });
 
   const winMaxBtn = document.getElementById('win-max-btn');
-  if (winMaxBtn) winMaxBtn.addEventListener('click', () => invoke('toggle_maximize_window'));
+  async function updateMaximizeIcon() {
+    if (!winMaxBtn) return;
+    try {
+      const isMax = await invoke('is_window_maximized');
+      if (isMax) {
+        winMaxBtn.title = 'Restore';
+        winMaxBtn.setAttribute('aria-label', 'Restore');
+        winMaxBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h10a2 2 0 0 1 2 2v10"></path><rect x="4" y="8" width="12" height="12" rx="2"></rect></svg>`;
+      } else {
+        winMaxBtn.title = 'Maximize';
+        winMaxBtn.setAttribute('aria-label', 'Maximize');
+        winMaxBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>`;
+      }
+    } catch (e) {
+      console.error('Failed to update maximize icon:', e);
+    }
+  }
+
+  if (winMaxBtn) {
+    winMaxBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        await invoke('toggle_maximize_window');
+        setTimeout(updateMaximizeIcon, 60);
+      } catch (err) {
+        console.error('Toggle maximize failed:', err);
+      }
+    });
+  }
+
+  const titlebarDrag = document.querySelector('#app .window-titlebar-drag');
+  if (titlebarDrag) {
+    titlebarDrag.addEventListener('dblclick', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        await invoke('toggle_maximize_window');
+        setTimeout(updateMaximizeIcon, 60);
+      } catch (err) {
+        console.error('Toggle maximize failed:', err);
+      }
+    });
+  }
+
+  window.addEventListener('resize', () => {
+    updateMaximizeIcon();
+  });
+  updateMaximizeIcon();
 
   const winCloseBtn = document.getElementById('win-close-btn');
-  if (winCloseBtn) winCloseBtn.addEventListener('click', () => invoke('close_window'));
+  if (winCloseBtn) winCloseBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    invoke('close_window');
+  });
 
   const onboardWinMinBtn = document.getElementById('onboard-win-min-btn');
-  if (onboardWinMinBtn) onboardWinMinBtn.addEventListener('click', () => invoke('minimize_window'));
+  if (onboardWinMinBtn) onboardWinMinBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    invoke('minimize_window');
+  });
 
   const onboardWinCloseBtn = document.getElementById('onboard-win-close-btn');
-  if (onboardWinCloseBtn) onboardWinCloseBtn.addEventListener('click', () => invoke('close_window'));
+  if (onboardWinCloseBtn) onboardWinCloseBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    invoke('close_window');
+  });
 
   // 1. Tab selection setup (Dashboard)
   tabItems.forEach(item => {
@@ -451,7 +515,11 @@ async function init() {
       } else if (tabId === 'vocabulary') {
         loadVocabulary();
       } else if (tabId === 'meetings') {
-        loadMeetings();
+        if (currentMeetingFile) {
+          showRecordingView();
+        } else {
+          loadMeetings();
+        }
       }
     });
   });
@@ -746,6 +814,17 @@ async function init() {
 
     // Initialize Meeting Notes UI event listeners
     setupMeetingsUI();
+
+    // Check if an active meeting is recording in the background (Option 2 Session Rehydration)
+    try {
+      const activeMeeting = await invoke('get_active_meeting');
+      if (activeMeeting && activeMeeting.is_recording) {
+        console.log("[MEETING RESTORE] Active meeting found during init:", activeMeeting);
+        rehydrateActiveMeeting(activeMeeting);
+      }
+    } catch (meetingErr) {
+      console.warn("[MEETING RESTORE] Failed to check for active meeting during init:", meetingErr);
+    }
 
     // Initialize Custom Themed Dropdowns
     initCustomSelects();
@@ -1953,6 +2032,26 @@ function setupMeetingsUI() {
         badge.style.color = "#ff453a";
       }
     });
+    listen('open-meeting-view', async () => {
+      console.log("[MEETING EVENT] open-meeting-view received from backend");
+      try {
+        const activeMeeting = await invoke('get_active_meeting');
+        if (activeMeeting && activeMeeting.is_recording) {
+          rehydrateActiveMeeting(activeMeeting);
+        } else {
+          tabItems.forEach(nav => nav.classList.remove('active'));
+          tabPanes.forEach(pane => pane.classList.remove('active'));
+          const meetingsTabNav = document.querySelector('.nav-item[data-tab="meetings"]');
+          const meetingsTabPane = document.getElementById('tab-meetings');
+          if (meetingsTabNav) meetingsTabNav.classList.add('active');
+          if (meetingsTabPane) meetingsTabPane.classList.add('active');
+          showDashboardView();
+          loadMeetings();
+        }
+      } catch (err) {
+        console.warn("[MEETING EVENT] open-meeting-view handling failed:", err);
+      }
+    });
   }
 }
 
@@ -2156,28 +2255,8 @@ async function viewMeeting(id) {
     }
 
     // Helper functions for avatars & time formatting
-    const getInitials = (name) => {
-      if (!name) return 'SP';
-      const cleanName = name.replace(/[\[\]]/g, '').trim();
-      const parts = cleanName.split(' ');
-      if (parts.length >= 2) {
-        return (parts[0][0] + parts[1][0]).toUpperCase();
-      }
-      return cleanName.slice(0, 2).toUpperCase();
-    };
-
-    const getAvatarColor = (name) => {
-      if (!name) return '#757575';
-      let hash = 0;
-      for (let i = 0; i < name.length; i++) {
-        hash = name.charCodeAt(i) + ((hash << 5) - hash);
-      }
-      const colors = [
-        '#7c3aed', '#0284c7', '#059669', '#d97706', 
-        '#e11d48', '#2563eb', '#4f46e5', '#0d9488'
-      ];
-      return colors[Math.abs(hash) % colors.length];
-    };
+    const getInitials = getMeetingSpeakerInitials;
+    const getAvatarColor = getMeetingSpeakerColor;
 
     const formatOffset = (seconds) => {
       if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -2813,6 +2892,45 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
   }
 }
 
+// Global helper functions for speaker avatars, initials & theme colors
+function getMeetingSpeakerInitials(name) {
+  if (!name) return 'SP';
+  const cleanName = name.replace(/[\[\]]/g, '').trim();
+  const lower = cleanName.toLowerCase();
+  if (lower === 'speaker 1' || lower === 'spk_1' || lower === 'speaker_1') return 'S1';
+  if (lower === 'speaker 2' || lower === 'spk_2' || lower === 'speaker_2') return 'S2';
+  if (lower === 'speaker 3' || lower === 'spk_3' || lower === 'speaker_3') return 'S3';
+  if (lower === 'speaker 4' || lower === 'spk_4' || lower === 'speaker_4') return 'S4';
+  if (lower === 'speaker 5' || lower === 'spk_5' || lower === 'speaker_5') return 'S5';
+  if (lower === 'you' || lower === 'me') return 'ME';
+  const parts = cleanName.split(' ');
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return cleanName.slice(0, 2).toUpperCase();
+}
+
+function getMeetingSpeakerColor(name) {
+  if (!name) return '#2563eb';
+  const clean = name.replace(/[\[\]]/g, '').toLowerCase().trim();
+  if (clean === 'speaker 1' || clean === 'spk_1' || clean === 'speaker_1') return '#2563eb'; // Royal Blue
+  if (clean === 'speaker 2' || clean === 'spk_2' || clean === 'speaker_2') return '#d97706'; // Vibrant Amber
+  if (clean === 'speaker 3' || clean === 'spk_3' || clean === 'speaker_3') return '#7c3aed'; // Deep Purple
+  if (clean === 'speaker 4' || clean === 'spk_4' || clean === 'speaker_4') return '#059669'; // Emerald Green
+  if (clean === 'speaker 5' || clean === 'spk_5' || clean === 'speaker_5') return '#e11d48'; // Rose Red
+  if (clean === 'you' || clean === 'me') return '#57bf7c'; // Soft Emerald
+
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const colors = [
+    '#2563eb', '#d97706', '#7c3aed', '#059669', 
+    '#e11d48', '#0284c7', '#4f46e5', '#0d9488'
+  ];
+  return colors[Math.abs(hash) % colors.length];
+}
+
 function handleLiveMeetingTurn(turn) {
   if (!turn || !turn.id) return;
   const turnsList = document.getElementById('meetings-live-turns-list');
@@ -2828,23 +2946,28 @@ function handleLiveMeetingTurn(turn) {
     return `${m}:${s < 10 ? '0' + s : s}`;
   };
 
+  const displayName = isMe ? 'You' : (turn.speaker_name || 'Remote Speaker');
+  const avatarText = isMe ? 'ME' : getMeetingSpeakerInitials(displayName);
+  const avatarBg = isMe ? '#57bf7c' : getMeetingSpeakerColor(displayName);
+
   let turnEl = document.getElementById(`live-${turn.id}`);
   if (!turnEl) {
     turnEl = document.createElement('div');
     turnEl.id = `live-${turn.id}`;
     turnEl.className = `live-turn-item ${isMe ? 'is-me' : 'is-remote'}`;
+    turnEl.style.borderLeftColor = avatarBg;
 
     const header = document.createElement('div');
     header.className = 'live-turn-header';
 
     const avatar = document.createElement('div');
     avatar.className = 'live-turn-avatar';
-    avatar.textContent = isMe ? 'ME' : (turn.speaker_name ? turn.speaker_name.slice(0, 2).toUpperCase() : 'SP');
-    avatar.style.backgroundColor = isMe ? '#57bf7c' : '#2f80ed';
+    avatar.textContent = avatarText;
+    avatar.style.backgroundColor = avatarBg;
 
     const spkSpan = document.createElement('span');
     spkSpan.className = 'live-turn-speaker';
-    spkSpan.textContent = turn.speaker_name || (isMe ? 'You' : 'Remote Speaker');
+    spkSpan.textContent = displayName;
 
     const timeSpan = document.createElement('span');
     timeSpan.className = 'live-turn-time';
@@ -2860,6 +2983,18 @@ function handleLiveMeetingTurn(turn) {
     turnEl.appendChild(textEl);
 
     turnsList.appendChild(turnEl);
+  } else {
+    // Dynamically update speaker name, avatar, and border if refined by Sortformer diarization
+    turnEl.style.borderLeftColor = avatarBg;
+    const avatar = turnEl.querySelector('.live-turn-avatar');
+    if (avatar) {
+      avatar.textContent = avatarText;
+      avatar.style.backgroundColor = avatarBg;
+    }
+    const spkSpan = turnEl.querySelector('.live-turn-speaker');
+    if (spkSpan) {
+      spkSpan.textContent = displayName;
+    }
   }
 
   const textEl = turnEl.querySelector('.live-turn-text');
@@ -2874,6 +3009,94 @@ function handleLiveMeetingTurn(turn) {
 
   // Smooth autoscroll down
   turnsList.scrollTop = turnsList.scrollHeight;
+}
+
+function rehydrateActiveMeeting(activeMeeting) {
+  if (!activeMeeting || !activeMeeting.is_recording) return;
+  console.log("[MEETING RESTORE] Rehydrating active meeting session:", activeMeeting);
+  currentMeetingFile = activeMeeting.filepath;
+
+  // 1. Switch to Meetings tab
+  tabItems.forEach(nav => nav.classList.remove('active'));
+  tabPanes.forEach(pane => pane.classList.remove('active'));
+  const meetingsTabNav = document.querySelector('.nav-item[data-tab="meetings"]');
+  const meetingsTabPane = document.getElementById('tab-meetings');
+  if (meetingsTabNav) meetingsTabNav.classList.add('active');
+  if (meetingsTabPane) meetingsTabPane.classList.add('active');
+
+  // 2. Switch to Recording view
+  showRecordingView();
+
+  // 3. Restore title if set
+  const titleInput = document.getElementById('meeting-title-input');
+  if (titleInput) {
+    if (activeMeeting.title && activeMeeting.title !== 'Recording...') {
+      titleInput.value = activeMeeting.title;
+    } else {
+      titleInput.value = '';
+    }
+  }
+
+  // 4. Restore timer to elapsed seconds
+  meetingSeconds = Math.floor(activeMeeting.elapsed_seconds || 0);
+  const timerEl = document.getElementById('meetings-timer');
+  if (timerEl) {
+    const hrs = String(Math.floor(meetingSeconds / 3600)).padStart(2, '0');
+    const mins = String(Math.floor((meetingSeconds % 3600) / 60)).padStart(2, '0');
+    const secs = String(meetingSeconds % 60).padStart(2, '0');
+    timerEl.textContent = `${hrs}:${mins}:${secs}`;
+  }
+
+  // 5. Update status badge
+  const badge = document.getElementById('meetings-live-status-badge');
+  if (badge) {
+    badge.textContent = "Live Connected";
+    badge.style.color = "#57bf7c";
+  }
+
+  // 6. Restore turns list
+  const turnsList = document.getElementById('meetings-live-turns-list');
+  if (turnsList) {
+    turnsList.innerHTML = '';
+    if (activeMeeting.turns && activeMeeting.turns.length > 0) {
+      activeMeeting.turns.forEach(turn => {
+        handleLiveMeetingTurn(turn);
+      });
+    } else {
+      turnsList.innerHTML = `
+        <div id="meetings-live-waiting-text" class="live-waiting-text">
+          Listening for speech from microphone and remote attendees...
+        </div>
+      `;
+    }
+  }
+
+  // 7. Restart intervals (timer clock + audio level polling)
+  clearInterval(timerInterval);
+  clearInterval(recordingInterval);
+
+  timerInterval = setInterval(() => {
+    meetingSeconds++;
+    const hrs = String(Math.floor(meetingSeconds / 3600)).padStart(2, '0');
+    const mins = String(Math.floor((meetingSeconds % 3600) / 60)).padStart(2, '0');
+    const secs = String(meetingSeconds % 60).padStart(2, '0');
+    if (timerEl) timerEl.textContent = `${hrs}:${mins}:${secs}`;
+  }, 1000);
+
+  recordingInterval = setInterval(async () => {
+    try {
+      const micFill = document.getElementById('mic-level-fill');
+      const loopbackFill = document.getElementById('loopback-level-fill');
+      const [mic, loopback] = await invoke('get_meeting_levels');
+      // Perceptual dynamic scaling (0-1000 RMS -> 0-100% meter bar)
+      const micPercent = mic > 0 ? Math.min(100, Math.max(3, Math.round(Math.pow(mic / 250, 0.5) * 100))) : 0;
+      const loopbackPercent = loopback > 0 ? Math.min(100, Math.max(3, Math.round(Math.pow(loopback / 250, 0.5) * 100))) : 0;
+      if (micFill) micFill.style.width = `${micPercent}%`;
+      if (loopbackFill) loopbackFill.style.width = `${loopbackPercent}%`;
+    } catch (e) {
+      console.error("[MEETING FRONTEND ERROR] get_meeting_levels failed:", e);
+    }
+  }, 80);
 }
 
 async function startMeetingRecording() {
@@ -2959,6 +3182,7 @@ async function stopMeetingRecording() {
   try {
     console.log("[MEETING FRONTEND] Invoking stop_meeting command on Tauri backend...");
     const res = await invoke('stop_meeting');
+    currentMeetingFile = null;
     console.log("[MEETING FRONTEND] stop_meeting returned:", res);
     let m = null;
     try {
@@ -2981,6 +3205,7 @@ async function stopMeetingRecording() {
     }
   } catch (err) {
     console.error("[MEETING FRONTEND ERROR] Failed to finalize meeting note:", err);
+    currentMeetingFile = null;
     alert("Failed to finalize meeting note: " + err);
     showDashboardView();
     loadMeetings();
@@ -2994,6 +3219,7 @@ async function cancelMeetingRecording() {
   try {
     await invoke('cancel_meeting');
   } catch (e) {}
+  currentMeetingFile = null;
   showDashboardView();
   loadMeetings();
 }

@@ -42,3 +42,4 @@ desktop.ini
 debug_stream_recordings/
 benchmark/open_asr_leaderboard/
 benchmark/venv/
+.codex-go-cache/

@@ -206,12 +206,21 @@ pub fn simulate_key_up(vk: u32) {
 #[cfg(target_os = "windows")]
 pub fn suppress_win_key_start_menu() {
     unsafe {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP,
+        };
         crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
-        // Virtual key 0x07 is unassigned in Windows. Sending it tells the Windows Shell
-        // that a key combination was executed with the Windows key, suppressing the Start Menu.
-        keybd_event(0x07, 0, 0, 0);
-        keybd_event(0x07, 0, KEYEVENTF_KEYUP, 0);
+        // Virtual key 0xE8 is officially unassigned in Windows.
+        // Sending 0xE8 tells the Windows Shell that a key combination was executed
+        // with the Windows key, cleanly suppressing the Start Menu from popping up.
+        let mut inputs: [INPUT; 2] = [std::mem::zeroed(), std::mem::zeroed()];
+        inputs[0].r#type = INPUT_KEYBOARD;
+        inputs[0].Anonymous.ki.wVk = 0xE8;
+        inputs[1].r#type = INPUT_KEYBOARD;
+        inputs[1].Anonymous.ki.wVk = 0xE8;
+        inputs[1].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+
+        SendInput(2, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
         crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -222,65 +231,99 @@ pub fn suppress_win_key_start_menu() {}
 #[cfg(target_os = "windows")]
 pub fn release_modifier_keys() {
     unsafe {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY};
-        
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY,
+        };
+
         crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
-        
-        // 1. Mask the Windows key BEFORE releasing so the Start Menu is never triggered
-        keybd_event(0x07, 0, 0, 0);
-        keybd_event(0x07, 0, KEYEVENTF_KEYUP, 0);
 
-        // Generic Control
-        keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0);
-        // Left Control
-        keybd_event(0xA2, 0, KEYEVENTF_KEYUP, 0);
-        // Right Control (Extended)
-        keybd_event(0xA3, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
-        keybd_event(0xA3, 0, KEYEVENTF_KEYUP, 0);
-        // Generic Alt
-        keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0);
-        // Left Alt
-        keybd_event(0xA4, 0, KEYEVENTF_KEYUP, 0);
-        // Right Alt (Extended)
-        keybd_event(0xA5, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
-        keybd_event(0xA5, 0, KEYEVENTF_KEYUP, 0);
-        // Shift
-        keybd_event(0x10, 0, KEYEVENTF_KEYUP, 0);
-        // Left Shift
-        keybd_event(0xA0, 0, KEYEVENTF_KEYUP, 0);
-        // Right Shift (Extended)
-        keybd_event(0xA1, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
-        keybd_event(0xA1, 0, KEYEVENTF_KEYUP, 0);
-        // Windows Key
-        keybd_event(0x5B, 0, KEYEVENTF_KEYUP, 0);
-        keybd_event(0x5C, 0, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
-        keybd_event(0x5C, 0, KEYEVENTF_KEYUP, 0);
+        // Check if Windows key is currently physically or logically down.
+        let lwin_down = (GetAsyncKeyState(0x5B) as u16 & 0x8000) != 0;
+        let rwin_down = (GetAsyncKeyState(0x5C) as u16 & 0x8000) != 0;
+        let win_down = lwin_down || rwin_down;
 
-        // 2. Mask again after release to ensure Windows Shell state is completely neutral
-        keybd_event(0x07, 0, 0, 0);
-        keybd_event(0x07, 0, KEYEVENTF_KEYUP, 0);
+        if win_down {
+            // Mask with 0xE8 before releasing so Windows Shell never opens the Start menu
+            let mut mask_inputs: [INPUT; 2] = [std::mem::zeroed(), std::mem::zeroed()];
+            mask_inputs[0].r#type = INPUT_KEYBOARD;
+            mask_inputs[0].Anonymous.ki.wVk = 0xE8;
+            mask_inputs[1].r#type = INPUT_KEYBOARD;
+            mask_inputs[1].Anonymous.ki.wVk = 0xE8;
+            mask_inputs[1].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(2, mask_inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+        }
+
+        // Only release modifiers that are ACTUALLY currently held down!
+        // Never send an artificial KEYUP for an idle key, as sending KEYUP on an idle
+        // Win or Alt key can cause the Windows Shell to pop open the Start Menu or Menu Bar.
+        let mut inputs: Vec<INPUT> = Vec::with_capacity(8);
+
+        let check_keys = [
+            (0x11u16, 0u32, 0x11i32),                       // VK_CONTROL
+            (0xA2u16, 0u32, 0xA2i32),                       // VK_LCONTROL
+            (0xA3u16, KEYEVENTF_EXTENDEDKEY, 0xA3i32),      // VK_RCONTROL
+            (0x12u16, 0u32, 0x12i32),                       // VK_MENU (Alt)
+            (0xA4u16, 0u32, 0xA4i32),                       // VK_LMENU
+            (0xA5u16, KEYEVENTF_EXTENDEDKEY, 0xA5i32),      // VK_RMENU
+            (0x10u16, 0u32, 0x10i32),                       // VK_SHIFT
+            (0xA0u16, 0u32, 0xA0i32),                       // VK_LSHIFT
+            (0xA1u16, KEYEVENTF_EXTENDEDKEY, 0xA1i32),      // VK_RSHIFT
+            (0x5Bu16, 0u32, 0x5Bi32),                       // VK_LWIN
+            (0x5Cu16, KEYEVENTF_EXTENDEDKEY, 0x5Ci32),      // VK_RWIN
+        ];
+
+        for (vk, flags, vki) in check_keys {
+            if (GetAsyncKeyState(vki) as u16 & 0x8000) != 0 {
+                let mut input: INPUT = std::mem::zeroed();
+                input.r#type = INPUT_KEYBOARD;
+                let mut ki: KEYBDINPUT = std::mem::zeroed();
+                ki.wVk = vk;
+                ki.dwFlags = KEYEVENTF_KEYUP | flags;
+                input.Anonymous.ki = ki;
+                inputs.push(input);
+            }
+        }
+
+        if !inputs.is_empty() {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            );
+        }
+
+        if win_down {
+            // Mask again after release to ensure Windows Shell state is completely neutral
+            let mut mask_inputs: [INPUT; 2] = [std::mem::zeroed(), std::mem::zeroed()];
+            mask_inputs[0].r#type = INPUT_KEYBOARD;
+            mask_inputs[0].Anonymous.ki.wVk = 0xE8;
+            mask_inputs[1].r#type = INPUT_KEYBOARD;
+            mask_inputs[1].Anonymous.ki.wVk = 0xE8;
+            mask_inputs[1].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(2, mask_inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+        }
 
         crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        // If any modifier was released, allow 25ms for the OS and active window to settle
+        if !inputs.is_empty() {
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 }
 
 #[cfg(target_os = "windows")]
 pub fn simulate_typing(text: &str) {
     release_modifier_keys();
+    // 25ms settling delay before typing the first character so the active target window
+    // (e.g. Notepad, Word, Browser) is 100% steady and ready to ingest text without dropping the first word.
+    thread::sleep(Duration::from_millis(25));
     unsafe {
-        let mut chunk_inputs: Vec<INPUT> = Vec::with_capacity(32);
-
         for ch in text.chars() {
             if ch == '\r' {
                 continue;
             }
             if ch == '\n' {
-                // Flush any buffered characters first before sending Enter
-                if !chunk_inputs.is_empty() {
-                    send_inputs(&chunk_inputs);
-                    chunk_inputs.clear();
-                }
-
                 // Send true physical VK_RETURN (Enter key)
                 let mut in_down: INPUT = std::mem::zeroed();
                 in_down.r#type = INPUT_KEYBOARD;
@@ -304,6 +347,7 @@ pub fn simulate_typing(text: &str) {
             let mut utf16_buf = [0u16; 2];
             let encoded = ch.encode_utf16(&mut utf16_buf);
 
+            let mut char_inputs: Vec<INPUT> = Vec::with_capacity(4);
             for &c in encoded.iter() {
                 let mut in_down: INPUT = std::mem::zeroed();
                 in_down.r#type = INPUT_KEYBOARD;
@@ -321,32 +365,26 @@ pub fn simulate_typing(text: &str) {
                 ki1.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
                 in_up.Anonymous.ki = ki1;
 
-                chunk_inputs.push(in_down);
-                chunk_inputs.push(in_up);
+                char_inputs.push(in_down);
+                char_inputs.push(in_up);
             }
 
+            // Send this character's Down + Up atomically so no key remains stuck
+            send_inputs(&char_inputs);
+
+            // Natural typing cadence with reliable pacing for modern Windows 11 apps (Notepad WinUI 3, RichEdit)
             let is_space = ch == ' ';
             let is_punct = matches!(ch, '.' | ',' | '!' | '?' | ';' | ':');
 
-            // Flush chunk at word boundaries, punctuation, or every ~16 characters
-            if is_space || is_punct || chunk_inputs.len() >= 16 {
-                send_inputs(&chunk_inputs);
-                chunk_inputs.clear();
+            let delay_ms = if is_punct {
+                8 + (rand::random::<u64>() % 6) // 8ms - 13ms after punctuation
+            } else if is_space {
+                4 + (rand::random::<u64>() % 4) // 4ms - 7ms after word space
+            } else {
+                2 + (rand::random::<u64>() % 3) // 2ms - 4ms between letters
+            };
 
-                let delay_ms = if is_punct {
-                    4 + (rand::random::<u64>() % 4) // 4ms - 7ms punctuation pause
-                } else if is_space {
-                    1 + (rand::random::<u64>() % 3) // 1ms - 3ms word pause
-                } else {
-                    1 // 1ms micro-tick for long continuous words
-                };
-
-                thread::sleep(Duration::from_millis(delay_ms));
-            }
-        }
-
-        if !chunk_inputs.is_empty() {
-            send_inputs(&chunk_inputs);
+            thread::sleep(Duration::from_millis(delay_ms));
         }
     }
 }
@@ -413,7 +451,7 @@ pub fn simulate_backspaces(count: usize) {
     println!("[KEYBOARD] simulate_backspaces: {}", count);
 }
 
-fn normalize_newlines(text: &str) -> String {
+pub fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
@@ -540,5 +578,30 @@ mod tests {
 
         let windows = "Line 1\r\nLine 2\r\n\r\nLine 3";
         assert_eq!(normalize_newlines(windows), expected);
+    }
+
+    #[test]
+    fn test_multibyte_unicode_slicing() {
+        // Test Hindi text with multi-byte Devanagari characters including virama/halants (\u{94d})
+        let hindi_text = "क्लाउड कंप्यूटिंग हमारे तकनीक तक पहुँचने और प्रबंधित करने के तरीके में क्रांति लाती है।";
+        
+        let preview_display = if let Some((start_byte, _)) = hindi_text.char_indices().rev().nth(31) {
+            let tail = &hindi_text[start_byte..];
+            format!("✨ ...{}", tail.trim_start())
+        } else {
+            format!("✨ {}", hindi_text)
+        };
+
+        assert!(preview_display.starts_with("✨ ..."));
+
+        // Short string test (< 32 chars)
+        let short_hindi = "नमस्ते दुनिया";
+        let short_preview = if let Some((start_byte, _)) = short_hindi.char_indices().rev().nth(31) {
+            let tail = &short_hindi[start_byte..];
+            format!("✨ ...{}", tail.trim_start())
+        } else {
+            format!("✨ {}", short_hindi)
+        };
+        assert_eq!(short_preview, format!("✨ {}", short_hindi));
     }
 }

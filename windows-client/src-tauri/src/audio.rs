@@ -176,17 +176,23 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
             }
             println!("[AUDIO] Recording started...");
             
+            let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
             let (is_stream_mode, api_url, token, enhance, custom_prompt) = {
                 let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                 (
                     cfg.transcription_mode == "stream" && cfg.session_token.is_some(),
                     cfg.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
                     cfg.session_token.clone().unwrap_or_default(),
-                    cfg.enhance,
+                    if is_cmd { false } else { cfg.enhance },
                     cfg.custom_prompt.clone(),
                 )
             };
-            println!("[AUDIO] Active transcription mode: {}", if is_stream_mode { "STREAM" } else { "BATCH" });
+            println!(
+                "[AUDIO] Active transcription mode: {} (enhance: {}, is_command_mode: {})",
+                if is_stream_mode { "STREAM" } else { "BATCH" },
+                enhance,
+                is_cmd
+            );
 
             if is_stream_mode {
                 let stream_handle = match crate::stream::start_streaming_session(
@@ -627,11 +633,50 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                         }
                                     };
 
-                                    match rt.block_on(crate::api::transform_text(
+                                    let typing_mode = {
+                                        let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                                        cfg.typing_mode
+                                    };
+
+                                    let mut is_first_chunk = true;
+                                    let mut last_ui_update = std::time::Instant::now();
+
+                                    match rt.block_on(crate::api::transform_text_stream(
                                         &api_url_clone,
                                         &token_clone,
                                         &target_clone,
                                         &cmd_clone,
+                                        move |delta, accumulated| {
+                                            if delta == "[RESET]" {
+                                                println!("[STREAM] Received [RESET], resetting stream UI preview");
+                                                crate::win32::set_preview_text("✨ Retrying with backup AI...");
+                                                is_first_chunk = true;
+                                                return;
+                                            }
+
+                                            if is_first_chunk {
+                                                if has_target && typing_mode {
+                                                    crate::keyboard::simulate_single_key(0x08);
+                                                    std::thread::sleep(std::time::Duration::from_millis(20));
+                                                }
+                                                is_first_chunk = false;
+                                            }
+
+                                            if typing_mode {
+                                                crate::keyboard::simulate_typing(delta);
+                                            }
+
+                                            if last_ui_update.elapsed() >= std::time::Duration::from_millis(80) {
+                                                last_ui_update = std::time::Instant::now();
+                                                let preview_display = if let Some((start_byte, _)) = accumulated.char_indices().rev().nth(31) {
+                                                    let tail = &accumulated[start_byte..];
+                                                    format!("✨ ...{}", tail.trim_start())
+                                                } else {
+                                                    format!("✨ {}", accumulated)
+                                                };
+                                                crate::win32::set_preview_text(&preview_display);
+                                            }
+                                        },
                                     )) {
                                         Ok(transformed) => {
                                             println!("\n=======================================================");
@@ -643,15 +688,13 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
 
                                             crate::win32::set_preview_text("✨ Done!");
 
-                                            let typing_mode = {
-                                                let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                                                cfg.typing_mode
-                                            };
-
-                                            if typing_mode {
-                                                crate::keyboard::simulate_typing(&transformed);
-                                            } else {
+                                            if !typing_mode {
                                                 crate::keyboard::paste_transformed_text(&transformed);
+                                            } else {
+                                                // Permanently leave transformed text in clipboard as a fallback
+                                                if let Ok(mut ctx) = arboard::Clipboard::new() {
+                                                    let _ = ctx.set_text(crate::keyboard::normalize_newlines(&transformed));
+                                                }
                                             }
 
                                             let (notify_title, notify_msg) = if has_target {
