@@ -516,18 +516,19 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 							}
 						} else if len(completedEvt.Words) == 0 && strings.TrimSpace(completedEvt.Transcript) != "" && completedEvt.AudioProcessed > lastEmittedLBWordEnd+0.2 {
 							cleanText := strings.TrimSpace(completedEvt.Transcript)
-							startSec := mathMax(0, completedEvt.AudioProcessed-2.5)
+							startSec := mathMax(lastEmittedLBWordEnd, completedEvt.AudioProcessed-2.5)
+							endSec := mathMax(startSec+0.5, completedEvt.AudioProcessed)
 							generatedTurns = append(generatedTurns, ClientMeetingTurn{
 								ID:          fmt.Sprintf("turn_lb_1_%d", int64(startSec*1000)),
 								Channel:     "system",
 								SpeakerID:   "spk_speaker_1",
 								SpeakerName: "Speaker 1",
 								StartTime:   startSec,
-								EndTime:     completedEvt.AudioProcessed,
+								EndTime:     endSec,
 								Text:        cleanText,
 								IsFinal:     true,
 							})
-							lastEmittedLBWordEnd = completedEvt.AudioProcessed
+							lastEmittedLBWordEnd = endSec
 						}
 						lbWordsMu.Unlock()
 
@@ -548,6 +549,9 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 
 					case "input_audio_buffer.committed":
 						log.Printf("[SERVER LOOPBACK] input_audio_buffer.committed confirmed by inference engine")
+						if isMeetingEnding.Load() {
+							return
+						}
 
 					case "error":
 						log.Printf("[SERVER LOOPBACK INFERENCE ERROR] %v", raw["error"])
@@ -654,6 +658,9 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 
 					case "input_audio_buffer.committed":
 						log.Printf("[SERVER MIC] input_audio_buffer.committed confirmed by inference engine")
+						if isMeetingEnding.Load() {
+							return
+						}
 
 					case "error":
 						log.Printf("[SERVER MIC INFERENCE ERROR] %v", raw["error"])
@@ -664,39 +671,6 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	} else {
 		closeMicDone()
 	}
-
-	// -------------------------------------------------------------------
-	// 5. Goroutine C: Periodic Commit Ticker to flush pending audio buffers
-	// -------------------------------------------------------------------
-	go func() {
-		ticker := time.NewTicker(4 * time.Second)
-		defer ticker.Stop()
-		var lastCheckLBChunks int64 = 0
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if isMeetingEnding.Load() {
-					return
-				}
-				chunkCountMu.Lock()
-				currentLB := loopbackChunkCount
-				chunkCountMu.Unlock()
-
-				// Flush loopback stream if audio has been actively arriving
-				if currentLB > lastCheckLBChunks+3 {
-					lastCheckLBChunks = currentLB
-					if s1Loopback != nil {
-						_ = s1Loopback.SendControl(ctx, map[string]interface{}{
-							"type": "input_audio_buffer.commit",
-						})
-					}
-				}
-			}
-		}
-	}()
 
 	// -------------------------------------------------------------------
 	// Main Receive Loop: Read dual-channel 560ms packets from Windows Client
