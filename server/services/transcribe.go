@@ -1148,6 +1148,7 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 		"language":              nemotronLang,
 		"model":                 provCfg.Model,
 		"initial_prompt":        promptStr,
+		"endpointing_ms":        1200,
 	}
 	if len(phrases) > 0 {
 		sessionMap["speech_contexts"] = []map[string]interface{}{
@@ -1190,7 +1191,8 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 
 	go func() {
 		defer close(sess.DoneChan)
-		var deltaAccumulator strings.Builder
+		var committedHistory string
+		var currentDelta strings.Builder
 		for {
 			msgType, data, err := conn.Read(sessCtx)
 			if err != nil {
@@ -1204,26 +1206,62 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 
 					// Case A: Realtime streaming delta token (e.g. "conversation.item.input_audio_transcription.delta")
 					if deltaVal, ok := eventMap["delta"].(string); ok && deltaVal != "" {
-						deltaAccumulator.WriteString(deltaVal)
-						sess.TextChan <- deltaAccumulator.String()
+						currentDelta.WriteString(deltaVal)
+						deltaStr := currentDelta.String()
+						if committedHistory != "" {
+							sess.TextChan <- strings.TrimRight(committedHistory, " ") + " " + strings.TrimLeft(deltaStr, " ")
+						} else {
+							sess.TextChan <- deltaStr
+						}
 						continue
 					}
 
 					// Case B: Final completed transcription (e.g. "conversation.item.input_audio_transcription.completed")
 					if transcriptVal, ok := eventMap["transcript"].(string); ok && transcriptVal != "" {
-						deltaAccumulator.Reset()
-						deltaAccumulator.WriteString(transcriptVal)
-						sess.TextChan <- transcriptVal
+						cleanTranscript := strings.TrimSpace(transcriptVal)
+						if cleanTranscript != "" {
+							if committedHistory == "" {
+								committedHistory = cleanTranscript
+							} else if strings.HasPrefix(cleanTranscript, committedHistory) {
+								// Upstream sent cumulative transcript covering prior sentences
+								committedHistory = cleanTranscript
+							} else {
+								// Upstream sent incremental sentence after EOU/pause
+								committedHistory = utils.MergeTranscripts(committedHistory, cleanTranscript)
+							}
+						}
+						currentDelta.Reset()
+						if committedHistory != "" {
+							sess.TextChan <- committedHistory
+						}
 						continue
 					}
 
 					// Case C: Standard "text" field
 					if textVal, ok := eventMap["text"].(string); ok && textVal != "" {
-						if eventType == "interim" || eventType == "final" {
-							deltaAccumulator.Reset()
-							deltaAccumulator.WriteString(textVal)
+						cleanVal := strings.TrimSpace(textVal)
+						if eventType == "final" {
+							if cleanVal != "" {
+								if committedHistory == "" {
+									committedHistory = cleanVal
+								} else if strings.HasPrefix(cleanVal, committedHistory) {
+									committedHistory = cleanVal
+								} else {
+									committedHistory = utils.MergeTranscripts(committedHistory, cleanVal)
+								}
+							}
+							currentDelta.Reset()
+							if committedHistory != "" {
+								sess.TextChan <- committedHistory
+							}
+						} else {
+							// Interim
+							if committedHistory != "" {
+								sess.TextChan <- strings.TrimRight(committedHistory, " ") + " " + cleanVal
+							} else {
+								sess.TextChan <- cleanVal
+							}
 						}
-						sess.TextChan <- textVal
 						continue
 					}
 				}
