@@ -150,3 +150,160 @@ func TestCalculateTextSimilarity(t *testing.T) {
 		t.Errorf("Expected low similarity for distinct strings, got %f", sim2)
 	}
 }
+
+func TestFilterMeetingStreamTurns_BleedSuppression(t *testing.T) {
+	turns := []ClientMeetingTurn{
+		{
+			ID:          "turn_lb_1",
+			Channel:     "system",
+			SpeakerID:   "spk_speaker_1",
+			SpeakerName: "Speaker 1",
+			StartTime:   25.0,
+			EndTime:     45.0,
+			Text:        "this is an easy base we can take",
+			IsFinal:     true,
+		},
+		{
+			// Phantom bleed mic turn #08
+			ID:          "turn_mic_bleed_1",
+			Channel:     "mic",
+			SpeakerID:   "speaker_local",
+			SpeakerName: "Sumedh Bengale",
+			StartTime:   32.0,
+			EndTime:     36.0,
+			Text:        "This is a case begin to take",
+			IsFinal:     true,
+		},
+		{
+			// Phantom bleed mic turn #09 (word fragment)
+			ID:          "turn_mic_bleed_2",
+			Channel:     "mic",
+			SpeakerID:   "speaker_local",
+			SpeakerName: "Sumedh Bengale",
+			StartTime:   41.0,
+			EndTime:     44.0,
+			Text:        "to take a person",
+			IsFinal:     true,
+		},
+		{
+			// Real user response after speaker finished
+			ID:          "turn_mic_real",
+			Channel:     "mic",
+			SpeakerID:   "speaker_local",
+			SpeakerName: "Sumedh Bengale",
+			StartTime:   48.0,
+			EndTime:     52.0,
+			Text:        "Why is that the best option?",
+			IsFinal:     true,
+		},
+	}
+
+	filtered := filterMeetingStreamTurns(turns)
+
+	if len(filtered) != 2 {
+		t.Fatalf("Expected 2 turns after bleed filtering (Speaker 1 + real user speech), got %d: %+v", len(filtered), filtered)
+	}
+
+	if filtered[0].SpeakerName != "Speaker 1" {
+		t.Errorf("Expected first turn to be Speaker 1, got %s", filtered[0].SpeakerName)
+	}
+	if filtered[0].Text != "this is an easy base we can take" {
+		t.Errorf("Unexpected text for Speaker 1: %s", filtered[0].Text)
+	}
+
+	if filtered[1].SpeakerName != "Sumedh Bengale" {
+		t.Errorf("Expected second turn to be Sumedh Bengale, got %s", filtered[1].SpeakerName)
+	}
+	if filtered[1].Text != "Why is that the best option?" {
+		t.Errorf("Unexpected text for Sumedh Bengale: %s", filtered[1].Text)
+	}
+}
+
+func TestFilterMeetingStreamTurns_MergeThresholdAndInterimPruning(t *testing.T) {
+	turns := []ClientMeetingTurn{
+		{
+			// Loopback turn 1 (ends at 25.84)
+			ID:          "turn_lb_1",
+			Channel:     "system",
+			SpeakerID:   "spk_speaker_1",
+			SpeakerName: "Speaker 1",
+			StartTime:   10.88,
+			EndTime:     25.84,
+			Text:        "First section of remote presentation.",
+			IsFinal:     true,
+		},
+		{
+			// Loopback turn 2 (starts at 26.48 -> pause = 0.64s > 0.35s, should NOT merge)
+			ID:          "turn_lb_2",
+			Channel:     "system",
+			SpeakerID:   "spk_speaker_1",
+			SpeakerName: "Speaker 1",
+			StartTime:   26.48,
+			EndTime:     30.16,
+			Text:        "Second section after a pause.",
+			IsFinal:     true,
+		},
+		{
+			// Loopback turn 3 (starts at 30.30 -> pause = 0.14s <= 0.35s, SHOULD merge into turn 2)
+			ID:          "turn_lb_3",
+			Channel:     "system",
+			SpeakerID:   "spk_speaker_1",
+			SpeakerName: "Speaker 1",
+			StartTime:   30.30,
+			EndTime:     35.00,
+			Text:        "Continuation without significant pause.",
+			IsFinal:     true,
+		},
+		{
+			// Interim non-final mic turn (must be pruned!)
+			ID:          "turn_mic_interim",
+			Channel:     "mic",
+			SpeakerID:   "speaker_local",
+			SpeakerName: "Sumedh Bengale",
+			StartTime:   36.00,
+			EndTime:     37.50,
+			Text:        "Partial unfinished delta",
+			IsFinal:     false,
+		},
+		{
+			// Completed final mic turn
+			ID:          "turn_mic_final",
+			Channel:     "mic",
+			SpeakerID:   "speaker_local",
+			SpeakerName: "Sumedh Bengale",
+			StartTime:   38.00,
+			EndTime:     42.00,
+			Text:        "Final verified local utterance.",
+			IsFinal:     true,
+		},
+	}
+
+	result := filterMeetingStreamTurns(turns)
+
+	// Should result in 3 turns:
+	// 1) turn_lb_1 (10.88-25.84)
+	// 2) turn_lb_2 + turn_lb_3 merged (26.48-35.00)
+	// 3) turn_mic_final (38.00-42.00)
+	// turn_mic_interim MUST be dropped!
+	if len(result) != 3 {
+		t.Fatalf("Expected 3 turns, got %d: %+v", len(result), result)
+	}
+
+	if result[0].StartTime != 10.88 || result[0].EndTime != 25.84 {
+		t.Errorf("Turn 1 timestamps incorrect: [%.2f-%.2f]", result[0].StartTime, result[0].EndTime)
+	}
+
+	if result[1].StartTime != 26.48 || result[1].EndTime != 35.00 {
+		t.Errorf("Merged Turn 2 timestamps incorrect: [%.2f-%.2f]", result[1].StartTime, result[1].EndTime)
+	}
+	expectedMergedText := "Second section after a pause. Continuation without significant pause."
+	if result[1].Text != expectedMergedText {
+		t.Errorf("Expected merged text %q, got %q", expectedMergedText, result[1].Text)
+	}
+
+	if result[2].ID != "turn_mic_final" {
+		t.Errorf("Expected 3rd turn to be turn_mic_final, got %s (%s)", result[2].ID, result[2].Text)
+	}
+}
+
+

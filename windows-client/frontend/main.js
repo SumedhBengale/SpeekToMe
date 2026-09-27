@@ -74,6 +74,168 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+// ==========================================
+// Custom Styled Dialog / Popup System
+// ==========================================
+
+function showConfirmDialog({
+  title = "Confirm Action",
+  message = "Are you sure you want to proceed?",
+  confirmText = "Confirm",
+  cancelText = "Cancel",
+  isDanger = false,
+  type = isDanger ? "danger" : "accent"
+} = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('app-dialog-overlay');
+    const titleEl = document.getElementById('app-dialog-title');
+    const msgEl = document.getElementById('app-dialog-msg');
+    const iconEl = document.getElementById('app-dialog-icon');
+    const confirmBtn = document.getElementById('app-dialog-confirm-btn');
+    const cancelBtn = document.getElementById('app-dialog-cancel-btn');
+    const closeBtn = document.getElementById('app-dialog-close-btn');
+
+    if (!overlay || !confirmBtn) {
+      resolve(true);
+      return;
+    }
+
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+    confirmBtn.textContent = confirmText;
+    cancelBtn.textContent = cancelText;
+    cancelBtn.style.display = 'inline-flex';
+
+    confirmBtn.className = isDanger ? 'fluent-button danger' : 'fluent-button primary';
+
+    iconEl.className = `app-dialog-icon-wrapper ${isDanger ? 'danger' : type}`;
+    if (isDanger || type === 'danger') {
+      iconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`;
+    } else if (type === 'warning') {
+      iconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`;
+    } else {
+      iconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+    }
+
+    const cleanup = (result) => {
+      overlay.classList.add('hidden');
+      overlay.setAttribute('aria-hidden', 'true');
+      document.removeEventListener('keydown', handleKey);
+      confirmBtn.onclick = null;
+      cancelBtn.onclick = null;
+      if (closeBtn) closeBtn.onclick = null;
+      const backdrop = overlay.querySelector('.app-dialog-backdrop');
+      if (backdrop) backdrop.onclick = null;
+      resolve(result);
+    };
+
+    const handleKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cleanup(false);
+      } else if (e.key === 'Enter') {
+        if (document.activeElement !== cancelBtn && document.activeElement !== closeBtn) {
+          e.preventDefault();
+          cleanup(true);
+        }
+      }
+    };
+
+    confirmBtn.onclick = () => cleanup(true);
+    cancelBtn.onclick = () => cleanup(false);
+    if (closeBtn) closeBtn.onclick = () => cleanup(false);
+
+    const backdrop = overlay.querySelector('.app-dialog-backdrop');
+    if (backdrop) backdrop.onclick = () => cleanup(false);
+
+    document.addEventListener('keydown', handleKey);
+
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+
+    if (isDanger) {
+      cancelBtn.focus();
+    } else {
+      confirmBtn.focus();
+    }
+  });
+}
+
+function showAlertDialog({
+  title = "Notice",
+  message = "",
+  confirmText = "OK",
+  type = "info"
+} = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('app-dialog-overlay');
+    const titleEl = document.getElementById('app-dialog-title');
+    const msgEl = document.getElementById('app-dialog-msg');
+    const iconEl = document.getElementById('app-dialog-icon');
+    const confirmBtn = document.getElementById('app-dialog-confirm-btn');
+    const cancelBtn = document.getElementById('app-dialog-cancel-btn');
+    const closeBtn = document.getElementById('app-dialog-close-btn');
+
+    if (!overlay || !confirmBtn) {
+      resolve();
+      return;
+    }
+
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+    confirmBtn.textContent = confirmText;
+    cancelBtn.style.display = 'none';
+
+    confirmBtn.className = type === 'error' ? 'fluent-button danger' : 'fluent-button primary';
+
+    iconEl.className = `app-dialog-icon-wrapper ${type === 'error' ? 'danger' : type}`;
+    if (type === 'error') {
+      iconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>`;
+    } else if (type === 'warning') {
+      iconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`;
+    } else {
+      iconEl.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+    }
+
+    const cleanup = () => {
+      overlay.classList.add('hidden');
+      overlay.setAttribute('aria-hidden', 'true');
+      document.removeEventListener('keydown', handleKey);
+      confirmBtn.onclick = null;
+      if (closeBtn) closeBtn.onclick = null;
+      const backdrop = overlay.querySelector('.app-dialog-backdrop');
+      if (backdrop) backdrop.onclick = null;
+      resolve();
+    };
+
+    const handleKey = (e) => {
+      if (e.key === 'Escape' || e.key === 'Enter') {
+        e.preventDefault();
+        cleanup();
+      }
+    };
+
+    confirmBtn.onclick = cleanup;
+    if (closeBtn) closeBtn.onclick = cleanup;
+    const backdrop = overlay.querySelector('.app-dialog-backdrop');
+    if (backdrop) backdrop.onclick = cleanup;
+
+    document.addEventListener('keydown', handleKey);
+
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+    confirmBtn.focus();
+  });
+}
+
+// Intercept window.alert so that any unhandled alert call displays as a styled popup modal
+window.alert = function(msg) {
+  showAlertDialog({
+    title: "Notice",
+    message: String(msg)
+  });
+};
+
 // DOM Elements - Navigation & Tab Panes
 const tabItems = document.querySelectorAll('.nav-item[data-tab]');
 const tabPanes = document.querySelectorAll('.tab-pane');
@@ -87,6 +249,8 @@ const soundFeedbackCheck = document.getElementById('sound-feedback-check');
 const modelSelect = document.getElementById('model-select');
 const streamingModeCheck = document.getElementById('streaming-mode-check');
 const streamingProHint = document.getElementById('streaming-pro-hint');
+const commandModeCheck = document.getElementById('command-mode-check');
+const commandModeProHint = document.getElementById('command-mode-pro-hint');
 const themeSelect = document.getElementById('theme-select');
 
 // Pill Position Elements
@@ -537,7 +701,8 @@ async function init() {
     pillCustomX,
     pillCustomY,
     modelSelect,
-    streamingModeCheck
+    streamingModeCheck,
+    commandModeCheck
   ];
 
   dashboardInputs.forEach(input => {
@@ -670,6 +835,7 @@ async function init() {
         if (streamingModeCheck) streamingModeCheck.checked = checkbox.checked;
         if (onboardStreamingModeCheck) onboardStreamingModeCheck.checked = checkbox.checked;
       }
+      markDirty();
     };
 
     if (streamingModeCheck) {
@@ -677,6 +843,23 @@ async function init() {
     }
     if (onboardStreamingModeCheck) {
       onboardStreamingModeCheck.addEventListener('change', () => handleStreamingToggleChange(onboardStreamingModeCheck));
+    }
+
+    const handleCommandModeToggleChange = (checkbox) => {
+      const isPaid = isUserPro(currentUserInfo);
+      if (!isPaid && checkbox.checked) {
+        checkbox.checked = false;
+        if (commandModeProHint) commandModeProHint.style.display = 'block';
+        showToast("AI Command Mode is an exclusive Pro feature. Upgrade your subscription on your Web Dashboard to unlock it!", "Pro Subscription Required", "warning");
+      } else if (isPaid) {
+        if (commandModeProHint) commandModeProHint.style.display = 'none';
+        if (commandModeCheck) commandModeCheck.checked = checkbox.checked;
+      }
+      markDirty();
+    };
+
+    if (commandModeCheck) {
+      commandModeCheck.addEventListener('change', () => handleCommandModeToggleChange(commandModeCheck));
     }
 
     // 4. Setup Onboarding flow state
@@ -983,6 +1166,9 @@ function checkIfConfigDirty(a, b) {
   if (a.theme !== b.theme) return true;
   if (a.model !== b.model) return true;
   if (a.transcription_mode !== b.transcription_mode) return true;
+  const aCmd = a.command_mode !== undefined ? Boolean(a.command_mode) : true;
+  const bCmd = b.command_mode !== undefined ? Boolean(b.command_mode) : true;
+  if (aCmd !== bCmd) return true;
   if (a.pill_position_mode !== b.pill_position_mode) return true;
   if (a.pill_predefined_position !== b.pill_predefined_position) return true;
   if (Number(a.pill_custom_x) !== Number(b.pill_custom_x)) return true;
@@ -1041,6 +1227,9 @@ function applyConfigToUI(config) {
   if (modelSelect) modelSelect.value = config.model || 'whisper-large-v3-turbo';
   if (streamingModeCheck) {
     streamingModeCheck.checked = (config.transcription_mode === 'stream');
+  }
+  if (commandModeCheck) {
+    commandModeCheck.checked = (config.command_mode !== false);
   }
   if (themeSelect) themeSelect.value = config.theme || 'forest';
 
@@ -1151,6 +1340,7 @@ function gatherConfigFromUI(isOnboarding) {
       model: onboardModelSelect ? onboardModelSelect.value : 'whisper-large-v3-turbo',
       enhance: true,
       transcription_mode: (onboardStreamingModeCheck && onboardStreamingModeCheck.checked) ? "stream" : "batch",
+      command_mode: currentConfig ? (currentConfig.command_mode !== false) : true,
       custom_prompt: "",
       session_token: currentConfig ? currentConfig.session_token : null,
       theme: themeName,
@@ -1174,6 +1364,7 @@ function gatherConfigFromUI(isOnboarding) {
       model: modelSelect ? modelSelect.value : 'whisper-large-v3-turbo',
       enhance: true,
       transcription_mode: (streamingModeCheck && streamingModeCheck.checked) ? "stream" : "batch",
+      command_mode: (commandModeCheck ? commandModeCheck.checked : (currentConfig ? (currentConfig.command_mode !== false) : true)),
       custom_prompt: "",
       session_token: currentConfig ? currentConfig.session_token : null,
       theme: themeName,
@@ -1630,6 +1821,14 @@ function updateAuthUI(userInfo) {
         if (streamingProHint) streamingProHint.style.display = 'none';
       }
     }
+    if (commandModeCheck) {
+      if (!isPaid) {
+        commandModeCheck.checked = false;
+        if (commandModeProHint) commandModeProHint.style.display = 'block';
+      } else {
+        if (commandModeProHint) commandModeProHint.style.display = 'none';
+      }
+    }
     if (onboardStreamingModeCheck && !isPaid) {
       onboardStreamingModeCheck.checked = false;
     }
@@ -1888,57 +2087,128 @@ function formatAuthError(err) {
 // Vocabulary Settings
 // ==========================================
 
+function showVocabLoading() {
+  const loadingEl = document.getElementById('vocab-loading-state');
+  const emptyEl = document.getElementById('vocab-empty-msg');
+  const listEl = document.getElementById('vocab-list');
+  const warningEl = document.getElementById('vocab-warning');
+
+  if (loadingEl) {
+    loadingEl.classList.remove('hidden');
+    loadingEl.style.display = 'flex';
+  }
+  if (emptyEl) {
+    emptyEl.classList.add('hidden');
+    emptyEl.style.display = 'none';
+  }
+  if (listEl) {
+    listEl.classList.add('hidden');
+    listEl.style.display = 'none';
+    listEl.innerHTML = '';
+  }
+  if (warningEl) {
+    warningEl.classList.add('hidden');
+  }
+}
+
+function hideVocabLoading() {
+  const loadingEl = document.getElementById('vocab-loading-state');
+  if (loadingEl) {
+    loadingEl.classList.add('hidden');
+    loadingEl.style.display = 'none';
+  }
+}
+
 async function loadVocabulary() {
   const vocabList = document.getElementById('vocab-list');
   const vocabEmpty = document.getElementById('vocab-empty-msg');
   const vocabWarning = document.getElementById('vocab-warning');
   if (!vocabList) return;
 
+  showVocabLoading();
+
   try {
     const terms = await invoke('get_vocabulary');
+    hideVocabLoading();
     vocabList.innerHTML = '';
-    
+
     if (!terms || terms.length === 0) {
-      vocabEmpty.style.display = 'block';
+      if (vocabEmpty) {
+        vocabEmpty.classList.remove('hidden');
+        vocabEmpty.style.display = 'flex';
+      }
+      vocabList.classList.add('hidden');
       vocabList.style.display = 'none';
-      vocabWarning.classList.add('hidden');
+      if (vocabWarning) vocabWarning.classList.add('hidden');
       return;
     }
 
-    vocabEmpty.style.display = 'none';
+    if (vocabEmpty) {
+      vocabEmpty.classList.add('hidden');
+      vocabEmpty.style.display = 'none';
+    }
+    vocabList.classList.remove('hidden');
     vocabList.style.display = 'flex';
 
-    if (terms.length > 1000) {
-      vocabWarning.classList.remove('hidden');
-    } else {
-      vocabWarning.classList.add('hidden');
+    if (vocabWarning) {
+      if (terms.length > 1000) {
+        vocabWarning.classList.remove('hidden');
+      } else {
+        vocabWarning.classList.add('hidden');
+      }
     }
 
     terms.forEach(term => {
       const li = document.createElement('li');
       li.className = 'vocab-item';
-      
-      const textSpan = document.createElement('span');
-      textSpan.className = 'vocab-term-text';
-      textSpan.textContent = term.canonical_term;
-      
+
+      const textSpan = document.createElement('div');
+      textSpan.className = 'vocab-item-text';
+
+      const termName = document.createElement('span');
+      termName.className = 'vocab-term-text';
+      termName.textContent = term.canonical_term;
+
       const normSpan = document.createElement('span');
       normSpan.className = 'vocab-term-normalized';
-      normSpan.textContent = ` (${term.normalized_term})`;
+      normSpan.textContent = `(${term.normalized_term})`;
+
+      textSpan.appendChild(termName);
       textSpan.appendChild(normSpan);
 
       const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
       deleteBtn.className = 'vocab-delete-btn';
-      deleteBtn.innerHTML = '🗑️';
-      deleteBtn.title = 'Delete word';
+      deleteBtn.title = `Delete "${term.canonical_term}"`;
+      deleteBtn.setAttribute('aria-label', `Delete ${term.canonical_term}`);
+      deleteBtn.innerHTML = `
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          <line x1="10" y1="11" x2="10" y2="17"></line>
+          <line x1="14" y1="11" x2="14" y2="17"></line>
+        </svg>
+      `;
+
       deleteBtn.addEventListener('click', async () => {
+        const confirmed = await showConfirmDialog({
+          title: "Delete Vocabulary Term?",
+          message: `Are you sure you want to remove "${term.canonical_term}" from your custom vocabulary?`,
+          confirmText: "Delete",
+          cancelText: "Cancel",
+          isDanger: true
+        });
+        if (!confirmed) return;
+
         deleteBtn.disabled = true;
         try {
           await invoke('delete_vocabulary_term', { term: term.canonical_term });
+          showToast(`Removed "${term.canonical_term}"`, "Vocabulary", "info");
           await loadVocabulary();
         } catch (err) {
           console.error("Failed to delete term:", err);
           showToast(err, "Failed to delete term", "error");
+          deleteBtn.disabled = false;
         }
       });
 
@@ -1947,9 +2217,18 @@ async function loadVocabulary() {
       vocabList.appendChild(li);
     });
   } catch (err) {
+    hideVocabLoading();
     console.error("Failed to load vocabulary:", err);
-    vocabList.innerHTML = `<li class="vocab-empty" style="color: var(--btn-danger-text);">Error loading vocabulary: ${escapeHtml(String(err))}</li>`;
-    vocabEmpty.style.display = 'none';
+    if (vocabEmpty) {
+      const emptyText = vocabEmpty.querySelector('.vocab-empty-text');
+      if (emptyText) {
+        emptyText.textContent = `Error loading vocabulary: ${err}`;
+      } else {
+        vocabEmpty.textContent = `Error loading vocabulary: ${err}`;
+      }
+      vocabEmpty.classList.remove('hidden');
+      vocabEmpty.style.display = 'flex';
+    }
   }
 }
 
@@ -1999,6 +2278,13 @@ function setupMeetingsUI() {
       renderMeetingsList(filtered);
     });
   }
+
+  // Close meeting card dropdowns when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.meeting-card-menu-wrapper') && !e.target.closest('.meeting-detail-menu-wrapper')) {
+      document.querySelectorAll('.meeting-card-dropdown').forEach(d => d.classList.add('hidden'));
+    }
+  });
 
   // Setup real-time meeting events from Tauri Rust backend
   if (window.__TAURI__ && window.__TAURI__.event) {
@@ -2056,6 +2342,8 @@ function setupMeetingsUI() {
 }
 
 function showDashboardView() {
+  const mainHdr = document.getElementById('meetings-main-header');
+  if (mainHdr) mainHdr.classList.remove('hidden');
   document.getElementById('meetings-dashboard-view').classList.remove('hidden');
   document.getElementById('meetings-recording-view').classList.add('hidden');
   document.getElementById('meetings-detail-view').classList.add('hidden');
@@ -2063,6 +2351,8 @@ function showDashboardView() {
 }
 
 function showRecordingView() {
+  const mainHdr = document.getElementById('meetings-main-header');
+  if (mainHdr) mainHdr.classList.remove('hidden');
   document.getElementById('meetings-dashboard-view').classList.add('hidden');
   document.getElementById('meetings-recording-view').classList.remove('hidden');
   document.getElementById('meetings-detail-view').classList.add('hidden');
@@ -2070,6 +2360,8 @@ function showRecordingView() {
 }
 
 function showDetailView() {
+  const mainHdr = document.getElementById('meetings-main-header');
+  if (mainHdr) mainHdr.classList.add('hidden');
   document.getElementById('meetings-dashboard-view').classList.add('hidden');
   document.getElementById('meetings-recording-view').classList.add('hidden');
   document.getElementById('meetings-detail-view').classList.remove('hidden');
@@ -2077,24 +2369,80 @@ function showDetailView() {
 }
 
 function showProcessingView() {
+  const mainHdr = document.getElementById('meetings-main-header');
+  if (mainHdr) mainHdr.classList.remove('hidden');
   document.getElementById('meetings-dashboard-view').classList.add('hidden');
   document.getElementById('meetings-recording-view').classList.add('hidden');
   document.getElementById('meetings-detail-view').classList.add('hidden');
   document.getElementById('meetings-processing-view').classList.remove('hidden');
 }
 
+function showMeetingsLoading() {
+  const loadingEl = document.getElementById('meetings-loading-state');
+  const emptyEl = document.getElementById('meetings-empty-msg');
+  const listEl = document.getElementById('meetings-list');
+
+  if (loadingEl) {
+    loadingEl.classList.remove('hidden');
+    loadingEl.style.display = 'flex';
+  }
+  if (emptyEl) {
+    emptyEl.classList.add('hidden');
+    emptyEl.style.display = 'none';
+  }
+  if (listEl) {
+    listEl.classList.add('hidden');
+    listEl.style.display = 'none';
+    listEl.innerHTML = '';
+  }
+}
+
+function hideMeetingsLoading() {
+  const loadingEl = document.getElementById('meetings-loading-state');
+  if (loadingEl) {
+    loadingEl.classList.add('hidden');
+    loadingEl.style.display = 'none';
+  }
+}
+
+function showMeetingsEmpty(message) {
+  hideMeetingsLoading();
+  const emptyEl = document.getElementById('meetings-empty-msg');
+  const emptyText = document.getElementById('meetings-empty-text');
+  const listEl = document.getElementById('meetings-list');
+
+  if (listEl) {
+    listEl.classList.add('hidden');
+    listEl.style.display = 'none';
+    listEl.innerHTML = '';
+  }
+  if (emptyEl) {
+    if (emptyText && message) {
+      emptyText.textContent = message;
+    } else if (message) {
+      emptyEl.textContent = message;
+    }
+    emptyEl.classList.remove('hidden');
+    emptyEl.style.display = 'flex';
+  }
+}
+
+let currentMeetingsReqId = 0;
+
 async function loadMeetings() {
-  const emptyMsg = document.getElementById('meetings-empty-msg');
   const listGrid = document.getElementById('meetings-list');
   if (!listGrid) return;
 
+  const reqId = ++currentMeetingsReqId;
   const token = currentConfig ? currentConfig.session_token : null;
+
   if (!token) {
-    listGrid.innerHTML = '';
-    emptyMsg.textContent = 'Please sign in to view and record meeting notes.';
-    emptyMsg.style.display = 'block';
+    showMeetingsEmpty('Please sign in to view and record meeting notes.');
     return;
   }
+
+  // Display the loading state while server fetch is in progress
+  showMeetingsLoading();
 
   try {
     const res = await fetch(`${API_URL}/meetings`, {
@@ -2102,54 +2450,275 @@ async function loadMeetings() {
         'Authorization': `Bearer ${token}`
       }
     });
-    if (!res.ok) throw new Error("Server error");
+
+    if (reqId !== currentMeetingsReqId) return; // Stale request, ignore
+
+    if (!res.ok) throw new Error("Server error " + res.status);
     const meetings = await res.json();
     
-    window.allMeetings = meetings;
-    renderMeetingsList(meetings);
+    if (reqId !== currentMeetingsReqId) return; // Stale request, ignore
+
+    window.allMeetings = Array.isArray(meetings) ? meetings : [];
+    renderMeetingsList(window.allMeetings);
   } catch (err) {
+    if (reqId !== currentMeetingsReqId) return;
     console.error("Failed to load meetings:", err);
-    listGrid.innerHTML = '';
-    emptyMsg.textContent = 'Error connecting to SpeekTo.Me server.';
-    emptyMsg.style.display = 'block';
+    showMeetingsEmpty('Error connecting to SpeekTo.Me server. Please check your connection.');
+  }
+}
+
+function formatMeetingDate(timestamp) {
+  if (!timestamp) return "N/A";
+  try {
+    let d;
+    if (typeof timestamp === 'number') {
+      d = new Date(timestamp < 10000000000 ? timestamp * 1000 : timestamp);
+    } else {
+      const num = Number(timestamp);
+      if (!isNaN(num) && num > 0) {
+        d = new Date(num < 10000000000 ? num * 1000 : num);
+      } else {
+        d = new Date(timestamp);
+      }
+    }
+    if (isNaN(d.getTime())) return String(timestamp);
+    const day = d.getDate();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'];
+    const month = months[d.getMonth()] || d.toLocaleDateString('en-US', { month: 'short' });
+    const year = d.getFullYear();
+    return `${day} ${month} ${year}`;
+  } catch (_) {
+    return String(timestamp);
+  }
+}
+
+function getMeetingSpeakerCount(m) {
+  if (!m) return 1;
+  if (m.speaker_count && typeof m.speaker_count === 'number') {
+    return Math.max(1, m.speaker_count);
+  }
+  let segments = [];
+  if (Array.isArray(m.segments)) {
+    segments = m.segments;
+  } else if (m.segments_json) {
+    try {
+      segments = typeof m.segments_json === 'string' ? JSON.parse(m.segments_json) : m.segments_json;
+    } catch (_) {}
+  }
+  if (Array.isArray(segments) && segments.length > 0) {
+    const speakerSet = new Set();
+    segments.forEach(s => {
+      if (s && s.speaker && typeof s.speaker === 'string') {
+        const clean = s.speaker.trim();
+        if (clean) speakerSet.add(clean);
+      }
+    });
+    if (speakerSet.size > 0) {
+      return speakerSet.size;
+    }
+  }
+  return 1;
+}
+
+async function deleteMeetingById(id) {
+  if (!id) return;
+  const confirmed = await showConfirmDialog({
+    title: "Delete Meeting Note?",
+    message: "Are you sure you want to delete this meeting note? This action cannot be undone.",
+    confirmText: "Delete",
+    cancelText: "Cancel",
+    isDanger: true
+  });
+  if (!confirmed) return;
+
+  const token = currentConfig ? currentConfig.session_token : null;
+  try {
+    const res = await fetch(`${API_URL}/meetings/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!res.ok) throw new Error("Failed to delete");
+    if (activeMeetingId === id) {
+      activeMeetingId = null;
+    }
+    showToast("Meeting note deleted successfully.", "SpeekTo.Me", "info");
+    loadMeetings();
+  } catch (err) {
+    console.error(err);
+    await showAlertDialog({
+      title: "Failed to Delete",
+      message: "Failed to delete meeting note: " + err,
+      type: "error"
+    });
   }
 }
 
 function renderMeetingsList(meetings) {
+  hideMeetingsLoading();
   const emptyMsg = document.getElementById('meetings-empty-msg');
   const listGrid = document.getElementById('meetings-list');
+  if (!listGrid) return;
   listGrid.innerHTML = '';
 
   if (!meetings || meetings.length === 0) {
-    emptyMsg.style.display = 'block';
-    emptyMsg.textContent = 'No meeting notes found.';
+    const searchInput = document.getElementById('meetings-search-input');
+    const query = searchInput ? searchInput.value.trim() : '';
+    if (query) {
+      showMeetingsEmpty(`No meeting notes found matching "${query}".`);
+    } else {
+      showMeetingsEmpty('No meeting notes recorded yet. Click "New Meeting" to start!');
+    }
     return;
   }
-  emptyMsg.style.display = 'none';
+
+  if (emptyMsg) {
+    emptyMsg.classList.add('hidden');
+    emptyMsg.style.display = 'none';
+  }
+  listGrid.classList.remove('hidden');
+  listGrid.style.display = 'grid';
 
   meetings.forEach(m => {
     const card = document.createElement('div');
     card.className = 'meeting-card';
-    card.addEventListener('click', () => viewMeeting(m.id));
+    card.setAttribute('data-meeting-id', m.id);
+
+    // Clicking card opens meeting details
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.meeting-card-menu-wrapper')) return;
+      viewMeeting(m.id);
+    });
+
+    // 1. Top row: Badge + Title + Action Button
+    const topRow = document.createElement('div');
+    topRow.className = 'meeting-card-top';
+
+    const leftGroup = document.createElement('div');
+    leftGroup.className = 'meeting-card-left';
+
+    const iconBadge = document.createElement('div');
+    iconBadge.className = 'meeting-card-icon-badge';
+    iconBadge.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+      <polyline points="14 2 14 8 20 8"></polyline>
+      <line x1="16" y1="13" x2="8" y2="13"></line>
+      <line x1="16" y1="17" x2="8" y2="17"></line>
+      <line x1="10" y1="9" x2="8" y2="9"></line>
+    </svg>`;
 
     const title = document.createElement('div');
     title.className = 'meeting-card-title';
-    title.textContent = m.title;
+    title.textContent = m.title || 'Recording...';
+    title.title = m.title || 'Recording...';
 
-    const meta = document.createElement('div');
-    meta.className = 'meeting-card-meta';
+    leftGroup.appendChild(iconBadge);
+    leftGroup.appendChild(title);
 
-    const dateSpan = document.createElement('span');
-    dateSpan.textContent = formatDate(m.timestamp);
+    // Three dots menu wrapper
+    const menuWrapper = document.createElement('div');
+    menuWrapper.className = 'meeting-card-menu-wrapper';
 
-    const durSpan = document.createElement('span');
-    durSpan.textContent = formatDuration(m.duration);
+    const menuBtn = document.createElement('button');
+    menuBtn.type = 'button';
+    menuBtn.className = 'meeting-card-menu-btn';
+    menuBtn.title = 'More options';
+    menuBtn.setAttribute('aria-label', 'More options');
+    menuBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="5" cy="12" r="1.75"></circle>
+      <circle cx="12" cy="12" r="1.75"></circle>
+      <circle cx="19" cy="12" r="1.75"></circle>
+    </svg>`;
 
-    meta.appendChild(dateSpan);
-    meta.appendChild(durSpan);
+    // Dropdown
+    const dropdown = document.createElement('div');
+    dropdown.className = 'meeting-card-dropdown hidden';
 
-    card.appendChild(title);
-    card.appendChild(meta);
+    const viewItem = document.createElement('button');
+    viewItem.type = 'button';
+    viewItem.className = 'meeting-dropdown-item';
+    viewItem.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg><span>View Note</span>`;
+    viewItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdown.classList.add('hidden');
+      viewMeeting(m.id);
+    });
+
+    const deleteItem = document.createElement('button');
+    deleteItem.type = 'button';
+    deleteItem.className = 'meeting-dropdown-item danger';
+    deleteItem.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="3 6 5 6 21 6"></polyline>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+    </svg><span>Delete Note</span>`;
+    deleteItem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdown.classList.add('hidden');
+      deleteMeetingById(m.id);
+    });
+
+    dropdown.appendChild(viewItem);
+    dropdown.appendChild(deleteItem);
+
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isCurrentlyHidden = dropdown.classList.contains('hidden');
+      document.querySelectorAll('.meeting-card-dropdown').forEach(d => d.classList.add('hidden'));
+      if (isCurrentlyHidden) {
+        dropdown.classList.remove('hidden');
+      }
+    });
+
+    menuWrapper.appendChild(menuBtn);
+    menuWrapper.appendChild(dropdown);
+
+    topRow.appendChild(leftGroup);
+    topRow.appendChild(menuWrapper);
+
+    // 2. Bottom Row: Calendar Date, Clock Duration, Users Speaker Count
+    const bottomRow = document.createElement('div');
+    bottomRow.className = 'meeting-card-bottom';
+
+    // Date item
+    const dateItem = document.createElement('div');
+    dateItem.className = 'meeting-meta-item';
+    dateItem.innerHTML = `<svg class="meeting-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+      <line x1="16" y1="2" x2="16" y2="6"></line>
+      <line x1="8" y1="2" x2="8" y2="6"></line>
+      <line x1="3" y1="10" x2="21" y2="10"></line>
+    </svg><span class="meeting-meta-text">${formatMeetingDate(m.timestamp)}</span>`;
+
+    // Duration item
+    const durItem = document.createElement('div');
+    durItem.className = 'meeting-meta-item';
+    durItem.innerHTML = `<svg class="meeting-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"></circle>
+      <polyline points="12 6 12 12 16 14"></polyline>
+    </svg><span class="meeting-meta-text">${formatDuration(m.duration)}</span>`;
+
+    // Speakers item
+    const speakerCount = getMeetingSpeakerCount(m);
+    const speakerItem = document.createElement('div');
+    speakerItem.className = 'meeting-meta-item';
+    speakerItem.innerHTML = `<svg class="meeting-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+    </svg><span class="meeting-meta-text">${speakerCount} ${speakerCount === 1 ? 'speaker' : 'speakers'}</span>`;
+
+    bottomRow.appendChild(dateItem);
+    bottomRow.appendChild(durItem);
+    bottomRow.appendChild(speakerItem);
+
+    card.appendChild(topRow);
+    card.appendChild(bottomRow);
+
     listGrid.appendChild(card);
   });
 }
@@ -2169,8 +2738,82 @@ async function viewMeeting(id) {
 
     showDetailView();
 
-    document.getElementById('meeting-detail-title').textContent = m.title;
-    document.getElementById('meeting-detail-date').textContent = `${formatDate(m.timestamp)} • ${formatDuration(m.duration)}`;
+    // Date & Duration formatters matching template ("7 Sept 2026", "1h 3m 24s")
+    const formatMeetingDate = (dateStr) => {
+      if (!dateStr) return "N/A";
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return dateStr;
+        const day = d.getDate();
+        const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"];
+        return `${day} ${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+      } catch (_) {
+        return dateStr;
+      }
+    };
+
+    const formatMeetingDurationDetailed = (seconds) => {
+      if (!seconds || seconds <= 0) return "0s";
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.round(seconds % 60);
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    };
+
+    const formatCurrentTimeDisplay = (sec) => {
+      if (isNaN(sec) || sec < 0) sec = 0;
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = Math.floor(sec % 60);
+      if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    };
+
+    const formatTotalTimeDisplay = (sec) => {
+      if (isNaN(sec) || sec <= 0) return '0:00';
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = Math.floor(sec % 60);
+      if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    };
+
+    // Populate Overview Metadata Row
+    const titleEl = document.getElementById('meeting-detail-title');
+    if (titleEl) titleEl.textContent = m.title || 'Untitled Meeting';
+
+    const dateEl = document.getElementById('meeting-detail-date');
+    if (dateEl) dateEl.textContent = formatMeetingDate(m.timestamp);
+
+    // Parse segments
+    let segments = [];
+    try {
+      segments = JSON.parse(m.segments_json);
+    } catch (_) {
+      segments = [];
+    }
+
+    // Determine local user name if available (from DOM or window state)
+    const domUserName = userNameEl && userNameEl.textContent ? userNameEl.textContent.trim() : '';
+    const userName = domUserName ? domUserName.toLowerCase() : '';
+
+    let maxSegEnd = 0;
+    if (segments && segments.length > 0) {
+      segments.forEach(s => {
+        if (s.end && s.end > maxSegEnd) maxSegEnd = s.end;
+      });
+    }
+    let totalDuration = Math.max(m.duration || 0, maxSegEnd, 1);
+
+    const durEl = document.getElementById('meeting-detail-duration');
+    if (durEl) durEl.textContent = formatMeetingDurationDetailed(totalDuration);
+
+    const uniqueSpeakers = new Set((segments || []).map(s => (s.speaker || 'Speaker').trim()));
+    const spkCount = Math.max(1, uniqueSpeakers.size);
+    const speakersEl = document.getElementById('meeting-detail-speakers');
+    if (speakersEl) speakersEl.textContent = `${spkCount} speaker${spkCount === 1 ? '' : 's'}`;
 
     // Set Audio source using local disk audio (fast seeking, accurate duration, 100% private)
     const player = document.getElementById('meeting-audio-player');
@@ -2206,6 +2849,114 @@ async function viewMeeting(id) {
       }
     }
 
+    // Custom Audio Player Controls Elements
+    const audioPlayBtn = document.getElementById('audio-play-btn');
+    const audioPlayIcon = document.getElementById('audio-play-icon');
+    const audioPauseIcon = document.getElementById('audio-pause-icon');
+    const audioTimeCurrent = document.getElementById('audio-time-current');
+    const audioTimeTotal = document.getElementById('audio-time-total');
+    const audioScrubberTrack = document.getElementById('audio-scrubber-track');
+    const audioScrubberFill = document.getElementById('audio-scrubber-fill');
+    const audioScrubberThumb = document.getElementById('audio-scrubber-thumb');
+    const audioVolBtn = document.getElementById('audio-vol-btn');
+    const audioSpeedSelect = document.getElementById('audio-speed-select');
+
+    if (audioTimeCurrent) audioTimeCurrent.textContent = '0:00';
+    if (audioTimeTotal) audioTimeTotal.textContent = formatTotalTimeDisplay(totalDuration);
+    if (audioScrubberFill) audioScrubberFill.style.width = '0%';
+    if (audioScrubberThumb) audioScrubberThumb.style.left = '0%';
+
+    const updateAudioPlayState = () => {
+      if (!audioPlayIcon || !audioPauseIcon) return;
+      if (player.paused) {
+        audioPlayIcon.classList.remove('hidden');
+        audioPauseIcon.classList.add('hidden');
+      } else {
+        audioPlayIcon.classList.add('hidden');
+        audioPauseIcon.classList.remove('hidden');
+      }
+    };
+
+    if (audioPlayBtn) {
+      audioPlayBtn.onclick = () => {
+        if (player.paused) {
+          player.play();
+        } else {
+          player.pause();
+        }
+      };
+    }
+
+    player.onplay = updateAudioPlayState;
+    player.onpause = updateAudioPlayState;
+    player.onended = () => {
+      updateAudioPlayState();
+      if (audioScrubberFill) audioScrubberFill.style.width = '0%';
+      if (audioScrubberThumb) audioScrubberThumb.style.left = '0%';
+    };
+    updateAudioPlayState();
+
+    if (audioVolBtn) {
+      audioVolBtn.onclick = () => {
+        player.muted = !player.muted;
+        audioVolBtn.style.opacity = player.muted ? '0.4' : '1.0';
+      };
+    }
+
+    if (audioSpeedSelect) {
+      audioSpeedSelect.value = "1.0";
+      player.playbackRate = 1.0;
+      audioSpeedSelect.onchange = (e) => {
+        player.playbackRate = parseFloat(e.target.value);
+      };
+    }
+
+    let isDraggingScrubber = false;
+    const seekFromScrubber = (e) => {
+      const effDuration = (player && player.duration && !isNaN(player.duration) && player.duration > 0) ? player.duration : totalDuration;
+      if (!audioScrubberTrack || effDuration <= 0) return;
+      const rect = audioScrubberTrack.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const pct = Math.max(0, Math.min(1, clickX / rect.width));
+      player.currentTime = pct * effDuration;
+      if (audioScrubberFill) audioScrubberFill.style.width = `${pct * 100}%`;
+      if (audioScrubberThumb) audioScrubberThumb.style.left = `${pct * 100}%`;
+      if (audioTimeCurrent) audioTimeCurrent.textContent = formatCurrentTimeDisplay(player.currentTime);
+    };
+
+    if (audioScrubberTrack) {
+      audioScrubberTrack.onmousedown = (e) => {
+        isDraggingScrubber = true;
+        seekFromScrubber(e);
+      };
+    }
+
+    window.onmousemove = (e) => {
+      if (isDraggingScrubber) seekFromScrubber(e);
+    };
+
+    window.onmouseup = () => {
+      if (isDraggingScrubber) isDraggingScrubber = false;
+    };
+
+    // Detail 3-dots Dropdown Menu
+    const detailMenuBtn = document.getElementById('meeting-detail-menu-btn');
+    const detailDropdown = document.getElementById('meeting-detail-dropdown');
+    const detailDeleteOpt = document.getElementById('meeting-detail-delete-opt');
+    if (detailMenuBtn && detailDropdown) {
+      detailMenuBtn.onclick = (e) => {
+        e.stopPropagation();
+        detailDropdown.classList.toggle('hidden');
+      };
+    }
+    if (detailDeleteOpt) {
+      detailDeleteOpt.onclick = (e) => {
+        e.stopPropagation();
+        if (detailDropdown) detailDropdown.classList.add('hidden');
+        confirmDeleteMeeting();
+      };
+    }
+
     // Setup active tab (Timeline by default)
     const tabBtns = document.querySelectorAll('.detail-tab-btn');
     const panes = document.querySelectorAll('.detail-tab-pane');
@@ -2216,30 +2967,16 @@ async function viewMeeting(id) {
     if (defaultTimelineBtn) defaultTimelineBtn.classList.add('active');
     if (defaultTimelinePane) defaultTimelinePane.classList.add('active');
 
-    // Parse segments
-    let segments = [];
-    try {
-      segments = JSON.parse(m.segments_json);
-    } catch (_) {
-      segments = [];
-    }
-
-    // Determine local user name if available (from DOM or window state)
-    const domUserName = userNameEl && userNameEl.textContent ? userNameEl.textContent.trim() : '';
-    const userName = domUserName ? domUserName.toLowerCase() : '';
-
-    let maxSegEnd = 0;
-    if (segments && segments.length > 0) {
-      segments.forEach(s => {
-        if (s.end && s.end > maxSegEnd) maxSegEnd = s.end;
-      });
-    }
-    let totalDuration = Math.max(m.duration || 0, maxSegEnd, 1);
-
     // Helper function to render or update timeline when audio duration is resolved
     const doRenderTimeline = () => {
       const audioDuration = player && player.duration && !isNaN(player.duration) && player.duration > 0 ? player.duration : 0;
       totalDuration = audioDuration > 0 ? audioDuration : (m.duration > 0 ? m.duration : Math.max(maxSegEnd, 1));
+      
+      const durLabel = document.getElementById('meeting-detail-duration');
+      if (durLabel) durLabel.textContent = formatMeetingDurationDetailed(totalDuration);
+
+      if (audioTimeTotal) audioTimeTotal.textContent = formatTotalTimeDisplay(totalDuration);
+      
       renderMeetingTimeline(segments, totalDuration, player, domUserName);
     };
 
@@ -2254,7 +2991,13 @@ async function viewMeeting(id) {
       };
     }
 
-    // Helper functions for avatars & time formatting
+    // 1. RENDER AUDIO TIMELINE VIEW
+    doRenderTimeline();
+
+    // 2. RENDER TRANSCRIPT VIEW
+    const transcriptTextEl = document.getElementById('meeting-transcript-text');
+    transcriptTextEl.innerHTML = '';
+
     const getInitials = getMeetingSpeakerInitials;
     const getAvatarColor = getMeetingSpeakerColor;
 
@@ -2270,13 +3013,6 @@ async function viewMeeting(id) {
       }
       return `${m}:${sStr}`;
     };
-
-    // 1. RENDER AUDIO TIMELINE VIEW (DAW / Audio Editor Style)
-    doRenderTimeline();
-
-    // 2. RENDER TRANSCRIPT VIEW
-    const transcriptTextEl = document.getElementById('meeting-transcript-text');
-    transcriptTextEl.innerHTML = '';
 
     if (segments && segments.length > 0) {
       let currentSpeaker = null;
@@ -2302,7 +3038,7 @@ async function viewMeeting(id) {
           const avatar = document.createElement('div');
           avatar.className = 'meeting-speaker-avatar';
           avatar.textContent = getInitials(speakerName);
-          avatar.style.backgroundColor = isMe ? '#7c3aed' : getAvatarColor(speakerName);
+          avatar.style.backgroundColor = isMe ? 'var(--accent-color)' : getAvatarColor(speakerName);
           
           const nameSpan = document.createElement('span');
           nameSpan.className = 'meeting-speaker-name';
@@ -2328,7 +3064,7 @@ async function viewMeeting(id) {
         span.className = 'transcript-segment';
         span.dataset.start = seg.start;
         span.dataset.end = seg.end;
-        span.textContent = seg.text + ' ';
+        span.textContent = (seg.text || '') + ' ';
         
         span.addEventListener('click', () => {
           player.currentTime = seg.start;
@@ -2349,30 +3085,30 @@ async function viewMeeting(id) {
     transcriptTextEl.onwheel = () => { isUserHoveringTranscript = true; };
 
     let lastActiveSpan = null;
-
-    // Synchronized Player Updates for Timeline, Inspector Table & Transcript
     let isUserHoveringTable = false;
     let lastActiveTableRow = null;
 
     player.ontimeupdate = () => {
       const time = player.currentTime;
-
-      // 1. Update Digital Monospace Clock
-      const clockCurrent = document.getElementById('timeline-clock-current');
-      if (clockCurrent) {
-        const m = Math.floor(time / 60);
-        const s = Math.floor(time % 60);
-        const ms = Math.floor((time % 1) * 100);
-        clockCurrent.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
-      }
-
-      // 2. Update Timeline Playhead Needle & Auto-Scroll
-      const playhead = document.getElementById('timeline-playhead');
-      const scrollArea = document.getElementById('timeline-scroll-area');
-      const scrollCanvas = document.getElementById('timeline-scroll-canvas');
       const effectiveDuration = (player && player.duration && !isNaN(player.duration) && player.duration > 0)
         ? player.duration
         : totalDuration;
+
+      // 1. Digital Time Counter in Audio Bar
+      if (audioTimeCurrent) audioTimeCurrent.textContent = formatCurrentTimeDisplay(time);
+      if (audioTimeTotal) audioTimeTotal.textContent = formatTotalTimeDisplay(effectiveDuration);
+
+      // 2. Scrubber Track Fill & Thumb
+      if (!isDraggingScrubber && audioScrubberFill && audioScrubberThumb && effectiveDuration > 0) {
+        const pct = Math.max(0, Math.min(100, (time / effectiveDuration) * 100));
+        audioScrubberFill.style.width = `${pct}%`;
+        audioScrubberThumb.style.left = `${pct}%`;
+      }
+
+      // 3. Timeline Playhead Needle & Auto-Scroll
+      const playhead = document.getElementById('timeline-playhead');
+      const scrollArea = document.getElementById('timeline-scroll-area');
+      const scrollCanvas = document.getElementById('timeline-scroll-canvas');
 
       if (playhead && effectiveDuration > 0) {
         const pct = Math.max(0, Math.min(100, (time / effectiveDuration) * 100));
@@ -2383,40 +3119,6 @@ async function viewMeeting(id) {
           const playheadPx = (pct / 100) * scrollCanvas.offsetWidth;
           const targetScroll = playheadPx - (scrollArea.offsetWidth / 2);
           scrollArea.scrollLeft = targetScroll;
-        }
-      }
-
-      // 3. Detect Active Speaker & Update Active Speaker Pill
-      const activePill = document.getElementById('timeline-active-speaker-pill');
-      const activeText = document.getElementById('timeline-active-speaker-text');
-      let activeSpkName = null;
-      let activeSpkTheme = null;
-
-      if (segments && segments.length > 0) {
-        for (const seg of segments) {
-          if (time >= seg.start && time <= seg.end) {
-            activeSpkName = seg.speaker || 'Speaker';
-            if (window.__currentSpeakerThemes && window.__currentSpeakerThemes[activeSpkName]) {
-              activeSpkTheme = window.__currentSpeakerThemes[activeSpkName];
-            }
-            break;
-          }
-        }
-      }
-
-      if (activePill && activeText) {
-        if (activeSpkName && activeSpkTheme) {
-          activePill.className = 'timeline-active-speaker-pill';
-          activePill.style.backgroundColor = activeSpkTheme.bg;
-          activePill.style.borderColor = activeSpkTheme.border;
-          activePill.style.color = activeSpkTheme.textColor;
-          activePill.innerHTML = `<span class="status-dot" style="background-color: ${activeSpkTheme.color};"></span><span>${activeSpkTheme.label} Speaking</span>`;
-        } else {
-          activePill.className = 'timeline-active-speaker-pill is-silence';
-          activePill.style.backgroundColor = '';
-          activePill.style.borderColor = '';
-          activePill.style.color = '';
-          activePill.innerHTML = '<span class="status-dot"></span><span>Silence</span>';
         }
       }
 
@@ -2432,7 +3134,7 @@ async function viewMeeting(id) {
         }
       });
 
-      // 5. Update Turn-by-Turn Inspector Table
+      // 5. Update Turn-by-Turn Inspector Table Active Row
       const tableRows = document.querySelectorAll('.turn-table-row');
       let currentActiveRow = null;
       tableRows.forEach(row => {
@@ -2515,30 +3217,15 @@ async function viewMeeting(id) {
 
 // Dedicated High-Precision Visualizer & Timeline Renderer
 function renderMeetingTimeline(segments, totalDuration, player, currentUserName) {
-  const audioMeta = document.getElementById('timeline-audio-meta');
-  const turnsCount = document.getElementById('timeline-turns-count');
-  const clockTotal = document.getElementById('timeline-clock-total');
-  const clockCurrent = document.getElementById('timeline-clock-current');
   const legendContainer = document.getElementById('timeline-speaker-legend');
   const headersList = document.getElementById('timeline-headers-list');
   const rulerTrack = document.getElementById('timeline-ruler-track');
   const lanesBody = document.getElementById('timeline-lanes-body');
   const scrollCanvas = document.getElementById('timeline-scroll-canvas');
   const scrollArea = document.getElementById('timeline-scroll-area');
-  const hoverBadge = document.getElementById('timeline-hover-badge');
-  const hoverText = document.getElementById('timeline-hover-text');
   const inspectorTbody = document.getElementById('timeline-inspector-tbody');
   const turnsLabel = document.getElementById('inspector-total-turns-label');
   const searchInput = document.getElementById('timeline-search-speaker');
-
-  // Media Buttons
-  const btnPlay = document.getElementById('timeline-btn-play');
-  const playIcon = document.getElementById('timeline-play-icon');
-  const playText = document.getElementById('timeline-play-text');
-  const btnBackward = document.getElementById('timeline-btn-backward');
-  const btnForward = document.getElementById('timeline-btn-forward');
-  const speedSelect = document.getElementById('timeline-speed-select');
-  const zoomBtns = document.querySelectorAll('.timeline-zoom-preset-btn');
 
   if (!headersList || !lanesBody || !rulerTrack) return;
 
@@ -2549,25 +3236,21 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
   if (inspectorTbody) inspectorTbody.innerHTML = '';
   lanesBody.innerHTML = `
     <div class="timeline-playhead" id="timeline-playhead">
-      <div class="timeline-playhead-handle"></div>
       <div class="timeline-playhead-line"></div>
     </div>
   `;
 
-  // Time format helpers
-  const formatTimeMs = (sec) => {
-    if (isNaN(sec) || sec < 0) return '00:00.00';
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    const ms = Math.floor((sec % 1) * 100);
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
-  };
-
   const formatOffset = (seconds) => {
     if (isNaN(seconds) || seconds < 0) return '0:00';
-    const m = Math.floor(seconds / 60);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);
-    return `${m}:${s < 10 ? '0' + s : s}`;
+    const sStr = s < 10 ? '0' + s : s;
+    if (h > 0) {
+      const mStr = m < 10 ? '0' + m : m;
+      return `${h}:${mStr}:${sStr}`;
+    }
+    return `${m}:${sStr}`;
   };
 
   // Sync with actual audio player duration when metadata loads
@@ -2575,62 +3258,10 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
     totalDuration = player.duration;
   }
 
-  // Populate metadata badges
-  if (audioMeta) audioMeta.textContent = `${totalDuration.toFixed(1)}s`;
-  if (turnsCount) turnsCount.textContent = `${(segments || []).length} Turns`;
   if (turnsLabel) turnsLabel.textContent = `${(segments || []).length}`;
-  if (clockTotal) clockTotal.textContent = formatTimeMs(totalDuration);
-  if (clockCurrent) clockCurrent.textContent = formatTimeMs(player ? player.currentTime : 0);
-
-  // Media Transport Bindings
-  if (btnPlay) {
-    btnPlay.onclick = () => {
-      if (player.paused) {
-        player.play();
-      } else {
-        player.pause();
-      }
-    };
-  }
-
-  const updatePlayBtnState = () => {
-    if (!btnPlay || !playIcon || !playText) return;
-    if (player.paused) {
-      playText.textContent = 'Play Audio';
-      playIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
-    } else {
-      playText.textContent = 'Pause';
-      playIcon.innerHTML = '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>';
-    }
-  };
-
-  player.onplay = updatePlayBtnState;
-  player.onpause = updatePlayBtnState;
-  player.onended = updatePlayBtnState;
-  updatePlayBtnState();
-
-  if (btnBackward) {
-    btnBackward.onclick = () => { player.currentTime = Math.max(0, player.currentTime - 5); };
-  }
-  if (btnForward) {
-    btnForward.onclick = () => { player.currentTime = Math.min(totalDuration, player.currentTime + 5); };
-  }
-  if (speedSelect) {
-    speedSelect.onchange = (e) => { player.playbackRate = parseFloat(e.target.value); };
-  }
-
-  // Zoom Handling
-  zoomBtns.forEach(btn => {
-    btn.onclick = () => {
-      zoomBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const z = parseInt(btn.dataset.zoom) || 1;
-      if (scrollCanvas) scrollCanvas.style.width = `${z * 100}%`;
-    };
-  });
 
   if (!segments || segments.length === 0) {
-    lanesBody.innerHTML += '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-size: 13px; font-style: italic;">No audio segment data available for this recording.</div>';
+    lanesBody.innerHTML += '<div style="padding: 30px; text-align: center; color: var(--text-muted); font-size: 13px; font-style: italic;">No audio segment data available for this recording.</div>';
     return;
   }
 
@@ -2664,12 +3295,12 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
     return a.name.localeCompare(b.name);
   });
 
-  // Harmonic Application Theme Palette for Speakers
+  // Dynamic Theme-Driven Palette for Speakers (100% Theme Variables)
   const palette = [
-    { color: '#38bdf8', border: 'rgba(56, 189, 248, 0.4)', bg: 'rgba(56, 189, 248, 0.14)', textColor: 'var(--text-primary)' }, // Sky
-    { color: '#34d399', border: 'rgba(52, 211, 153, 0.4)', bg: 'rgba(52, 211, 153, 0.14)', textColor: 'var(--text-primary)' }, // Emerald
-    { color: '#fbbf24', border: 'rgba(251, 191, 36, 0.4)', bg: 'rgba(251, 191, 36, 0.14)', textColor: 'var(--text-primary)' }, // Amber
-    { color: '#f472b6', border: 'rgba(244, 114, 182, 0.4)', bg: 'rgba(244, 114, 182, 0.14)', textColor: 'var(--text-primary)' }, // Pink
+    { color: 'var(--speaker-remote-color, #38bdf8)', border: 'var(--speaker-remote-border, rgba(56, 189, 248, 0.3))', bg: 'var(--speaker-remote-bg, rgba(56, 189, 248, 0.15))', textColor: 'var(--text-primary)' },
+    { color: '#34d399', border: 'rgba(52, 211, 153, 0.3)', bg: 'rgba(52, 211, 153, 0.14)', textColor: 'var(--text-primary)' },
+    { color: '#fbbf24', border: 'rgba(251, 191, 36, 0.3)', bg: 'rgba(251, 191, 36, 0.14)', textColor: 'var(--text-primary)' },
+    { color: '#f472b6', border: 'rgba(244, 114, 182, 0.3)', bg: 'rgba(244, 114, 182, 0.14)', textColor: 'var(--text-primary)' },
   ];
 
   window.__currentSpeakerThemes = {};
@@ -2678,10 +3309,10 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
     let theme;
     if (spk.isMe) {
       theme = {
-        color: 'var(--accent-color, #f43f5e)',
-        border: 'var(--border-focus, #fca5b7)',
-        bg: 'var(--accent-tint, rgba(244, 63, 94, 0.15))',
-        textColor: 'var(--text-primary, #240a12)',
+        color: 'var(--speaker-mic-color, var(--accent-color))',
+        border: 'var(--speaker-mic-border, var(--border-focus))',
+        bg: 'var(--speaker-mic-bg, var(--accent-tint))',
+        textColor: 'var(--text-primary)',
         label: `${spk.name} (Mic)`
       };
     } else {
@@ -2700,28 +3331,34 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       pill.style.backgroundColor = theme.bg;
       pill.style.borderColor = theme.border;
       pill.style.color = theme.textColor;
-      pill.innerHTML = `<span style="width: 6px; height: 6px; border-radius: 50%; background-color: ${theme.color};"></span><span>${theme.label}</span>`;
+      pill.innerHTML = `<span style="width: 6px; height: 6px; border-radius: 50%; background-color: ${theme.color}; display: inline-block;"></span><span>${theme.label}</span>`;
       legendContainer.appendChild(pill);
     }
   });
 
-  // Render Time Ruler Ticks
-  const numTicks = 14;
-  const tickInterval = totalDuration / numTicks;
-  for (let i = 0; i <= numTicks; i++) {
-    const timeVal = i * tickInterval;
-    const percent = (timeVal / totalDuration) * 100;
+  // Render Time Ruler Ticks at clean human intervals
+  const steps = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+  let step = 600;
+  for (const s of steps) {
+    if (totalDuration / s <= 8) {
+      step = s;
+      break;
+    }
+  }
+
+  for (let t = 0; t <= totalDuration; t += step) {
+    const percent = (t / totalDuration) * 100;
     const tickEl = document.createElement('div');
     tickEl.className = 'timeline-ruler-tick';
     tickEl.style.left = `${percent}%`;
     tickEl.innerHTML = `
-      <span class="timeline-ruler-tick-label">${formatOffset(timeVal)}</span>
+      <span class="timeline-ruler-tick-label">${formatOffset(t)}</span>
       <div class="timeline-ruler-tick-line"></div>
     `;
     rulerTrack.appendChild(tickEl);
   }
 
-  // Interactive Drag-to-Scrub Functionality
+  // Interactive Drag-to-Scrub on Ruler & Lanes
   let isScrubbing = false;
   const handleScrub = (e) => {
     const effectiveTotalDuration = (player && player.duration && !isNaN(player.duration) && player.duration > 0) ? player.duration : totalDuration;
@@ -2735,8 +3372,16 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
     // Immediate visual update
     const playhead = document.getElementById('timeline-playhead');
     if (playhead) playhead.style.left = `${pct * 100}%`;
-    const clockCurrent = document.getElementById('timeline-clock-current');
-    if (clockCurrent) clockCurrent.textContent = formatTimeMs(seekTime);
+    const scrubberFill = document.getElementById('audio-scrubber-fill');
+    const scrubberThumb = document.getElementById('audio-scrubber-thumb');
+    if (scrubberFill) scrubberFill.style.width = `${pct * 100}%`;
+    if (scrubberThumb) scrubberThumb.style.left = `${pct * 100}%`;
+    const audioTimeCurrent = document.getElementById('audio-time-current');
+    if (audioTimeCurrent) {
+      const m = Math.floor(seekTime / 60);
+      const s = Math.floor(seekTime % 60);
+      audioTimeCurrent.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    }
   };
 
   const startScrub = (e) => {
@@ -2747,20 +3392,16 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
   rulerTrack.onmousedown = startScrub;
   lanesBody.onmousedown = startScrub;
 
-  window.onmousemove = (e) => {
-    if (isScrubbing) {
-      handleScrub(e);
-    }
-  };
+  window.addEventListener('mousemove', (e) => {
+    if (isScrubbing) handleScrub(e);
+  });
 
-  window.onmouseup = () => {
-    if (isScrubbing) {
-      isScrubbing = false;
-    }
-  };
+  window.addEventListener('mouseup', () => {
+    if (isScrubbing) isScrubbing = false;
+  });
 
   // Render Tracks & Segment Boxes
-  sortedSpeakers.forEach((spk, idx) => {
+  sortedSpeakers.forEach((spk) => {
     const theme = window.__currentSpeakerThemes[spk.name];
     const talkPercent = Math.round((spk.totalTime / totalDuration) * 100);
 
@@ -2771,7 +3412,7 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       <div class="timeline-header-swatch" style="background-color: ${theme.color};"></div>
       <div class="timeline-header-info">
         <div class="timeline-header-name" title="${theme.label}">${theme.label}</div>
-        <div class="timeline-header-meta">${spk.segments.length} turns &bull; ${talkPercent}% talk</div>
+        <div class="timeline-header-meta">${spk.segments.length} turns &bull; ${talkPercent}% talk time</div>
       </div>
     `;
     headersList.appendChild(headerItem);
@@ -2788,26 +3429,14 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       const box = document.createElement('div');
       box.className = 'segment-box';
       box.style.left = `${leftPercent}%`;
-      box.style.width = `max(1px, ${widthPercent}%)`;
-      box.style.minWidth = '1px';
-      box.style.borderRadius = '0px';
+      box.style.width = `max(2px, ${widthPercent}%)`;
+      box.style.minWidth = '2px';
       box.style.backgroundColor = theme.bg;
       box.style.border = `1px solid ${theme.color}`;
       box.dataset.start = seg.start;
       box.dataset.end = seg.end;
       box.dataset.speaker = spk.name;
       box.title = `${theme.label}: ${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s (${(seg.end - seg.start).toFixed(2)}s)\n"${seg.text || ''}"`;
-
-      // Hover feedback
-      box.onmouseenter = () => {
-        if (hoverBadge && hoverText) {
-          hoverText.textContent = `${theme.label}: ${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s (${(seg.end - seg.start).toFixed(2)}s)`;
-          hoverBadge.classList.remove('hidden');
-        }
-      };
-      box.onmouseleave = () => {
-        if (hoverBadge) hoverBadge.classList.add('hidden');
-      };
 
       // Click to seek & play
       box.onclick = (e) => {
@@ -2836,7 +3465,7 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
 
       const duration = Math.max(0, seg.end - seg.start);
       const leftPct = (seg.start / totalDuration) * 100;
-      const widthPct = Math.max((duration / totalDuration) * 100, 1);
+      const widthPct = Math.max((duration / totalDuration) * 100, 1.5);
 
       const tr = document.createElement('tr');
       tr.className = 'turn-table-row';
@@ -2848,12 +3477,14 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       tr.innerHTML = `
         <td style="font-family: monospace; color: var(--text-muted);">#${String(idx + 1).padStart(2, '0')}</td>
         <td>
-          <span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 10.5px; font-weight: 600; font-family: monospace; background-color: ${theme.bg}; border: 1px solid ${theme.border}; color: ${theme.textColor};">
-            <span style="width: 5px; height: 5px; border-radius: 50%; background-color: ${theme.color};"></span>
+          <span class="inspector-speaker-pill" style="background-color: ${theme.bg}; border: 1px solid ${theme.border}; color: ${theme.textColor};">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background-color: ${theme.color}; display: inline-block;"></span>
             ${theme.label}
           </span>
         </td>
-        <td style="font-family: monospace; color: var(--accent-color); font-weight: 600;">${seg.start.toFixed(2)}s</td>
+        <td>
+          <span class="inspector-start-badge">${seg.start.toFixed(2)}s</span>
+        </td>
         <td style="font-family: monospace; color: var(--text-muted);">${seg.end.toFixed(2)}s</td>
         <td style="font-family: monospace; color: var(--text-secondary); font-weight: 600;">${duration.toFixed(2)}s</td>
         <td>
@@ -2861,8 +3492,8 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
             <div class="mini-timeline-fill" style="left: ${leftPct}%; width: ${widthPct}%; background-color: ${theme.color};"></div>
           </div>
         </td>
-        <td style="color: var(--text-primary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${seg.text || ''}">
-          ${seg.text || '<span style="color: var(--text-muted); font-style: italic;">(No speech text)</span>'}
+        <td style="color: var(--text-primary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(seg.text || '')}">
+          ${seg.text ? escapeHtml(seg.text) : '<span style="color: var(--text-muted); font-style: italic;">(No speech text)</span>'}
         </td>
       `;
 
@@ -2954,6 +3585,7 @@ function handleLiveMeetingTurn(turn) {
   if (!turnEl) {
     turnEl = document.createElement('div');
     turnEl.id = `live-${turn.id}`;
+    turnEl.dataset.startTime = turn.start_time != null ? String(turn.start_time) : "0";
     turnEl.className = `live-turn-item ${isMe ? 'is-me' : 'is-remote'}`;
     turnEl.style.borderLeftColor = avatarBg;
 
@@ -2982,8 +3614,23 @@ function handleLiveMeetingTurn(turn) {
     textEl.className = 'live-turn-text';
     turnEl.appendChild(textEl);
 
-    turnsList.appendChild(turnEl);
+    // Insert in chronological order by start_time
+    const existingItems = Array.from(turnsList.querySelectorAll('.live-turn-item'));
+    const turnStart = parseFloat(turn.start_time || 0);
+    const nextItem = existingItems.find(item => {
+      const itemStart = parseFloat(item.dataset.startTime || 0);
+      return itemStart > turnStart;
+    });
+    if (nextItem) {
+      turnsList.insertBefore(turnEl, nextItem);
+    } else {
+      turnsList.appendChild(turnEl);
+    }
   } else {
+    // If start_time was updated
+    if (turn.start_time != null) {
+      turnEl.dataset.startTime = String(turn.start_time);
+    }
     // Dynamically update speaker name, avatar, and border if refined by Sortformer diarization
     turnEl.style.borderLeftColor = avatarBg;
     const avatar = turnEl.querySelector('.live-turn-avatar');
@@ -2994,6 +3641,10 @@ function handleLiveMeetingTurn(turn) {
     const spkSpan = turnEl.querySelector('.live-turn-speaker');
     if (spkSpan) {
       spkSpan.textContent = displayName;
+    }
+    const timeSpan = turnEl.querySelector('.live-turn-time');
+    if (timeSpan && turn.start_time != null) {
+      timeSpan.textContent = formatOffset(turn.start_time);
     }
   }
 
@@ -3206,7 +3857,11 @@ async function stopMeetingRecording() {
   } catch (err) {
     console.error("[MEETING FRONTEND ERROR] Failed to finalize meeting note:", err);
     currentMeetingFile = null;
-    alert("Failed to finalize meeting note: " + err);
+    await showAlertDialog({
+      title: "Finalization Failed",
+      message: "Failed to finalize meeting note: " + err,
+      type: "error"
+    });
     showDashboardView();
     loadMeetings();
   }
@@ -3226,7 +3881,14 @@ async function cancelMeetingRecording() {
 
 async function confirmDeleteMeeting() {
   if (!activeMeetingId) return;
-  if (!confirm("Are you sure you want to delete this meeting note? This action cannot be undone.")) return;
+  const confirmed = await showConfirmDialog({
+    title: "Delete Meeting Note?",
+    message: "Are you sure you want to delete this meeting note? This action cannot be undone.",
+    confirmText: "Delete",
+    cancelText: "Cancel",
+    isDanger: true
+  });
+  if (!confirmed) return;
   
   const token = currentConfig ? currentConfig.session_token : null;
   try {
@@ -3242,7 +3904,11 @@ async function confirmDeleteMeeting() {
     loadMeetings();
   } catch (err) {
     console.error(err);
-    alert("Failed to delete meeting note: " + err);
+    await showAlertDialog({
+      title: "Failed to Delete",
+      message: "Failed to delete meeting note: " + err,
+      type: "error"
+    });
   }
 }
 

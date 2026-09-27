@@ -1491,7 +1491,7 @@ mod win32_impl {
                         let now = std::time::Instant::now();
                         if state.is_key_held {
                             let elapsed = state.press_time.map(|t| now.duration_since(t)).unwrap_or_default();
-                            if elapsed <= Duration::from_millis(1000) && !state.is_command_mode {
+                            if elapsed <= Duration::from_millis(1000) && !state.is_command_mode && crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst) {
                                 // Double tap in toggle mode within 1 second!
                                 state.is_command_mode = true;
                                 set_preview_text("✨ Command Mode (Listening...)");
@@ -1639,12 +1639,13 @@ mod win32_impl {
                             }
                         };
 
+                        let cmd_enabled = crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst);
                         state.is_key_held = true;
                         state.press_time = Some(now);
-                        state.is_command_mode = is_double_press;
+                        state.is_command_mode = is_double_press && cmd_enabled;
                         state.selected_text = None;
 
-                        if is_double_press {
+                        if is_double_press && cmd_enabled {
                             set_preview_text("✨ Command Mode (Listening...)");
                             thread::spawn(move || {
                                 let selected = crate::keyboard::get_selected_text();
@@ -1722,7 +1723,7 @@ mod win32_impl {
                             state.is_key_held = false;
                             state.press_time = None;
 
-                            if press_dur < Duration::from_millis(350) && !state.is_command_mode {
+                            if press_dur < Duration::from_millis(350) && !state.is_command_mode && crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst) {
                                 if let Some(tx) = state.stop_tx.take() {
                                     let _ = tx.send(false);
                                 }
@@ -1759,7 +1760,7 @@ mod win32_impl {
                         state.is_key_held = false;
                         state.press_time = None;
 
-                        if press_dur < Duration::from_millis(350) && !state.is_command_mode {
+                        if press_dur < Duration::from_millis(350) && !state.is_command_mode && crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst) {
                             // Quick tap in hold mode (< 350ms):
                             // This is the first tap of a potential double-tap! Abort the brief tap cleanly so it doesn't transcribe silence
                             if let Some(tx) = state.stop_tx.take() {

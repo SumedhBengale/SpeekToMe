@@ -28,6 +28,9 @@ fn default_hotkey() -> String {
 fn default_hotkey_mode() -> String {
     "hold".to_string()
 }
+fn default_command_mode() -> bool {
+    true
+}
 
 pub const HOTKEY_CTRL: u32 = 0x01;
 pub const HOTKEY_SHIFT: u32 = 0x02;
@@ -43,6 +46,9 @@ pub struct AppConfig {
     
     #[serde(default = "default_hotkey_mode")]
     pub hotkey_mode: String,  // "hold" | "toggle"
+
+    #[serde(default = "default_command_mode")]
+    pub command_mode: bool,   // true/false - AI transformation command mode
 
     pub model: String,        // "whisper-large-v3-turbo", "whisper-large-v3"
     pub enhance: bool,        // true/false
@@ -84,6 +90,7 @@ impl Default for AppConfig {
             api_url: Some("https://api.speekto.me".to_string()),
             hotkey: default_hotkey(),
             hotkey_mode: default_hotkey_mode(),
+            command_mode: default_command_mode(),
             model: "whisper-large-v3-turbo".to_string(),
             enhance: true,
             typing_mode: false,

@@ -36,6 +36,7 @@ pub static ACTIVE_HOTKEY_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::
 pub static ACTIVE_PILL_BG_COLOR: AtomicU32 = AtomicU32::new(0x27221F);
 pub static ACTIVE_PILL_WAVE_COLOR: AtomicU32 = AtomicU32::new(0x57BF7C);
 pub static ACTIVE_SOUND_FEEDBACK: AtomicBool = AtomicBool::new(true);
+pub static ACTIVE_COMMAND_MODE: AtomicBool = AtomicBool::new(true);
 pub static ACTIVE_HAS_SESSION_TOKEN: AtomicBool = AtomicBool::new(false);
 pub static TRANSFORM_INPUT_WORD_LIMIT: AtomicUsize = AtomicUsize::new(10000);
 
@@ -51,6 +52,7 @@ pub fn sync_active_config_atomics(config: &AppConfig) {
     ACTIVE_HOTKEY_COMBO.store(config::parse_hotkey_combo(&config.hotkey), Ordering::SeqCst);
     let mode_byte = if config.hotkey_mode == "toggle" { 1 } else { 0 };
     ACTIVE_HOTKEY_MODE.store(mode_byte, Ordering::SeqCst);
+    ACTIVE_COMMAND_MODE.store(config.command_mode, Ordering::SeqCst);
     ACTIVE_PILL_BG_COLOR.store(config.pill_bg_color, Ordering::SeqCst);
     ACTIVE_PILL_WAVE_COLOR.store(config.pill_wave_color, Ordering::SeqCst);
     ACTIVE_SOUND_FEEDBACK.store(config.sound_feedback, Ordering::SeqCst);

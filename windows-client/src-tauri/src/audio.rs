@@ -1300,6 +1300,12 @@ pub fn start_meeting_recording(
         let mut total_lb_samples = 0;
         let mut energy_log = Vec::new();
         let mut loop_count: u64 = 0;
+        let mut last_lb_activity = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(10))
+            .unwrap_or_else(std::time::Instant::now);
+        let mut last_mic_speech = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(10))
+            .unwrap_or_else(std::time::Instant::now);
         const CHUNK_560MS: usize = 8960; // 560ms @ 16kHz mono
         const CHUNK_60MS: usize = 960;   // 60ms @ 16kHz mono (Opus standard frame)
 
@@ -1338,11 +1344,50 @@ pub fn start_meeting_recording(
                 total_lb_samples = total_mic_samples;
             }
 
+            let lb_vol = LOOPBACK_VOLUME.load(Ordering::Relaxed);
+            if lb_vol > 15 {
+                last_lb_activity = std::time::Instant::now();
+            }
+
             // Send 560ms chunks to live inference stream
             if let Some(ref tx) = stream_tx {
                 while mic_stream_buffer.len() >= CHUNK_560MS {
                     let chunk: Vec<i16> = mic_stream_buffer.drain(..CHUNK_560MS).collect();
-                    if let Ok(opus_bytes) = encode_opus_ogg(&chunk, 16000, 1) {
+
+                    // Acoustic echo & ambient noise gating
+                    let mut sum_sq: f64 = 0.0;
+                    for &s in &chunk {
+                        let norm = s as f64 / 32768.0;
+                        sum_sq += norm * norm;
+                    }
+                    let chunk_rms = (sum_sq / chunk.len() as f64).sqrt() as f32;
+
+                    let is_lb_active = last_lb_activity.elapsed() < std::time::Duration::from_millis(1500);
+                    let is_recent_speech = last_mic_speech.elapsed() < std::time::Duration::from_millis(1200);
+
+                    let chunk_to_send = if is_lb_active {
+                        if chunk_rms >= 0.0040 {
+                            last_mic_speech = std::time::Instant::now();
+                            chunk
+                        } else if is_recent_speech && chunk_rms >= 0.0025 {
+                            chunk
+                        } else {
+                            // Faint acoustic bleed from physical speakers during remote talk -> replace with digital silence
+                            vec![0i16; CHUNK_560MS]
+                        }
+                    } else {
+                        if chunk_rms >= 0.0020 {
+                            last_mic_speech = std::time::Instant::now();
+                            chunk
+                        } else if is_recent_speech && chunk_rms >= 0.0010 {
+                            chunk
+                        } else {
+                            // Ambient room noise floor / digital silence -> replace with digital silence
+                            vec![0i16; CHUNK_560MS]
+                        }
+                    };
+
+                    if let Ok(opus_bytes) = encode_opus_ogg(&chunk_to_send, 16000, 1) {
                         let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, opus_bytes));
                     }
                 }
@@ -1443,7 +1488,18 @@ pub fn start_meeting_recording(
 
         if let Some(ref tx) = stream_tx {
             if !mic_stream_buffer.is_empty() {
-                if let Ok(opus_bytes) = encode_opus_ogg(&mic_stream_buffer, 16000, 1) {
+                let mut sum_sq: f64 = 0.0;
+                for &s in &mic_stream_buffer {
+                    let norm = s as f64 / 32768.0;
+                    sum_sq += norm * norm;
+                }
+                let flush_rms = (sum_sq / mic_stream_buffer.len() as f64).sqrt() as f32;
+                let chunk_to_send = if flush_rms < 0.0020 {
+                    vec![0i16; mic_stream_buffer.len()]
+                } else {
+                    mic_stream_buffer
+                };
+                if let Ok(opus_bytes) = encode_opus_ogg(&chunk_to_send, 16000, 1) {
                     let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, opus_bytes));
                 }
             }

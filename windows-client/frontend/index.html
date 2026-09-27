@@ -517,7 +517,8 @@
             <line x1="12" y1="19" x2="12" y2="23"></line>
             <line x1="8" y1="23" x2="16" y2="23"></line>
           </svg>
-          <span>Dictation</span>
+          <span>Speech &amp; AI</span>
+          <span class="pro-badge" title="Speech &amp; AI features require an active SpeekTo.Me Pro subscription.">PRO</span>
         </a>
         <a href="#" class="nav-item" data-tab="vocabulary">
           <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -596,12 +597,12 @@
       <div class="tab-pane active" id="tab-general">
         <div class="tab-header">
           <h2>General Settings</h2>
-          <p class="section-desc">Configure core keyboard and feedback behavior.</p>
+          <p class="section-desc">Configure core keyboard shortcuts, spoken languages, and app behavior.</p>
         </div>
 
         <input type="hidden" id="model-select" value="whisper-large-v3-turbo">
 
-        <!-- Setting Dropdowns Card -->
+        <!-- Trigger & Activation Card -->
         <div class="settings-card">
           <!-- Trigger Hotkey -->
           <div class="setting-row">
@@ -663,7 +664,64 @@
               </select>
             </div>
           </div>
+        </div>
 
+        <!-- Spoken Language Preferences Card -->
+        <div class="settings-card languages-card">
+          <div class="languages-card-header">
+            <div class="dictation-icon-box">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+            </div>
+            <div class="languages-header-content">
+              <h3 class="languages-card-title">Spoken Language Preferences</h3>
+              <p class="languages-card-desc">
+                1 language locks Whisper for max speed & accuracy.<br>
+                Multiple languages guide Whisper multi-lingual detection without translating.
+              </p>
+            </div>
+            <span id="client-lang-count" class="lang-pill-count">1 / 5</span>
+          </div>
+
+          <div class="languages-section-group">
+            <div class="languages-section-label">Selected Languages</div>
+            <div id="client-lang-chips" class="languages-chips-list">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+
+          <div class="languages-divider"></div>
+
+          <div class="languages-section-group">
+            <div class="languages-section-label">Add a Language</div>
+            <div class="languages-search-row">
+              <div class="lang-combobox-wrapper">
+                <svg class="lang-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="client-lang-search-input" class="fluent-input lang-search-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off">
+                <div id="client-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
+              </div>
+              <button type="button" id="client-add-lang-btn" class="fluent-button accent lang-add-btn">Add</button>
+            </div>
+          </div>
+
+          <div class="languages-info-banner">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>You can add up to 5 languages.</span>
+          </div>
+        </div>
+
+        <!-- Appearance & Overlay Pill Card -->
+        <div class="settings-card">
           <!-- App Theme -->
           <div class="setting-row">
             <div class="setting-left">
@@ -761,7 +819,7 @@
           </div>
         </div>
 
-        <!-- Checkboxes Card -->
+        <!-- System & Behavior Card -->
         <div class="settings-card">
           <!-- Autostart -->
           <div class="checkbox-row">
@@ -802,11 +860,38 @@
 
       </div>
 
-      <!-- Dictation Tab -->
+      <!-- Speech & AI Tab -->
       <div class="tab-pane" id="tab-dictation">
         <div class="tab-header">
-          <h2>Dictation & Languages</h2>
-          <p class="section-desc">Configure real-time streaming dictation and spoken language preferences.</p>
+          <h2>Speech &amp; AI</h2>
+          <p class="section-desc">Advanced AI-powered speech features and real-time transcription.</p>
+        </div>
+
+        <!-- AI Command Mode Card -->
+        <div class="settings-card dictation-feature-card">
+          <div class="dictation-icon-box">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+          </div>
+          <div class="dictation-feature-content">
+            <div class="dictation-feature-title-row">
+              <span class="dictation-feature-title">AI Command Mode</span>
+              <span class="plan-pill-tag">PRO</span>
+            </div>
+            <p class="dictation-feature-desc">
+              Select text in any application and double-tap your hotkey to rewrite, edit, format, or transform it with voice commands.
+            </p>
+            <div id="command-mode-pro-hint" class="streaming-pro-hint" style="display: none; margin-top: 6px;">
+              Pro plan feature. Upgrade on your Web Dashboard to unlock AI command mode.
+            </div>
+          </div>
+          <div class="dictation-feature-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" id="command-mode-check">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
         </div>
 
         <!-- Real-Time Streaming Dictation Card -->
@@ -839,60 +924,6 @@
           </div>
         </div>
 
-        <!-- Spoken Language Preferences Card -->
-        <div class="settings-card languages-card">
-          <div class="languages-card-header">
-            <div class="dictation-icon-box">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="2" y1="12" x2="22" y2="12"></line>
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-              </svg>
-            </div>
-            <div class="languages-header-content">
-              <h3 class="languages-card-title">Spoken Language Preferences</h3>
-              <p class="languages-card-desc">
-                1 language locks Whisper for max speed & accuracy.<br>
-                Multiple languages guide Whisper multi-lingual detection without translating.
-              </p>
-            </div>
-            <span id="client-lang-count" class="lang-pill-count">1 / 5</span>
-          </div>
-
-          <div class="languages-section-group">
-            <div class="languages-section-label">Selected Languages</div>
-            <div id="client-lang-chips" class="languages-chips-list">
-              <!-- Rendered dynamically -->
-            </div>
-          </div>
-
-          <div class="languages-divider"></div>
-
-          <div class="languages-section-group">
-            <div class="languages-section-label">Add a Language</div>
-            <div class="languages-search-row">
-              <div class="lang-combobox-wrapper">
-                <svg class="lang-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                </svg>
-                <input type="text" id="client-lang-search-input" class="fluent-input lang-search-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off">
-                <div id="client-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
-              </div>
-              <button type="button" id="client-add-lang-btn" class="fluent-button accent lang-add-btn">Add</button>
-            </div>
-          </div>
-
-          <div class="languages-info-banner">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="16" x2="12" y2="12"></line>
-              <line x1="12" y1="8" x2="12.01" y2="8"></line>
-            </svg>
-            <span>You can add up to 5 languages.</span>
-          </div>
-        </div>
-
       </div>
 
       <!-- Vocabulary Tab -->
@@ -902,25 +933,68 @@
           <p class="section-desc">Add words, names, or abbreviations you want the transcription to match and correct.</p>
         </div>
 
-        <div class="settings-card">
-          <div class="vocab-input-row" style="display: flex; gap: 10px; margin-bottom: 12px;">
-            <input type="text" id="vocab-input" class="fluent-input" placeholder="e.g. SpeekTo.Me, DeepSeek" style="flex: 1;">
-            <button id="vocab-add-btn" class="fluent-button primary">Add Word</button>
-          </div>
-
-          <div class="vocab-warning hidden" id="vocab-warning">
-            <span>⚠️</span> <span>Warning: Having more than 1000 terms may slightly affect latency.</span>
-          </div>
-
-          <div class="vocab-list-container">
-            <div id="vocab-empty-msg" class="vocab-empty">
-              No custom vocabulary terms yet. Add one above!
+        <div class="vocab-outer-card">
+          <!-- Top Input Row: Search Box & Add Button -->
+          <div class="vocab-input-row">
+            <div class="vocab-search-box">
+              <svg class="vocab-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input type="text" id="vocab-input" class="vocab-input" placeholder="e.g. SpeakTo.Me, DeepSeek, OpenAI" autocomplete="off">
             </div>
-            <ul id="vocab-list" class="vocab-list">
+            <button type="button" id="vocab-add-btn" class="vocab-add-btn">Add Word</button>
+          </div>
+
+          <!-- 1,000+ Term Latency Warning -->
+          <div class="vocab-warning hidden" id="vocab-warning">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <span>Warning: Having more than 1,000 terms may slightly affect latency.</span>
+          </div>
+
+          <!-- Vocabulary Items Container -->
+          <div class="vocab-list-wrapper">
+            <!-- Loading State -->
+            <div id="vocab-loading-state" class="vocab-loading hidden">
+              <div class="vocab-spinner-wrapper">
+                <div class="spinner"></div>
+              </div>
+              <div class="vocab-loading-content">
+                <span class="vocab-loading-title">Loading custom vocabulary...</span>
+                <span class="vocab-loading-subtitle">Fetching your synced terms</span>
+              </div>
+            </div>
+
+            <!-- Empty State -->
+            <div id="vocab-empty-msg" class="vocab-empty hidden">
+              <div class="vocab-empty-icon-box">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                </svg>
+              </div>
+              <div class="vocab-empty-text">No custom vocabulary terms yet. Add one above!</div>
+            </div>
+
+            <!-- List of Term Cards -->
+            <ul id="vocab-list" class="vocab-items-list">
               <!-- Rendered dynamically -->
             </ul>
           </div>
-          <span class="setting-hint" style="margin-left: 0; margin-top: 10px; display: block;">Terms are synced to all your devices. Matching is case-insensitive.</span>
+
+          <!-- Bottom Synced Notice Banner -->
+          <div class="vocab-notice-banner">
+            <svg class="vocab-notice-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span class="vocab-notice-text">Terms are synced to all your devices. Matching is case-insensitive.</span>
+          </div>
         </div>
       </div>
 
@@ -1087,25 +1161,63 @@
 
       <!-- Meeting Notes Tab -->
       <div class="tab-pane" id="tab-meetings">
-        <div class="tab-header" style="display: flex; align-items: center; gap: 8px;">
-          <h2>Meeting Notes</h2>
-          <span class="beta-badge" title="This feature is in beta and some bugs are expected.">BETA</span>
+        <div class="meetings-header-wrapper" id="meetings-main-header">
+          <div class="meetings-header-info">
+            <h2 class="meetings-page-title">Meeting Notes</h2>
+            <p class="section-desc meetings-page-desc">Record, transcribe, and summarize your meetings, Google Meet, Zoom, or local audio.</p>
+          </div>
+          <div class="meetings-top-beta">
+            <span class="beta-badge" title="This feature is in beta and some bugs are expected.">BETA</span>
+          </div>
         </div>
-        <p class="section-desc">Record, transcribe, and summarize your meetings, Google Meet, Zoom, or local audio.</p>
 
         <!-- Dynamic Content Switcher -->
         <div id="meetings-container">
           <!-- 1. Dashboard View (default) -->
           <div id="meetings-dashboard-view">
-            <div class="meetings-header-row" style="display: flex; gap: 10px; margin-bottom: 16px; align-items: center;">
-              <input type="text" id="meetings-search-input" class="fluent-input" placeholder="Search meetings..." style="flex: 1;">
-              <button id="meetings-start-rec-btn" class="fluent-button primary">New Meeting</button>
+            <div class="meetings-toolbar">
+              <div class="meetings-search-box">
+                <svg class="meetings-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="meetings-search-input" class="meetings-search-input" placeholder="Search meetings..." autocomplete="off">
+              </div>
+              <button type="button" id="meetings-start-rec-btn" class="meetings-new-btn">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                <span>New Meeting</span>
+              </button>
             </div>
 
-            <div class="settings-card meetings-list-container" style="min-height: 220px; padding: 18px;">
-              <div id="meetings-empty-msg" class="meetings-empty">
-                No meeting notes recorded yet. Click "New Meeting" to start!
+            <div class="meetings-outer-card">
+              <!-- Loading State -->
+              <div id="meetings-loading-state" class="meetings-loading hidden">
+                <div class="meetings-spinner-wrapper">
+                  <div class="spinner"></div>
+                </div>
+                <div class="meetings-loading-content">
+                  <span class="meetings-loading-title">Loading meeting notes...</span>
+                  <span class="meetings-loading-subtitle">Fetching your recordings from server</span>
+                </div>
               </div>
+
+              <!-- Empty State -->
+              <div id="meetings-empty-msg" class="meetings-empty hidden">
+                <div class="meetings-empty-icon-box">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <line x1="10" y1="9" x2="8" y2="9"></line>
+                  </svg>
+                </div>
+                <div id="meetings-empty-text" class="meetings-empty-text">No meeting notes recorded yet. Click "New Meeting" to start!</div>
+              </div>
+
               <div id="meetings-list" class="meetings-list-grid">
                 <!-- Rendered dynamically -->
               </div>
@@ -1165,195 +1277,286 @@
 
           <!-- 3. Detail View -->
           <div id="meetings-detail-view" class="hidden">
-            <button id="meetings-back-btn" class="fluent-button secondary" style="margin-bottom: 14px; display: flex; align-items: center; gap: 5px;">
-              <span>⬅</span> Back to List
-            </button>
+            <!-- Top Action Navigation -->
+            <div class="meetings-detail-topbar">
+              <button id="meetings-back-btn" class="meetings-back-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="19" y1="12" x2="5" y2="12"></line>
+                  <polyline points="12 19 5 12 12 5"></polyline>
+                </svg>
+                <span>Back to List</span>
+              </button>
+            </div>
 
-            <div class="settings-card meeting-detail-card" style="padding: 20px;">
-              <div class="meeting-detail-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px;">
-                <div>
-                  <h3 id="meeting-detail-title" style="margin: 0; font-size: 18px; color: var(--text-primary);">Meeting Title</h3>
-                  <span id="meeting-detail-date" class="meeting-date" style="font-size: 12px; color: var(--text-secondary);">July 6, 2026</span>
+            <!-- Consistent Header -->
+            <div class="meetings-header-wrapper">
+              <div class="meetings-header-info">
+                <h2 class="meetings-page-title">Meeting Notes</h2>
+                <p class="section-desc meetings-page-desc">Record, transcribe, and summarize your meetings, Google Meet, Zoom, or local audio.</p>
+              </div>
+              <div class="meetings-top-beta">
+                <span class="beta-badge" title="This feature is in beta and some bugs are expected.">BETA</span>
+              </div>
+            </div>
+
+            <!-- Card 1: Overview & Custom Audio Player Card -->
+            <div class="meetings-card-container meeting-player-card">
+              <!-- Top Row: Title & Action Dots -->
+              <div class="meeting-player-header">
+                <h3 id="meeting-detail-title" class="meeting-player-title">Recording...</h3>
+                <div class="meeting-detail-menu-wrapper">
+                  <button type="button" id="meeting-detail-menu-btn" class="meeting-card-menu-btn" title="More options" aria-label="More options">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="5" cy="12" r="1.75"></circle>
+                      <circle cx="12" cy="12" r="1.75"></circle>
+                      <circle cx="19" cy="12" r="1.75"></circle>
+                    </svg>
+                  </button>
+                  <div id="meeting-detail-dropdown" class="meeting-card-dropdown hidden">
+                    <button type="button" id="meeting-detail-delete-opt" class="meeting-dropdown-item danger">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                      </svg>
+                      <span>Delete Note</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <!-- Audio Player Section -->
-              <div class="audio-player-container" style="margin-bottom: 18px;">
-                <audio id="meeting-audio-player" controls style="width: 100%; height: 40px; border-radius: 6px;"></audio>
-              </div>
-
-              <!-- Tabs: Timeline vs Transcript vs AI Summary vs Action Items -->
-              <div class="detail-tabs" style="display: flex; gap: 5px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px; margin-bottom: 15px; align-items: center;">
-                <button class="detail-tab-btn active" data-detail-tab="timeline">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 5px; vertical-align: -2px;">
-                    <line x1="4" y1="6" x2="20" y2="6"></line>
-                    <line x1="4" y1="12" x2="16" y2="12"></line>
-                    <line x1="4" y1="18" x2="18" y2="18"></line>
+              <!-- Metadata Row -->
+              <div class="meeting-player-meta">
+                <div class="meeting-meta-item">
+                  <svg class="meeting-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                    <line x1="3" y1="10" x2="21" y2="10"></line>
                   </svg>
-                  Timeline
-                </button>
-                <button class="detail-tab-btn" data-detail-tab="transcript">Transcript</button>
-                <button class="detail-tab-btn" data-detail-tab="summary">AI Summary</button>
-                <button class="detail-tab-btn" data-detail-tab="actions">Action Items</button>
-                <button id="meeting-delete-btn" class="fluent-button danger small" style="margin-left: auto;">Delete</button>
+                  <span id="meeting-detail-date" class="meeting-meta-text">7 Sept 2026</span>
+                </div>
+                <div class="meeting-meta-item">
+                  <svg class="meeting-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                  <span id="meeting-detail-duration" class="meeting-meta-text">1h 3m 24s</span>
+                </div>
+                <div class="meeting-meta-item">
+                  <svg class="meeting-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                  </svg>
+                  <span id="meeting-detail-speakers" class="meeting-meta-text">2 speakers</span>
+                </div>
               </div>
 
-              <div class="detail-tab-content">
-                <!-- Timeline Pane (Default) -->
-                <div class="detail-tab-pane active" id="detail-pane-timeline">
-                  <div class="meeting-timeline-wrapper">
-                    <!-- Top Playback & Diagnostic Status Header -->
-                    <div class="timeline-header-card">
-                      <div class="timeline-header-top-row">
-                        <div class="timeline-meta-title-group">
-                          <div class="timeline-scale-badge">1:1 Exact Diarization Scale</div>
-                          <div class="timeline-audio-subtext" id="timeline-audio-subtext">
-                            Audio: <span id="timeline-audio-meta" class="font-mono">--</span> &bull; <span id="timeline-turns-count">0 Turns</span> &bull; Min width: 1px
-                          </div>
-                        </div>
+              <!-- Custom Audio Player Bar -->
+              <div class="meeting-custom-audio-bar">
+                <audio id="meeting-audio-player" preload="metadata" style="display: none;"></audio>
+                
+                <!-- Circular Play Button -->
+                <button type="button" id="audio-play-btn" class="audio-play-circle-btn" title="Play / Pause Audio">
+                  <svg id="audio-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                  </svg>
+                  <svg id="audio-pause-icon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="4" width="4" height="16"></rect>
+                    <rect x="14" y="4" width="4" height="16"></rect>
+                  </svg>
+                </button>
 
-                        <!-- Transport Controls & Zoom -->
-                        <div class="timeline-transport-controls">
-                          <!-- Zoom Presets -->
-                          <div class="timeline-zoom-group">
-                            <span class="timeline-zoom-label">Zoom:</span>
-                            <button class="timeline-zoom-preset-btn active" data-zoom="1">1x</button>
-                            <button class="timeline-zoom-preset-btn" data-zoom="2">2x</button>
-                            <button class="timeline-zoom-preset-btn" data-zoom="4">4x</button>
-                          </div>
+                <!-- Digital Time Counter -->
+                <div class="audio-time-counter">
+                  <span id="audio-time-current">0:00</span>
+                  <span class="audio-time-slash">/</span>
+                  <span id="audio-time-total">0:00</span>
+                </div>
 
-                          <div class="timeline-playback-btn-group">
-                            <button id="timeline-btn-backward" class="timeline-ctrl-btn" title="Rewind 5s">
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.334 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"/></svg>
-                            </button>
-                            <button id="timeline-btn-play" class="timeline-play-main-btn" title="Play / Pause Audio">
-                              <svg id="timeline-play-icon" width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                              <span id="timeline-play-text">Play Audio</span>
-                            </button>
-                            <button id="timeline-btn-forward" class="timeline-ctrl-btn" title="Forward 5s">
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11.934 12.8a1 1 0 000-1.6l-5.334-4A1 1 0 005 8v8a1 1 0 001.6.8l5.334-4zM19.934 12.8a1 1 0 000-1.6l-5.334-4A1 1 0 0013 8v8a1 1 0 001.6.8l5.334-4z"/></svg>
-                            </button>
-                            <select id="timeline-speed-select" class="timeline-speed-dropdown">
-                              <option value="0.75">0.75x</option>
-                              <option value="1.0" selected>1.0x</option>
-                              <option value="1.25">1.25x</option>
-                              <option value="1.5">1.5x</option>
-                              <option value="2.0">2.0x</option>
-                            </select>
-                          </div>
-                        </div>
-                      </div>
+                <!-- Scrubber Track -->
+                <div id="audio-scrubber-track" class="audio-scrubber-track">
+                  <div id="audio-scrubber-fill" class="audio-scrubber-fill"></div>
+                  <div id="audio-scrubber-thumb" class="audio-scrubber-thumb"></div>
+                </div>
 
-                      <!-- Real-Time Status Bar: Digital Clock, Active Speaker Pill, Hover Tooltip, Legend -->
-                      <div class="timeline-header-bottom-row">
-                        <div class="timeline-clock-group">
-                          <div class="timeline-digital-clock">
-                            <span id="timeline-clock-current" class="clock-active">00:00.00</span>
-                            <span class="clock-slash">/</span>
-                            <span id="timeline-clock-total" class="clock-total">00:00.00</span>
-                          </div>
-                          <div id="timeline-active-speaker-pill" class="timeline-active-speaker-pill is-silence">
-                            <span class="status-dot"></span>
-                            <span id="timeline-active-speaker-text">Silence</span>
-                          </div>
-                          <div id="timeline-hover-badge" class="timeline-hover-badge hidden">
-                            Hover: <span id="timeline-hover-text">--</span>
-                          </div>
-                        </div>
+                <!-- Volume Button -->
+                <button type="button" id="audio-vol-btn" class="audio-ctrl-btn" title="Mute / Unmute">
+                  <svg id="audio-vol-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                  </svg>
+                </button>
 
-                        <!-- Dynamic Speaker Legend -->
-                        <div class="timeline-speaker-legend" id="timeline-speaker-legend">
-                          <!-- Injected Dynamically -->
-                        </div>
+                <!-- Speed Selector -->
+                <div class="audio-speed-wrapper">
+                  <select id="audio-speed-select" class="audio-speed-select" title="Playback Speed">
+                    <option value="0.75">0.75x</option>
+                    <option value="1.0" selected>1.0x</option>
+                    <option value="1.25">1.25x</option>
+                    <option value="1.5">1.5x</option>
+                    <option value="2.0">2.0x</option>
+                  </select>
+                </div>
+
+                <!-- More Options Button -->
+                <button type="button" id="audio-options-btn" class="audio-ctrl-btn" title="Audio Options">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="5" r="1.75"></circle>
+                    <circle cx="12" cy="12" r="1.75"></circle>
+                    <circle cx="12" cy="19" r="1.75"></circle>
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Sub-Tabs & Delete Button -->
+              <div class="detail-tabs-bar">
+                <div class="detail-tabs-group">
+                  <button type="button" class="detail-tab-btn active" data-detail-tab="timeline">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="8" y1="6" x2="21" y2="6"></line>
+                      <line x1="8" y1="12" x2="21" y2="12"></line>
+                      <line x1="8" y1="18" x2="21" y2="18"></line>
+                      <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                      <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                      <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                    </svg>
+                    <span>Timeline</span>
+                  </button>
+                  <button type="button" class="detail-tab-btn" data-detail-tab="transcript">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <polyline points="14 2 14 8 20 8"></polyline>
+                      <line x1="16" y1="13" x2="8" y2="13"></line>
+                      <line x1="16" y1="17" x2="8" y2="17"></line>
+                      <line x1="10" y1="9" x2="8" y2="9"></line>
+                    </svg>
+                    <span>Transcript</span>
+                  </button>
+                  <button type="button" class="detail-tab-btn" data-detail-tab="summary">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path>
+                    </svg>
+                    <span>AI Summary</span>
+                  </button>
+                  <button type="button" class="detail-tab-btn" data-detail-tab="actions">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="9 11 12 14 22 4"></polyline>
+                      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                    </svg>
+                    <span>Action Items</span>
+                  </button>
+                </div>
+
+                <button type="button" id="meeting-delete-btn" class="detail-delete-btn" title="Delete this meeting note">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <span>Delete</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Tab Contents -->
+            <div class="detail-tab-content">
+              <!-- Pane 1: Timeline (Cards 2 & 3) -->
+              <div class="detail-tab-pane active" id="detail-pane-timeline">
+                <!-- Card 2: Speaker Timeline Card -->
+                <div class="meetings-card-container meeting-timeline-card">
+                  <div class="meeting-timeline-header">
+                    <h4 class="meeting-card-section-title">Speaker Timeline</h4>
+                    <div id="timeline-speaker-legend" class="timeline-speaker-legend">
+                      <!-- Dynamically injected -->
+                    </div>
+                  </div>
+
+                  <div class="timeline-main-container" id="timeline-main-container">
+                    <!-- Left Speaker Headers Col -->
+                    <div class="timeline-tracks-header-col" id="timeline-tracks-header-col">
+                      <div class="timeline-ruler-header-spacer"></div>
+                      <div class="timeline-headers-list" id="timeline-headers-list">
+                        <!-- Dynamically injected -->
                       </div>
                     </div>
 
-                    <!-- Main Multi-Track Diarization Timeline Canvas -->
-                    <div class="timeline-main-container" id="timeline-main-container">
-                      <!-- Left Sticky Track Headers Column -->
-                      <div class="timeline-tracks-header-col" id="timeline-tracks-header-col">
-                        <div class="timeline-ruler-header-spacer">
-                          <span>Speakers</span>
+                    <!-- Right Scrollable Lanes -->
+                    <div class="timeline-scroll-area" id="timeline-scroll-area">
+                      <div class="timeline-scroll-canvas" id="timeline-scroll-canvas">
+                        <!-- Time Ruler Track -->
+                        <div class="timeline-ruler-track" id="timeline-ruler-track">
+                          <!-- Time Ticks -->
                         </div>
-                        <div class="timeline-headers-list" id="timeline-headers-list">
-                          <!-- Injected Dynamically -->
-                        </div>
-                      </div>
-
-                      <!-- Right Scrollable Lanes & Ruler Area -->
-                      <div class="timeline-scroll-area" id="timeline-scroll-area">
-                        <div class="timeline-scroll-canvas" id="timeline-scroll-canvas">
-                          <!-- Time Ruler Track -->
-                          <div class="timeline-ruler-track" id="timeline-ruler-track">
-                            <!-- Injected Time Ticks -->
-                          </div>
-
-                          <!-- Multi-Track Lanes Container -->
-                          <div class="timeline-lanes-body" id="timeline-lanes-body">
-                            <!-- Injected Speaker Lanes & 1:1 Audio Segment Boxes -->
-                            <!-- Glowing Neon Playhead Needle -->
-                            <div class="timeline-playhead" id="timeline-playhead">
-                              <div class="timeline-playhead-handle"></div>
-                              <div class="timeline-playhead-line"></div>
-                            </div>
+                        <!-- Multi-track Lanes -->
+                        <div class="timeline-lanes-body" id="timeline-lanes-body">
+                          <!-- Injected Lanes -->
+                          <div class="timeline-playhead" id="timeline-playhead">
+                            <div class="timeline-playhead-line"></div>
                           </div>
                         </div>
-                      </div>
-                    </div>
-
-                    <!-- Turn-by-Turn Segment Inspector Table (Interactive) -->
-                    <div class="timeline-inspector-card">
-                      <div class="inspector-card-top">
-                        <div>
-                          <h4 class="inspector-card-title">Turn-by-Turn Segment Inspector (<span id="inspector-total-turns-label">0</span> Turns)</h4>
-                          <p class="inspector-card-subtitle">Click any row below or segment above to jump audio playback directly to that turn.</p>
-                        </div>
-                        <div class="inspector-filter-group">
-                          <input id="timeline-search-speaker" type="text" placeholder="Filter speaker or text..." class="timeline-search-input" />
-                        </div>
-                      </div>
-
-                      <div class="inspector-table-scroll">
-                        <table class="inspector-table">
-                          <thead>
-                            <tr>
-                              <th style="width: 50px;">Turn</th>
-                              <th style="width: 140px;">Speaker</th>
-                              <th style="width: 75px;">Start</th>
-                              <th style="width: 75px;">End</th>
-                              <th style="width: 75px;">Duration</th>
-                              <th style="width: 140px;">Timeline Position</th>
-                              <th>Transcript Text</th>
-                            </tr>
-                          </thead>
-                          <tbody id="timeline-inspector-tbody">
-                            <!-- Injected Dynamically -->
-                          </tbody>
-                        </table>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <!-- Transcript Pane -->
-                <div class="detail-tab-pane" id="detail-pane-transcript">
-                  <div id="meeting-transcript-text" class="transcript-view">
-                    <!-- Loaded dynamically -->
+                <!-- Card 3: Turn-by-Turn Segment Inspector Card -->
+                <div class="meetings-card-container meeting-inspector-card">
+                  <div class="inspector-card-top">
+                    <div>
+                      <h4 class="inspector-card-title">Turn-by-Turn Segment Inspector (<span id="inspector-total-turns-label">0</span> Turns)</h4>
+                      <p class="inspector-card-subtitle">Click any row below or segment above to jump audio playback directly to that turn.</p>
+                    </div>
+                    <div class="inspector-filter-group">
+                      <div class="inspector-search-box">
+                        <svg class="inspector-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <circle cx="11" cy="11" r="8"></circle>
+                          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <input id="timeline-search-speaker" type="text" placeholder="Filter speaker or text..." class="timeline-search-input" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="inspector-table-scroll">
+                    <table class="inspector-table">
+                      <thead>
+                        <tr>
+                          <th style="width: 50px;">#</th>
+                          <th style="width: 150px;">SPEAKER</th>
+                          <th style="width: 80px;">START</th>
+                          <th style="width: 80px;">END</th>
+                          <th style="width: 80px;">DURATION</th>
+                          <th style="width: 100px;">TIMELINE</th>
+                          <th>TRANSCRIPT TEXT</th>
+                        </tr>
+                      </thead>
+                      <tbody id="timeline-inspector-tbody">
+                        <!-- Injected Dynamically -->
+                      </tbody>
+                    </table>
                   </div>
                 </div>
+              </div>
 
-                <!-- Summary Pane -->
-                <div class="detail-tab-pane" id="detail-pane-summary">
-                  <div id="meeting-summary-text" class="markdown-view">
-                    <!-- Loaded dynamically -->
-                  </div>
+              <!-- Pane 2: Transcript -->
+              <div class="detail-tab-pane" id="detail-pane-transcript">
+                <div class="meetings-card-container">
+                  <div id="meeting-transcript-text" class="transcript-view"></div>
                 </div>
+              </div>
 
-                <!-- Action Items Pane -->
-                <div class="detail-tab-pane" id="detail-pane-actions">
-                  <div id="meeting-actions-text" class="markdown-view">
-                    <!-- Loaded dynamically -->
-                  </div>
+              <!-- Pane 3: Summary -->
+              <div class="detail-tab-pane" id="detail-pane-summary">
+                <div class="meetings-card-container">
+                  <div id="meeting-summary-text" class="markdown-view"></div>
+                </div>
+              </div>
+
+              <!-- Pane 4: Action Items -->
+              <div class="detail-tab-pane" id="detail-pane-actions">
+                <div class="meetings-card-container">
+                  <div id="meeting-actions-text" class="markdown-view"></div>
                 </div>
               </div>
             </div>
@@ -1371,6 +1574,28 @@
           </div>
 
         </div>
+      </div>
+    </div>
+  <!-- Styled App Dialog / Popup Modal -->
+  <div id="app-dialog-overlay" class="app-dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-msg">
+    <div class="app-dialog-backdrop"></div>
+    <div class="app-dialog-card">
+      <div class="app-dialog-header">
+        <div class="app-dialog-icon-wrapper" id="app-dialog-icon"></div>
+        <div class="app-dialog-title-wrap">
+          <h3 class="app-dialog-title" id="app-dialog-title">Notice</h3>
+        </div>
+        <button type="button" class="app-dialog-close-btn" id="app-dialog-close-btn" title="Close" aria-label="Close dialog">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="app-dialog-msg" id="app-dialog-msg"></div>
+      <div class="app-dialog-actions" id="app-dialog-actions">
+        <button type="button" class="fluent-button secondary" id="app-dialog-cancel-btn">Cancel</button>
+        <button type="button" class="fluent-button primary" id="app-dialog-confirm-btn">Confirm</button>
       </div>
     </div>
   </div>

@@ -64,12 +64,44 @@ type MeetingStreamEventMessage struct {
 
 // WordItem represents a timestamped & diarized word from NeMo-Speech.cpp / Sortformer
 type WordItem struct {
-	Word       string  `json:"word"`
-	Start      float64 `json:"start"`
-	End        float64 `json:"end"`
-	Speaker    int     `json:"speaker"`
-	Confidence float64 `json:"confidence"`
+	Word       string      `json:"word"`
+	Start      float64     `json:"start"`
+	End        float64     `json:"end"`
+	Speaker    interface{} `json:"speaker"`
+	Confidence float64     `json:"confidence"`
 }
+
+func (w WordItem) SpeakerID() int {
+	if w.Speaker == nil {
+		return 1
+	}
+	switch v := w.Speaker.(type) {
+	case float64:
+		if int(v) > 0 {
+			return int(v)
+		}
+	case int:
+		if v > 0 {
+			return v
+		}
+	case int64:
+		if int(v) > 0 {
+			return int(v)
+		}
+	case string:
+		if strings.Contains(v, "_") {
+			parts := strings.Split(v, "_")
+			if id, err := strconv.Atoi(parts[len(parts)-1]); err == nil && id > 0 {
+				return id
+			}
+		}
+		if id, err := strconv.Atoi(v); err == nil && id > 0 {
+			return id
+		}
+	}
+	return 1
+}
+
 
 // CompletedUtteranceEvent from NeMo-Speech.cpp runtime via SpeekToMe Gateway
 type CompletedUtteranceEvent struct {
@@ -189,19 +221,13 @@ func collapseWordsToTurns(words []WordItem, baseIDPrefix string) []ClientMeeting
 		return nil
 	}
 	var turns []ClientMeetingTurn
-	curSpk := words[0].Speaker
-	if curSpk <= 0 {
-		curSpk = 1
-	}
+	curSpk := words[0].SpeakerID()
 	startT := words[0].Start
 	endT := words[0].End
 	var curWords []string
 
 	for _, w := range words {
-		spk := w.Speaker
-		if spk <= 0 {
-			spk = 1
-		}
+		spk := w.SpeakerID()
 		if spk == curSpk {
 			curWords = append(curWords, w.Word)
 			if w.End > endT {
@@ -419,9 +445,25 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(phrases) > 0 {
-			vocabMsg := map[string]interface{}{
+			vocabMsgMic := map[string]interface{}{
 				"type": "session.update",
 				"session": map[string]interface{}{
+					"word_timestamps":       true,
+					"automatic_punctuation": true,
+					"speech_contexts": []map[string]interface{}{
+						{
+							"phrases": phrases,
+							"boost":   1.5,
+						},
+					},
+				},
+			}
+			vocabMsgLB := map[string]interface{}{
+				"type": "session.update",
+				"session": map[string]interface{}{
+					"speaker_diarization":   true,
+					"word_timestamps":       true,
+					"automatic_punctuation": true,
 					"speech_contexts": []map[string]interface{}{
 						{
 							"phrases": phrases,
@@ -431,10 +473,10 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 				},
 			}
 			if s1MicASR != nil {
-				_ = s1MicASR.SendControl(ctx, vocabMsg)
+				_ = s1MicASR.SendControl(ctx, vocabMsgMic)
 			}
 			if s1Loopback != nil {
-				_ = s1Loopback.SendControl(ctx, vocabMsg)
+				_ = s1Loopback.SendControl(ctx, vocabMsgLB)
 			}
 		}
 	}
@@ -516,7 +558,9 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 							}
 						} else if len(completedEvt.Words) == 0 && strings.TrimSpace(completedEvt.Transcript) != "" && completedEvt.AudioProcessed > lastEmittedLBWordEnd+0.2 {
 							cleanText := strings.TrimSpace(completedEvt.Transcript)
-							startSec := mathMax(lastEmittedLBWordEnd, completedEvt.AudioProcessed-2.5)
+							wordCount := len(strings.Fields(cleanText))
+							estimatedDuration := mathMax(1.0, float64(wordCount)/2.6)
+							startSec := mathMax(lastEmittedLBWordEnd, completedEvt.AudioProcessed-estimatedDuration)
 							endSec := mathMax(startSec+0.5, completedEvt.AudioProcessed)
 							generatedTurns = append(generatedTurns, ClientMeetingTurn{
 								ID:          fmt.Sprintf("turn_lb_1_%d", int64(startSec*1000)),
@@ -550,6 +594,8 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 					case "input_audio_buffer.committed":
 						log.Printf("[SERVER LOOPBACK] input_audio_buffer.committed confirmed by inference engine")
 						if isMeetingEnding.Load() {
+							// Allow 250ms grace period to ensure all flushed completion events are received
+							time.Sleep(250 * time.Millisecond)
 							return
 						}
 
@@ -607,27 +653,6 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 							}
 							lastDeltaTime = now
 							currentTurnText += delta
-							cleanText := strings.TrimSpace(currentTurnText)
-							if cleanText != "" {
-								turn := ClientMeetingTurn{
-									ID:          turnID,
-									Channel:     "mic",
-									SpeakerID:   "speaker_local",
-									SpeakerName: userName,
-									StartTime:   turnStartTime,
-									EndTime:     audioProc,
-									Text:        cleanText,
-									IsFinal:     false,
-								}
-								turnsMu.Lock()
-								upsertMeetingTurn(&activeTurns, turn)
-								turnsMu.Unlock()
-
-								_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{
-									Type: "turn",
-									Turn: &turn,
-								})
-							}
 						}
 
 					case "conversation.item.input_audio_transcription.completed":
@@ -635,12 +660,14 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 						transcript, _ := raw["transcript"].(string)
 						cleanText := strings.TrimSpace(transcript)
 						if cleanText != "" {
+							turnDuration := mathMax(1.0, float64(len(strings.Fields(cleanText)))/2.6)
+							effectiveStart := mathMax(0, mathMin(turnStartTime, audioProc-turnDuration))
 							turn := ClientMeetingTurn{
 								ID:          turnID,
 								Channel:     "mic",
 								SpeakerID:   "speaker_local",
 								SpeakerName: userName,
-								StartTime:   turnStartTime,
+								StartTime:   effectiveStart,
 								EndTime:     audioProc,
 								Text:        cleanText,
 								IsFinal:     true,
@@ -648,6 +675,9 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 							turnsMu.Lock()
 							upsertMeetingTurn(&activeTurns, turn)
 							turnsMu.Unlock()
+
+							log.Printf("[SERVER EMIT MIC TURN] ID=%s [%.2f-%.2f] %s: %q",
+								turn.ID, turn.StartTime, turn.EndTime, turn.SpeakerName, turn.Text)
 
 							_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{
 								Type: "turn",
@@ -659,6 +689,8 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 					case "input_audio_buffer.committed":
 						log.Printf("[SERVER MIC] input_audio_buffer.committed confirmed by inference engine")
 						if isMeetingEnding.Load() {
+							// Allow 250ms grace period to ensure all flushed completion events are received
+							time.Sleep(250 * time.Millisecond)
 							return
 						}
 
@@ -747,6 +779,15 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	}
 	flushTimer.Stop()
 
+	micTimer := time.NewTimer(3 * time.Second)
+	select {
+	case <-micDoneChan:
+		log.Printf("[SERVER INFERENCE] Mic upstream completed.")
+	case <-micTimer.C:
+		log.Printf("[SERVER INFERENCE WARNING] Timed out waiting for mic flush. Proceeding.")
+	}
+	micTimer.Stop()
+
 	// 7. Calculate Audio Duration strictly from processed audio chunks
 	chunkCountMu.Lock()
 	maxChunks := mathMax(float64(micChunkCount), float64(loopbackChunkCount))
@@ -817,6 +858,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 
 	var finalSegments []FinalSegment
 	turnsMu.Lock()
+	activeTurns = filterMeetingStreamTurns(activeTurns)
 	for _, turn := range activeTurns {
 		trimmed := strings.TrimSpace(turn.Text)
 		if trimmed == "" {
@@ -996,4 +1038,108 @@ func mathMax(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+// filterMeetingStreamTurns eliminates acoustic bleed turns where remote speaker sound was picked up faintly
+// by the microphone and mis-transcribed as phantom local speaker turns.
+func filterMeetingStreamTurns(turns []ClientMeetingTurn) []ClientMeetingTurn {
+	var lbTurns []ClientMeetingTurn
+	var micTurns []ClientMeetingTurn
+
+	for _, t := range turns {
+		if !t.IsFinal {
+			continue // Drop non-final interim turns from final timeline
+		}
+		clean := strings.TrimSpace(t.Text)
+		if clean == "" {
+			continue
+		}
+		t.Text = clean
+		if t.Channel == "system" {
+			lbTurns = append(lbTurns, t)
+		} else {
+			micTurns = append(micTurns, t)
+		}
+	}
+
+	var filteredTurns []ClientMeetingTurn
+	// Always retain legitimate system / loopback turns
+	filteredTurns = append(filteredTurns, lbTurns...)
+
+	for _, m := range micTurns {
+		isBleed := false
+		mWords := tokenizeString(m.Text)
+
+		for _, lb := range lbTurns {
+			// Check temporal overlap (within +/- 2.0s tolerance)
+			timeOverlap := !(m.EndTime < lb.StartTime-2.0 || m.StartTime > lb.EndTime+2.0)
+			if !timeOverlap {
+				continue
+			}
+
+			// 1. Text Jaccard similarity check
+			similarity := calculateTextSimilarity(m.Text, lb.Text)
+			if similarity >= 0.30 {
+				log.Printf("[BLEED FILTER] Dropped acoustic bleed turn %s [%.2f-%.2f] %q (overlapped with %s [%.2f-%.2f] %q, sim=%.2f)",
+					m.ID, m.StartTime, m.EndTime, m.Text, lb.ID, lb.StartTime, lb.EndTime, lb.Text, similarity)
+				isBleed = true
+				break
+			}
+
+			// 2. Short fragment containment check: if mic turn is completely submerged within an active loopback turn
+			// and shares words with the remote speaker (ratio >= 0.25)
+			isSubmerged := m.StartTime >= lb.StartTime-0.5 && m.EndTime <= lb.EndTime+0.5
+			if isSubmerged && len(mWords) > 0 && len(mWords) <= 8 {
+				lbWords := tokenizeString(lb.Text)
+				lbSet := make(map[string]bool)
+				for _, w := range lbWords {
+					lbSet[w] = true
+				}
+				common := 0
+				for _, w := range mWords {
+					if lbSet[w] {
+						common++
+					}
+				}
+				if float64(common)/float64(len(mWords)) >= 0.25 {
+					log.Printf("[BLEED FILTER] Dropped acoustic bleed fragment turn %s [%.2f-%.2f] %q (words matched in loopback turn [%.2f-%.2f], ratio=%.2f)",
+						m.ID, m.StartTime, m.EndTime, m.Text, lb.StartTime, lb.EndTime, float64(common)/float64(len(mWords)))
+					isBleed = true
+					break
+				}
+			}
+		}
+
+		if !isBleed {
+			filteredTurns = append(filteredTurns, m)
+		}
+	}
+
+	// Sort chronologically by start time
+	sort.Slice(filteredTurns, func(i, j int) bool {
+		if filteredTurns[i].StartTime == filteredTurns[j].StartTime {
+			return filteredTurns[i].EndTime < filteredTurns[j].EndTime
+		}
+		return filteredTurns[i].StartTime < filteredTurns[j].StartTime
+	})
+
+	// Merge adjacent turns from the same speaker and same channel if within 0.35 seconds
+	var merged []ClientMeetingTurn
+	for _, t := range filteredTurns {
+		if len(merged) == 0 {
+			merged = append(merged, t)
+			continue
+		}
+		last := &merged[len(merged)-1]
+		if last.Channel == t.Channel && last.SpeakerID == t.SpeakerID && t.StartTime <= last.EndTime+0.35 {
+			last.Text = strings.TrimSpace(last.Text + " " + t.Text)
+			if t.EndTime > last.EndTime {
+				last.EndTime = t.EndTime
+			}
+		} else {
+			merged = append(merged, t)
+		}
+	}
+
+	return merged
 }
