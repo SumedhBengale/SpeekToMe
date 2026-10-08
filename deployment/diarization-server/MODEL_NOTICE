@@ -1,0 +1,55 @@
+This is an ONNX conversion of nvidia/Nemotron-3-Diarization
+(https://huggingface.co/nvidia/Nemotron-3-Diarization), produced independently and not by,
+affiliated with, or endorsed by NVIDIA Corporation. No trademark rights are claimed or
+implied.
+
+Origin of the Model Materials this conversion is derived from:
+
+  Model:     nvidia/Nemotron-3-Diarization
+  Source:    https://huggingface.co/nvidia/Nemotron-3-Diarization
+  Revision:  f667ed73aee57d40cc39428eb768b4fd87a0a29e (the HF `main` revision at the time
+             the weights used for this conversion were downloaded -- this is the exact
+             commit `config.json`/`model.safetensors`/`processor_config.json` came from,
+             confirmed against the Hugging Face API's own `sha` field for this repository).
+  Licence:   OpenMDW License Agreement, version 1.1 (OpenMDW-1.1) -- LICENSE in this
+             directory is the official plain-text file from
+             https://github.com/OpenMDW/OpenMDW/blob/main/1.1/LICENSE.OpenMDW-1.1
+             (commit 9067ba54b2f84bc9e15a05734f570ec88e9f445d, fetched 2026-09-24), byte
+             for byte: 2619 bytes, SHA-256
+             2ab44b68365473c112f5092211a38f231cb23e50de68b75a13369adbd76a74df. (The
+             openmdw.ai/license/1-1/ page renders the same text through WordPress, which
+             both substitutes curly quotes for straight ones and does not hard-wrap each
+             paragraph onto multiple lines the way the canonical file does -- not a second,
+             different license, but not byte-identical to the canonical file either, so the
+             GitHub file is the one shipped here.)
+
+The upstream repository's own files (README.md and the model card subcards: bias.md,
+safety.md, privacy.md, explainability.md, diarization_evaluation.md,
+ASR_INTEGRATION_GUIDE.md, config.json, processor_config.json, model.safetensors) carry no
+explicit copyright statement beyond the Hugging Face repository's own "nvidia" org
+attribution and the licence link above (`license: openmdw-1.1` in README.md's front matter,
+"Use of this model is governed by the OpenMDW License Agreement, version 1.1" in its
+"License/Terms of Use" section) -- there is no separate "Copyright (c) NVIDIA Corporation"
+line in the Model Materials to reproduce verbatim; this NOTICE states that origin instead, as
+OpenMDW-1.1 requires for "notices of origin included in the Model Materials".
+
+How this conversion was made -- full detail, and the exact scripts, in this package's own
+`scripts/` (see `scripts/README.md`):
+
+  Reference implementation: transformers, git commit 4b28d51d0d5f17ec20c23a187d0475a8e68810c8
+                             (https://github.com/huggingface/transformers)
+  Export scripts:           scripts/export_preprocessor.py, scripts/export_model.py,
+                             scripts/quantize.py, scripts/strip_metadata.py
+  Exporter:                 torch.onnx.export(dynamo=True), opset 18
+  Numeric parity:            checked against the PyTorch reference with scripts/parity.py;
+                             see README.md's "Parity with PyTorch" section for the numbers.
+
+LICENSE applies to this whole package, not only to the Model Materials `preprocessor_core.onnx`,
+`model.onnx` and `model.int8.onnx` are derived from: `diarize.py`, `scripts/`, `requirements.txt`,
+this NOTICE and this package's own README.md are original works produced for this conversion,
+and the OpenMDW-1.1 licence is this project's own choice of licence for them, not something the
+upstream model imposes on them -- one licence for the whole package rather than two. Each
+shipped `.py` file carries its own `SPDX-License-Identifier: LicenseRef-OpenMDW-1.1` header and
+a one-line copyright notice.
+
+Copyright 2026 Joost Helfers.

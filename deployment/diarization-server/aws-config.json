@@ -1,0 +1,32 @@
+{
+  "region": "us-east-1",
+  "availability_zone": "us-east-1a",
+  "instance_id": "i-REDACTED",
+  "instance_type": "t4g.medium",
+  "market": "on-demand",
+  "ami": "ami-REDACTED",
+  "cpu_credits": "unlimited",
+  "root_volume": {
+    "size_gib": 8,
+    "type": "gp3",
+    "encrypted": true,
+    "delete_on_termination": true
+  },
+  "key_name": "SpeekToMe",
+  "security_group_id": "sg-REDACTED",
+  "private_ipv4": "DIARIZATION_PRIVATE_IP",
+  "public_ipv4": null,
+  "allowed_coordinator_ipv4": "COORDINATOR_PRIVATE_IP/32",
+  "inbound_tcp_ports": [
+    22,
+    8081
+  ],
+  "instance_profile": null,
+  "gateway_port": 8081,
+  "capacity": 1,
+  "max_upload_bytes": 2147483648,
+  "memory_limit_gib": 3,
+  "subnet_id": "subnet-REDACTED",
+  "vpc_id": "vpc-REDACTED",
+  "architecture": "arm64"
+}

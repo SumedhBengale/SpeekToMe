@@ -1,0 +1,5 @@
+[Unit]
+Description=Cap non-journal logs at 64 MiB
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/speektome-log-budget
