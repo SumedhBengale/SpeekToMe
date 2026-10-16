@@ -102,7 +102,6 @@ func (w WordItem) SpeakerID() int {
 	return 1
 }
 
-
 // CompletedUtteranceEvent from NeMo-Speech.cpp runtime via SpeekToMe Gateway
 type CompletedUtteranceEvent struct {
 	EventID        string     `json:"event_id"`
@@ -407,8 +406,8 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	micLang := utils.ResolveNemotronLanguage(user.Languages)
-	micURL := resolveUnifiedStreamURL(streamBaseURL, false, micLang, fmt.Sprintf("meeting-%d-%d-mic", user.ID, nowNs), vocabPhrases)
-	lbURL := resolveUnifiedStreamURL(streamBaseURL, true, "en", fmt.Sprintf("meeting-%d-%d-lb", user.ID, nowNs), vocabPhrases)
+	micURL := resolveUnifiedStreamURL(streamBaseURL, false, micLang, fmt.Sprintf("meeting-%d-%d-mic", user.ID, nowNs))
+	lbURL := resolveUnifiedStreamURL(streamBaseURL, true, "en", fmt.Sprintf("meeting-%d-%d-lb", user.ID, nowNs))
 
 	log.Printf("[MEETING STREAM UPSTREAM] Connecting Mic stream to: %s", micURL)
 	log.Printf("[MEETING STREAM UPSTREAM] Connecting Loopback stream to: %s", lbURL)
@@ -434,52 +433,6 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 			s1Loopback.Close(websocket.StatusNormalClosure, "meeting finished")
 		}
 	}()
-
-	// Send optional speech contexts (custom vocabulary) if present
-	if len(vocabTerms) > 0 {
-		var phrases []string
-		for _, term := range vocabTerms {
-			tTrimmed := strings.TrimSpace(term.Canonical)
-			if tTrimmed != "" {
-				phrases = append(phrases, tTrimmed)
-			}
-		}
-		if len(phrases) > 0 {
-			vocabMsgMic := map[string]interface{}{
-				"type": "session.update",
-				"session": map[string]interface{}{
-					"word_timestamps":       true,
-					"automatic_punctuation": true,
-					"speech_contexts": []map[string]interface{}{
-						{
-							"phrases": phrases,
-							"boost":   1.5,
-						},
-					},
-				},
-			}
-			vocabMsgLB := map[string]interface{}{
-				"type": "session.update",
-				"session": map[string]interface{}{
-					"speaker_diarization":   true,
-					"word_timestamps":       true,
-					"automatic_punctuation": true,
-					"speech_contexts": []map[string]interface{}{
-						{
-							"phrases": phrases,
-							"boost":   1.5,
-						},
-					},
-				},
-			}
-			if s1MicASR != nil {
-				_ = s1MicASR.SendControl(ctx, vocabMsgMic)
-			}
-			if s1Loopback != nil {
-				_ = s1Loopback.SendControl(ctx, vocabMsgLB)
-			}
-		}
-	}
 
 	_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{
 		Type:  "session_ready",
@@ -899,18 +852,17 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	var summaryText string = "No speech detected in this recording."
 	var actionItemsText string = "No action items extracted."
 
+	audit := finalizeVocabulary(ctx, rawTranscriptText, vocabTerms, nil)
+	polishedTranscript = audit.Resolved
 	if strings.TrimSpace(rawTranscriptText) != "" {
-		if a.VocabCache != nil && len(vocabTerms) > 0 {
-			rawTranscriptText, _, _ = a.VocabCache.ProcessText(user.ID, rawTranscriptText, vocabTerms)
-		}
-		pPolished, pSummary, pActions, errAI := generateMeetingAIAnalysis(ctx, rawTranscriptText, pctx)
+		input, restore := audit.Protect()
+		pPolished, pSummary, pActions, errAI := generateMeetingAIAnalysis(ctx, input, pctx)
 		if errAI == nil {
-			polishedTranscript = pPolished
-			summaryText = pSummary
-			actionItemsText = pActions
+			polishedTranscript = restore(pPolished)
+			summaryText = audit.RestoreMentions(pSummary)
+			actionItemsText = audit.RestoreMentions(pActions)
 		} else {
 			log.Printf("[MEETING AI SUMMARY ERROR] %v", errAI)
-			summaryText = fmt.Sprintf("AI Summary generation failed: %v", errAI)
 		}
 	}
 
@@ -928,7 +880,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = a.DB.UpdateMeetingResult(meetingID, polishedTranscript, summaryText, actionItemsText, segmentsJSON)
+	_ = a.DB.UpdateMeetingResult(meetingID, polishedTranscript, summaryText, actionItemsText, segmentsJSON, auditJSON(audit))
 
 	audioFileSize := 0
 	if fi, errStat := os.Stat(audioPath); errStat == nil {

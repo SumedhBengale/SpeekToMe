@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -597,3 +598,33 @@ func TestAIEnhancementTruncationSafeguard(t *testing.T) {
 	}
 }
 
+func TestGrammarPromptCannotBeOverriddenByModelConfiguration(t *testing.T) {
+	orig := config.ConfigManager.Get()
+	raw := config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(orig, raw)
+	key := config.CerebrasAPIKey
+	config.CerebrasAPIKey = "mock"
+	defer func() { config.CerebrasAPIKey = key }()
+	GlobalCircuitBreaker.Reset()
+	defer GlobalCircuitBreaker.Reset()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&p)
+		if len(p.Messages) < 2 || !strings.Contains(p.Messages[0].Content, "Fix grammar") || strings.Contains(p.Messages[0].Content, "Rewrite as marketing") {
+			t.Error("grammar policy overridden")
+		}
+		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "We use STMLOCKtest0END today."}}}})
+	}))
+	defer srv.Close()
+	cfg := orig
+	cfg.Models.EnhancementModels = []config.ModelSpec{{Provider: config.ProviderCerebras, Model: "gpt-oss-120b", Enabled: true, EndpointOverride: srv.URL, TimeoutMs: 2000, SystemPrompt: "Rewrite as marketing"}}
+	config.ConfigManager.Set(cfg, raw)
+	if _, e := NewGrammarEnhancementTransform("", " ").Transform(context.Background(), "We use STMLOCKtest0END today.", nil); e != nil {
+		t.Fatal(e)
+	}
+}

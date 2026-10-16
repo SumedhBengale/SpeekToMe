@@ -1,0 +1,159 @@
+{
+  "sample_rate": 16000,
+  "format": "little-endian float32 mono",
+  "human_sources": [
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-260-123286-0000.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-260-123286-0001.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-260-123286-0002.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-260-123286-0003.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-260-123286-0004.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-260-123286-0005.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-260-123286-0006.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-260-123286-0007.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-3575-170457-0031.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-3575-170457-0032.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-3575-170457-0033.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-3575-170457-0034.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-3575-170457-0035.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-3575-170457-0036.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-3575-170457-0037.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-3575-170457-0038.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-6930-75918-0000.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-6930-75918-0001.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-6930-75918-0002.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-6930-75918-0003.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-6930-75918-0004.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-6930-75918-0005.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-6930-75918-0006.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-6930-75918-0007.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-8463-294828-0022.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-8463-294828-0023.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-8463-294828-0024.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-8463-294828-0025.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-8463-294828-0026.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-8463-294828-0027.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-8463-294828-0028.wav",
+    "benchmark/vocabulary/results/2026-10-16-followup/libri-8463-294828-0029.wav"
+  ],
+  "source_seconds": 242.545,
+  "window_seconds": [
+    2.5,
+    5,
+    7.5,
+    10,
+    12.5,
+    15,
+    20,
+    30
+  ],
+  "mixed_seconds": [
+    5,
+    10,
+    20,
+    30,
+    5,
+    10,
+    20,
+    30
+  ],
+  "hour_test": "120 sequential 30-second windows repeating eight speech fixtures; capacity/memory endurance only",
+  "references": [
+    {
+      "id": "holdout-00",
+      "category": "target",
+      "reference": "When the checkout service slows down, Grafana displays the Redis latency next to the PostgreSQL connection count.",
+      "targets": [
+        "Grafana",
+        "Redis",
+        "PostgreSQL"
+      ],
+      "audio": "holdout-00.wav",
+      "duration": 8.4,
+      "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration",
+      "manifest_row": "holdout-00\t/home/ubuntu/qwen-q8-test/audio/holdout-00.f32\n"
+    },
+    {
+      "id": "holdout-01",
+      "category": "target",
+      "reference": "Please compare the PyTorch training run with yesterday's TensorRT deployment before changing the CUDA version.",
+      "targets": [
+        "PyTorch",
+        "TensorRT",
+        "CUDA"
+      ],
+      "audio": "holdout-01.wav",
+      "duration": 7.848,
+      "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration",
+      "manifest_row": "holdout-01\t/home/ubuntu/qwen-q8-test/audio/holdout-01.f32\n"
+    },
+    {
+      "id": "holdout-02",
+      "category": "target",
+      "reference": "Can you deploy the FastAPI service to Kubernetes and publish the TypeScript dashboard on Vercel?",
+      "targets": [
+        "FastAPI",
+        "Kubernetes",
+        "TypeScript",
+        "Vercel"
+      ],
+      "audio": "holdout-02.wav",
+      "duration": 7.128,
+      "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration",
+      "manifest_row": "holdout-02\t/home/ubuntu/qwen-q8-test/audio/holdout-02.f32\n"
+    },
+    {
+      "id": "holdout-03",
+      "category": "target",
+      "reference": "We chose Tauri for the desktop app and WebSocket for updates, while Kafka handles background events.",
+      "targets": [
+        "Tauri",
+        "WebSocket",
+        "Kafka"
+      ],
+      "audio": "holdout-03.wav",
+      "duration": 7.44,
+      "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration",
+      "manifest_row": "holdout-03\t/home/ubuntu/qwen-q8-test/audio/holdout-03.f32\n"
+    },
+    {
+      "id": "holdout-04",
+      "category": "confuser",
+      "reference": "Please read this page carefully. The doctor said my coffee should be cold before I drink it.",
+      "targets": [],
+      "audio": "holdout-04.wav",
+      "duration": 7.368,
+      "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration",
+      "manifest_row": "holdout-04\t/home/ubuntu/qwen-q8-test/audio/holdout-04.f32\n"
+    },
+    {
+      "id": "holdout-05",
+      "category": "confuser",
+      "reference": "Anna drew a graph while the children played on the blue carpet near the garden.",
+      "targets": [],
+      "audio": "holdout-05.wav",
+      "duration": 5.448,
+      "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration",
+      "manifest_row": "holdout-05\t/home/ubuntu/qwen-q8-test/audio/holdout-05.f32\n"
+    },
+    {
+      "id": "holdout-06",
+      "category": "confuser",
+      "reference": "We carried a torch to the old docks and opened the wooden door before sunset.",
+      "targets": [],
+      "audio": "holdout-06.wav",
+      "duration": 5.688,
+      "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration",
+      "manifest_row": "holdout-06\t/home/ubuntu/qwen-q8-test/audio/holdout-06.f32\n"
+    },
+    {
+      "id": "holdout-07",
+      "category": "confuser",
+      "reference": "The cook put celery in the soup, filled a flask with water, and asked the team to wash the plates.",
+      "targets": [],
+      "audio": "holdout-07.wav",
+      "duration": 7.08,
+      "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration",
+      "manifest_row": "holdout-07\t/home/ubuntu/qwen-q8-test/audio/holdout-07.f32\n"
+    }
+  ]
+}

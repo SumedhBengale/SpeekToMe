@@ -1,0 +1,51 @@
+[
+  {
+    "id": "ordinary-phrase",
+    "reference": "Why don't you speak to me about the problem?",
+    "audio": "/home/ssben/.codex/worktrees/2433/SpeekToMe/benchmark/vocabulary/results/2026-10-16-jev/ordinary-phrase.wav",
+    "source": "Synthetic Edge TTS en-IN-NeerjaNeural; targeted regression"
+  },
+  {
+    "id": "named-app",
+    "reference": "We installed Speak to Me on the laptop to dictate emails.",
+    "audio": "/home/ssben/.codex/worktrees/2433/SpeekToMe/benchmark/vocabulary/results/2026-10-16-jev/named-app.wav",
+    "source": "Synthetic Edge TTS en-IN-NeerjaNeural; targeted regression"
+  },
+  {
+    "id": "database",
+    "reference": "We are using PostgreSQL as our database.",
+    "audio": "/home/ssben/.codex/worktrees/2433/SpeekToMe/benchmark/vocabulary/results/2026-10-16-jev/database.wav",
+    "source": "Synthetic Edge TTS en-IN-NeerjaNeural; targeted regression"
+  },
+  {
+    "id": "holdout-00",
+    "category": "target",
+    "reference": "When the checkout service slows down, Grafana displays the Redis latency next to the PostgreSQL connection count.",
+    "targets": [
+      "Grafana",
+      "Redis",
+      "PostgreSQL"
+    ],
+    "audio": "/home/ssben/.codex/worktrees/2433/SpeekToMe/benchmark/vocabulary/results/2026-10-16-followup/holdout-00.wav",
+    "duration": 8.4,
+    "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration"
+  },
+  {
+    "id": "holdout-04",
+    "category": "confuser",
+    "reference": "Please read this page carefully. The doctor said my coffee should be cold before I drink it.",
+    "targets": [],
+    "audio": "/home/ssben/.codex/worktrees/2433/SpeekToMe/benchmark/vocabulary/results/2026-10-16-followup/holdout-04.wav",
+    "duration": 7.368,
+    "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration"
+  },
+  {
+    "id": "holdout-07",
+    "category": "confuser",
+    "reference": "The cook put celery in the soup, filled a flask with water, and asked the team to wash the plates.",
+    "targets": [],
+    "audio": "/home/ssben/.codex/worktrees/2433/SpeekToMe/benchmark/vocabulary/results/2026-10-16-followup/holdout-07.wav",
+    "duration": 7.08,
+    "source": "Edge TTS en-IN-NeerjaNeural; new texts and voice held out from prior calibration"
+  }
+]

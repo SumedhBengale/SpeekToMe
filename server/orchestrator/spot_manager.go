@@ -2,224 +2,197 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
-	"log"
+	"io"
+	"net"
+	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
-// SpotPoolCandidate holds discovered price and location for an instance type.
-type SpotPoolCandidate struct {
-	Region           string  `json:"region"`
-	AvailabilityZone string  `json:"availability_zone"`
-	InstanceType     string  `json:"instance_type"`
-	SpotPriceUSD     float64 `json:"spot_price_usd"`
-	LatencyMs        float64 `json:"latency_ms"`
+type AWSCloud struct{}
+
+func NewAWSCloud() *AWSCloud { return &AWSCloud{} }
+func awsSession(region string) (*session.Session, error) {
+	return session.NewSessionWithOptions(session.Options{Config: aws.Config{Region: aws.String(region), MaxRetries: aws.Int(2)}, SharedConfigState: session.SharedConfigEnable})
 }
-
-// SpotManager defines the cloud interface for managing Spot instances.
-type SpotManager interface {
-	FindCheapestValidPool(ctx context.Context, validRegions []RegionLatency, instanceTypes []string) (*SpotPoolCandidate, error)
-	LaunchSpotWorker(ctx context.Context, pool *SpotPoolCandidate, amiID string, keyName string, securityGroup string, userData string) (string, error)
-	TerminateWorker(ctx context.Context, region string, instanceID string) error
-	DescribeWorkerIP(ctx context.Context, region string, instanceID string) (string, error)
-}
-
-// AWSSpotManager implements SpotManager using the AWS Go SDK.
-type AWSSpotManager struct{}
-
-func NewAWSSpotManager() *AWSSpotManager {
-	return &AWSSpotManager{}
-}
-
-// FindCheapestValidPool queries real-time Spot prices across all valid low-latency regions.
-func (m *AWSSpotManager) FindCheapestValidPool(ctx context.Context, validRegions []RegionLatency, instanceTypes []string) (*SpotPoolCandidate, error) {
-	if len(validRegions) == 0 {
-		return nil, fmt.Errorf("no low-latency regions available (<80ms)")
+func regional(c FleetConfig, region string) (RegionConfig, error) {
+	for _, r := range c.Regions {
+		if r.Region == region {
+			return r, nil
+		}
 	}
-	if len(instanceTypes) == 0 {
-		instanceTypes = []string{"g6f.large"}
+	return RegionConfig{}, errors.New("unconfigured region")
+}
+func instanceWorker(i *ec2.Instance, r string) SpotWorker {
+	w := SpotWorker{InstanceID: aws.StringValue(i.InstanceId), Region: r, AvailabilityZone: aws.StringValue(i.Placement.AvailabilityZone), InstanceType: aws.StringValue(i.InstanceType), LaunchedAt: aws.TimeValue(i.LaunchTime)}
+	for _, nic := range i.NetworkInterfaces {
+		for _, ip := range nic.Ipv6Addresses {
+			if ip.Ipv6Address != nil {
+				w.IPAddress = *ip.Ipv6Address
+				w.EndpointURL = "https://" + net.JoinHostPort(w.IPAddress, "80")
+				return w
+			}
+		}
 	}
-
-	var bestPool *SpotPoolCandidate
-	lowestPrice := float64(1000.0)
-
-	for _, regLat := range validRegions {
-		sess, err := session.NewSession(&aws.Config{
-			Region: aws.String(regLat.Region),
-		})
-		if err != nil {
-			log.Printf("[SPOT DISCOVERY] Failed to create AWS session for region %s: %v", regLat.Region, err)
-			continue
+	return w
+}
+func (m *AWSCloud) Discover(ctx context.Context, c FleetConfig) (CloudSnapshot, error) {
+	out := CloudSnapshot{Complete: true}
+	for _, r := range c.Regions {
+		s, e := awsSession(r.Region)
+		if e != nil {
+			return CloudSnapshot{}, e
 		}
-
-		client := ec2.New(sess)
-		awsTypes := make([]*string, len(instanceTypes))
-		for i, t := range instanceTypes {
-			awsTypes[i] = aws.String(t)
-		}
-
-		// Query current spot price history
-		input := &ec2.DescribeSpotPriceHistoryInput{
-			InstanceTypes:       awsTypes,
-			ProductDescriptions: []*string{aws.String("Linux/UNIX")},
-			StartTime:           aws.Time(time.Now().Add(-1 * time.Hour)),
-			MaxResults:          aws.Int64(10),
-		}
-
-		out, err := client.DescribeSpotPriceHistoryWithContext(ctx, input)
-		if err != nil {
-			log.Printf("[SPOT DISCOVERY] DescribeSpotPriceHistory failed in %s: %v", regLat.Region, err)
-			continue
-		}
-
-		for _, item := range out.SpotPriceHistory {
-			if item.SpotPrice == nil || item.AvailabilityZone == nil || item.InstanceType == nil {
-				continue
-			}
-			price, perr := strconv.ParseFloat(*item.SpotPrice, 64)
-			if perr != nil {
-				continue
-			}
-
-			if price < lowestPrice {
-				lowestPrice = price
-				bestPool = &SpotPoolCandidate{
-					Region:           regLat.Region,
-					AvailabilityZone: *item.AvailabilityZone,
-					InstanceType:     *item.InstanceType,
-					SpotPriceUSD:     price,
-					LatencyMs:        regLat.LatencyMs,
+		client := ec2.New(s)
+		input := &ec2.DescribeInstancesInput{Filters: []*ec2.Filter{{Name: aws.String("tag:SpeekToMeFleet"), Values: []*string{aws.String(c.FleetID)}}, {Name: aws.String("instance-state-name"), Values: aws.StringSlice([]string{"pending", "running", "stopping", "stopped", "shutting-down"})}}}
+		e = client.DescribeInstancesPagesWithContext(ctx, input, func(page *ec2.DescribeInstancesOutput, last bool) bool {
+			for _, res := range page.Reservations {
+				for _, i := range res.Instances {
+					// Do not adopt On-Demand or unrelated instance types even with matching tags.
+					if aws.StringValue(i.InstanceLifecycle) != "spot" || aws.StringValue(i.InstanceType) != c.InstanceType {
+						continue
+					}
+					w := instanceWorker(i, r.Region)
+					state := aws.StringValue(i.State.Name)
+					if state != "running" && state != "pending" {
+						w.State = StateDraining
+						w.Interruption = true
+					}
+					out.Workers = append(out.Workers, w)
 				}
 			}
-		}
-	}
-
-	if bestPool == nil {
-		return nil, fmt.Errorf("could not find any active Spot price data in candidate regions")
-	}
-
-	log.Printf("[SPOT DISCOVERY] Selected cheapest pool: %s (%s) @ $%.4f/hr [RTT: %.1fms]",
-		bestPool.InstanceType, bestPool.AvailabilityZone, bestPool.SpotPriceUSD, bestPool.LatencyMs)
-
-	return bestPool, nil
-}
-
-// LaunchSpotWorker provisions an EC2 Spot instance in the chosen pool.
-func (m *AWSSpotManager) LaunchSpotWorker(ctx context.Context, pool *SpotPoolCandidate, amiID string, keyName string, securityGroup string, userData string) (string, error) {
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(pool.Region),
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to init session for %s: %w", pool.Region, err)
-	}
-
-	client := ec2.New(sess)
-	input := &ec2.RunInstancesInput{
-		ImageId:      aws.String(amiID),
-		InstanceType: aws.String(pool.InstanceType),
-		MinCount:     aws.Int64(1),
-		MaxCount:     aws.Int64(1),
-		InstanceMarketOptions: &ec2.InstanceMarketOptionsRequest{
-			MarketType: aws.String("spot"),
-			SpotOptions: &ec2.SpotMarketOptions{
-				SpotInstanceType: aws.String("one-time"),
-			},
-		},
-		Placement: &ec2.Placement{
-			AvailabilityZone: aws.String(pool.AvailabilityZone),
-		},
-		TagSpecifications: []*ec2.TagSpecification{
-			{
-				ResourceType: aws.String("instance"),
-				Tags: []*ec2.Tag{
-					{Key: aws.String("Name"), Value: aws.String("SpeekToMe-Nemotron-ASR-Worker")},
-					{Key: aws.String("Role"), Value: aws.String("asr-streaming-worker")},
-				},
-			},
-		},
-	}
-
-	if keyName == "" {
-		keyName = "SpeekToMe"
-	}
-	input.KeyName = aws.String(keyName)
-
-	if securityGroup != "" && strings.HasPrefix(securityGroup, "sg-") {
-		input.SecurityGroupIds = []*string{aws.String(securityGroup)}
-	} else {
-		// Auto-lookup speektome-spot-worker-sg in target region
-		sgOut, sgErr := client.DescribeSecurityGroupsWithContext(ctx, &ec2.DescribeSecurityGroupsInput{
-			Filters: []*ec2.Filter{
-				{Name: aws.String("group-name"), Values: []*string{aws.String("speektome-spot-worker-sg")}},
-			},
+			return true
 		})
-		if sgErr == nil && len(sgOut.SecurityGroups) > 0 {
-			input.SecurityGroupIds = []*string{sgOut.SecurityGroups[0].GroupId}
+		if e != nil {
+			return CloudSnapshot{Complete: false}, fmt.Errorf("discover %s: %w", r.Region, e)
 		}
 	}
-	if userData != "" {
-		input.UserData = aws.String(userData)
+	return out, nil
+}
+func (m *AWSCloud) Pools(ctx context.Context, c FleetConfig) ([]SpotPoolCandidate, error) {
+	out := []SpotPoolCandidate{}
+	for _, r := range c.Regions {
+		latency := MeasureRegionLatency(ctx, r.Region, 2*time.Second)
+		if !latency.Reachable {
+			continue
+		}
+		if c.MaxRTTMs > 0 && latency.LatencyMs > c.MaxRTTMs {
+			continue
+		}
+		s, e := awsSession(r.Region)
+		if e != nil {
+			return nil, e
+		}
+		client := ec2.New(s)
+		quotes := map[string]*ec2.SpotPrice{}
+		input := &ec2.DescribeSpotPriceHistoryInput{InstanceTypes: aws.StringSlice([]string{c.InstanceType}), ProductDescriptions: aws.StringSlice([]string{"Linux/UNIX"}), StartTime: aws.Time(time.Now()), MaxResults: aws.Int64(100)}
+		e = client.DescribeSpotPriceHistoryPagesWithContext(ctx, input, func(page *ec2.DescribeSpotPriceHistoryOutput, last bool) bool {
+			for _, q := range page.SpotPriceHistory {
+				az := aws.StringValue(q.AvailabilityZone)
+				if _, ok := r.Subnets[az]; !ok {
+					continue
+				}
+				if old := quotes[az]; old == nil || aws.TimeValue(q.Timestamp).After(aws.TimeValue(old.Timestamp)) {
+					quotes[az] = q
+				}
+			}
+			return true
+		})
+		if e != nil {
+			return nil, fmt.Errorf("prices %s: %w", r.Region, e)
+		}
+		for az, q := range quotes {
+			price, e := strconv.ParseFloat(aws.StringValue(q.SpotPrice), 64)
+			if e == nil {
+				out = append(out, SpotPoolCandidate{Region: r.Region, AvailabilityZone: az, InstanceType: c.InstanceType, SpotPriceUSD: price, LatencyMs: latency.LatencyMs})
+			}
+		}
 	}
-
-	res, err := client.RunInstancesWithContext(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("RunInstances spot request failed in %s: %w", pool.Region, err)
+	sort.Slice(out, func(i, j int) bool { return out[i].SpotPriceUSD < out[j].SpotPriceUSD })
+	return out, nil
+}
+func (m *AWSCloud) Launch(ctx context.Context, c FleetConfig, p SpotPoolCandidate, token string) (SpotWorker, error) {
+	r, e := regional(c, p.Region)
+	if e != nil {
+		return SpotWorker{}, &DefiniteLaunchError{e}
 	}
-
-	if len(res.Instances) == 0 || res.Instances[0].InstanceId == nil {
-		return "", fmt.Errorf("no instance returned in RunInstances response")
+	s, e := awsSession(p.Region)
+	if e != nil {
+		return SpotWorker{}, e
 	}
-
-	instanceID := *res.Instances[0].InstanceId
-	log.Printf("[SPOT LAUNCH] Provisioned Spot instance %s in %s (%s)", instanceID, pool.Region, pool.AvailabilityZone)
-	return instanceID, nil
+	client := ec2.New(s)
+	input := &ec2.RunInstancesInput{
+		ImageId: aws.String(r.AMI), InstanceType: aws.String(c.InstanceType), MinCount: aws.Int64(1), MaxCount: aws.Int64(1), ClientToken: aws.String(token), KeyName: aws.String(c.KeyName),
+		UserData:              aws.String(base64.StdEncoding.EncodeToString([]byte(r.UserData))),
+		IamInstanceProfile:    &ec2.IamInstanceProfileSpecification{Name: aws.String(c.InstanceProfile)},
+		MetadataOptions:       &ec2.InstanceMetadataOptionsRequest{HttpTokens: aws.String("required"), HttpEndpoint: aws.String("enabled"), HttpProtocolIpv6: aws.String("enabled"), HttpPutResponseHopLimit: aws.Int64(1)},
+		InstanceMarketOptions: &ec2.InstanceMarketOptionsRequest{MarketType: aws.String("spot"), SpotOptions: &ec2.SpotMarketOptions{SpotInstanceType: aws.String("one-time"), InstanceInterruptionBehavior: aws.String("terminate"), MaxPrice: aws.String(strconv.FormatFloat(c.MaxPoolHourlyUSD, 'f', 4, 64))}},
+		NetworkInterfaces:     []*ec2.InstanceNetworkInterfaceSpecification{{DeviceIndex: aws.Int64(0), SubnetId: aws.String(r.Subnets[p.AvailabilityZone]), Groups: aws.StringSlice([]string{r.SecurityGroup}), AssociatePublicIpAddress: aws.Bool(false), Ipv6AddressCount: aws.Int64(1), DeleteOnTermination: aws.Bool(true)}},
+		Placement:             &ec2.Placement{AvailabilityZone: aws.String(p.AvailabilityZone)},
+		BlockDeviceMappings:   []*ec2.BlockDeviceMapping{{DeviceName: aws.String("/dev/sda1"), Ebs: &ec2.EbsBlockDevice{VolumeSize: aws.Int64(c.RootVolumeGiB), VolumeType: aws.String("gp3"), Encrypted: aws.Bool(true), DeleteOnTermination: aws.Bool(true)}}},
+	}
+	for _, kind := range []string{"instance", "volume"} {
+		input.TagSpecifications = append(input.TagSpecifications, &ec2.TagSpecification{ResourceType: aws.String(kind), Tags: []*ec2.Tag{{Key: aws.String("Name"), Value: aws.String("SpeekToMe Fleet Worker")}, {Key: aws.String("SpeekToMeFleet"), Value: aws.String(c.FleetID)}, {Key: aws.String("LaunchToken"), Value: aws.String(token)}}})
+	}
+	result, e := client.RunInstancesWithContext(ctx, input)
+	if e != nil {
+		// Server failures/timeouts are ambiguous; retain the exact client token.
+		if definiteLaunchFailure(e) {
+			return SpotWorker{}, &DefiniteLaunchError{e}
+		}
+		return SpotWorker{}, e
+	}
+	if len(result.Instances) != 1 {
+		return SpotWorker{}, errors.New("ambiguous RunInstances response")
+	}
+	w := instanceWorker(result.Instances[0], p.Region)
+	return w, nil
+}
+func (m *AWSCloud) Terminate(ctx context.Context, w SpotWorker) error {
+	s, e := awsSession(w.Region)
+	if e != nil {
+		return e
+	}
+	_, e = ec2.New(s).TerminateInstancesWithContext(ctx, &ec2.TerminateInstancesInput{InstanceIds: aws.StringSlice([]string{w.InstanceID})})
+	return e
+}
+func (m *AWSCloud) Certificate(ctx context.Context, c FleetConfig, w SpotWorker) ([]byte, error) {
+	r, e := regional(c, w.Region)
+	if e != nil {
+		return nil, e
+	}
+	s, e := awsSession(r.ArtifactRegion)
+	if e != nil {
+		return nil, e
+	}
+	client := s3.New(s, &aws.Config{UseDualStack: aws.Bool(true)})
+	out, e := client.GetObjectWithContext(ctx, &s3.GetObjectInput{Bucket: aws.String(r.ArtifactBucket), Key: aws.String("registration/" + w.InstanceID + "/tls.crt")})
+	if e != nil {
+		return nil, e
+	}
+	defer out.Body.Close()
+	return io.ReadAll(io.LimitReader(out.Body, 32<<10))
 }
 
-// TerminateWorker terminates an EC2 instance.
-func (m *AWSSpotManager) TerminateWorker(ctx context.Context, region string, instanceID string) error {
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(region),
-	})
-	if err != nil {
-		return err
-	}
-	client := ec2.New(sess)
-	_, err = client.TerminateInstancesWithContext(ctx, &ec2.TerminateInstancesInput{
-		InstanceIds: []*string{aws.String(instanceID)},
-	})
-	log.Printf("[SPOT TERMINATE] Terminated instance %s in %s (err=%v)", instanceID, region, err)
-	return err
-}
-
-// DescribeWorkerIP retrieves the public or private IP of a running instance.
-func (m *AWSSpotManager) DescribeWorkerIP(ctx context.Context, region string, instanceID string) (string, error) {
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(region),
-	})
-	if err != nil {
-		return "", err
-	}
-	client := ec2.New(sess)
-	out, err := client.DescribeInstancesWithContext(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: []*string{aws.String(instanceID)},
-	})
-	if err != nil {
-		return "", err
-	}
-	if len(out.Reservations) > 0 && len(out.Reservations[0].Instances) > 0 {
-		inst := out.Reservations[0].Instances[0]
-		if inst.PublicIpAddress != nil && *inst.PublicIpAddress != "" {
-			return *inst.PublicIpAddress, nil
-		}
-		if inst.PrivateIpAddress != nil && *inst.PrivateIpAddress != "" {
-			return *inst.PrivateIpAddress, nil
+// AWS returns some explicit capacity rejections as HTTP 500. These are known
+// unsuccessful launches, unlike a timeout or generic internal server error.
+func definiteLaunchFailure(err error) bool {
+	var api awserr.Error
+	if errors.As(err, &api) {
+		switch api.Code() {
+		case "InsufficientInstanceCapacity", "InsufficientHostCapacity", "InsufficientReservedInstanceCapacity", "MaxSpotInstanceCountExceeded", "SpotMaxPriceTooLow", "VcpuLimitExceeded", "InstanceLimitExceeded":
+			return true
 		}
 	}
-	return "", fmt.Errorf("no IP address assigned yet for %s", instanceID)
+	var rf awserr.RequestFailure
+	return errors.As(err, &rf) && rf.StatusCode() >= 400 && rf.StatusCode() < 500
 }

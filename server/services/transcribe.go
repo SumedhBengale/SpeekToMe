@@ -14,7 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
-	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +27,7 @@ import (
 	"speektome-server/ratelimit"
 	"speektome-server/utils"
 	"speektome-server/valkey"
+	"speektome/vocabulary"
 )
 
 var (
@@ -1039,15 +1040,20 @@ func RunWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []Whi
 }
 
 type UpstreamStreamingSession struct {
-	Conn       *websocket.Conn
-	Provider   string
-	CancelFunc context.CancelFunc
-	TextChan   chan string
-	ErrChan    chan error
-	DoneChan   chan struct{}
+	replay           *fleetReplay
+	vocabularyResult *vocabulary.Result
+	Conn             *websocket.Conn
+	Provider         string
+	CancelFunc       context.CancelFunc
+	TextChan         chan string
+	ErrChan          chan error
+	DoneChan         chan struct{}
 }
 
 func (s *UpstreamStreamingSession) SendAudio(ctx context.Context, data []byte) error {
+	if s.replay != nil {
+		return s.replay.send(ctx, replayCommand{audio: data})
+	}
 	if s.Conn == nil {
 		return fmt.Errorf("upstream connection not open")
 	}
@@ -1055,6 +1061,9 @@ func (s *UpstreamStreamingSession) SendAudio(ctx context.Context, data []byte) e
 }
 
 func (s *UpstreamStreamingSession) SendControl(ctx context.Context, msg map[string]interface{}) error {
+	if s.replay != nil {
+		return s.replay.send(ctx, replayCommand{control: msg})
+	}
 	if s.Conn == nil {
 		return fmt.Errorf("upstream connection not open")
 	}
@@ -1087,6 +1096,13 @@ func (s *UpstreamStreamingSession) Close(status websocket.StatusCode, reason str
 }
 
 func CreateUpstreamStreamingSession(ctx context.Context, providerName string, userLanguages []string, prompt string, vocabTerms ...[]db.VocabularyTerm) (*UpstreamStreamingSession, error) {
+	if providerName == "self_hosted_nemotron_3_5" && os.Getenv("SPEEKTOME_FLEET_URL") != "" {
+		var terms []db.VocabularyTerm
+		if len(vocabTerms) > 0 {
+			terms = vocabTerms[0]
+		}
+		return createFleetStreamingSession(ctx, providerName, userLanguages, prompt, terms)
+	}
 	cfg := config.ConfigManager.Get()
 	provCfg, ok := cfg.Models.StreamingProviders[providerName]
 	if !ok || !provCfg.Enabled || provCfg.BaseURL == "" {
@@ -1111,14 +1127,6 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 	}
 
 	dialURL := provCfg.BaseURL
-	if len(phrases) > 0 {
-		if u, err := url.Parse(dialURL); err == nil {
-			q := u.Query()
-			q.Set("boosted_words", strings.Join(phrases, ","))
-			u.RawQuery = q.Encode()
-			dialURL = u.String()
-		}
-	}
 
 	conn, _, err := websocket.Dial(dialCtx, dialURL, &websocket.DialOptions{
 		Subprotocols: []string{},
@@ -1150,14 +1158,7 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 		"initial_prompt":        promptStr,
 		"endpointing_ms":        1200,
 	}
-	if len(phrases) > 0 {
-		sessionMap["speech_contexts"] = []map[string]interface{}{
-			{
-				"phrases": phrases,
-				"boost":   1.5,
-			},
-		}
-	}
+
 	sessionUpdateMsg := map[string]interface{}{
 		"type":    "session.update",
 		"session": sessionMap,
@@ -1270,4 +1271,40 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 	}()
 
 	return sess, nil
+}
+
+func (s *UpstreamStreamingSession) AwaitFinal(ctx context.Context) error {
+	if s.replay == nil {
+		select {
+		case <-time.After(350 * time.Millisecond):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	select {
+	case e := <-s.ErrChan:
+		return e
+	case <-s.DoneChan:
+		select {
+		case e := <-s.ErrChan:
+			return e
+		default:
+			return nil
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (s *UpstreamStreamingSession) UsesFleet() bool { return s.replay != nil }
+
+// VocabularyResult is available after AwaitFinal completes. The producer writes
+// it before closing DoneChan, which establishes the synchronization boundary.
+func (s *UpstreamStreamingSession) VocabularyResult() *vocabulary.Result {
+	select {
+	case <-s.DoneChan:
+		return s.vocabularyResult
+	default:
+		return nil
+	}
 }

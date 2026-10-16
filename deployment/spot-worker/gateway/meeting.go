@@ -1,0 +1,344 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+var jobIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+
+type meetingWord struct {
+	Word       string  `json:"word"`
+	Start      float64 `json:"start"`
+	End        float64 `json:"end"`
+	Confidence float64 `json:"confidence,omitempty"`
+}
+type meetingASR struct {
+	Text     string        `json:"text"`
+	Words    []meetingWord `json:"words"`
+	Duration float64       `json:"duration"`
+}
+
+// Separate from live admission: one meeting, exactly two ASR stages and one
+// diarization stage, may share a worker with the configured live sessions.
+func (g *gateway) admitMeeting(job, stage string) bool {
+	g.admission.Lock()
+	defer g.admission.Unlock()
+	if !jobIDPattern.MatchString(job) || (stage != "mic" && stage != "system" && stage != "diar") {
+		return false
+	}
+	if g.meetingExclusive && len(g.slots) > 0 {
+		return false
+	}
+	if len(g.meetingStages) > 0 && g.meetingID != job {
+		return false
+	}
+	if g.meetingStages == nil {
+		g.meetingStages = map[string]bool{}
+	}
+	if g.meetingStages[stage] {
+		return false
+	}
+	g.meetingID = job
+	g.meetingStages[stage] = true
+	return true
+}
+func (g *gateway) releaseMeeting(stage string) {
+	g.admission.Lock()
+	defer g.admission.Unlock()
+	delete(g.meetingStages, stage)
+	if len(g.meetingStages) == 0 {
+		g.meetingID = ""
+	}
+}
+func (g *gateway) meeting(w http.ResponseWriter, r *http.Request) {
+	contexts, contextErr := queryContexts(r.URL.Query())
+	if contextErr != nil {
+		http.Error(w, contextErr.Error(), 400)
+		return
+	}
+	stage := strings.TrimPrefix(r.URL.Path, "/v1/meeting/")
+	job := r.Header.Get("X-SpeekToMe-Meeting-ID")
+	if r.Method != "POST" || !jobIDPattern.MatchString(job) || (stage != "mic" && stage != "system" && stage != "diar") {
+		http.Error(w, "invalid meeting request", 400)
+		return
+	}
+	if !g.admitMeeting(job, stage) {
+		w.Header().Set("X-SpeekToMe-Admission", "rejected")
+		http.Error(w, "meeting capacity full", 429)
+		return
+	}
+	defer g.releaseMeeting(stage)
+	stat := g.stats.begin(r)
+	g.stats.mu.Lock()
+	stat.diar = stage == "diar"
+	stat.asr = stage != "diar"
+	g.stats.mu.Unlock()
+	defer g.stats.end(stat)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+	defer cancel()
+	dir, e := os.MkdirTemp("", "speektome-meeting-*")
+	if e != nil {
+		http.Error(w, "temporary storage unavailable", 503)
+		return
+	}
+	defer os.RemoveAll(dir)
+	input := filepath.Join(dir, "input.ogg")
+	f, e := os.OpenFile(input, os.O_CREATE|os.O_WRONLY, 0600)
+	if e != nil {
+		http.Error(w, "storage unavailable", 503)
+		return
+	}
+	_, e = io.Copy(f, http.MaxBytesReader(w, r.Body, 512<<20))
+	if e == nil {
+		e = f.Sync()
+	}
+	f.Close()
+	if e != nil {
+		http.Error(w, "upload failed or oversized", 413)
+		return
+	}
+	// Bound recordings to four hours. Probe first so oversize input is rejected,
+	// never silently truncated. Output disk usage is bounded by PCM16 geometry.
+	probe, e := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", input).Output()
+	duration, pe := strconv.ParseFloat(strings.TrimSpace(string(probe)), 64)
+	if e != nil || pe != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 || duration > 14400 {
+		http.Error(w, "invalid audio or recording exceeds four hours", 422)
+		return
+	}
+	wav := filepath.Join(dir, "audio.wav")
+	if e = exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", input, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav).Run(); e != nil {
+		http.Error(w, "cannot decode audio", 422)
+		return
+	}
+	if stage == "diar" {
+		result, e := g.meetingBackend(ctx, "/v1/audio/diarizations", wav, map[string]string{"mode": "streaming"})
+		if e != nil {
+			http.Error(w, "diarization failed: "+e.Error(), 502)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(result)
+		return
+	}
+	result := meetingASR{Words: []meetingWord{}, Duration: duration}
+	// 30-second ownership windows with context on both sides. Word midpoints
+	// belong to exactly one window; timestamps remain on the original timeline.
+	for start := 0.0; start < duration; start += 30 {
+		from := math.Max(0, start-4.48)
+		to := math.Min(duration, start+30+4.48)
+		part := filepath.Join(dir, "part.pcm")
+		if e = exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", fmt.Sprint(from), "-i", wav, "-t", fmt.Sprint(to-from), "-c:a", "pcm_s16le", "-f", "s16le", part).Run(); e != nil {
+			http.Error(w, "cannot section audio", 502)
+			return
+		}
+		section, e := g.meetingStreamingASR(ctx, part, r.URL.Query().Get("language"), contexts)
+		if e != nil {
+			http.Error(w, "transcription failed: "+e.Error(), 502)
+			return
+		}
+		for _, word := range section.Words {
+			word.Start += from
+			word.End += from
+			mid := (word.Start + word.End) / 2
+			if mid >= start && mid < math.Min(duration, start+30) {
+				result.Words = append(result.Words, word)
+			}
+		}
+	}
+	var words []string
+	for _, word := range result.Words {
+		words = append(words, word.Word)
+	}
+	result.Text = strings.Join(words, " ")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+func (g *gateway) meetingBackend(ctx context.Context, path, wav string, fields map[string]string) ([]byte, error) {
+	input, e := os.Open(wav)
+	if e != nil {
+		return nil, e
+	}
+	defer input.Close()
+	reader, writer := io.Pipe()
+	form := multipart.NewWriter(writer)
+	finished := make(chan error, 1)
+	go func() {
+		p, e := form.CreateFormFile("file", "audio.wav")
+		if e == nil {
+			_, e = io.Copy(p, input)
+		}
+		if e == nil {
+			for key, value := range fields {
+				if e = form.WriteField(key, value); e != nil {
+					break
+				}
+			}
+		}
+		if e == nil {
+			e = form.Close()
+		}
+		writer.CloseWithError(e)
+		finished <- e
+	}()
+	req, e := http.NewRequestWithContext(ctx, "POST", g.upstream.String()+path, reader)
+	if e != nil {
+		reader.Close()
+		<-finished
+		return nil, e
+	}
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	resp, e := http.DefaultClient.Do(req)
+	if e != nil {
+		reader.Close()
+		<-finished
+		return nil, e
+	}
+	defer resp.Body.Close()
+	data, e := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	reader.Close()
+	writeErr := <-finished
+	if e != nil {
+		return nil, e
+	}
+	if writeErr != nil {
+		return nil, writeErr
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("runtime status %d", resp.StatusCode)
+	}
+	return data, nil
+}
+
+// Recorded audio uses the cache-aware encoder too. Whole-utterance HTTP ASR
+// allocates attention tensors proportional to section length and can exhaust a
+// fractional GPU when live streams share it. Each bounded section is a separate
+// streaming session; the runtime consumes queued PCM at its own compute speed.
+func (g *gateway) meetingStreamingASR(ctx context.Context, pcmPath, language string, contexts ...[]speechContext) (meetingASR, error) {
+	result := meetingASR{Words: []meetingWord{}}
+	endpoint := *g.upstream
+	endpoint.Scheme = "ws"
+	if g.upstream.Scheme == "https" {
+		endpoint.Scheme = "wss"
+	}
+	endpoint.Path = "/v1/audio/transcriptions/realtime"
+	conn, response, err := websocket.DefaultDialer.DialContext(ctx, endpoint.String(), nil)
+	if response != nil && response.Body != nil {
+		response.Body.Close()
+	}
+	if err != nil {
+		return result, err
+	}
+	defer conn.Close()
+	conn.SetReadLimit(8 << 20)
+	deadline := time.Now().Add(30 * time.Minute)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	conn.SetReadDeadline(deadline)
+	conn.SetWriteDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	session := map[string]interface{}{"sample_rate": 16000, "word_timestamps": true, "speaker_diarization": false}
+	if len(contexts) > 0 && len(contexts[0]) > 0 {
+		session["speech_contexts"] = contexts[0]
+	}
+	if language != "" {
+		session["language"] = language
+	}
+	if err = conn.WriteJSON(map[string]interface{}{"type": "session.update", "session": session}); err != nil {
+		return result, err
+	}
+	input, err := os.Open(pcmPath)
+	if err != nil {
+		return result, err
+	}
+	defer input.Close()
+	sent := make(chan error, 1)
+	go func() {
+		var sendErr error
+		defer func() {
+			if sendErr != nil {
+				conn.Close()
+			}
+			sent <- sendErr
+		}()
+		buf := make([]byte, 17920) // 560ms PCM16; bounded section is at most 39s.
+		next := time.Now()
+		for {
+			n, e := input.Read(buf)
+			if n > 0 {
+				// Share spare capacity between the two background ASR stages.
+				// At high live load, process recorded audio at real-time cadence
+				// rather than dumping an entire section into the runtime queue.
+				pace := meetingASRInterval(len(g.slots))
+				if wait := time.Until(next); wait > 0 {
+					timer := time.NewTimer(wait)
+					select {
+					case <-timer.C:
+					case <-ctx.Done():
+						timer.Stop()
+						sendErr = ctx.Err()
+						return
+					}
+				}
+				next = time.Now().Add(pace)
+				if we := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); we != nil {
+					sendErr = we
+					return
+				}
+			}
+			if e == io.EOF {
+				break
+			}
+			if e != nil {
+				sendErr = e
+				return
+			}
+		}
+		sendErr = conn.WriteJSON(map[string]string{"type": "input_audio_buffer.commit"})
+	}()
+	// Ensure the sender exits before closing its input, including read failures.
+	defer func() { conn.Close(); <-sent }()
+	for {
+		var event struct {
+			Type       string          `json:"type"`
+			Transcript string          `json:"transcript"`
+			Words      []meetingWord   `json:"words"`
+			Error      json.RawMessage `json:"error"`
+		}
+		if err = conn.ReadJSON(&event); err != nil {
+			return result, err
+		}
+		switch event.Type {
+		case "error":
+			return result, fmt.Errorf("runtime streaming error: %s", event.Error)
+		case "conversation.item.input_audio_transcription.completed":
+			if strings.TrimSpace(event.Transcript) != "" && len(event.Words) == 0 {
+				return result, fmt.Errorf("timestamped transcription unavailable")
+			}
+			result.Words = append(result.Words, event.Words...)
+		case "input_audio_buffer.committed":
+			return result, nil
+		}
+	}
+}
+
+func meetingASRInterval(live int) time.Duration {
+	spare := max(2, 16-live)
+	return time.Duration(float64(1120*time.Millisecond) / float64(spare))
+}

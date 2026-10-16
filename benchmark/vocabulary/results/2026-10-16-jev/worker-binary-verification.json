@@ -1,0 +1,22 @@
+[
+  {
+    "hashes": {
+      "/opt/speektome-worker/bin/gateway": "d441a8f26a5c723cd11da98c1e710f9834983d1ff1e4dba8e716c3558c43541b",
+      "/opt/speektome-worker/check-ready.sh": "cf4e01c2e03af5b6791a8c2f19991ec74ed1e5118ac0cf99ef4ef69170294ea5",
+      "/opt/speektome-worker/models/asr.gguf": "7ece4ce06d9f5496d5a7e1dade556a5646ce25f84f828f7a8805bb1db3e27792"
+    },
+    "asr_smoke_passed": true,
+    "gpu_memory": "/opt/speektome-worker/runtime/bin/nemo-speech, 1611 MiB",
+    "region": "us-east-1"
+  },
+  {
+    "hashes": {
+      "/opt/speektome-worker/bin/gateway": "d441a8f26a5c723cd11da98c1e710f9834983d1ff1e4dba8e716c3558c43541b",
+      "/opt/speektome-worker/check-ready.sh": "cf4e01c2e03af5b6791a8c2f19991ec74ed1e5118ac0cf99ef4ef69170294ea5",
+      "/opt/speektome-worker/models/asr.gguf": "7ece4ce06d9f5496d5a7e1dade556a5646ce25f84f828f7a8805bb1db3e27792"
+    },
+    "asr_smoke_passed": true,
+    "gpu_memory": "/opt/speektome-worker/runtime/bin/nemo-speech, 1625 MiB",
+    "region": "us-west-2"
+  }
+]

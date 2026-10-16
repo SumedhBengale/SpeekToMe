@@ -1,0 +1,335 @@
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index e068116f..676de0e4 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -881,6 +881,11 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
+     ggml_cuda_set_device(buft_ctx->device);
+ 
+     void * dev_ptr;
++    if (getenv("GGML_CUDA_ALLOC_TRACE")) {
++        size_t avail = 0, total = 0;
++        cudaMemGetInfo(&avail, &total);
++        fprintf(stderr, "ALLOC_TRACE request_mib=%.2f free_mib=%.2f total_mib=%.2f\n", size/1048576.0, avail/1048576.0, total/1048576.0);
++    }
+     cudaError_t err = ggml_cuda_device_malloc(&dev_ptr, size, buft_ctx->device);
+     if (err != cudaSuccess) {
+         // clear the error
+diff --git a/src/arch/qwen3_asr/decoder.cpp b/src/arch/qwen3_asr/decoder.cpp
+index 70de99b4..52382434 100644
+--- a/src/arch/qwen3_asr/decoder.cpp
++++ b/src/arch/qwen3_asr/decoder.cpp
+@@ -42,6 +42,8 @@ causal_lm::BlockView to_block_view(const QwenAsrDecBlock & b) {
+     v.attn_q_norm   = b.attn_q_norm;
+     v.attn_k_norm   = b.attn_k_norm;
+     v.ffn_gate_up_w = b.ffn_gate_up_w;
++    v.ffn_gate_w = b.ffn_gate_w;
++    v.ffn_up_w = b.ffn_up_w;
+     v.ffn_down_w    = b.ffn_down_w;
+     return v;
+ }
+diff --git a/src/arch/qwen3_asr/model.cpp b/src/arch/qwen3_asr/model.cpp
+index a8d6d977..bb489954 100644
+--- a/src/arch/qwen3_asr/model.cpp
++++ b/src/arch/qwen3_asr/model.cpp
+@@ -40,6 +40,32 @@ namespace transcribe::qwen3_asr {
+ 
+ extern const Arch arch;
+ 
++static void verify_flash_graph(ggml_backend_sched_t sched, ggml_cgraph * graph, const char * stage) {
++    if (std::getenv("TRANSCRIBE_VERIFY_FLASH") == nullptr) return;
++    static std::unordered_map<std::string, bool> seen;
++    if (seen[stage]) return;
++    seen[stage] = true;
++    int count = 0, cuda_count = 0;
++    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
++        ggml_tensor * node = ggml_graph_node(graph, i);
++        if (node->op != GGML_OP_FLASH_ATTN_EXT) continue;
++        ++count;
++        auto backend = ggml_backend_sched_get_tensor_backend(sched, node);
++        if (backend && std::strncmp(ggml_backend_name(backend), "CUDA", 4) == 0) ++cuda_count;
++    }
++    std::fprintf(stderr, "FLASH_VERIFY stage=%s flash_nodes=%d cuda_nodes=%d\n", stage, count, cuda_count);
++}
++
++
++static bool release_encoder_workspace(QwenAsrSession * cc, QwenAsrModel * cm) {
++    if (std::getenv("TRANSCRIBE_QWEN_RELEASE_ENCODER") == nullptr) return true;
++    safe_sched_free(cc->sched);
++    cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
++                                      static_cast<int>(cm->plan.scheduler_list.size()), 16384, false,
++                                      std::getenv("TRANSCRIBE_QWEN_CPU_EMBED") == nullptr);
++    return cc->sched != nullptr;
++}
++
+ static_assert(std::is_base_of_v<transcribe_model, QwenAsrModel>);
+ static_assert(std::is_base_of_v<transcribe_session, QwenAsrSession>);
+ 
+@@ -57,6 +83,8 @@ QwenAsrModel::~QwenAsrModel() {
+         safe_buffer_free(backend_buffer);
+         backend_buffer = nullptr;
+     }
++    safe_buffer_free(cpu_embed_buffer);
++    cpu_embed_buffer = nullptr;
+     packed_gate_up.free();
+     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
+         safe_backend_free(*it);
+@@ -247,6 +275,22 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
+     m->backend         = ggml_backend_name(m->plan.primary);
+     m->primary_backend = m->plan.primary;
+ 
++    if (std::getenv("TRANSCRIBE_QWEN_CPU_EMBED") != nullptr) {
++        ggml_tensor * token_w = m->weights.dec_embed.token_w;
++        m->cpu_embed_buffer = ggml_backend_alloc_buffer(m->plan.scheduler_list.back(), ggml_nbytes(token_w) + 256);
++        if (m->cpu_embed_buffer == nullptr) {
++            gguf_free(gguf_data);
++            return TRANSCRIBE_ERR_OOM;
++        }
++        if (ggml_backend_tensor_alloc(m->cpu_embed_buffer, token_w,
++                                     ggml_backend_buffer_get_base(m->cpu_embed_buffer)) != GGML_STATUS_SUCCESS) {
++            gguf_free(gguf_data);
++            return TRANSCRIBE_ERR_OOM;
++        }
++        ggml_backend_buffer_set_usage(m->cpu_embed_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++        std::fprintf(stderr, "CPU_OFFLOAD tied_embedding_head_mib=%.2f backend=%s\n",
++                     ggml_nbytes(token_w)/1048576.0, ggml_backend_name(m->plan.scheduler_list.back()));
++    }
+     ggml_backend_buffer_t weights_buffer = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
+     if (weights_buffer == nullptr) {
+         gguf_free(gguf_data);
+@@ -268,7 +312,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
+     // can run a single mul_mat instead of two. ctx_meta is sized
+     // exactly for GGUF file tensors with no headroom, so packed
+     // tensors live in their own context owned by `causal_lm::pack_gate_up`.
+-    {
++    if (std::getenv("TRANSCRIBE_QWEN_LOW_MEMORY") == nullptr) {
+         std::vector<transcribe::causal_lm::GateUpEntry> entries;
+         entries.reserve(m->weights.dec_blocks.size());
+         for (auto & b : m->weights.dec_blocks) {
+@@ -308,7 +352,8 @@ transcribe_status init_context(transcribe_model *                model,
+     // Pre-allocate KV cache at context creation so the first run
+     // doesn't pay the allocation cost inside the decode phase.
+     auto * cm = static_cast<QwenAsrModel *>(model);
+-    {
++    // Low-memory runs allocate only the cache needed by the selected run path.
++    if (std::getenv("TRANSCRIBE_QWEN_LOW_MEMORY") == nullptr) {
+         ggml_type kv_type = GGML_TYPE_F16;
+         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) {
+             kv_type = GGML_TYPE_F32;
+@@ -671,6 +716,11 @@ transcribe_status run(transcribe_session *          session,
+         }
+     }
+ 
++    if (std::getenv("TRANSCRIBE_QWEN_RELEASE_ENCODER") != nullptr) {
++        cc->kv_cache.free();
++        cc->kv_cache_batch.free();
++        cc->kv_batch_cap = cc->kv_batch_n_ctx = 0;
++    }
+     // Build encoder graph.
+     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, cm->hparams, timing, cc->encoder_use_flash);
+     if (eb.graph == nullptr || eb.out == nullptr) {
+@@ -680,7 +730,7 @@ transcribe_status run(transcribe_session *          session,
+     // Allocate + compute encoder graph.
+     if (cc->sched == nullptr) {
+         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
+-                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
++                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, std::getenv("TRANSCRIBE_QWEN_CPU_EMBED") == nullptr);
+         if (cc->sched == nullptr) {
+             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run: ggml_backend_sched_new failed");
+             return TRANSCRIBE_ERR_BACKEND;
+@@ -722,6 +772,7 @@ transcribe_status run(transcribe_session *          session,
+ 
+     const int64_t t_enc_start = ggml_time_us();
+     t_enc_build_us            = t_enc_start - t_enc_build_start;
++    verify_flash_graph(cc->sched, eb.graph, "eb");
+     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph); gs != GGML_STATUS_SUCCESS) {
+         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run: encoder graph compute failed (%d)", static_cast<int>(gs));
+         return TRANSCRIBE_ERR_BACKEND;
+@@ -755,6 +806,7 @@ transcribe_status run(transcribe_session *          session,
+     const int64_t t_d2h_start = ggml_time_us();
+     ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
+     t_enc_d2h_us = ggml_time_us() - t_d2h_start;
++    if (!release_encoder_workspace(cc, cm)) return TRANSCRIBE_ERR_BACKEND;
+ 
+     // Decode phase begins. t_dec_start covers prompt + KV init + prefill
+     // build/compute + step loop (prefill is part of "decode" to users).
+@@ -882,6 +934,7 @@ transcribe_status run(transcribe_session *          session,
+ 
+     const int64_t t_prefill_compute_start = ggml_time_us();
+     t_prefill_build_us                    = t_prefill_compute_start - t_prefill_build_start;
++    verify_flash_graph(cc->sched, pb.graph, "pb");
+     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph); gs != GGML_STATUS_SUCCESS) {
+         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run: prefill graph compute failed (%d)", static_cast<int>(gs));
+         return TRANSCRIBE_ERR_BACKEND;
+@@ -1007,6 +1060,7 @@ transcribe_status run(transcribe_session *          session,
+         const int64_t t_set1 = ggml_time_us();
+         t_step_set_us += t_set1 - t_set0;
+ 
++        verify_flash_graph(cc->sched, sb.graph, "sb");
+         if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, sb.graph); gs != GGML_STATUS_SUCCESS) {
+             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr step: graph compute failed (%d)", static_cast<int>(gs));
+             return TRANSCRIBE_ERR_BACKEND;
+@@ -1247,7 +1301,7 @@ transcribe_status encode_all_batched(QwenAsrSession *                  cc,
+ 
+     if (cc->sched == nullptr) {
+         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
+-                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
++                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, std::getenv("TRANSCRIBE_QWEN_CPU_EMBED") == nullptr);
+         if (cc->sched == nullptr) {
+             return TRANSCRIBE_ERR_BACKEND;
+         }
+@@ -1325,6 +1379,7 @@ transcribe_status encode_all_batched(QwenAsrSession *                  cc,
+     apply_sched_threads(cc);
+ 
+     const int64_t t_enc0 = ggml_time_us();
++    verify_flash_graph(cc->sched, eb.graph, "eb");
+     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
+         return TRANSCRIBE_ERR_BACKEND;
+     }
+@@ -1461,6 +1516,7 @@ transcribe_status prefill_all_batched(QwenAsrSession *
+     }
+ 
+     apply_sched_threads(cc);
++    verify_flash_graph(cc->sched, pb.graph, "pb");
+     if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
+         return TRANSCRIBE_ERR_BACKEND;
+     }
+@@ -1594,6 +1650,11 @@ transcribe_status run_batch(transcribe_session *          session,
+     std::vector<char>                 valid(n, 0);  // utterance produced a usable prefill
+     int64_t                           mel_us = 0, enc_us = 0;
+ 
++    if (std::getenv("TRANSCRIBE_QWEN_RELEASE_ENCODER") != nullptr) {
++        cc->kv_cache.free();
++        cc->kv_cache_batch.free();
++        cc->kv_batch_cap = cc->kv_batch_n_ctx = 0;
++    }
+     // Encode every utterance first so we can size the batched cache to the
+     // real max prompt length before allocating it.
+     std::vector<std::vector<float>> enc_hosts(n);
+@@ -1604,6 +1665,7 @@ transcribe_status run_batch(transcribe_session *          session,
+         st != TRANSCRIBE_OK) {
+         return st;
+     }
++    if (!release_encoder_workspace(cc, cm)) return TRANSCRIBE_ERR_BACKEND;
+     const int64_t enc_pass_us = ggml_time_us() - t_encpass0;
+ 
+     // Prompt length bound → max_n_kv and batched-cache n_ctx. Build and keep
+diff --git a/src/arch/qwen3_asr/qwen3_asr.h b/src/arch/qwen3_asr/qwen3_asr.h
+index 3bf8f4a0..4eb80a86 100644
+--- a/src/arch/qwen3_asr/qwen3_asr.h
++++ b/src/arch/qwen3_asr/qwen3_asr.h
+@@ -78,6 +78,7 @@ struct QwenAsrModel final : public transcribe_model {
+ 
+     transcribe::BackendPlan                    plan;
+     ggml_backend_buffer_t                      backend_buffer = nullptr;
++    ggml_backend_buffer_t                      cpu_embed_buffer = nullptr;
+     transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
+ 
+     std::optional<transcribe::MelFrontend> mel;
+diff --git a/src/causal_lm/causal_lm.cpp b/src/causal_lm/causal_lm.cpp
+index 4db8c073..2df9e1f0 100644
+--- a/src/causal_lm/causal_lm.cpp
++++ b/src/causal_lm/causal_lm.cpp
+@@ -371,8 +371,15 @@ ggml_tensor * block_prefill(ggml_context *      ctx,
+     if (view.ffn_scale != nullptr) {
+         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
+     }
+-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
+-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
++    ggml_tensor * ff;
++    if (view.ffn_gate_up_w != nullptr) {
++        ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
++        ff = ggml_swiglu(ctx, gate_up);
++    } else {
++        ggml_tensor * gate = mul_mat_f32acc(ctx, view.ffn_gate_w, ff_norm);
++        ggml_tensor * up = mul_mat_f32acc(ctx, view.ffn_up_w, ff_norm);
++        ff = ggml_swiglu_split(ctx, gate, up);
++    }
+     ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+ 
+     x = ggml_add(ctx, x, ff);
+@@ -487,8 +494,15 @@ ggml_tensor * block_step(ggml_context *      ctx,
+     if (view.ffn_scale != nullptr) {
+         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
+     }
+-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
+-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
++    ggml_tensor * ff;
++    if (view.ffn_gate_up_w != nullptr) {
++        ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
++        ff = ggml_swiglu(ctx, gate_up);
++    } else {
++        ggml_tensor * gate = mul_mat_f32acc(ctx, view.ffn_gate_w, ff_norm);
++        ggml_tensor * up = mul_mat_f32acc(ctx, view.ffn_up_w, ff_norm);
++        ff = ggml_swiglu_split(ctx, gate, up);
++    }
+     ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+ 
+     x = ggml_add(ctx, x, ff);
+@@ -601,8 +615,15 @@ ggml_tensor * block_step_n(ggml_context *      ctx,
+     if (view.ffn_scale != nullptr) {
+         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
+     }
+-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
+-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
++    ggml_tensor * ff;
++    if (view.ffn_gate_up_w != nullptr) {
++        ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
++        ff = ggml_swiglu(ctx, gate_up);
++    } else {
++        ggml_tensor * gate = mul_mat_f32acc(ctx, view.ffn_gate_w, ff_norm);
++        ggml_tensor * up = mul_mat_f32acc(ctx, view.ffn_up_w, ff_norm);
++        ff = ggml_swiglu_split(ctx, gate, up);
++    }
+     ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+ 
+     x = ggml_add(ctx, x, ff);
+@@ -713,8 +734,15 @@ ggml_tensor * block_step_batched(ggml_context *      ctx,
+     if (view.ffn_scale != nullptr) {
+         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
+     }
+-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
+-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
++    ggml_tensor * ff;
++    if (view.ffn_gate_up_w != nullptr) {
++        ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
++        ff = ggml_swiglu(ctx, gate_up);
++    } else {
++        ggml_tensor * gate = mul_mat_f32acc(ctx, view.ffn_gate_w, ff_norm);
++        ggml_tensor * up = mul_mat_f32acc(ctx, view.ffn_up_w, ff_norm);
++        ff = ggml_swiglu_split(ctx, gate, up);
++    }
+     ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+ 
+     x = ggml_add(ctx, x, ff);
+@@ -817,8 +845,15 @@ ggml_tensor * block_prefill_batched(ggml_context *      ctx,
+     if (view.ffn_scale != nullptr) {
+         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
+     }
+-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
+-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
++    ggml_tensor * ff;
++    if (view.ffn_gate_up_w != nullptr) {
++        ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
++        ff = ggml_swiglu(ctx, gate_up);
++    } else {
++        ggml_tensor * gate = mul_mat_f32acc(ctx, view.ffn_gate_w, ff_norm);
++        ggml_tensor * up = mul_mat_f32acc(ctx, view.ffn_up_w, ff_norm);
++        ff = ggml_swiglu_split(ctx, gate, up);
++    }
+     ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+ 
+     x = ggml_add(ctx, x, ff);
+diff --git a/src/causal_lm/causal_lm.h b/src/causal_lm/causal_lm.h
+index 1992f86b..2dac320c 100644
+--- a/src/causal_lm/causal_lm.h
++++ b/src/causal_lm/causal_lm.h
+@@ -43,6 +43,9 @@ struct BlockView {
+     // Packed gate+up filled by pack_gate_up at load time; the graph runs
+     // one mul_mat + ggml_swiglu instead of two mul_mats + manual silu·mul.
+     ggml_tensor * ffn_gate_up_w = nullptr;  // [hidden, 2·intermediate]
++    // Optional separate projections avoid a duplicate packed weight buffer.
++    ggml_tensor * ffn_gate_w = nullptr;
++    ggml_tensor * ffn_up_w = nullptr;
+     ggml_tensor * ffn_down_w    = nullptr;  // [intermediate, hidden]
+     // Optional per-layer FFN-branch scale (ff_norm *= ffn_scale, broadcast
+     // over the token axis). Null for standard callers; voxtral_realtime's

@@ -1,0 +1,44 @@
+[
+  {
+    "key": "deployment/fleet-v1/911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad/fleet-manifest.json",
+    "sha256": "911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad",
+    "verified": true,
+    "region": null
+  },
+  {
+    "key": "deployment/fleet-v1/3280c246f40020ab6e19edb2aab71b8409ec69d9ad198fbd2d01f663788d7ab7/bootstrap.sh",
+    "sha256": "3280c246f40020ab6e19edb2aab71b8409ec69d9ad198fbd2d01f663788d7ab7",
+    "verified": true,
+    "region": null
+  },
+  {
+    "key": "deployment/fleet-config/6b1f412acdf36e5515612dacbb67eaecb9e73111aa69b719b94a96c89c943acd/fleet.json",
+    "sha256": "6b1f412acdf36e5515612dacbb67eaecb9e73111aa69b719b94a96c89c943acd",
+    "verified": true,
+    "region": null
+  },
+  {
+    "key": "deployment/launch-configs/us-east-1/7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a/user-data.sh",
+    "sha256": "7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a",
+    "verified": true,
+    "region": "us-east-1"
+  },
+  {
+    "key": "deployment/launch-configs/us-east-2/7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a/user-data.sh",
+    "sha256": "7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a",
+    "verified": true,
+    "region": "us-east-2"
+  },
+  {
+    "key": "deployment/launch-configs/us-west-2/7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a/user-data.sh",
+    "sha256": "7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a",
+    "verified": true,
+    "region": "us-west-2"
+  },
+  {
+    "key": "deployment/launch-configs/ca-central-1/7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a/user-data.sh",
+    "sha256": "7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a",
+    "verified": true,
+    "region": "ca-central-1"
+  }
+]

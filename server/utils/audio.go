@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -277,4 +278,17 @@ func GetPromptContext(committedText string, maxChars int) string {
 		return strings.TrimSpace(sub[idx+1:])
 	}
 	return strings.TrimSpace(sub)
+}
+
+// GetOggOpusDecodedDuration matches the gateway's trim of Opus pre-skip.
+// Recovery timestamps must describe decoded samples, not container granules.
+func GetOggOpusDecodedDuration(data []byte) float64 {
+	duration := GetOggOpusDuration(data)
+	if offset := bytes.Index(data, []byte("OpusHead")); offset >= 0 && offset+12 <= len(data) {
+		duration -= float64(binary.LittleEndian.Uint16(data[offset+10:offset+12])) / 48000
+	}
+	if duration < 0 {
+		return 0
+	}
+	return duration
 }

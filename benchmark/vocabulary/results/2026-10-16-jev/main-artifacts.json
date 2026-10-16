@@ -1,0 +1,10 @@
+{
+  "server": {
+    "key": "deployment/main-vocabulary/b7f68e58a8a492b30de6b6c058312b97a48a80f9e57705f50f7d3b1cd1245e87/server.gz",
+    "sha256": "b7f68e58a8a492b30de6b6c058312b97a48a80f9e57705f50f7d3b1cd1245e87"
+  },
+  "acceptance": {
+    "key": "deployment/main-vocabulary/b24ab78f820963f6a7b0fb55faeaa9bbc56d350aa7648bb811a9bdd9283a8ab8/acceptance.gz",
+    "sha256": "b24ab78f820963f6a7b0fb55faeaa9bbc56d350aa7648bb811a9bdd9283a8ab8"
+  }
+}

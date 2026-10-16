@@ -1,0 +1,45 @@
+{
+  "workers": [
+    {
+      "instance_id": "i-REDACTED",
+      "region": "us-west-2",
+      "ready": true,
+      "active_streams": 0,
+      "active_meeting_jobs": 0,
+      "vocabulary_matching_schema": 1
+    },
+    {
+      "instance_id": "i-REDACTED",
+      "region": "us-east-1",
+      "ready": true,
+      "active_streams": 0,
+      "active_meeting_jobs": 0,
+      "vocabulary_matching_schema": 1
+    }
+  ],
+  "regions": [
+    {
+      "region": "us-east-1",
+      "manifest_key": "deployment/fleet-v1/911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad/fleet-manifest.json",
+      "manifest_sha": "911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad"
+    },
+    {
+      "region": "us-east-2",
+      "manifest_key": "deployment/fleet-v1/911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad/fleet-manifest.json",
+      "manifest_sha": "911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad"
+    },
+    {
+      "region": "us-west-2",
+      "manifest_key": "deployment/fleet-v1/911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad/fleet-manifest.json",
+      "manifest_sha": "911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad"
+    },
+    {
+      "region": "ca-central-1",
+      "manifest_key": "deployment/fleet-v1/911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad/fleet-manifest.json",
+      "manifest_sha": "911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad"
+    }
+  ],
+  "main_sha256": "3e6d7467e802563bb048b99d7aebd3cf9ec15a878215495e10790b6542fa085d",
+  "main_env_mode": "0o600",
+  "jev_key_present": true
+}

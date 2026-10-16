@@ -275,11 +275,12 @@ func (a *App) HandleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 
 	cleanedPath := filepath.Clean(meeting.AudioPath)
 	normalizedPath := filepath.ToSlash(cleanedPath)
-	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") {
+	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") && !validMeetingAudioPath(cleanedPath) {
 		http.Error(w, "Forbidden: Invalid audio file path", http.StatusForbidden)
 		return
 	}
 
+	_, _ = a.DB.GetDB().Exec(`UPDATE meeting_jobs SET status='cancelled',attempt='',lease_until=0 WHERE meeting_id=? AND user_id=?`, meetingID, user.ID)
 	_ = os.Remove(meeting.AudioPath)
 
 	err = a.DB.DeleteMeeting(meetingID)
@@ -320,7 +321,7 @@ func (a *App) HandleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 
 	cleanedPath := filepath.Clean(meeting.AudioPath)
 	normalizedPath := filepath.ToSlash(cleanedPath)
-	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") {
+	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") && !validMeetingAudioPath(cleanedPath) {
 		http.Error(w, "Forbidden: Invalid audio file path", http.StatusForbidden)
 		return
 	}
@@ -617,4 +618,25 @@ func tokenizeString(s string) []string {
 		}
 	}
 	return strings.Fields(sb.String())
+}
+
+func validMeetingAudioPath(path string) bool {
+	root := os.Getenv("MEETING_AUDIO_DIR")
+	if root == "" {
+		root = "uploads/meetings/jobs"
+	}
+	absoluteRoot, e := filepath.Abs(root)
+	if e != nil {
+		return false
+	}
+	absolute, e := filepath.Abs(path)
+	if e != nil {
+		return false
+	}
+	relative, e := filepath.Rel(absoluteRoot, absolute)
+	if e != nil || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) || relative == ".." {
+		return false
+	}
+	parts := strings.Split(relative, string(os.PathSeparator))
+	return len(parts) == 2 && len(parts[0]) == 64 && parts[1] == "mixed.ogg"
 }

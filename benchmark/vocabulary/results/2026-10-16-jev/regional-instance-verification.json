@@ -1,0 +1,40 @@
+[
+  {
+    "region": "us-east-1",
+    "instances": [
+      {
+        "id": "i-REDACTED",
+        "type": "t4g.micro",
+        "name": "Crossclip-Server"
+      },
+      {
+        "id": "i-REDACTED",
+        "type": "t4g.small",
+        "name": "SpeekToMe Server"
+      },
+      {
+        "id": "i-REDACTED",
+        "type": "g6f.large",
+        "name": "SpeekToMe Fleet Worker"
+      }
+    ]
+  },
+  {
+    "region": "us-east-2",
+    "instances": []
+  },
+  {
+    "region": "us-west-2",
+    "instances": [
+      {
+        "id": "i-REDACTED",
+        "type": "g6f.large",
+        "name": "SpeekToMe Fleet Worker"
+      }
+    ]
+  },
+  {
+    "region": "ca-central-1",
+    "instances": []
+  }
+]

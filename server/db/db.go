@@ -56,7 +56,7 @@ func NewDatabase(connStr string) (*Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Configure connection pooling
 	dbConn.SetMaxOpenConns(10)
 	dbConn.SetMaxIdleConns(5)
@@ -65,10 +65,10 @@ func NewDatabase(connStr string) (*Database, error) {
 	if driver == "sqlite" {
 		// Enable WAL journal mode and busy timeout (Group A Optimization)
 		_, _ = dbConn.Exec("PRAGMA journal_mode=WAL;")
-		_, _ = dbConn.Exec("PRAGMA synchronous=NORMAL;")
+		_, _ = dbConn.Exec("PRAGMA synchronous=FULL;")
 		_, _ = dbConn.Exec("PRAGMA busy_timeout = 5000;")
 	}
-	
+
 	// Create tables and indices (Group A Optimization)
 	_, err = dbConn.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
@@ -204,13 +204,13 @@ func NewDatabase(connStr string) (*Database, error) {
 		dbConn.Close()
 		return nil, err
 	}
-	
+
 	// Dynamic migrations for existing databases
 	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN event_id TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN payment_id TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN invoice_id TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_id ON webhook_logs(event_id)")
-	
+
 	// Dynamic migrations for existing databases to avoid breaking changes
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN plan_tier TEXT DEFAULT 'free'")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN plan_active INTEGER DEFAULT 0")
@@ -222,6 +222,8 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN verification_token TEXT")
 	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN transcription_provider TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN vocabulary_audit TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE meetings ADD COLUMN vocabulary_audit TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_status TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_current_start INTEGER DEFAULT 0")
@@ -361,7 +363,7 @@ func (d *Database) GetOrCreateUser(googleID, email, name string) (int64, error) 
 			return existingID, nil
 		}
 	}
-	
+
 	// 3. Insert new user
 	res, err := d.db.Exec("INSERT INTO users (google_id, email, name, is_verified, languages) VALUES (?, ?, ?, 1, '[\"en\"]')", googleID, email, name)
 	if err != nil {
@@ -544,7 +546,11 @@ type UsageLogRecord struct {
 	Status          string
 }
 
-func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int, transcriptionProvider, llmProvider string) (int64, error) {
+func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int, transcriptionProvider, llmProvider string, vocabularyAudit ...string) (int64, error) {
+	audit := ""
+	if len(vocabularyAudit) > 0 {
+		audit = vocabularyAudit[0]
+	}
 	enhanceVal := 0
 	if enhanceEnabled {
 		enhanceVal = 1
@@ -560,9 +566,9 @@ func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, l
 		INSERT INTO usage_logs (
 			user_id, audio_duration, whisper_time, llm_time, total_time, 
 			enhance_enabled, enhance_model, input_transcript, final_output, status, audio_size_bytes,
-			transcription_provider, llm_provider
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, userID, duration, whisperTime, llmTime, totalTime, enhanceVal, model, input, output, status, audioSizeBytes, transcriptionProvider, llmProvider)
+			transcription_provider, llm_provider, vocabulary_audit
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, userID, duration, whisperTime, llmTime, totalTime, enhanceVal, model, input, output, status, audioSizeBytes, transcriptionProvider, llmProvider, audit)
 	if err != nil {
 		return 0, err
 	}
@@ -873,7 +879,7 @@ func (d *Database) ListUsersWithStats() ([]map[string]interface{}, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	result := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var id int64
@@ -969,26 +975,27 @@ func (d *Database) VerifyUserEmail(token string) (string, error) {
 }
 
 type UsageLog struct {
-	ID                    int64   `json:"id"`
-	Timestamp             string  `json:"timestamp"`
-	AudioDuration         float64 `json:"audio_duration"`
-	WhisperTime           float64 `json:"whisper_time"`
-	LLMTime               float64 `json:"llm_time"`
-	TotalTime             float64 `json:"total_time"`
-	EnhanceEnabled        bool    `json:"enhance_enabled"`
-	EnhanceModel          string  `json:"enhance_model"`
-	InputTranscript       string  `json:"input_transcript"`
-	FinalOutput           string  `json:"final_output"`
-	Status                string  `json:"status"`
-	TranscriptionProvider string  `json:"transcription_provider"`
-	LLMProvider           string  `json:"llm_provider"`
+	ID                    int64           `json:"id"`
+	Timestamp             string          `json:"timestamp"`
+	AudioDuration         float64         `json:"audio_duration"`
+	WhisperTime           float64         `json:"whisper_time"`
+	LLMTime               float64         `json:"llm_time"`
+	TotalTime             float64         `json:"total_time"`
+	EnhanceEnabled        bool            `json:"enhance_enabled"`
+	EnhanceModel          string          `json:"enhance_model"`
+	InputTranscript       string          `json:"input_transcript"`
+	FinalOutput           string          `json:"final_output"`
+	Status                string          `json:"status"`
+	TranscriptionProvider string          `json:"transcription_provider"`
+	LLMProvider           string          `json:"llm_provider"`
+	VocabularyAudit       json.RawMessage `json:"vocabulary,omitempty"`
 }
 
 func (d *Database) GetUserUsageLogs(userID int64) ([]UsageLog, error) {
 	rows, err := d.db.Query(`
 		SELECT id, timestamp, audio_duration, COALESCE(whisper_time, 0.0), COALESCE(llm_time, 0.0), total_time, 
 		       COALESCE(enhance_enabled, 0), COALESCE(enhance_model, ''), COALESCE(input_transcript, ''), 
-		       COALESCE(final_output, ''), status, COALESCE(transcription_provider, ''), COALESCE(llm_provider, '')
+		       COALESCE(final_output, ''), status, COALESCE(transcription_provider, ''), COALESCE(llm_provider, ''), COALESCE(vocabulary_audit, '')
 		FROM usage_logs
 		WHERE user_id = ?
 		ORDER BY timestamp DESC
@@ -1003,12 +1010,16 @@ func (d *Database) GetUserUsageLogs(userID int64) ([]UsageLog, error) {
 	for rows.Next() {
 		var l UsageLog
 		var enhanceVal int
+		var audit string
 		err := rows.Scan(
 			&l.ID, &l.Timestamp, &l.AudioDuration, &l.WhisperTime, &l.LLMTime, &l.TotalTime,
 			&enhanceVal, &l.EnhanceModel, &l.InputTranscript, &l.FinalOutput,
-			&l.Status, &l.TranscriptionProvider, &l.LLMProvider,
+			&l.Status, &l.TranscriptionProvider, &l.LLMProvider, &audit,
 		)
 		if err == nil {
+			if json.Valid([]byte(audit)) {
+				l.VocabularyAudit = json.RawMessage(audit)
+			}
 			l.EnhanceEnabled = enhanceVal == 1
 			logs = append(logs, l)
 		}
@@ -1108,16 +1119,19 @@ func (d *Database) DeleteVocabularyTerm(userID int64, canonical string) error {
 }
 
 type Meeting struct {
-	ID           int64   `json:"id"`
-	UserID       int64   `json:"user_id"`
-	Title        string  `json:"title"`
-	Timestamp    string  `json:"timestamp"`
-	Duration     float64 `json:"duration"`
-	AudioPath    string  `json:"audio_path"`
-	Transcript   string  `json:"transcript"`
-	Summary      string  `json:"summary"`
-	ActionItems  string  `json:"action_items"`
-	SegmentsJSON string  `json:"segments_json"`
+	ID               int64           `json:"id"`
+	UserID           int64           `json:"user_id"`
+	Title            string          `json:"title"`
+	Timestamp        string          `json:"timestamp"`
+	Duration         float64         `json:"duration"`
+	AudioPath        string          `json:"audio_path"`
+	Transcript       string          `json:"transcript"`
+	Summary          string          `json:"summary"`
+	ActionItems      string          `json:"action_items"`
+	SegmentsJSON     string          `json:"segments_json"`
+	ProcessingStatus string          `json:"processing_status,omitempty"`
+	ClientID         string          `json:"client_id,omitempty"`
+	VocabularyAudit  json.RawMessage `json:"vocabulary,omitempty"`
 }
 
 func (d *Database) CreateMeeting(userID int64, title string, duration float64, audioPath string) (int64, error) {
@@ -1131,7 +1145,11 @@ func (d *Database) CreateMeeting(userID int64, title string, duration float64, a
 	return res.LastInsertId()
 }
 
-func (d *Database) UpdateMeetingResult(meetingID int64, transcript string, summary string, actionItems string, segmentsJSON string) error {
+func (d *Database) UpdateMeetingResult(meetingID int64, transcript string, summary string, actionItems string, segmentsJSON string, vocabularyAudit ...string) error {
+	if len(vocabularyAudit) > 0 {
+		_, err := d.db.Exec(`UPDATE meetings SET transcript=?,summary=?,action_items=?,segments_json=?,vocabulary_audit=? WHERE id=?`, transcript, summary, actionItems, segmentsJSON, vocabularyAudit[0], meetingID)
+		return err
+	}
 	_, err := d.db.Exec(`
 		UPDATE meetings
 		SET transcript = ?, summary = ?, action_items = ?, segments_json = ?
@@ -1142,7 +1160,7 @@ func (d *Database) UpdateMeetingResult(meetingID int64, transcript string, summa
 
 func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 	rows, err := d.db.Query(`
-		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json
+		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, '')
 		FROM meetings
 		WHERE user_id = ?
 		ORDER BY timestamp DESC
@@ -1155,8 +1173,13 @@ func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 	meetings := make([]Meeting, 0)
 	for rows.Next() {
 		var m Meeting
-		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON)
+		var audit string
+		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit)
 		if err == nil {
+			_ = d.db.QueryRow(`SELECT status,client_id FROM meeting_jobs WHERE meeting_id=?`, m.ID).Scan(&m.ProcessingStatus, &m.ClientID)
+			if json.Valid([]byte(audit)) {
+				m.VocabularyAudit = json.RawMessage(audit)
+			}
 			meetings = append(meetings, m)
 		}
 	}
@@ -1168,13 +1191,18 @@ func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 
 func (d *Database) GetMeeting(meetingID int64) (*Meeting, error) {
 	var m Meeting
+	var audit string
 	err := d.db.QueryRow(`
-		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json
+		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, '')
 		FROM meetings
 		WHERE id = ?
-	`, meetingID).Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON)
+	`, meetingID).Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit)
 	if err != nil {
 		return nil, err
+	}
+	_ = d.db.QueryRow(`SELECT status,client_id FROM meeting_jobs WHERE meeting_id=?`, m.ID).Scan(&m.ProcessingStatus, &m.ClientID)
+	if json.Valid([]byte(audit)) {
+		m.VocabularyAudit = json.RawMessage(audit)
 	}
 	return &m, nil
 }
@@ -1262,17 +1290,17 @@ func (d *Database) GetUserBySubscriptionID(subID string) (int64, error) {
 }
 
 type WebhookLogEntry struct {
-	ID             int64   `json:"id"`
-	ReceivedAt     string  `json:"received_at"`
-	EventType      string  `json:"event_type"`
-	SubscriptionID string  `json:"subscription_id"`
-	PaymentID      string  `json:"payment_id"`
-	InvoiceID      string  `json:"invoice_id"`
-	UserID         *int64  `json:"user_id"`
-	EventID        string  `json:"event_id"`
-	Status         string  `json:"status"`
-	Result         string  `json:"result"`
-	RawPayload     string  `json:"raw_payload"`
+	ID             int64  `json:"id"`
+	ReceivedAt     string `json:"received_at"`
+	EventType      string `json:"event_type"`
+	SubscriptionID string `json:"subscription_id"`
+	PaymentID      string `json:"payment_id"`
+	InvoiceID      string `json:"invoice_id"`
+	UserID         *int64 `json:"user_id"`
+	EventID        string `json:"event_id"`
+	Status         string `json:"status"`
+	Result         string `json:"result"`
+	RawPayload     string `json:"raw_payload"`
 }
 
 func (d *Database) IsWebhookEventProcessed(eventID string) (bool, error) {
@@ -1442,25 +1470,25 @@ func (d *Database) AddNewsletterSubscriber(email string) error {
 }
 
 type UserProfileSummary struct {
-	ID                     int64    `json:"id"`
-	Email                  string   `json:"email"`
-	Name                   string   `json:"name"`
-	PlanTier               string   `json:"plan_tier"`
-	PlanActive             bool     `json:"plan_active"`
-	PlanActivatedAt        string   `json:"plan_activated_at"`
-	CreatedAt              string   `json:"created_at"`
-	Languages              []string `json:"languages"`
-	HasPassword            bool     `json:"has_password"`
-	HasGoogleAuth          bool     `json:"has_google_auth"`
-	TotalTranscriptions    int      `json:"total_transcriptions"`
-	TotalAudioDuration     float64  `json:"total_audio_duration_seconds"`
-	TotalWordsTranscribed  int      `json:"total_words_transcribed"`
-	TotalMeetings          int      `json:"total_meetings"`
-	TotalMeetingDuration   float64  `json:"total_meeting_duration_seconds"`
-	TotalVocabularyTerms   int      `json:"total_vocabulary_terms"`
-	TotalEnhancements      int      `json:"total_enhancements"`
-	MonthlyUsageSeconds    float64  `json:"monthly_usage_seconds"`
-	LastActiveAt           string   `json:"last_active_at"`
+	ID                    int64    `json:"id"`
+	Email                 string   `json:"email"`
+	Name                  string   `json:"name"`
+	PlanTier              string   `json:"plan_tier"`
+	PlanActive            bool     `json:"plan_active"`
+	PlanActivatedAt       string   `json:"plan_activated_at"`
+	CreatedAt             string   `json:"created_at"`
+	Languages             []string `json:"languages"`
+	HasPassword           bool     `json:"has_password"`
+	HasGoogleAuth         bool     `json:"has_google_auth"`
+	TotalTranscriptions   int      `json:"total_transcriptions"`
+	TotalAudioDuration    float64  `json:"total_audio_duration_seconds"`
+	TotalWordsTranscribed int      `json:"total_words_transcribed"`
+	TotalMeetings         int      `json:"total_meetings"`
+	TotalMeetingDuration  float64  `json:"total_meeting_duration_seconds"`
+	TotalVocabularyTerms  int      `json:"total_vocabulary_terms"`
+	TotalEnhancements     int      `json:"total_enhancements"`
+	MonthlyUsageSeconds   float64  `json:"monthly_usage_seconds"`
+	LastActiveAt          string   `json:"last_active_at"`
 }
 
 func (d *Database) GetUserProfileSummary(userID int64) (*UserProfileSummary, error) {

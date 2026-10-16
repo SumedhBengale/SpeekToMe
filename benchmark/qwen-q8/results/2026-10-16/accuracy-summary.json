@@ -1,0 +1,66 @@
+{
+  "clips": 8,
+  "reference_words": 131,
+  "word_edits": 4,
+  "normalization": "lowercase ASCII alphanumeric words; punctuation ignored; no ITN normalization",
+  "scope": "8 synthetic Indian-English holdout clips; not meeting accuracy",
+  "rows": [
+    {
+      "id": "holdout-00",
+      "reference": "When the checkout service slows down, Grafana displays the Redis latency next to the PostgreSQL connection count.",
+      "text": "When the checkout service slows down, Grafana displays the Redis latency next to the PostgreSQL connection count.",
+      "words": 17,
+      "edits": 0
+    },
+    {
+      "id": "holdout-01",
+      "reference": "Please compare the PyTorch training run with yesterday's TensorRT deployment before changing the CUDA version.",
+      "text": "Please compare the PyTorch training run with yesterday's TensorRT deployment before changing the CUDA version.",
+      "words": 16,
+      "edits": 0
+    },
+    {
+      "id": "holdout-02",
+      "reference": "Can you deploy the FastAPI service to Kubernetes and publish the TypeScript dashboard on Vercel?",
+      "text": "Can you deploy the Fast API service to Kubernetes and publish the TypeScript dashboard on Versal?",
+      "words": 15,
+      "edits": 3
+    },
+    {
+      "id": "holdout-03",
+      "reference": "We chose Tauri for the desktop app and WebSocket for updates, while Kafka handles background events.",
+      "text": "We chose Thori for the desktop app and WebSocket for updates, while Kafka handles background events.",
+      "words": 16,
+      "edits": 1
+    },
+    {
+      "id": "holdout-04",
+      "reference": "Please read this page carefully. The doctor said my coffee should be cold before I drink it.",
+      "text": "Please read this page carefully. The doctor said my coffee should be cold before I drink it.",
+      "words": 17,
+      "edits": 0
+    },
+    {
+      "id": "holdout-05",
+      "reference": "Anna drew a graph while the children played on the blue carpet near the garden.",
+      "text": "Anna drew a graph while the children played on the blue carpet near the garden.",
+      "words": 15,
+      "edits": 0
+    },
+    {
+      "id": "holdout-06",
+      "reference": "We carried a torch to the old docks and opened the wooden door before sunset.",
+      "text": "We carried a torch to the old docks and opened the wooden door before sunset.",
+      "words": 15,
+      "edits": 0
+    },
+    {
+      "id": "holdout-07",
+      "reference": "The cook put celery in the soup, filled a flask with water, and asked the team to wash the plates.",
+      "text": "The cook put celery in the soup, filled a flask with water, and asked the team to wash the plates.",
+      "words": 20,
+      "edits": 0
+    }
+  ],
+  "wer": 0.030534351145038167
+}

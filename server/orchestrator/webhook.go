@@ -1,116 +1,149 @@
 package orchestrator
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 )
 
-// AWSEventBridgeDetail represents the payload of an EC2 Spot Event.
 type AWSEventBridgeEvent struct {
 	Version    string          `json:"version"`
 	ID         string          `json:"id"`
 	DetailType string          `json:"detail-type"`
 	Source     string          `json:"source"`
 	Account    string          `json:"account"`
-	Time       string          `json:"time"`
+	Time       time.Time       `json:"time"`
 	Region     string          `json:"region"`
-	Resources  []string        `json:"resources"`
 	Detail     json.RawMessage `json:"detail"`
 }
 
-type HeartbeatPayload struct {
-	InstanceID string `json:"instance_id"`
-	Region     string `json:"region"`
-	IPAddress  string `json:"ip_address"`
-	Status     string `json:"status"`
+func (o *Controller) ProcessEvent(event AWSEventBridgeEvent) error {
+	if event.Source != "aws.ec2" || event.Account != o.cfg.AccountID {
+		return errInvalidEvent
+	}
+	if _, e := regional(o.cfg, event.Region); e != nil {
+		return errInvalidEvent
+	}
+	if event.Time.IsZero() || o.now().Sub(event.Time) > 30*time.Minute || event.Time.Sub(o.now()) > time.Minute {
+		return errInvalidEvent
+	}
+	var detail struct {
+		ID string `json:"instance-id"`
+	}
+	if json.Unmarshal(event.Detail, &detail) != nil || detail.ID == "" {
+		return errInvalidEvent
+	}
+	return o.Signal(detail.ID, event.Region, event.DetailType)
 }
 
-// HandleSpotEvent processes AWS EventBridge notifications for Spot instances.
-func (o *Orchestrator) HandleSpotEvent(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+var errInvalidEvent = &eventError{"invalid or stale event"}
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
+type eventError struct{ message string }
 
-	// Handle AWS SNS Subscription Confirmation if wrapped
-	var snsMessage struct {
-		Type             string `json:"Type"`
-		SubscribeURL     string `json:"SubscribeURL"`
-		Message          string `json:"Message"`
+func (e *eventError) Error() string { return e.message }
+func (o *Controller) authenticated(r *http.Request) bool {
+	token, e := os.ReadFile(o.cfg.TokenFile)
+	if e != nil {
+		return false
 	}
-	if json.Unmarshal(body, &snsMessage) == nil && snsMessage.Type == "SubscriptionConfirmation" {
-		log.Printf("[AWS SPOT WEBHOOK] Confirming SNS Subscription: %s", snsMessage.SubscribeURL)
-		_, _ = http.Get(snsMessage.SubscribeURL)
-		w.WriteHeader(http.StatusOK)
-		return
+	want := sha256.Sum256([]byte(strings.TrimSpace(string(token))))
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return false
 	}
-
-	// Unwrap SNS Message payload if applicable
-	eventPayload := body
-	if snsMessage.Message != "" {
-		eventPayload = []byte(snsMessage.Message)
-	}
-
+	got := sha256.Sum256([]byte(strings.TrimPrefix(header, "Bearer ")))
+	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
+}
+func (o *Controller) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /fleet/meetings/acquire", o.acquireMeeting)
+	mux.HandleFunc("POST /fleet/meetings/release", o.releaseMeeting)
+	mux.HandleFunc("GET /fleet/status", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(o.GetStatus()) })
+	mux.HandleFunc("GET /fleet/workers", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(o.Candidates()) })
+	mux.HandleFunc("POST /worker/heartbeat", o.handleHeartbeat)
+	mux.HandleFunc("POST /webhooks/aws-spot-event", o.handleEvent)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !o.authenticated(r) {
+			http.Error(w, "unauthorized", 401)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		mux.ServeHTTP(w, r)
+	})
+}
+func (o *Controller) handleEvent(w http.ResponseWriter, r *http.Request) {
 	var event AWSEventBridgeEvent
-	if err := json.Unmarshal(eventPayload, &event); err != nil {
-		log.Printf("[AWS SPOT WEBHOOK ERROR] Failed to parse EventBridge event: %v", err)
-		http.Error(w, "Invalid event payload", http.StatusBadRequest)
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&event) != nil {
+		http.Error(w, "invalid event", 400)
 		return
 	}
-
-	log.Printf("[AWS SPOT EVENT] Type: %q | Region: %s | Resources: %v", event.DetailType, event.Region, event.Resources)
-
-	// Check for Rebalance Recommendation or Interruption Warning
-	if strings.Contains(event.DetailType, "EC2 Instance Rebalance Recommendation") ||
-		strings.Contains(event.DetailType, "EC2 Spot Instance Interruption Warning") {
-		o.TriggerRebalance(r.Context(), event.DetailType)
+	if e := o.ProcessEvent(event); e != nil {
+		http.Error(w, e.Error(), 400)
+		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"event_processed"}`))
+	w.WriteHeader(204)
 }
-
-// HandleWorkerHeartbeat receives boot completion and dynamic IP from the worker instance.
+func (o *Controller) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		InstanceID string      `json:"instance_id"`
+		Region     string      `json:"region"`
+		Signal     *SpotSignal `json:"spot_signal"`
+	}
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&payload) != nil {
+		http.Error(w, "invalid heartbeat", 400)
+		return
+	}
+	o.mu.RLock()
+	worker, ok := o.state.Workers[payload.InstanceID]
+	o.mu.RUnlock()
+	if !ok || worker.Region != payload.Region {
+		http.Error(w, "unmanaged worker", 404)
+		return
+	}
+	// Do not trust callback-provided IPs/readiness. EC2 discovery and verified TLS
+	// metadata determine routing. Heartbeats only expedite polling or warnings.
+	if payload.Signal != nil {
+		if payload.Signal.Time.IsZero() || o.now().Sub(payload.Signal.Time) > 30*time.Minute {
+			http.Error(w, "stale signal", 400)
+			return
+		}
+		if e := o.Signal(payload.InstanceID, payload.Region, payload.Signal.Type); e != nil {
+			http.Error(w, e.Error(), 400)
+			return
+		}
+	}
+	select {
+	case o.wake <- struct{}{}:
+	default:
+	}
+	w.WriteHeader(204)
+}
+func (o *Orchestrator) guarded(w http.ResponseWriter, r *http.Request, next func(http.ResponseWriter, *http.Request)) {
+	if o.Controller == nil {
+		http.Error(w, "fleet controller not configured", 503)
+		return
+	}
+	if !o.Controller.authenticated(r) {
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+	next(w, r)
+}
+func (o *Orchestrator) HandleSpotEvent(w http.ResponseWriter, r *http.Request) {
+	o.guarded(w, r, o.event)
+}
+func (o *Orchestrator) event(w http.ResponseWriter, r *http.Request) { o.Controller.handleEvent(w, r) }
 func (o *Orchestrator) HandleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var payload HeartbeatPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "Invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	if payload.IPAddress == "" {
-		// Try resolving remote addr
-		payload.IPAddress = strings.Split(r.RemoteAddr, ":")[0]
-	}
-
-	if err := o.RegisterHeartbeat(payload.InstanceID, payload.Region, payload.IPAddress); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"heartbeat_acknowledged"}`))
+	o.guarded(w, r, o.heartbeat)
 }
-
-// HandleAdminStatus returns JSON representation of orchestrator status.
+func (o *Orchestrator) heartbeat(w http.ResponseWriter, r *http.Request) {
+	o.Controller.handleHeartbeat(w, r)
+}
 func (o *Orchestrator) HandleAdminStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	status := o.GetStatus()
-	_ = json.NewEncoder(w).Encode(status)
+	o.guarded(w, r, func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(o.GetStatus()) })
 }

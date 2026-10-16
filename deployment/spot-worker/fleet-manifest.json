@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "nemo_version": "0.2.0",
+  "source_commit": "6a3ca369370782acee0dd155e34394ba60b920c4",
+  "asr": {
+    "key": "models/nemotron-3.5-asr-streaming-0.6b.q8_0.spm.gguf",
+    "sha256": "7ece4ce06d9f5496d5a7e1dade556a5646ce25f84f828f7a8805bb1db3e27792"
+  },
+  "profiles": {
+    "amd64-cuda12": {
+      "key": "runtime/nemo-x86-runtime-v2.tar.gz",
+      "sha256": "0ac2ec8da64e8d69d0027a8e9721985009ba57fd31ea83fe27226a23e061e7c9"
+    },
+    "arm64-sm75": {
+      "key": "runtime/a2ea5a9a8c11ec62f71aa6d8256e535a6e9678f2483e1553f6b9d4bb8d90fd75/nemo-arm64-sm75.tar.gz",
+      "sha256": "a2ea5a9a8c11ec62f71aa6d8256e535a6e9678f2483e1553f6b9d4bb8d90fd75",
+      "cuda": "13.2",
+      "sm": 75,
+      "os": "Ubuntu 24.04",
+      "builder_instance": "i-REDACTED"
+    }
+  },
+  "gateways": {
+    "amd64": {
+      "key": "gateway/96bfc572d987603ac17248f70464e5d0c3844a7729047aa612f7035225c1fa48/speektome-gateway-amd64.gz",
+      "sha256": "96bfc572d987603ac17248f70464e5d0c3844a7729047aa612f7035225c1fa48",
+      "compression": "gzip"
+    },
+    "arm64": {
+      "key": "gateway/c5b3d7f0644868572c74779de614ecfe1fbf8bea3d34fd12e21feb676480f37f/speektome-gateway-arm64.gz",
+      "sha256": "c5b3d7f0644868572c74779de614ecfe1fbf8bea3d34fd12e21feb676480f37f",
+      "compression": "gzip"
+    }
+  },
+  "smoke": {
+    "key": "deployment/20261006/smoke-2s.wav",
+    "sha256": "6d8efc2f38af96953fcd75178968e273417f3a320c60eb01d5aedb134bc22157"
+  },
+  "source": {
+    "key": "build/nemo-source-v0.2.0.tar.gz",
+    "sha256": "0428c94c5a55c03e71880c3f58e28ba23a581f4420e7a76c524d1158d757e848"
+  },
+  "helpers": {
+    "build": {
+      "key": "deployment/helpers/21fae6b6fc10cf9b8ef0bf019ba63f3117df73fd3a5b692fb9b32ba4b1eace59/build-runtime.sh",
+      "sha256": "21fae6b6fc10cf9b8ef0bf019ba63f3117df73fd3a5b692fb9b32ba4b1eace59"
+    },
+    "ready": {
+      "key": "deployment/helpers/cf4e01c2e03af5b6791a8c2f19991ec74ed1e5118ac0cf99ef4ef69170294ea5/check-ready.sh",
+      "sha256": "cf4e01c2e03af5b6791a8c2f19991ec74ed1e5118ac0cf99ef4ef69170294ea5"
+    },
+    "watcher": {
+      "key": "deployment/helpers/65ff1f6bab5cb0e7a24ae05cd942736314e01d4752ceaa7541e051b96abbf02b/spot-watcher.py",
+      "sha256": "65ff1f6bab5cb0e7a24ae05cd942736314e01d4752ceaa7541e051b96abbf02b"
+    }
+  },
+  "capabilities": [
+    "final_vocabulary_matching_v1",
+    "meeting_transcription",
+    "streaming_transcription"
+  ]
+}

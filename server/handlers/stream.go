@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,10 +21,11 @@ import (
 	"speektome-server/ratelimit"
 	"speektome-server/services"
 	"speektome-server/utils"
+	"speektome-server/vocabularydecision"
 )
 
 type StreamStartPayload struct {
-	Type         string   `json:"type"` // "start"
+	Type         string   `json:"type"`   // "start"
 	Format       string   `json:"format"` // "opus" | "wav" | "pcm" | "ogg_opus"
 	SampleRate   int      `json:"sample_rate"`
 	Channels     int      `json:"channels"`
@@ -35,14 +35,15 @@ type StreamStartPayload struct {
 }
 
 type StreamEventMessage struct {
-	Type       string  `json:"type"` // "session_ready" | "interim" | "final" | "error"
-	Mode       string  `json:"mode,omitempty"` // "continuous_stream" | "chunked_vad"
-	Text       string  `json:"text,omitempty"`
-	LogID      int64   `json:"log_id,omitempty"`
-	AckToken   string  `json:"ack_token,omitempty"`
-	LatencyMs  int64   `json:"latency_ms,omitempty"`
-	Provider   string  `json:"provider,omitempty"`
-	Error      string  `json:"error,omitempty"`
+	Type       string                    `json:"type"`           // "session_ready" | "interim" | "final" | "error"
+	Mode       string                    `json:"mode,omitempty"` // "continuous_stream" | "chunked_vad"
+	Text       string                    `json:"text,omitempty"`
+	LogID      int64                     `json:"log_id,omitempty"`
+	AckToken   string                    `json:"ack_token,omitempty"`
+	LatencyMs  int64                     `json:"latency_ms,omitempty"`
+	Provider   string                    `json:"provider,omitempty"`
+	Error      string                    `json:"error,omitempty"`
+	Vocabulary *vocabularydecision.Audit `json:"vocabulary,omitempty"`
 }
 
 func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +87,6 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "Unauthorized")
 		return
 	}
-
 
 	// Rate limiting & quota check
 	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
@@ -214,24 +214,12 @@ func (a *App) handleRealStreamingSession(
 	var chunkCount int
 	var timingMutex sync.Mutex
 
-	var sessionVocabMutex sync.Mutex
-	sessionProtectedVocab := make(map[string]bool)
-
 	// Goroutine to receive text tokens from upstream real-time model and forward to client
+	textReceiverDone := make(chan struct{})
 	go func() {
+		defer close(textReceiverDone)
 		for text := range upstream.TextChan {
 			normText := text
-			if a.VocabCache != nil && len(vocabTerms) > 0 {
-				var replaced []string
-				normText, replaced, _ = a.VocabCache.ProcessStreamingText(user.ID, text, vocabTerms)
-				if len(replaced) > 0 {
-					sessionVocabMutex.Lock()
-					for _, term := range replaced {
-						sessionProtectedVocab[term] = true
-					}
-					sessionVocabMutex.Unlock()
-				}
-			}
 
 			timingMutex.Lock()
 			rtt := time.Duration(0)
@@ -287,35 +275,37 @@ func (a *App) handleRealStreamingSession(
 
 			if err := upstream.SendAudio(ctx, data); err != nil {
 				log.Printf("[STREAM REAL ERROR] Failed to forward audio to upstream: %v", err)
-				break
+				_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription recovery failed; please retry."})
+				return
 			}
 		}
 	}
 
-	// Allow upstream time to finalize last frame
-	time.Sleep(350 * time.Millisecond)
+	// Acknowledge commit before saving successful output. Failure is explicit.
+	flushCtx, flushCancel := context.WithTimeout(ctx, 15*time.Second)
+	flushError := upstream.AwaitFinal(flushCtx)
+	flushCancel()
+	if upstream.UsesFleet() {
+		select {
+		case <-textReceiverDone:
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+			_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription output could not be saved; please retry."})
+			return
+		}
+	}
+	if flushError != nil {
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription could not be finalized; please retry."})
+		return
+	}
 
 	textMutex.Lock()
 	finalRawTranscript := committedText
 	textMutex.Unlock()
 
-	if a.VocabCache != nil && len(vocabTerms) > 0 && finalRawTranscript != "" {
-		var finalReplaced []string
-		finalRawTranscript, finalReplaced, _ = a.VocabCache.ProcessText(user.ID, finalRawTranscript, vocabTerms)
-		sessionVocabMutex.Lock()
-		for _, term := range finalReplaced {
-			sessionProtectedVocab[term] = true
-		}
-		sessionVocabMutex.Unlock()
-	}
-
-	sessionVocabMutex.Lock()
-	var protectedList []string
-	for term := range sessionProtectedVocab {
-		protectedList = append(protectedList, term)
-	}
-	sessionVocabMutex.Unlock()
-	sort.Strings(protectedList)
+	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, upstream.VocabularyResult())
+	grammarInput, restoreGrammar := audit.Protect()
 
 	audioRaw := fullAudioAccumulator.Bytes()
 	audioSizeBytes := len(audioRaw)
@@ -324,20 +314,20 @@ func (a *App) handleRealStreamingSession(
 		audioDuration = float64(audioSizeBytes) / 32000.0
 	}
 
-	currentText := finalRawTranscript
+	currentText := audit.Resolved
 	var dsLatency float64
 	pctx := pipeline.NewPipelineContext(user.ID)
 
-	if startPayload.Enhance && finalRawTranscript != "" {
+	if finalRawTranscript != "" {
 		tstart := time.Now()
-		enhancer := pipeline.NewAIEnhancementTransform("", "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
-		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
+		enhancer := pipeline.NewGrammarEnhancementTransform(config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
 			log.Printf("[STREAM REAL ENHANCE ERROR] %v", terr)
 		} else if enhancedText != "" {
-			currentText = enhancedText
-			log.Printf("[STREAM REAL ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s, protected vocab: %d terms)", dsLatency, pctx.LLMModel, pctx.LLMProvider, len(protectedList))
+			currentText = restoreGrammar(enhancedText)
+			log.Printf("[STREAM REAL ENHANCE] LLM Post-Processing completed in %.3fs (model: %s, provider: %s, protected vocab: %d terms)", dsLatency, pctx.LLMModel, pctx.LLMProvider, len(audit.Decisions))
 		}
 	}
 
@@ -348,7 +338,7 @@ func (a *App) handleRealStreamingSession(
 		status = "success_empty"
 	}
 	loggedModel := ""
-	if startPayload.Enhance {
+	{
 		loggedModel = pctx.LLMModel
 		if loggedModel == "" {
 			loggedModel = pctx.LLMProvider
@@ -361,14 +351,14 @@ func (a *App) handleRealStreamingSession(
 		float64(totalLatencyMs)/1000.0,
 		dsLatency,
 		float64(totalLatencyMs)/1000.0,
-		startPayload.Enhance,
+		true,
 		loggedModel,
 		finalRawTranscript,
 		finalOutput,
 		status,
 		audioSizeBytes,
 		provider,
-		pctx.LLMProvider,
+		pctx.LLMProvider, auditJSON(audit),
 	)
 	if err != nil {
 		log.Printf("[STREAM LOG ERROR] Failed to log usage: %v", err)
@@ -377,12 +367,13 @@ func (a *App) handleRealStreamingSession(
 	ackToken := auth.GenerateLogAckToken(user.ID, logID)
 
 	_ = writeStreamJSON(ctx, conn, StreamEventMessage{
-		Type:      "final",
-		Text:      finalOutput,
-		LogID:     logID,
-		AckToken:  ackToken,
-		LatencyMs: totalLatencyMs,
-		Provider:  provider,
+		Type:       "final",
+		Text:       finalOutput,
+		LogID:      logID,
+		AckToken:   ackToken,
+		LatencyMs:  totalLatencyMs,
+		Provider:   provider,
+		Vocabulary: &audit,
 	})
 
 	conn.Close(websocket.StatusNormalClosure, "Transcription complete")
@@ -398,13 +389,11 @@ func (a *App) handlePseudoStreamingSession(
 	startTime time.Time,
 ) {
 	var fullAudioAccumulator bytes.Buffer
-	enhance := startPayload.Enhance
+	enhance := true
 	customPrompt := startPayload.Prompt
 
 	var committedText string
 	var chunkCount int
-
-	var sessionProtectedVocab = make(map[string]bool)
 
 	// Read audio chunks loop (VAD pause chunks)
 	for {
@@ -481,13 +470,6 @@ func (a *App) handlePseudoStreamingSession(
 				currentChunk, user.ID, usedProvider, rawChunkText, asrDuration)
 
 			if rawChunkText != "" {
-				if a.VocabCache != nil && len(vocabTerms) > 0 {
-					var replaced []string
-					rawChunkText, replaced, _ = a.VocabCache.ProcessText(user.ID, rawChunkText, vocabTerms)
-					for _, term := range replaced {
-						sessionProtectedVocab[term] = true
-					}
-				}
 
 				previousCommitted := committedText
 				committedText = utils.MergeTranscripts(committedText, rawChunkText)
@@ -540,37 +522,26 @@ func (a *App) handlePseudoStreamingSession(
 		}
 	}
 
-	if a.VocabCache != nil && len(vocabTerms) > 0 && finalRawTranscript != "" {
-		var finalReplaced []string
-		finalRawTranscript, finalReplaced, _ = a.VocabCache.ProcessText(user.ID, finalRawTranscript, vocabTerms)
-		for _, term := range finalReplaced {
-			sessionProtectedVocab[term] = true
-		}
-	}
+	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, nil)
+	grammarInput, restoreGrammar := audit.Protect()
 
 	whisperLatency := time.Since(whisperStart).Seconds()
 
-	currentText := finalRawTranscript
+	currentText := audit.Resolved
 	var dsLatency float64
 	pctx := pipeline.NewPipelineContext(user.ID)
 
-	var protectedList []string
-	for term := range sessionProtectedVocab {
-		protectedList = append(protectedList, term)
-	}
-	sort.Strings(protectedList)
-
 	if enhance && finalRawTranscript != "" {
 		tstart := time.Now()
-		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Raw Input: %q | Protected Vocab: %d terms", user.ID, finalRawTranscript, len(protectedList))
-		enhancer := pipeline.NewAIEnhancementTransform("", "", config.DeepSeekAPIKey, config.DeepSeekAPIURL, protectedList)
-		enhancedText, terr := enhancer.Transform(ctx, finalRawTranscript, pctx)
+		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Raw Input: %q | Protected Vocab: %d terms", user.ID, finalRawTranscript, len(audit.Decisions))
+		enhancer := pipeline.NewGrammarEnhancementTransform(config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
 			log.Printf("[STREAM AI ENHANCE ERROR] User ID: %d | Error: %v | Latency: %.2fs", user.ID, terr, dsLatency)
 		} else if enhancedText != "" {
 			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Enhanced: %q | Latency: %.2fs (model: %s, provider: %s)", user.ID, enhancedText, dsLatency, pctx.LLMModel, pctx.LLMProvider)
-			currentText = enhancedText
+			currentText = restoreGrammar(enhancedText)
 		}
 	}
 
@@ -603,7 +574,7 @@ func (a *App) handlePseudoStreamingSession(
 		status,
 		audioSizeBytes,
 		asrProvider,
-		pctx.LLMProvider,
+		pctx.LLMProvider, auditJSON(audit),
 	)
 	if err != nil {
 		log.Printf("[STREAM LOG ERROR] Failed to log usage/quota: %v", err)
@@ -612,12 +583,13 @@ func (a *App) handlePseudoStreamingSession(
 	ackToken := auth.GenerateLogAckToken(user.ID, logID)
 
 	_ = writeStreamJSON(ctx, conn, StreamEventMessage{
-		Type:      "final",
-		Text:      finalOutput,
-		LogID:     logID,
-		AckToken:  ackToken,
-		LatencyMs: totalLatencyMs,
-		Provider:  asrProvider,
+		Type:       "final",
+		Text:       finalOutput,
+		LogID:      logID,
+		AckToken:   ackToken,
+		LatencyMs:  totalLatencyMs,
+		Provider:   asrProvider,
+		Vocabulary: &audit,
 	})
 
 	conn.Close(websocket.StatusNormalClosure, "Transcription complete")

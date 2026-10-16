@@ -118,6 +118,9 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
+	if err := app.StartMeetingJobs(context.Background(), mux); err != nil {
+		log.Fatalf("Failed to initialize durable meeting jobs: %v", err)
+	}
 
 	mux.HandleFunc("GET /auth/login", app.HandleAuthLogin)
 	mux.HandleFunc("GET /auth/callback", app.HandleAuthCallback)
