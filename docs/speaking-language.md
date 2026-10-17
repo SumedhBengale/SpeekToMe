@@ -2,8 +2,8 @@
 
 The account's `languages` list is the set of languages the user speaks. The
 Windows and Linux clients keep one device-local `active_language` in config.json.
-It is either a code from that list or `auto`. Settings and the tray's Speaking
-language submenu change the same persisted choice immediately.
+It is either a code from that list or `auto`. Settings and the tray's language
+submenu change the same persisted choice immediately.
 
 A new dictation or meeting captures that choice when it starts. Changing the
 tray selection during a recording applies to the next recording. Concrete

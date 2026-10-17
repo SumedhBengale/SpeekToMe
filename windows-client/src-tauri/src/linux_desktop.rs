@@ -48,7 +48,8 @@ fn layer_shell_api() -> Option<&'static LayerShellApi> {
 
 fn speaking_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let active = crate::speaking_language();
-    let mut languages = SubmenuBuilder::new(app, "Speaking language");
+    // Leave room for the submenu indicator in compact Linux tray menus.
+    let mut languages = SubmenuBuilder::new(app, "Language");
     for (code, name) in crate::speaking_language_options() {
         let item = CheckMenuItem::with_id(app, format!("language:{}", code), name, true, code == active, None::<&str>)?;
         languages = languages.item(&item);
