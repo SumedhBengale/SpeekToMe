@@ -3,6 +3,7 @@
 pub mod config;
 pub mod audio;
 pub mod audio_processing;
+pub mod meeting_echo;
 pub mod api;
 pub mod keyboard;
 pub mod win32;

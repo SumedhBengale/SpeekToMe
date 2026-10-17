@@ -813,14 +813,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	// -------------------------------------------------------------------
 	// 8. Assemble Final Diarized Dialogue & JSON Segments
 	// -------------------------------------------------------------------
-	type FinalSegment struct {
-		Start   float64 `json:"start"`
-		End     float64 `json:"end"`
-		Text    string  `json:"text"`
-		Speaker string  `json:"speaker"`
-	}
-
-	var finalSegments []FinalSegment
+	var finalSegments []MeetingSegment
 	turnsMu.Lock()
 	activeTurns = filterMeetingStreamTurns(activeTurns)
 	for _, turn := range activeTurns {
@@ -828,11 +821,12 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 		if trimmed == "" {
 			continue
 		}
-		finalSegments = append(finalSegments, FinalSegment{
-			Start:   turn.StartTime,
-			End:     turn.EndTime,
-			Text:    trimmed,
-			Speaker: turn.SpeakerName,
+		finalSegments = append(finalSegments, MeetingSegment{
+			Start:     turn.StartTime,
+			End:       turn.EndTime,
+			Text:      trimmed,
+			Speaker:   turn.SpeakerName,
+			SpeakerID: turn.SpeakerID, Channel: turn.Channel,
 		})
 	}
 	turnsMu.Unlock()

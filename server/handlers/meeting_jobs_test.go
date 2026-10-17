@@ -95,6 +95,14 @@ func TestMeetingJobPersistsStagesAndCompletesWithoutClient(t *testing.T) {
 	if json.Unmarshal([]byte(meeting.SegmentsJSON), &segments) != nil || len(segments) != 2 {
 		t.Fatal(meeting)
 	}
+	for _, segment := range segments {
+		if segment.Channel == "" || segment.SpeakerID == "" {
+			t.Fatalf("speaker identity lost on save: %+v", segment)
+		}
+		if segment.Channel == "mic" && segment.SpeakerID != "speaker_local" {
+			t.Fatal(segment)
+		}
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if calls["mic"] != 0 || calls["system"] != 1 || calls["diar"] != 0 {
@@ -240,6 +248,23 @@ func TestMeetingLanguageSurvivesAccountChangesAndMigration(t *testing.T) {
 	for key, want := range map[string]string{"saved": "hi-IN", "automatic": "auto", "legacy": "en-US"} {
 		if got := jobs.language(key); got != want {
 			t.Errorf("%s: %s != %s", key, got, want)
+		}
+	}
+}
+
+func TestMeetingSpeakerZeroAndHigherIDsAreSeparateFromMicrophone(t *testing.T) {
+	turns := mergeMeeting(jobTranscript{Words: []jobWord{{"local", 0, 1}}},
+		jobTranscript{Words: []jobWord{{"zero", 1, 2}, {"ten", 3, 4}}},
+		[]jobSpeaker{{1, 2, 0}, {3, 4, 10}}, "Owner")
+	if len(turns) != 3 {
+		t.Fatal(turns)
+	}
+	if turns[0].Channel != "mic" || turns[0].SpeakerID != "speaker_local" {
+		t.Fatal(turns[0])
+	}
+	for i, id := range []string{"spk_0", "spk_10"} {
+		if turns[i+1].Channel != "system" || turns[i+1].SpeakerID != id {
+			t.Fatal(turns[i+1])
 		}
 	}
 }

@@ -983,14 +983,6 @@ pub fn start_meeting_recording(
             mic_device.build_input_stream(
                 &mic_config.clone().into(),
                 move |data: &[f32], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            sum_squares += sample * sample;
-                        }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        MIC_VOLUME.store((rms * 1000.0) as u32, Ordering::Relaxed);
-                    }
                     if let Ok(mut buf) = mic_buffer_clone.lock() {
                         for &sample in data {
                             let i16_val = (sample * i16::MAX as f32) as i16;
@@ -1006,15 +998,6 @@ pub fn start_meeting_recording(
             mic_device.build_input_stream(
                 &mic_config.clone().into(),
                 move |data: &[i16], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            let normalized = sample as f32 / i16::MAX as f32;
-                            sum_squares += normalized * normalized;
-                        }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        MIC_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
-                    }
                     if let Ok(mut buf) = mic_buffer_clone.lock() {
                         buf.extend_from_slice(data);
                     }
@@ -1027,15 +1010,6 @@ pub fn start_meeting_recording(
             mic_device.build_input_stream(
                 &mic_config.clone().into(),
                 move |data: &[u16], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            let normalized = (sample as f32 - 32768.0) / 32768.0;
-                            sum_squares += normalized * normalized;
-                        }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        MIC_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
-                    }
                     if let Ok(mut buf) = mic_buffer_clone.lock() {
                         for &sample in data {
                             let i16_val = (sample as i32 - 32768) as i16;
@@ -1275,15 +1249,9 @@ pub fn start_meeting_recording(
         let mut encoded_buf_lb = [0u8; 512];
 
         let mut total_mic_samples = 0;
-        let mut total_lb_samples = 0;
+        let mut echo_canceller = crate::meeting_echo::MeetingEchoCanceller::new();
         let mut energy_log = Vec::new();
         let mut loop_count: u64 = 0;
-        let mut last_lb_activity = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_secs(10))
-            .unwrap_or_else(std::time::Instant::now);
-        let mut last_mic_speech = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_secs(10))
-            .unwrap_or_else(std::time::Instant::now);
         const CHUNK_560MS: usize = 8960; // 560ms @ 16kHz mono
         const CHUNK_60MS: usize = 960;   // 60ms @ 16kHz mono (Opus standard frame)
 
@@ -1311,86 +1279,16 @@ pub fn start_meeting_recording(
             let loopback_16k = resample_to_16k_mono(&loopback_raw, loopback_rate, loopback_channels);
 
             total_mic_samples += mic_16k.len();
-            total_lb_samples += loopback_16k.len();
-
-            if stream_tx.is_some() {mic_stream_buffer.extend_from_slice(&mic_16k);}
-            if stream_tx.is_some() {loopback_stream_buffer.extend_from_slice(&loopback_16k);}
-
             mic_carry_encode.extend_from_slice(&mic_16k);
             loopback_carry_encode.extend_from_slice(&loopback_16k);
 
-            // Synchronize loopback time clock if WASAPI loopback device paused during silence
-            if total_lb_samples < total_mic_samples {
-                let missing = total_mic_samples - total_lb_samples;
-                if stream_tx.is_some() {loopback_stream_buffer.resize(loopback_stream_buffer.len() + missing, 0);}
-                loopback_carry_encode.resize(loopback_carry_encode.len() + missing, 0);
-                total_lb_samples = total_mic_samples;
-            }
-
-            let lb_vol = LOOPBACK_VOLUME.load(Ordering::Relaxed);
-            if lb_vol > 15 {
-                last_lb_activity = std::time::Instant::now();
-            }
-
-            // Send 560ms chunks to live inference stream
-            if let Some(ref tx) = stream_tx {
-                while mic_stream_buffer.len() >= CHUNK_560MS {
-                    let chunk: Vec<i16> = mic_stream_buffer.drain(..CHUNK_560MS).collect();
-
-                    // Acoustic echo & ambient noise gating
-                    let mut sum_sq: f64 = 0.0;
-                    for &s in &chunk {
-                        let norm = s as f64 / 32768.0;
-                        sum_sq += norm * norm;
-                    }
-                    let chunk_rms = (sum_sq / chunk.len() as f64).sqrt() as f32;
-
-                    let is_lb_active = last_lb_activity.elapsed() < std::time::Duration::from_millis(1500);
-                    let is_recent_speech = last_mic_speech.elapsed() < std::time::Duration::from_millis(1200);
-
-                    let chunk_to_send = if is_lb_active {
-                        if chunk_rms >= 0.0040 {
-                            last_mic_speech = std::time::Instant::now();
-                            chunk
-                        } else if is_recent_speech && chunk_rms >= 0.0025 {
-                            chunk
-                        } else {
-                            // Faint acoustic bleed from physical speakers during remote talk -> replace with digital silence
-                            vec![0i16; CHUNK_560MS]
-                        }
-                    } else {
-                        if chunk_rms >= 0.0020 {
-                            last_mic_speech = std::time::Instant::now();
-                            chunk
-                        } else if is_recent_speech && chunk_rms >= 0.0010 {
-                            chunk
-                        } else {
-                            // Ambient room noise floor / digital silence -> replace with digital silence
-                            vec![0i16; CHUNK_560MS]
-                        }
-                    };
-
-                    if let Ok(opus_bytes) = encode_opus_ogg(&chunk_to_send, 16000, 1) {
-                        let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, opus_bytes));
-                    }
-                }
-                while loopback_stream_buffer.len() >= CHUNK_560MS {
-                    let chunk: Vec<i16> = loopback_stream_buffer.drain(..CHUNK_560MS).collect();
-                    if let Ok(opus_bytes) = encode_opus_ogg(&chunk, 16000, 1) {
-                        let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x02, opus_bytes));
-                    }
-                }
-            }
-
-            if loop_count % 5 == 0 {
-                let time_sec = total_mic_samples as f32 / 16000.0;
-                let mic_vol = MIC_VOLUME.load(Ordering::Relaxed);
-                let lb_vol = LOOPBACK_VOLUME.load(Ordering::Relaxed);
-                energy_log.push(EnergySample {
-                    time: time_sec,
-                    mic: mic_vol,
-                    lb: lb_vol,
-                });
+            // Let independently scheduled capture callbacks catch up. Only pad
+            // a channel after 200 ms without matching audio (e.g. suspended WASAPI).
+            const MAX_CHANNEL_LAG: usize = 3200;
+            if mic_carry_encode.len() > loopback_carry_encode.len() + MAX_CHANNEL_LAG {
+                loopback_carry_encode.resize(mic_carry_encode.len() - MAX_CHANNEL_LAG, 0);
+            } else if loopback_carry_encode.len() > mic_carry_encode.len() + MAX_CHANNEL_LAG {
+                mic_carry_encode.resize(loopback_carry_encode.len() - MAX_CHANNEL_LAG, 0);
             }
 
             // Encode and save time-synchronized aligned audio chunks
@@ -1399,8 +1297,31 @@ pub fn start_meeting_recording(
             let encode_len = num_chunks * CHUNK_60MS;
 
             if encode_len > 0 {
-                let mic_block = &mic_carry_encode[..encode_len];
+                let mut mic_block = mic_carry_encode[..encode_len].to_vec();
                 let lb_block = &loopback_carry_encode[..encode_len];
+                echo_canceller.process(&mut mic_block, lb_block);
+                let rms = (mic_block.iter().map(|&s| (s as f64 / 32768.0).powi(2)).sum::<f64>() / mic_block.len() as f64).sqrt();
+                MIC_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
+                if let Some(ref tx) = stream_tx {
+                    mic_stream_buffer.extend_from_slice(&mic_block);
+                    loopback_stream_buffer.extend_from_slice(lb_block);
+                    while mic_stream_buffer.len() >= CHUNK_560MS {
+                        let chunk: Vec<i16> = mic_stream_buffer.drain(..CHUNK_560MS).collect();
+                        if let Ok(bytes) = encode_opus_ogg(&chunk, 16000, 1) {
+                            let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, bytes));
+                        }
+                    }
+                    while loopback_stream_buffer.len() >= CHUNK_560MS {
+                        let chunk: Vec<i16> = loopback_stream_buffer.drain(..CHUNK_560MS).collect();
+                        if let Ok(bytes) = encode_opus_ogg(&chunk, 16000, 1) {
+                            let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x02, bytes));
+                        }
+                    }
+                }
+                if loop_count % 5 == 0 {
+                    energy_log.push(EnergySample { time: total_mic_samples as f32 / 16000.0,
+                        mic: MIC_VOLUME.load(Ordering::Relaxed), lb: LOOPBACK_VOLUME.load(Ordering::Relaxed) });
+                }
 
                 // Write aligned samples directly to WAV file
                 if let Some(ref mut w) = wav_writer {
@@ -1463,42 +1384,31 @@ pub fn start_meeting_recording(
         let mic_16k = resample_to_16k_mono(&mic_raw, mic_rate, mic_channels);
         let loopback_16k = resample_to_16k_mono(&loopback_raw, loopback_rate, loopback_channels);
 
-        if stream_tx.is_some() {mic_stream_buffer.extend_from_slice(&mic_16k);}
-        if stream_tx.is_some() {loopback_stream_buffer.extend_from_slice(&loopback_16k);}
-
         mic_carry_encode.extend_from_slice(&mic_16k);
         loopback_carry_encode.extend_from_slice(&loopback_16k);
-
-        if let Some(ref tx) = stream_tx {
-            if !mic_stream_buffer.is_empty() {
-                let mut sum_sq: f64 = 0.0;
-                for &s in &mic_stream_buffer {
-                    let norm = s as f64 / 32768.0;
-                    sum_sq += norm * norm;
-                }
-                let flush_rms = (sum_sq / mic_stream_buffer.len() as f64).sqrt() as f32;
-                let chunk_to_send = if flush_rms < 0.0020 {
-                    vec![0i16; mic_stream_buffer.len()]
-                } else {
-                    mic_stream_buffer
-                };
-                if let Ok(opus_bytes) = encode_opus_ogg(&chunk_to_send, 16000, 1) {
-                    let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, opus_bytes));
-                }
-            }
-            if !loopback_stream_buffer.is_empty() {
-                if let Ok(opus_bytes) = encode_opus_ogg(&loopback_stream_buffer, 16000, 1) {
-                    let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x02, opus_bytes));
-                }
-            }
-            let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::EndOfMeeting);
-        }
 
         // Align remaining lengths
         if loopback_carry_encode.len() < mic_carry_encode.len() {
             loopback_carry_encode.resize(mic_carry_encode.len(), 0);
         } else if mic_carry_encode.len() < loopback_carry_encode.len() {
             mic_carry_encode.resize(loopback_carry_encode.len(), 0);
+        }
+
+        echo_canceller.process(&mut mic_carry_encode, &loopback_carry_encode);
+        if let Some(ref tx) = stream_tx {
+            mic_stream_buffer.extend_from_slice(&mic_carry_encode);
+            loopback_stream_buffer.extend_from_slice(&loopback_carry_encode);
+            if !mic_stream_buffer.is_empty() {
+                if let Ok(bytes) = encode_opus_ogg(&mic_stream_buffer, 16000, 1) {
+                    let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, bytes));
+                }
+            }
+            if !loopback_stream_buffer.is_empty() {
+                if let Ok(bytes) = encode_opus_ogg(&loopback_stream_buffer, 16000, 1) {
+                    let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x02, bytes));
+                }
+            }
+            let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::EndOfMeeting);
         }
 
         let flush_len = mic_carry_encode.len();

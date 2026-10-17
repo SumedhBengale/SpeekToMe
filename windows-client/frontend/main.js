@@ -2938,7 +2938,6 @@ async function viewMeeting(id) {
 
     // Determine local user name if available (from DOM or window state)
     const domUserName = userNameEl && userNameEl.textContent ? userNameEl.textContent.trim() : '';
-    const userName = domUserName ? domUserName.toLowerCase() : '';
 
     let maxSegEnd = 0;
     if (segments && segments.length > 0) {
@@ -2951,7 +2950,7 @@ async function viewMeeting(id) {
     const durEl = document.getElementById('meeting-detail-duration');
     if (durEl) durEl.textContent = formatMeetingDurationDetailed(totalDuration);
 
-    const uniqueSpeakers = new Set((segments || []).map(s => (s.speaker || 'Speaker').trim()));
+    const uniqueSpeakers = new Set((segments || []).map(s => getMeetingSpeakerIdentity(s, domUserName).id));
     const spkCount = Math.max(1, uniqueSpeakers.size);
     const speakersEl = document.getElementById('meeting-detail-speakers');
     if (speakersEl) speakersEl.textContent = `${spkCount} speaker${spkCount === 1 ? '' : 's'}`;
@@ -3139,86 +3138,7 @@ async function viewMeeting(id) {
     const transcriptTextEl = document.getElementById('meeting-transcript-text');
     transcriptTextEl.innerHTML = '';
 
-    const getInitials = getMeetingSpeakerInitials;
-    const getAvatarColor = getMeetingSpeakerColor;
-
-    const formatOffset = (seconds) => {
-      if (isNaN(seconds) || seconds < 0) return '0:00';
-      const h = Math.floor(seconds / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = Math.floor(seconds % 60);
-      const sStr = s < 10 ? '0' + s : s;
-      if (h > 0) {
-        const mStr = m < 10 ? '0' + m : m;
-        return `${h}:${mStr}:${sStr}`;
-      }
-      return `${m}:${sStr}`;
-    };
-
-    if (segments && segments.length > 0) {
-      let currentSpeaker = null;
-      let currentBlock = null;
-      let currentBlockText = null;
-
-      segments.forEach(seg => {
-        const speakerName = seg.speaker || 'Speaker';
-        
-        if (speakerName !== currentSpeaker) {
-          currentSpeaker = speakerName;
-          currentBlock = document.createElement('div');
-          
-          const cleanLowerSpeaker = speakerName.toLowerCase().replace(/[\[\]]/g, '').trim();
-          const isRemote = cleanLowerSpeaker.includes('speaker 1') || cleanLowerSpeaker.includes('speaker 2') || cleanLowerSpeaker.includes('speaker 3') || cleanLowerSpeaker.includes('speaker 4') || cleanLowerSpeaker.includes('remote') || cleanLowerSpeaker.includes('system') || cleanLowerSpeaker.includes('participant');
-          const isMe = !isRemote || (userName && cleanLowerSpeaker.includes(userName)) || cleanLowerSpeaker === 'you' || cleanLowerSpeaker === 'me';
-
-          currentBlock.className = `meeting-speaker-block ${isRemote ? 'is-remote' : 'is-me'}`;
-          
-          const header = document.createElement('div');
-          header.className = 'meeting-speaker-header';
-          
-          const avatar = document.createElement('div');
-          avatar.className = 'meeting-speaker-avatar';
-          avatar.textContent = getInitials(speakerName);
-          avatar.style.backgroundColor = isMe ? 'var(--accent-color)' : getAvatarColor(speakerName);
-          
-          const nameSpan = document.createElement('span');
-          nameSpan.className = 'meeting-speaker-name';
-          nameSpan.textContent = isMe ? `${speakerName} (You)` : speakerName;
-          
-          const timeSpan = document.createElement('span');
-          timeSpan.className = 'meeting-speaker-time';
-          timeSpan.textContent = formatOffset(seg.start);
-          
-          header.appendChild(avatar);
-          header.appendChild(nameSpan);
-          header.appendChild(timeSpan);
-          currentBlock.appendChild(header);
-          
-          currentBlockText = document.createElement('div');
-          currentBlockText.className = 'meeting-speaker-text';
-          currentBlock.appendChild(currentBlockText);
-          
-          transcriptTextEl.appendChild(currentBlock);
-        }
-        
-        const span = document.createElement('span');
-        span.className = 'transcript-segment';
-        span.dataset.start = seg.start;
-        span.dataset.end = seg.end;
-        span.textContent = (seg.text || '') + ' ';
-        
-        span.addEventListener('click', () => {
-          player.currentTime = seg.start;
-          player.play();
-        });
-        
-        if (currentBlockText) {
-          currentBlockText.appendChild(span);
-        }
-      });
-    } else {
-      transcriptTextEl.textContent = m.transcript || 'No transcript text available.';
-    }
+    renderMeetingTranscript(segments, player, domUserName, m.transcript);
 
     let isUserHoveringTranscript = false;
     transcriptTextEl.onmouseenter = () => { isUserHoveringTranscript = true; };
@@ -3406,25 +3326,14 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
     return;
   }
 
-  // Group segments by unique speaker
-  const uName = (currentUserName || '').toLowerCase().trim();
+  // Channel and stable speaker ID are shared with the transcript and inspector.
   const speakerGroups = new Map();
-
   segments.forEach((seg, idx) => {
-    const rawSpk = (seg.speaker || 'Speaker 1').trim();
-    if (!speakerGroups.has(rawSpk)) {
-      const cleanLower = rawSpk.toLowerCase().replace(/[\[\]]/g, '').trim();
-      const isRemote = cleanLower.includes('speaker 1') || cleanLower.includes('speaker 2') || cleanLower.includes('speaker 3') || cleanLower.includes('speaker 4') || cleanLower.includes('remote') || cleanLower.includes('system') || cleanLower.includes('participant');
-      const isMe = !isRemote || (uName && cleanLower.includes(uName)) || cleanLower === 'you' || cleanLower === 'me' || cleanLower === 'local speaker';
-
-      speakerGroups.set(rawSpk, {
-        name: rawSpk,
-        isMe: isMe,
-        segments: [],
-        totalTime: 0
-      });
+    const identity = getMeetingSpeakerIdentity(seg, currentUserName);
+    if (!speakerGroups.has(identity.id)) {
+      speakerGroups.set(identity.id, { ...identity, name: identity.label, segments: [], totalTime: 0 });
     }
-    const group = speakerGroups.get(rawSpk);
+    const group = speakerGroups.get(identity.id);
     group.segments.push({ ...seg, turnIndex: idx + 1 });
     group.totalTime += Math.max(0, (seg.end || 0) - (seg.start || 0));
   });
@@ -3433,37 +3342,13 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
   const sortedSpeakers = Array.from(speakerGroups.values()).sort((a, b) => {
     if (a.isMe && !b.isMe) return -1;
     if (!a.isMe && b.isMe) return 1;
-    return a.name.localeCompare(b.name);
+    return a.name.localeCompare(b.name, undefined, { numeric: true });
   });
 
-  // Dynamic Theme-Driven Palette for Speakers (100% Theme Variables)
-  const palette = [
-    { color: 'var(--speaker-remote-color, #38bdf8)', border: 'var(--speaker-remote-border, rgba(56, 189, 248, 0.3))', bg: 'var(--speaker-remote-bg, rgba(56, 189, 248, 0.15))', textColor: 'var(--text-primary)' },
-    { color: '#34d399', border: 'rgba(52, 211, 153, 0.3)', bg: 'rgba(52, 211, 153, 0.14)', textColor: 'var(--text-primary)' },
-    { color: '#fbbf24', border: 'rgba(251, 191, 36, 0.3)', bg: 'rgba(251, 191, 36, 0.14)', textColor: 'var(--text-primary)' },
-    { color: '#f472b6', border: 'rgba(244, 114, 182, 0.3)', bg: 'rgba(244, 114, 182, 0.14)', textColor: 'var(--text-primary)' },
-  ];
-
   window.__currentSpeakerThemes = {};
-
-  sortedSpeakers.forEach((spk, idx) => {
-    let theme;
-    if (spk.isMe) {
-      theme = {
-        color: 'var(--speaker-mic-color, var(--accent-color))',
-        border: 'var(--speaker-mic-border, var(--border-focus))',
-        bg: 'var(--speaker-mic-bg, var(--accent-tint))',
-        textColor: 'var(--text-primary)',
-        label: `${spk.name} (Mic)`
-      };
-    } else {
-      const p = palette[(idx - (sortedSpeakers.some(s => s.isMe) ? 1 : 0)) % palette.length];
-      theme = {
-        ...p,
-        label: spk.name
-      };
-    }
-    window.__currentSpeakerThemes[spk.name] = theme;
+  sortedSpeakers.forEach(spk => {
+    const theme = getMeetingSpeakerTheme(spk);
+    window.__currentSpeakerThemes[spk.id] = theme;
 
     // Add to Legend
     if (legendContainer) {
@@ -3472,7 +3357,7 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       pill.style.backgroundColor = theme.bg;
       pill.style.borderColor = theme.border;
       pill.style.color = theme.textColor;
-      pill.innerHTML = `<span style="width: 6px; height: 6px; border-radius: 50%; background-color: ${theme.color}; display: inline-block;"></span><span>${theme.label}</span>`;
+      pill.innerHTML = `<span style="width: 6px; height: 6px; border-radius: 50%; background-color: ${theme.color}; display: inline-block;"></span><span>${escapeHtml(theme.label)}</span>`;
       legendContainer.appendChild(pill);
     }
   });
@@ -3543,7 +3428,7 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
 
   // Render Tracks & Segment Boxes
   sortedSpeakers.forEach((spk) => {
-    const theme = window.__currentSpeakerThemes[spk.name];
+    const theme = window.__currentSpeakerThemes[spk.id];
     const talkPercent = Math.round((spk.totalTime / totalDuration) * 100);
 
     // 1. Left Sticky Header Item
@@ -3552,7 +3437,7 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
     headerItem.innerHTML = `
       <div class="timeline-header-swatch" style="background-color: ${theme.color};"></div>
       <div class="timeline-header-info">
-        <div class="timeline-header-name" title="${theme.label}">${theme.label}</div>
+        <div class="timeline-header-name" title="${escapeHtml(theme.label)}">${escapeHtml(theme.label)}</div>
         <div class="timeline-header-meta">${spk.segments.length} turns &bull; ${talkPercent}% talk time</div>
       </div>
     `;
@@ -3561,7 +3446,7 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
     // 2. Right Track Lane Row
     const laneRow = document.createElement('div');
     laneRow.className = 'timeline-lane-row';
-    laneRow.dataset.speaker = spk.name;
+    laneRow.dataset.speaker = spk.id;
 
     spk.segments.forEach(seg => {
       const leftPercent = (seg.start / totalDuration) * 100;
@@ -3576,8 +3461,8 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       box.style.border = `1px solid ${theme.color}`;
       box.dataset.start = seg.start;
       box.dataset.end = seg.end;
-      box.dataset.speaker = spk.name;
-      box.title = `${theme.label}: ${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s (${(seg.end - seg.start).toFixed(2)}s)\n"${seg.text || ''}"`;
+      box.dataset.speaker = spk.id;
+      box.title = `${escapeHtml(theme.label)}: ${seg.start.toFixed(2)}s - ${seg.end.toFixed(2)}s (${(seg.end - seg.start).toFixed(2)}s)\n"${seg.text || ''}"`;
 
       // Click to seek & play
       box.onclick = (e) => {
@@ -3595,8 +3480,9 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
   // Render Turn-by-Turn Inspector Table
   if (inspectorTbody) {
     segments.forEach((seg, idx) => {
-      const spkName = (seg.speaker || 'Speaker 1').trim();
-      const theme = window.__currentSpeakerThemes[spkName] || {
+      const identity = getMeetingSpeakerIdentity(seg, currentUserName);
+      const spkName = identity.label;
+      const theme = window.__currentSpeakerThemes[identity.id] || {
         color: 'var(--text-muted)',
         border: 'var(--border-subtle)',
         bg: 'var(--bg-card-subtle)',
@@ -3614,13 +3500,14 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       tr.dataset.start = seg.start;
       tr.dataset.end = seg.end;
       tr.dataset.speaker = spkName;
+      tr.dataset.speakerId = identity.id;
 
       tr.innerHTML = `
         <td style="font-family: monospace; color: var(--text-muted);">#${String(idx + 1).padStart(2, '0')}</td>
         <td>
           <span class="inspector-speaker-pill" style="background-color: ${theme.bg}; border: 1px solid ${theme.border}; color: ${theme.textColor};">
             <span style="width: 6px; height: 6px; border-radius: 50%; background-color: ${theme.color}; display: inline-block;"></span>
-            ${theme.label}
+            ${escapeHtml(theme.label)}
           </span>
         </td>
         <td>
@@ -3664,16 +3551,98 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
   }
 }
 
+// Speaker numbers (including zero) are remote diarizer IDs, never a local-user shortcut.
+function getMeetingSpeakerIdentity(segment, currentUserName = '') {
+  const channel = String(segment.channel || '').toLowerCase();
+  const sourceId = String(segment.speaker_id || '').trim();
+  const rawName = String(segment.speaker || segment.speaker_name || '').replace(/[\[\]]/g, '').trim();
+  const clean = rawName.toLowerCase();
+  const numbered = clean.match(/^(?:speaker|spk)[ _-]*(\d+)$/) || sourceId.match(/^spk[_-]?(\d+)$/i);
+  const remoteChannel = channel === 'system' || channel === 'loopback';
+  const localAlias = ['me', 'you', 'local speaker'].includes(clean);
+  const exactOwnerName = currentUserName && clean === currentUserName.toLowerCase().trim();
+  const isMe = channel === 'mic' || (!remoteChannel && !numbered &&
+    (sourceId === 'speaker_local' || (!sourceId && (localAlias || exactOwnerName))));
+  if (isMe) return { id: 'mic:speaker_local', label: 'Me', isMe: true };
+  const id = sourceId || (numbered ? `spk_${numbered[1]}` : (clean || 'unknown'));
+  let label = rawName || (numbered ? `Speaker ${numbered[1]}` : 'Unknown speaker');
+  if (localAlias) label += ' (System)';
+  return { id: `system:${id}`, label, isMe: false };
+}
+
+function getMeetingSpeakerTheme(identity) {
+  if (identity.isMe) return {
+    color: 'var(--speaker-mic-color, var(--accent-color))',
+    border: 'var(--speaker-mic-border, var(--border-focus))',
+    bg: 'var(--speaker-mic-bg, var(--accent-tint))',
+    textColor: 'var(--text-primary)', label: identity.label
+  };
+  const color = getMeetingSpeakerColor(identity.id);
+  return { color, border: `${color}55`, bg: `${color}22`, textColor: 'var(--text-primary)', label: identity.label };
+}
+
+function renderMeetingTranscript(segments, player, currentUserName, fallbackText) {
+  const container = document.getElementById('meeting-transcript-text');
+  if (!container) return;
+  container.replaceChildren();
+  if (!segments || !segments.length) {
+    container.textContent = fallbackText || 'No transcript text available.';
+    return;
+  }
+  let previousId = null;
+  let blockText = null;
+  for (const segment of segments) {
+    const identity = getMeetingSpeakerIdentity(segment, currentUserName);
+    const theme = getMeetingSpeakerTheme(identity);
+    if (identity.id !== previousId) {
+      previousId = identity.id;
+      const block = document.createElement('div');
+      block.className = `meeting-speaker-block ${identity.isMe ? 'is-me' : 'is-remote'}`;
+      block.dataset.speakerId = identity.id;
+      block.style.borderLeftColor = theme.color;
+      const header = document.createElement('div');
+      header.className = 'meeting-speaker-header';
+      const avatar = document.createElement('div');
+      avatar.className = 'meeting-speaker-avatar';
+      avatar.textContent = identity.isMe ? 'ME' : getMeetingSpeakerInitials(identity.label);
+      avatar.style.backgroundColor = theme.color;
+      const label = document.createElement('span');
+      label.className = 'meeting-speaker-name';
+      label.textContent = identity.label;
+      const time = document.createElement('span');
+      time.className = 'meeting-speaker-time';
+      time.textContent = formatMeetingTimeOffset(segment.start);
+      header.append(avatar, label, time);
+      blockText = document.createElement('div');
+      blockText.className = 'meeting-speaker-text';
+      block.append(header, blockText);
+      container.appendChild(block);
+    }
+    const text = document.createElement('span');
+    text.className = 'transcript-segment';
+    text.dataset.start = segment.start;
+    text.dataset.end = segment.end;
+    text.textContent = (segment.text || '') + ' ';
+    text.onclick = () => { player.currentTime = segment.start; player.play(); };
+    blockText.appendChild(text);
+  }
+}
+
+function formatMeetingTimeOffset(seconds) {
+  seconds = Math.max(0, Number(seconds) || 0);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const sec = String(Math.floor(seconds % 60)).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
 // Global helper functions for speaker avatars, initials & theme colors
 function getMeetingSpeakerInitials(name) {
   if (!name) return 'SP';
   const cleanName = name.replace(/[\[\]]/g, '').trim();
   const lower = cleanName.toLowerCase();
-  if (lower === 'speaker 1' || lower === 'spk_1' || lower === 'speaker_1') return 'S1';
-  if (lower === 'speaker 2' || lower === 'spk_2' || lower === 'speaker_2') return 'S2';
-  if (lower === 'speaker 3' || lower === 'spk_3' || lower === 'speaker_3') return 'S3';
-  if (lower === 'speaker 4' || lower === 'spk_4' || lower === 'speaker_4') return 'S4';
-  if (lower === 'speaker 5' || lower === 'spk_5' || lower === 'speaker_5') return 'S5';
+  const numbered = lower.match(/^(?:speaker|spk)[ _-]*(\d+)$/);
+  if (numbered) return `S${numbered[1]}`;
   if (lower === 'you' || lower === 'me') return 'ME';
   const parts = cleanName.split(' ');
   if (parts.length >= 2) {
@@ -3683,23 +3652,12 @@ function getMeetingSpeakerInitials(name) {
 }
 
 function getMeetingSpeakerColor(name) {
-  if (!name) return '#2563eb';
-  const clean = name.replace(/[\[\]]/g, '').toLowerCase().trim();
-  if (clean === 'speaker 1' || clean === 'spk_1' || clean === 'speaker_1') return '#2563eb'; // Royal Blue
-  if (clean === 'speaker 2' || clean === 'spk_2' || clean === 'speaker_2') return '#d97706'; // Vibrant Amber
-  if (clean === 'speaker 3' || clean === 'spk_3' || clean === 'speaker_3') return '#7c3aed'; // Deep Purple
-  if (clean === 'speaker 4' || clean === 'spk_4' || clean === 'speaker_4') return '#059669'; // Emerald Green
-  if (clean === 'speaker 5' || clean === 'spk_5' || clean === 'speaker_5') return '#e11d48'; // Rose Red
-  if (clean === 'you' || clean === 'me') return '#57bf7c'; // Soft Emerald
-
+  const colors = ['#2563eb', '#d97706', '#7c3aed', '#059669', '#e11d48', '#0284c7', '#4f46e5', '#0d9488'];
+  const clean = String(name || '').toLowerCase().replace(/^system:/, '').trim();
+  const numbered = clean.match(/^(?:speaker|spk)[ _-]*(\d+)$/);
+  if (numbered) return colors[Number(numbered[1]) % colors.length];
   let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const colors = [
-    '#2563eb', '#d97706', '#7c3aed', '#059669', 
-    '#e11d48', '#0284c7', '#4f46e5', '#0d9488'
-  ];
+  for (let i = 0; i < clean.length; i++) hash = clean.charCodeAt(i) + ((hash << 5) - hash);
   return colors[Math.abs(hash) % colors.length];
 }
 
@@ -3710,7 +3668,8 @@ function handleLiveMeetingTurn(turn) {
   if (waitingText) waitingText.style.display = 'none';
   if (!turnsList) return;
 
-  const isMe = turn.channel === 'mic';
+  const identity = getMeetingSpeakerIdentity(turn, currentUserInfo?.name || '');
+  const isMe = identity.isMe;
   const formatOffset = (seconds) => {
     if (isNaN(seconds) || seconds < 0) return '0:00';
     const m = Math.floor(seconds / 60);
@@ -3718,9 +3677,9 @@ function handleLiveMeetingTurn(turn) {
     return `${m}:${s < 10 ? '0' + s : s}`;
   };
 
-  const displayName = isMe ? 'You' : (turn.speaker_name || 'Remote Speaker');
+  const displayName = identity.label;
   const avatarText = isMe ? 'ME' : getMeetingSpeakerInitials(displayName);
-  const avatarBg = isMe ? '#57bf7c' : getMeetingSpeakerColor(displayName);
+  const avatarBg = getMeetingSpeakerTheme(identity).color;
 
   let turnEl = document.getElementById(`live-${turn.id}`);
   if (!turnEl) {
@@ -3773,6 +3732,7 @@ function handleLiveMeetingTurn(turn) {
       turnEl.dataset.startTime = String(turn.start_time);
     }
     // Dynamically update speaker name, avatar, and border if refined by Sortformer diarization
+    turnEl.className = `live-turn-item ${isMe ? 'is-me' : 'is-remote'}`;
     turnEl.style.borderLeftColor = avatarBg;
     const avatar = turnEl.querySelector('.live-turn-avatar');
     if (avatar) {

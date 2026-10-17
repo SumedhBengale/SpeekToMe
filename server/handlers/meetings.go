@@ -409,10 +409,12 @@ type EnergySample struct {
 }
 
 type MeetingSegment struct {
-	Start   float64 `json:"start"`
-	End     float64 `json:"end"`
-	Text    string  `json:"text"`
-	Speaker string  `json:"speaker"`
+	SpeakerID string  `json:"speaker_id,omitempty"`
+	Channel   string  `json:"channel,omitempty"`
+	Start     float64 `json:"start"`
+	End       float64 `json:"end"`
+	Text      string  `json:"text"`
+	Speaker   string  `json:"speaker"`
 }
 
 func diarizeSegmentsWithEnergy(segments []services.WhisperSegment, energySamples []EnergySample, localSpeakerName string) ([]MeetingSegment, string) {
@@ -493,6 +495,13 @@ func diarizeSegmentsWithEnergy(segments []services.WhisperSegment, energySamples
 		}
 	}
 
+	for i := range merged {
+		merged[i].Channel, merged[i].SpeakerID = "mic", "speaker_local"
+		if merged[i].Speaker == "Remote Speaker" {
+			merged[i].Channel, merged[i].SpeakerID = "system", "remote"
+		}
+	}
+
 	var transcriptBuilder strings.Builder
 	for _, s := range merged {
 		transcriptBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", s.Speaker, s.Text))
@@ -514,10 +523,11 @@ func deduplicateMeetingSegments(micSegs []services.WhisperSegment, lbSegs []serv
 			continue
 		}
 		candidates = append(candidates, MeetingSegment{
-			Start:   s.Start,
-			End:     s.End,
-			Text:    cleanText,
-			Speaker: "Remote Speaker",
+			Start:     s.Start,
+			End:       s.End,
+			Text:      cleanText,
+			Speaker:   "Remote Speaker",
+			SpeakerID: "remote", Channel: "system",
 		})
 	}
 
@@ -547,10 +557,11 @@ func deduplicateMeetingSegments(micSegs []services.WhisperSegment, lbSegs []serv
 
 		if !isBleed {
 			candidates = append(candidates, MeetingSegment{
-				Start:   m.Start,
-				End:     m.End,
-				Text:    cleanMicText,
-				Speaker: localSpeakerName,
+				Start:     m.Start,
+				End:       m.End,
+				Text:      cleanMicText,
+				Speaker:   localSpeakerName,
+				SpeakerID: "speaker_local", Channel: "mic",
 			})
 		}
 	}
@@ -570,7 +581,7 @@ func deduplicateMeetingSegments(micSegs []services.WhisperSegment, lbSegs []serv
 		}
 
 		last := &merged[len(merged)-1]
-		if last.Speaker == seg.Speaker && seg.Start <= last.End+1.5 {
+		if last.Speaker == seg.Speaker && last.Channel == seg.Channel && last.SpeakerID == seg.SpeakerID && seg.Start <= last.End+1.5 {
 			last.Text = strings.TrimSpace(last.Text + " " + seg.Text)
 			if seg.End > last.End {
 				last.End = seg.End

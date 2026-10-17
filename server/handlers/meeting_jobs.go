@@ -709,7 +709,7 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 	segments := []MeetingSegment{}
 	var lines []string
 	for _, turn := range turns {
-		segments = append(segments, MeetingSegment{Start: turn.StartTime, End: turn.EndTime, Text: turn.Text, Speaker: turn.SpeakerName})
+		segments = append(segments, MeetingSegment{Start: turn.StartTime, End: turn.EndTime, Text: turn.Text, Speaker: turn.SpeakerName, SpeakerID: turn.SpeakerID, Channel: turn.Channel})
 		lines = append(lines, turn.SpeakerName+": "+turn.Text)
 	}
 	transcript := strings.Join(lines, "\n")
