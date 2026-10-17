@@ -1121,11 +1121,53 @@ async function init() {
   }
 }
 
+function refreshCustomSelectMenu(select, wrapper, labelSpan, menu) {
+  const trigger = wrapper.querySelector('.custom-select-trigger');
+  const signature = JSON.stringify(Array.from(select.options, opt => [opt.value, opt.textContent, opt.hidden]));
+  if (menu.dataset.optionsSignature !== signature) {
+    menu.replaceChildren();
+    Array.from(select.options).filter(opt => !opt.hidden).forEach(opt => {
+      const optEl = document.createElement('div');
+      optEl.className = 'custom-select-option' + (opt.value === select.value ? ' selected' : '');
+      optEl.setAttribute('role', 'option');
+      optEl.setAttribute('data-value', opt.value);
+      optEl.textContent = opt.textContent;
+
+      optEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        select.value = opt.value;
+        labelSpan.textContent = opt.textContent;
+
+        menu.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('selected'));
+        optEl.classList.add('selected');
+
+        wrapper.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+
+        if (select.id === 'theme-select' || select.id === 'onboard-theme-select') {
+          applyAppTheme(opt.value);
+        }
+
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        if (typeof markDirty === 'function') {
+          setTimeout(markDirty, 10);
+        }
+      });
+
+      menu.appendChild(optEl);
+    });
+    menu.dataset.optionsSignature = signature;
+  }
+  const current = select.options[select.selectedIndex];
+  labelSpan.textContent = current ? current.textContent : '';
+  menu.querySelectorAll('.custom-select-option').forEach(option => {
+    option.classList.toggle('selected', option.getAttribute('data-value') === select.value);
+  });
+}
+
 function initCustomSelects() {
   const selects = document.querySelectorAll('select.fluent-select');
   selects.forEach(select => {
-    // Language choices change at runtime; keep the accessible native select.
-    if (select.id.endsWith("-speaking-language")) return;
     if (select.parentElement && select.parentElement.classList.contains('custom-select-wrapper')) {
       return;
     }
@@ -1159,36 +1201,7 @@ function initCustomSelects() {
     menu.className = 'custom-select-menu';
     menu.setAttribute('role', 'listbox');
 
-    Array.from(select.options).filter(opt => !opt.hidden).forEach(opt => {
-      const optEl = document.createElement('div');
-      optEl.className = 'custom-select-option' + (opt.value === select.value ? ' selected' : '');
-      optEl.setAttribute('role', 'option');
-      optEl.setAttribute('data-value', opt.value);
-      optEl.textContent = opt.textContent;
-
-      optEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        select.value = opt.value;
-        labelSpan.textContent = opt.textContent;
-
-        menu.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('selected'));
-        optEl.classList.add('selected');
-
-        wrapper.classList.remove('open');
-        trigger.setAttribute('aria-expanded', 'false');
-
-        if (select.id === 'theme-select' || select.id === 'onboard-theme-select') {
-          applyAppTheme(opt.value);
-        }
-
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        if (typeof markDirty === 'function') {
-          setTimeout(markDirty, 10);
-        }
-      });
-
-      menu.appendChild(optEl);
-    });
+    refreshCustomSelectMenu(select, wrapper, labelSpan, menu);
 
     wrapper.appendChild(menu);
 
@@ -1251,13 +1264,7 @@ function syncCustomSelects() {
     const labelSpan = wrapper.querySelector('.custom-select-label');
     const menu = wrapper.querySelector('.custom-select-menu');
     if (select && labelSpan && menu) {
-      const curOpt = select.options[select.selectedIndex];
-      if (curOpt) {
-        labelSpan.textContent = curOpt.textContent;
-        menu.querySelectorAll('.custom-select-option').forEach(o => {
-          o.classList.toggle('selected', o.getAttribute('data-value') === select.value);
-        });
-      }
+      refreshCustomSelectMenu(select, wrapper, labelSpan, menu);
     }
   });
 }
