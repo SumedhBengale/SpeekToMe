@@ -59,3 +59,39 @@ cargo run --manifest-path windows-client/Cargo.toml --release \
 The example reads fixed-size frames; it does not load the meeting into memory.
 No inference-worker or regional launch artifact changes are needed for this
 client-side processing and additive server metadata.
+
+## Saved speaker names
+
+Open a completed meeting and expand **Rename speakers** below the date/duration.
+Enter names and select **Save names**. Clearing a field restores its original
+label. All speakers, including the microphone speaker, can be named. Names are
+per meeting and stored on the main server, so they survive app/server restarts
+and appear on other signed-in devices.
+
+`PUT /meetings/{id}/speakers` accepts `speaker_names` and `previous_names` maps,
+keyed by channel-qualified identities such as `system:spk_0` and
+`mic:speaker_local`. Authentication and meeting ownership are required. Names
+are trimmed, limited to 80 Unicode characters, and reject control characters.
+A stale previous map returns 409 rather than overwriting another device's save.
+
+The additive `meetings.speaker_names` column preserves canonical transcripts,
+segments and generated notes. Detail/list responses include a `speakers` catalog
+and `speaker_key` / `speaker_display_name` on each segment. Summary, action-item
+and polished-transcript speaker references are projected from the original
+labels in one pass. Renaming again, name swaps, and Speaker 1 versus Speaker 10
+therefore do not cascade. Ambiguous legacy labels shared by two identities are
+left alone in prose rather than attributing them to the wrong person. New
+analysis prompts explicitly preserve input speaker labels for attribution.
+No new ASR, LLM, or worker launch change is needed for renaming.
+
+Validation: full Go suite, authenticated save/read after database reopen,
+ownership checks, stale writes, input limits, old/new segment formats, repeated
+renames, action-item attribution, Unicode word boundaries, and ambiguous legacy
+labels. The DOM smoke check also covers consistent transcript/timeline/inspector
+names and colors, saved editor values, failed saves retaining edits, playback
+position, and HTML-looking names rendered as text:
+
+```
+npm install --prefix /tmp/speektome-ui-tests jsdom
+NODE_PATH=/tmp/speektome-ui-tests/node_modules node windows-client/tests/meeting-speaker-names.cjs
+```

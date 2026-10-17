@@ -225,7 +225,11 @@ func (a *App) HandleGetMeetings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(meetings)
+	views := make([]meetingSpeakerView, 0, len(meetings))
+	for _, meeting := range meetings {
+		views = append(views, prepareMeetingSpeakerView(meeting, user.Name))
+	}
+	_ = json.NewEncoder(w).Encode(views)
 }
 
 func (a *App) HandleGetMeetingDetail(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +258,7 @@ func (a *App) HandleGetMeetingDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(meeting)
+	_ = json.NewEncoder(w).Encode(prepareMeetingSpeakerView(*meeting, user.Name))
 }
 
 func (a *App) HandleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
@@ -349,6 +353,7 @@ You must return your response in JSON format with exactly three fields:
 - "polished_transcript": The polished transcript formatted as dialogue script.
 - "summary": A concise, professional markdown summary of the meeting, including key discussion points.
 - "action_items": A markdown list of action items, tasks, and owners.
+Use each speaker label from the input exactly when attributing owners or mentioning speakers in the summary; never abbreviate, renumber, or invent speaker labels.
 
 Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" + `json) or conversational text outside the JSON structure.`
 

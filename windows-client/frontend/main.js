@@ -3251,6 +3251,24 @@ async function viewMeeting(id) {
     document.getElementById('meeting-summary-text').innerHTML = parseMarkdownToHTML(m.summary);
     document.getElementById('meeting-actions-text').innerHTML = parseMarkdownToHTML(m.action_items);
 
+    renderMeetingSpeakerEditor(m, (updated) => {
+      Object.assign(m, updated);
+      segments = JSON.parse(updated.segments_json || '[]');
+      const scrollArea = document.getElementById('timeline-scroll-area');
+      const scrollLeft = scrollArea?.scrollLeft || 0;
+      const transcriptScroll = transcriptTextEl.scrollTop;
+      doRenderTimeline();
+      if (scrollArea) scrollArea.scrollLeft = scrollLeft;
+      renderMeetingTranscript(segments, player, domUserName, m.transcript);
+      transcriptTextEl.scrollTop = transcriptScroll;
+      lastActiveSpan = null;
+      lastActiveTableRow = null;
+      document.getElementById('meeting-summary-text').innerHTML = parseMarkdownToHTML(m.summary);
+      document.getElementById('meeting-actions-text').innerHTML = parseMarkdownToHTML(m.action_items);
+      const search = document.getElementById('timeline-search-speaker');
+      if (search?.value) search.dispatchEvent(new Event('input'));
+    });
+
     // Detail Tabs switching
     const currentTabBtns = document.querySelectorAll('.detail-tab-btn');
     currentTabBtns.forEach(btn => {
@@ -3274,6 +3292,77 @@ async function viewMeeting(id) {
     showToast(err.message, "Failed to load meeting", "error");
     showDashboardView();
   }
+}
+
+function renderMeetingSpeakerEditor(meeting, onSaved) {
+  const editor = document.getElementById('meeting-speaker-editor');
+  const fields = document.getElementById('meeting-speaker-fields');
+  const form = document.getElementById('meeting-speaker-form');
+  const save = document.getElementById('meeting-speaker-save');
+  const status = document.getElementById('meeting-speaker-status');
+  if (!editor || !fields || !form || !save || !status) return;
+  editor.open = false;
+  editor.hidden = !(meeting.speakers?.length);
+  fields.replaceChildren();
+  status.textContent = '';
+  save.disabled = true;
+  const inputs = new Map();
+  for (const speaker of meeting.speakers || []) {
+    const row = document.createElement('label');
+    row.className = 'meeting-speaker-edit-row';
+    const source = document.createElement('span');
+    source.textContent = speaker.default_name + (speaker.is_me ? ' (microphone)' : '');
+    const dot = document.createElement('span');
+    dot.className = 'meeting-speaker-dot';
+    dot.style.backgroundColor = getMeetingSpeakerTheme({id: speaker.id, isMe: speaker.is_me}).color;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'fluent-input';
+    input.maxLength = 80;
+    input.value = meeting.speaker_names?.[speaker.id] || '';
+    input.placeholder = speaker.default_name;
+    input.autocomplete = 'off';
+    input.dataset.speakerId = speaker.id;
+    input.oninput = () => {
+      const dirty = [...inputs].some(([id, field]) => field.value.trim() !== (meeting.speaker_names?.[id] || ''));
+      save.disabled = !dirty;
+      status.textContent = dirty ? 'Unsaved changes' : '';
+    };
+    row.append(dot, source, input);
+    fields.appendChild(row);
+    inputs.set(speaker.id, input);
+  }
+  let saving = false;
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (saving || save.disabled) return;
+    saving = true;
+    save.disabled = true;
+    for (const input of inputs.values()) input.disabled = true;
+    status.textContent = 'Saving…';
+    const names = Object.fromEntries([...inputs].filter(([,input]) => input.value.trim()).map(([id,input]) => [id,input.value.trim()]));
+    try {
+      const response = await fetch(`${API_URL}/meetings/${meeting.id}/speakers`, {
+        method: 'PUT',
+        headers: {'Authorization': `Bearer ${currentConfig?.session_token}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify({speaker_names: names, previous_names: meeting.speaker_names || {}})
+      });
+      if (!response.ok) throw new Error(await response.text() || 'Could not save names. Try again.');
+      const updated = await response.json();
+      if (String(activeMeetingId) !== String(meeting.id)) return;
+      meeting.speaker_names = updated.speaker_names;
+      for (const [id,input] of inputs) input.value = updated.speaker_names[id] || '';
+      onSaved(updated);
+      status.textContent = 'Names saved';
+    } catch (error) {
+      if (String(activeMeetingId) !== String(meeting.id)) return;
+      status.textContent = error.message || 'Could not save names. Try again.';
+      save.disabled = false;
+    } finally {
+      saving = false;
+      for (const input of inputs.values()) input.disabled = false;
+    }
+  };
 }
 
 // Dedicated High-Precision Visualizer & Timeline Renderer
@@ -3553,6 +3642,9 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
 
 // Speaker numbers (including zero) are remote diarizer IDs, never a local-user shortcut.
 function getMeetingSpeakerIdentity(segment, currentUserName = '') {
+  if (segment.speaker_key && segment.speaker_display_name) {
+    return { id: segment.speaker_key, label: segment.speaker_display_name, isMe: segment.speaker_key === 'mic:speaker_local' };
+  }
   const channel = String(segment.channel || '').toLowerCase();
   const sourceId = String(segment.speaker_id || '').trim();
   const rawName = String(segment.speaker || segment.speaker_name || '').replace(/[\[\]]/g, '').trim();

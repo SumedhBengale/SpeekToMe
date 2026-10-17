@@ -5004,3 +5004,21 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
 
 
 
+
+.meeting-speaker-editor {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.meeting-speaker-editor summary { cursor: pointer; font-weight: 500; }
+.meeting-speaker-help { color: var(--text-secondary); line-height: 1.5; margin: 12px 0; }
+.meeting-speaker-fields { display: grid; gap: 10px; max-height: 260px; overflow-y: auto; }
+.meeting-speaker-edit-row { display: grid; grid-template-columns: 8px minmax(90px, 1fr) minmax(120px, 2fr); gap: 10px; align-items: center; }
+.meeting-speaker-edit-row > span:nth-child(2) { overflow-wrap: anywhere; }
+.meeting-speaker-edit-row input { width: 100%; min-width: 0; box-sizing: border-box; }
+.meeting-speaker-dot { width: 8px; height: 8px; border-radius: 50%; }
+.meeting-speaker-save-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+#meeting-speaker-status { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }

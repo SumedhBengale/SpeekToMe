@@ -224,6 +224,7 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN llm_provider TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN vocabulary_audit TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE meetings ADD COLUMN vocabulary_audit TEXT DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE meetings ADD COLUMN speaker_names TEXT NOT NULL DEFAULT '{}'")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_status TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_current_start INTEGER DEFAULT 0")
@@ -1119,19 +1120,20 @@ func (d *Database) DeleteVocabularyTerm(userID int64, canonical string) error {
 }
 
 type Meeting struct {
-	ID               int64           `json:"id"`
-	UserID           int64           `json:"user_id"`
-	Title            string          `json:"title"`
-	Timestamp        string          `json:"timestamp"`
-	Duration         float64         `json:"duration"`
-	AudioPath        string          `json:"audio_path"`
-	Transcript       string          `json:"transcript"`
-	Summary          string          `json:"summary"`
-	ActionItems      string          `json:"action_items"`
-	SegmentsJSON     string          `json:"segments_json"`
-	ProcessingStatus string          `json:"processing_status,omitempty"`
-	ClientID         string          `json:"client_id,omitempty"`
-	VocabularyAudit  json.RawMessage `json:"vocabulary,omitempty"`
+	SpeakerNames     map[string]string `json:"speaker_names"`
+	ID               int64             `json:"id"`
+	UserID           int64             `json:"user_id"`
+	Title            string            `json:"title"`
+	Timestamp        string            `json:"timestamp"`
+	Duration         float64           `json:"duration"`
+	AudioPath        string            `json:"audio_path"`
+	Transcript       string            `json:"transcript"`
+	Summary          string            `json:"summary"`
+	ActionItems      string            `json:"action_items"`
+	SegmentsJSON     string            `json:"segments_json"`
+	ProcessingStatus string            `json:"processing_status,omitempty"`
+	ClientID         string            `json:"client_id,omitempty"`
+	VocabularyAudit  json.RawMessage   `json:"vocabulary,omitempty"`
 }
 
 func (d *Database) CreateMeeting(userID int64, title string, duration float64, audioPath string) (int64, error) {
@@ -1160,7 +1162,7 @@ func (d *Database) UpdateMeetingResult(meetingID int64, transcript string, summa
 
 func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 	rows, err := d.db.Query(`
-		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, '')
+		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, ''), COALESCE(speaker_names, '{}')
 		FROM meetings
 		WHERE user_id = ?
 		ORDER BY timestamp DESC
@@ -1174,8 +1176,10 @@ func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 	for rows.Next() {
 		var m Meeting
 		var audit string
-		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit)
+		var names string
+		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names)
 		if err == nil {
+			_ = json.Unmarshal([]byte(names), &m.SpeakerNames)
 			_ = d.db.QueryRow(`SELECT status,client_id FROM meeting_jobs WHERE meeting_id=?`, m.ID).Scan(&m.ProcessingStatus, &m.ClientID)
 			if json.Valid([]byte(audit)) {
 				m.VocabularyAudit = json.RawMessage(audit)
@@ -1192,19 +1196,30 @@ func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 func (d *Database) GetMeeting(meetingID int64) (*Meeting, error) {
 	var m Meeting
 	var audit string
+	var names string
 	err := d.db.QueryRow(`
-		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, '')
+		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, ''), COALESCE(speaker_names, '{}')
 		FROM meetings
 		WHERE id = ?
-	`, meetingID).Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit)
+	`, meetingID).Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names)
 	if err != nil {
 		return nil, err
 	}
+	_ = json.Unmarshal([]byte(names), &m.SpeakerNames)
 	_ = d.db.QueryRow(`SELECT status,client_id FROM meeting_jobs WHERE meeting_id=?`, m.ID).Scan(&m.ProcessingStatus, &m.ClientID)
 	if json.Valid([]byte(audit)) {
 		m.VocabularyAudit = json.RawMessage(audit)
 	}
 	return &m, nil
+}
+
+func (d *Database) SaveMeetingSpeakerNames(meetingID, userID int64, names, previous string) (bool, error) {
+	res, err := d.db.Exec(`UPDATE meetings SET speaker_names=? WHERE id=? AND user_id=? AND COALESCE(speaker_names,'{}')=?`, names, meetingID, userID, previous)
+	if err != nil {
+		return false, err
+	}
+	count, err := res.RowsAffected()
+	return count == 1, err
 }
 
 func (d *Database) DeleteMeeting(meetingID int64) error {

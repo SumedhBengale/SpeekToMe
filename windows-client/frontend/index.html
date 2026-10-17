@@ -1363,6 +1363,18 @@
                 </div>
               </div>
 
+              <details id="meeting-speaker-editor" class="meeting-speaker-editor">
+                <summary>Rename speakers</summary>
+                <p class="meeting-speaker-help">Names are saved for this meeting and update the transcript, timeline, summary, and action items.</p>
+                <form id="meeting-speaker-form">
+                  <div id="meeting-speaker-fields" class="meeting-speaker-fields"></div>
+                  <div class="meeting-speaker-save-row">
+                    <button type="submit" id="meeting-speaker-save" class="fluent-button">Save names</button>
+                    <span id="meeting-speaker-status" role="status" aria-live="polite"></span>
+                  </div>
+                </form>
+              </details>
+
               <!-- Custom Audio Player Bar -->
               <div class="meeting-custom-audio-bar">
                 <audio id="meeting-audio-player" preload="metadata" style="display: none;"></audio>

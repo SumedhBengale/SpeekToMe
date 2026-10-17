@@ -161,6 +161,7 @@ func main() {
 	mux.HandleFunc("GET /v1/meetings/live", app.HandleMeetingStream)
 	mux.HandleFunc("GET /meetings", app.HandleGetMeetings)
 	mux.HandleFunc("GET /meetings/{id}", app.HandleGetMeetingDetail)
+	mux.HandleFunc("PUT /meetings/{id}/speakers", app.HandleSaveMeetingSpeakers)
 	mux.HandleFunc("DELETE /meetings/{id}", app.HandleDeleteMeeting)
 	mux.HandleFunc("GET /meetings/{id}/audio", app.HandleGetMeetingAudio)
 	mux.HandleFunc("POST /billing/create-subscription", app.HandleCreateSubscription)
