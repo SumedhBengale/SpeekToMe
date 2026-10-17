@@ -153,7 +153,9 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     layout.set_wrap(gtk::pango::WrapMode::WordChar);
     layout.set_height(-4);
     layout.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    overlay.default_vbox()?.pack_start(&surface, true, true, 0);
+    let container = overlay.default_vbox()?;
+    container.pack_start(&surface, true, true, 0);
+    container.show();
     surface.show();
     NATIVE_OVERLAY.with(|slot| {
         *slot.borrow_mut() = Some(NativeOverlay {
@@ -188,6 +190,23 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
         .clone();
     configure_overlay_position(&overlay, &config);
     apply_overlay_text_and_theme();
+    if std::env::args().any(|arg| arg == "--diagnose-native-overlay") {
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+            NATIVE_OVERLAY.with(|slot| {
+                if let Some(overlay) = slot.borrow().as_ref() {
+                    let allocation = overlay.surface.allocation();
+                    eprintln!(
+                        "[NATIVE OVERLAY CHECK] mapped={} width={} height={} pill=({}, {})",
+                        overlay.surface.is_mapped(),
+                        allocation.width(),
+                        allocation.height(),
+                        overlay.pill_x,
+                        overlay.pill_y
+                    );
+                }
+            });
+        });
+    }
     Ok(())
 }
 
