@@ -1375,7 +1375,7 @@ mod win32_impl {
                         }
                     } else if cmd == 2 {
                         if let Some(app) = crate::TAURI_APP.get() {
-                            app.exit(0);
+                            crate::lifecycle::quit(app);
                         }
                         windows_sys::Win32::System::Threading::ExitProcess(0);
                     }

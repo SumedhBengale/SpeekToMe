@@ -364,6 +364,7 @@ pub fn send_keys(keys: Vec<i32>) -> Result<(), String> {
 }
 
 fn on_shortcut(pressed: bool) {
+    if crate::lifecycle::is_quitting() { return; }
     if crate::ACTIVE_MEETING
         .lock()
         .unwrap_or_else(|e| e.into_inner())

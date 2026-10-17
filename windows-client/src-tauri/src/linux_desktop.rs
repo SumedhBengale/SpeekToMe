@@ -1,9 +1,13 @@
-use tauri::{menu::{MenuBuilder, SubmenuBuilder, CheckMenuItem}, tray::TrayIconBuilder, Manager};
 use gtk::prelude::*;
 use libloading::Library;
 use std::ffi::{c_char, CString};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::OnceLock;
+use tauri::{
+    menu::{CheckMenuItem, MenuBuilder, SubmenuBuilder},
+    tray::TrayIconBuilder,
+    Manager,
+};
 
 static OVERLAY_STATE: AtomicU8 = AtomicU8::new(0);
 static LAYER_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -51,21 +55,49 @@ fn speaking_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<taur
     // Leave room for the submenu indicator in compact Linux tray menus.
     let mut languages = SubmenuBuilder::new(app, "Language");
     for (code, name) in crate::speaking_language_options() {
-        let item = CheckMenuItem::with_id(app, format!("language:{}", code), name, true, code == active, None::<&str>)?;
+        let item = CheckMenuItem::with_id(
+            app,
+            format!("language:{}", code),
+            name,
+            true,
+            code == active,
+            None::<&str>,
+        )?;
         languages = languages.item(&item);
     }
     let languages = languages.build()?;
-    MenuBuilder::new(app).item(&languages).separator()
-        .text("settings", "Open Settings").text("quit", "Quit SpeekTo.Me").build()
+    MenuBuilder::new(app)
+        .item(&languages)
+        .separator()
+        .text("settings", "Open Settings")
+        .text("quit", "Quit SpeekTo.Me")
+        .build()
 }
 
 pub fn refresh_language_menu(app: &tauri::AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(tray) = handle.tray_by_id("main-tray") {
-            if let Ok(menu) = speaking_menu(&handle) { let _ = tray.set_menu(Some(menu)); }
+            if let Ok(menu) = speaking_menu(&handle) {
+                let _ = tray.set_menu(Some(menu));
+            }
         }
     });
+}
+
+// GTK owns this tiny native status surface. No WebKit context is created for it.
+struct NativeOverlay {
+    surface: gtk::DrawingArea,
+    layout: gtk::pango::Layout,
+    has_preview: bool,
+    timer: Option<gtk::glib::SourceId>,
+    frame: u64,
+    smoothed: f64,
+    pill_x: f64,
+    pill_y: f64,
+}
+thread_local! {
+    static NATIVE_OVERLAY: std::cell::RefCell<Option<NativeOverlay>> = const { std::cell::RefCell::new(None) };
 }
 
 pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -74,46 +106,79 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "settings" => crate::show_or_create_settings_window(app),
-            "quit" => app.exit(0),
-            id => { if let Some(code) = id.strip_prefix("language:") {
-                let _ = crate::set_active_language(code.to_string());
-            } }
+            "quit" => crate::lifecycle::quit(app),
+            id => {
+                if let Some(code) = id.strip_prefix("language:") {
+                    let _ = crate::set_active_language(code.to_string());
+                }
+            }
         });
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
     tray.build(app)?;
-    let overlay = tauri::WebviewWindowBuilder::new(
-        app,
-        "overlay",
-        tauri::WebviewUrl::App("overlay.html".into()),
-    )
-    .title("SpeekTo.Me status")
-    // The transparent canvas has room for both the pill and its live transcript.
-    .inner_size(420.0, 140.0)
-    .decorations(false)
-    .transparent(true)
-    .skip_taskbar(true)
-    .always_on_top(true)
-    .focusable(false)
-    .visible(false)
-    .build()?;
-    if let Ok(native) = overlay.gtk_window() {
-        native.set_accept_focus(false);
-        native.set_focus_on_map(false);
-        if let Some(api) = layer_shell_api() {
-            let ptr = native.as_ptr() as *mut gtk::ffi::GtkWindow;
-            unsafe {
-                if (api.is_supported)() != 0 {
-                    (api.init_for_window)(ptr);
-                    let namespace = CString::new("speektome-overlay").unwrap();
-                    (api.set_namespace)(ptr, namespace.as_ptr());
-                    (api.set_layer)(ptr, 3); // Overlay layer
-                    (api.set_keyboard_mode)(ptr, 0); // No keyboard focus
-                    (api.set_exclusive_zone)(ptr, 0);
-                    LAYER_SHELL_ACTIVE.store(true, Ordering::SeqCst);
-                    eprintln!("[LINUX OVERLAY] Wayland layer-shell positioning enabled");
-                }
+    let overlay = tauri::WindowBuilder::new(app, "overlay")
+        .title("SpeekTo.Me status")
+        .inner_size(420.0, 140.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .focusable(false)
+        .visible(false)
+        .build()?;
+    let native = overlay.gtk_window()?;
+    native.set_accept_focus(false);
+    native.set_focus_on_map(false);
+    native.set_app_paintable(true);
+    native.connect_draw(|_, cr| {
+        cr.set_operator(gtk::cairo::Operator::Source);
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+        let _ = cr.paint();
+        cr.set_operator(gtk::cairo::Operator::Over);
+        gtk::glib::Propagation::Proceed
+    });
+    let surface = gtk::DrawingArea::new();
+    surface.set_size_request(420, 140);
+    surface.connect_draw(|_, cr| {
+        draw_overlay(cr);
+        gtk::glib::Propagation::Stop
+    });
+    let layout = surface.create_pango_layout(None);
+    let mut font = gtk::pango::FontDescription::from_string("Sans");
+    font.set_absolute_size(13.0 * gtk::pango::SCALE as f64);
+    layout.set_font_description(Some(&font));
+    layout.set_width(370 * gtk::pango::SCALE);
+    layout.set_wrap(gtk::pango::WrapMode::WordChar);
+    layout.set_height(-4);
+    layout.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    overlay.default_vbox()?.pack_start(&surface, true, true, 0);
+    surface.show();
+    NATIVE_OVERLAY.with(|slot| {
+        *slot.borrow_mut() = Some(NativeOverlay {
+            surface,
+            layout,
+            has_preview: false,
+            timer: None,
+            frame: 0,
+            smoothed: 0.0,
+            pill_x: 179.0,
+            pill_y: 0.0,
+        });
+    });
+    if let Some(api) = layer_shell_api() {
+        let ptr = native.as_ptr() as *mut gtk::ffi::GtkWindow;
+        unsafe {
+            if (api.is_supported)() != 0 {
+                (api.init_for_window)(ptr);
+                let namespace = CString::new("speektome-overlay").unwrap();
+                (api.set_namespace)(ptr, namespace.as_ptr());
+                (api.set_layer)(ptr, 3);
+                (api.set_keyboard_mode)(ptr, 0);
+                (api.set_exclusive_zone)(ptr, 0);
+                LAYER_SHELL_ACTIVE.store(true, Ordering::SeqCst);
+                eprintln!("[LINUX OVERLAY] Native GTK layer-shell status surface enabled");
             }
         }
     }
@@ -122,97 +187,207 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
         .unwrap_or_else(|e| e.into_inner())
         .clone();
     configure_overlay_position(&overlay, &config);
+    apply_overlay_text_and_theme();
     Ok(())
 }
 
-pub fn show_overlay() {
-    if let Some(app) = crate::TAURI_APP.get() {
-        if let Some(window) = app.get_webview_window("overlay") {
-            let app = app.clone();
-            let state = match OVERLAY_STATE.load(Ordering::SeqCst) {
-                2 => "processing",
-                3 => "meeting",
-                _ => "listening",
+fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, width: f64, height: f64, radius: f64) {
+    let pi = std::f64::consts::PI;
+    cr.new_sub_path();
+    cr.arc(x + width - radius, y + radius, radius, -pi / 2.0, 0.0);
+    cr.arc(
+        x + width - radius,
+        y + height - radius,
+        radius,
+        0.0,
+        pi / 2.0,
+    );
+    cr.arc(x + radius, y + height - radius, radius, pi / 2.0, pi);
+    cr.arc(x + radius, y + radius, radius, pi, 3.0 * pi / 2.0);
+    cr.close_path();
+}
+fn color(value: u32) -> (f64, f64, f64) {
+    (
+        ((value >> 16) & 255) as f64 / 255.0,
+        ((value >> 8) & 255) as f64 / 255.0,
+        (value & 255) as f64 / 255.0,
+    )
+}
+fn draw_overlay(cr: &gtk::cairo::Context) {
+    cr.set_operator(gtk::cairo::Operator::Source);
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+    let _ = cr.paint();
+    cr.set_operator(gtk::cairo::Operator::Over);
+    let background = color(crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed));
+    let wave = color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed));
+    NATIVE_OVERLAY.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(overlay) = slot.as_mut() else { return };
+        let (x, y) = (overlay.pill_x, overlay.pill_y);
+        cr.set_source_rgba(background.0, background.1, background.2, 235.0 / 255.0);
+        rounded_rect(cr, x + 0.5, y + 0.5, 61.0, 23.0, 11.5);
+        let _ = cr.fill();
+        cr.set_source_rgb(wave.0, wave.1, wave.2);
+        let level = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed) as f64;
+        overlay.smoothed = overlay.smoothed * 0.8 + level * 0.2;
+        let volume =
+            (if overlay.smoothed > 2.0 { 5.0 } else { 2.5 }) + (overlay.smoothed / 4.0).min(2.5);
+        let processing = OVERLAY_STATE.load(Ordering::SeqCst) == 2;
+        for i in 0..5 {
+            let phase =
+                overlay.frame as f64 * (if processing { 0.12 } else { 0.1 }) + i as f64 * 0.7;
+            let h = if processing {
+                2.2 + 2.5 * ((phase.sin() + 1.0) / 2.0)
+            } else {
+                (volume * (0.35 + 0.65 * phase.sin().abs())).clamp(2.0, 8.0)
             };
-            let config = crate::get_active_config()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
-            let preview = crate::win32::get_preview_text();
-            let preview_js = serde_json::to_string(&preview).unwrap_or_else(|_| "\"\"".into());
-            let _ = app.run_on_main_thread(move || {
-                let _ = window.eval(&format!("window.setPreviewState?.({state:?})"));
-                let _ = window.eval(&format!("window.setStatus?.({preview_js})"));
-                if let Ok(native) = window.gtk_window() {
-                    native.set_accept_focus(false);
-                    native.set_focus_on_map(false);
-                }
+            rounded_rect(
+                cr,
+                x + 20.75 + i as f64 * 4.5,
+                y + 12.0 - h + 0.8,
+                2.5,
+                h * 2.0 - 1.6,
+                1.2,
+            );
+            let _ = cr.fill();
+        }
+        if overlay.has_preview {
+            let (width, height) = overlay.layout.pixel_size();
+            let width = (width as f64 + 24.0).clamp(160.0, 394.0);
+            let height = (height as f64 + 16.0).min(104.0);
+            let card_x = (x + 31.0 - width / 2.0).clamp(4.0, 420.0 - width - 4.0);
+            let card_y = if y > 70.0 {
+                (y - height - 8.0).max(4.0)
+            } else {
+                (y + 32.0).min(140.0 - height - 4.0)
+            };
+            rounded_rect(cr, card_x, card_y, width, height, 7.0);
+            cr.set_source_rgba(background.0, background.1, background.2, 0.96);
+            let _ = cr.fill_preserve();
+            cr.set_source_rgba(wave.0, wave.1, wave.2, 0.64);
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+            if background.0 * 0.299 + background.1 * 0.587 + background.2 * 0.114 > 0.5 {
+                cr.set_source_rgb(24.0 / 255.0, 16.0 / 255.0, 34.0 / 255.0);
+            } else {
+                cr.set_source_rgb(245.0 / 255.0, 245.0 / 255.0, 250.0 / 255.0);
+            }
+            cr.move_to(card_x + 12.0, card_y + 8.0);
+            pangocairo::functions::show_layout(cr, &overlay.layout);
+        }
+        overlay.frame += 1;
+    });
+}
+
+fn apply_overlay_text_and_theme() {
+    let text = crate::win32::get_preview_text();
+    NATIVE_OVERLAY.with(|slot| {
+        if let Some(overlay) = slot.borrow_mut().as_mut() {
+            // Pango text, not markup, handles all scripts without browser UI.
+            overlay.layout.set_text(&text);
+            overlay.has_preview = !text.trim().is_empty();
+            overlay.surface.queue_draw();
+        }
+    });
+}
+
+pub fn show_overlay() {
+    if crate::lifecycle::is_quitting() {
+        return;
+    }
+    if let Some(app) = crate::TAURI_APP.get() {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(window) = handle.get_window("overlay") {
+                apply_overlay_text_and_theme();
+                let config = crate::get_active_config()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
                 configure_overlay_position(&window, &config);
                 let _ = window.show();
                 let _ = window.set_ignore_cursor_events(true);
-            });
-        }
+                NATIVE_OVERLAY.with(|slot| {
+                    if let Some(overlay) = slot.borrow_mut().as_mut() {
+                        if overlay.timer.is_none() {
+                            overlay.timer = Some(gtk::glib::timeout_add_local(
+                                std::time::Duration::from_millis(33),
+                                || {
+                                    NATIVE_OVERLAY.with(|slot| {
+                                        if let Some(overlay) = slot.borrow().as_ref() {
+                                            overlay.surface.queue_draw();
+                                        }
+                                    });
+                                    gtk::glib::ControlFlow::Continue
+                                },
+                            ));
+                        }
+                    }
+                });
+            }
+        });
     }
 }
-
 pub fn hide_overlay() {
     if let Some(app) = crate::TAURI_APP.get() {
-        if let Some(window) = app.get_webview_window("overlay") {
-            let _ = window.hide();
-        }
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(window) = handle.get_window("overlay") {
+                let _ = window.hide();
+            }
+            NATIVE_OVERLAY.with(|slot| {
+                if let Some(overlay) = slot.borrow_mut().as_mut() {
+                    if let Some(timer) = overlay.timer.take() {
+                        timer.remove();
+                    }
+                    overlay.has_preview = false;
+                }
+            });
+        });
     }
 }
-
-pub fn set_preview_text(text: &str) {
+pub fn set_preview_text(_text: &str) {
     if let Some(app) = crate::TAURI_APP.get() {
-        if let Some(window) = app.get_webview_window("overlay") {
-            let encoded = serde_json::to_string(text).unwrap_or_default();
-            let _ = window.eval(&format!("window.setStatus({encoded})"));
-        }
+        let _ = app.run_on_main_thread(apply_overlay_text_and_theme);
     }
 }
-
 pub fn set_preview_state(state: u8) {
     OVERLAY_STATE.store(state, Ordering::SeqCst);
-    if let Some(app) = crate::TAURI_APP.get() {
-        if let Some(window) = app.get_webview_window("overlay") {
-            let name = match state {
-                0 => "hidden",
-                2 => "processing",
-                3 => "meeting",
-                _ => "listening",
-            };
-            let _ = window.eval(&format!("window.setPreviewState?.({name:?})"));
-        }
-    }
 }
-
 pub fn sync_overlay_theme() {
-    let background = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed) & 0x00ff_ffff;
-    let wave = crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed) & 0x00ff_ffff;
     if let Some(app) = crate::TAURI_APP.get() {
-        if let Some(window) = app.get_webview_window("overlay") {
-            let _ = window.eval(&format!(
-                "window.setTheme?.('#{background:06X}', '#{wave:06X}')"
-            ));
-        }
+        let _ = app.run_on_main_thread(apply_overlay_text_and_theme);
     }
 }
-
 pub fn update_overlay_position() {
     if let Some(app) = crate::TAURI_APP.get() {
-        if let Some(window) = app.get_webview_window("overlay") {
-            let config = crate::get_active_config()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
-            let app = app.clone();
-            let _ = app.run_on_main_thread(move || configure_overlay_position(&window, &config));
-        }
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(window) = handle.get_window("overlay") {
+                let config = crate::get_active_config()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                configure_overlay_position(&window, &config);
+            }
+        });
     }
 }
 
-fn configure_overlay_position(window: &tauri::WebviewWindow, config: &crate::config::AppConfig) {
+pub fn release_idle_webkit(app: &tauri::AppHandle) {
+    let app = app.clone();
+    // Window destruction is asynchronous. A newly opened Settings window wins
+    // this race and keeps its browser processes. The native overlay is not a webview.
+    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(350), move || {
+        if app.webview_windows().is_empty() {
+            let stopped = crate::lifecycle::terminate_webkit_children();
+            crate::lifecycle::trim_idle_heap();
+            eprintln!("[WINDOW] Settings destroyed; released {stopped} idle WebKit helpers");
+        }
+    });
+}
+
+fn configure_overlay_position(window: &tauri::Window, config: &crate::config::AppConfig) {
     let monitor = window
         .current_monitor()
         .ok()
@@ -269,7 +444,13 @@ fn configure_overlay_position(window: &tauri::WebviewWindow, config: &crate::con
         (x, y)
     };
 
-    let _ = window.eval(&format!("window.setOverlayLayout?.({pill_x}, {pill_y})"));
+    NATIVE_OVERLAY.with(|slot| {
+        if let Some(overlay) = slot.borrow_mut().as_mut() {
+            overlay.pill_x = pill_x;
+            overlay.pill_y = pill_y;
+            overlay.surface.queue_draw();
+        }
+    });
     if LAYER_SHELL_ACTIVE.load(Ordering::SeqCst) {
         if let (Some(api), Ok(native)) = (layer_shell_api(), window.gtk_window()) {
             let ptr = native.as_ptr() as *mut gtk::ffi::GtkWindow;

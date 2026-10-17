@@ -73,7 +73,8 @@ int main(int argc, char **argv) {
     if (argc != 2 || getuid() != 0) return 2;
     enum chord chord;
     if (!selected_chord(argv[1], &chord)) return 2;
-    if (prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 || getppid() == 1) return 2;
+    const pid_t parent_pid = getppid();
+    if (prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 || parent_pid == 1) return 2;
     signal(SIGTERM, on_signal);
     signal(SIGINT, on_signal);
 
@@ -91,12 +92,15 @@ int main(int argc, char **argv) {
     }
     globfree(&inputs);
     if (count == 0 || drop_root() != 0) return 3;
+    // Changing effective UID clears PR_SET_PDEATHSIG. Re-arm after dropping
+    // root and detect parent death during that privilege transition as well.
+    if (prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 || getppid() != parent_pid) return 2;
     if (puts("READY") == EOF || fflush(stdout) != 0) return 3;
 
     bool down[KEY_MAX + 1] = {0};
     bool active = false;
     while (!stop_requested) {
-        int ready = poll(fds, count, 1000);
+        int ready = poll(fds, count, 100);
         if (ready < 0) {
             if (errno == EINTR) continue;
             break;

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 pub mod config;
+mod lifecycle;
 pub mod audio;
 pub mod audio_processing;
 pub mod meeting_echo;
@@ -169,12 +170,8 @@ fn update_tray_theme(app: tauri::AppHandle, theme: String) {
     }
 }
 
-// INTENTIONAL DESIGN: hide_window and close_window destroy the WebView2 window
-// completely instead of just hiding it. This fully unloads the WebView2/Chromium runtime
-// (renderer, GPU, and network processes), saving ~100MB-200MB of RAM while the app runs in the background.
-// All background voice dictation, low-level OS hotkeys, tray icon, and audio recording run
-// in native Win32/Rust threads and remain 100% active. When the user re-opens settings via
-// the tray icon, show_or_create_settings_window() recreates the window instantly.
+// Destroy Settings on close so the web UI does not stay resident in the tray.
+// Recording, shortcuts, tray actions and uploads run in native Rust code.
 #[tauri::command]
 fn hide_window(window: tauri::WebviewWindow) {
     if window.is_maximized().unwrap_or(false) == false {
@@ -187,7 +184,7 @@ fn hide_window(window: tauri::WebviewWindow) {
             *size_lock = Some(size);
         }
     }
-    // Gracefully close the WebView2 window to completely unload it from RAM
+    // The close handler saves geometry and allows the webview to be destroyed.
     let _ = window.close();
 }
 
@@ -441,6 +438,7 @@ pub fn handle_session_expired(reason: Option<&str>) {
 }
 
 pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
+    if lifecycle::is_quitting() { return; }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
@@ -587,6 +585,26 @@ fn cleanup_old_recordings() {
  // meeting sidecars must never be removed by an age-only cleanup policy.
 }
 
+// A bounded native rendering check without microphone capture, portal prompts,
+// uploads or network calls. It uses the actual production pill/preview renderer.
+#[cfg(target_os = "linux")]
+fn run_native_overlay_diagnostic() {
+    let app = tauri::Builder::default().setup(|app| {
+        let handle = app.handle().clone();
+        let _ = TAURI_APP.set(handle.clone());
+        linux_desktop::setup(&handle)?;
+        win32::set_preview_text("Native Rust preview. नमस्ते दुनिया. No webview is running.");
+        win32::set_preview_state(win32::PreviewState::Listening);
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(7), move || lifecycle::quit(&handle));
+        Ok(())
+    }).build(tauri::generate_context!()).expect("native overlay diagnostic");
+    app.run(|_, event| {
+        if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+            if lifecycle::keep_tray_alive(code) { api.prevent_exit(); }
+        }
+    });
+}
+
 fn main() {
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
@@ -622,6 +640,12 @@ fn main() {
     // 1. Initialize global loaded config
     let _ = get_active_config();
     println!("[STARTUP 4] Active config initialized.");
+
+    #[cfg(target_os = "linux")]
+    if std::env::args().any(|arg| arg == "--diagnose-native-overlay") {
+        run_native_overlay_diagnostic();
+        return;
+    }
 
     // 2. Retain local meeting recordings for explicit deletion and retry.
     cleanup_old_recordings();
@@ -679,13 +703,7 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                #[cfg(target_os = "windows")]
                 let _ = &api;
-                #[cfg(target_os = "linux")]
-                {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
                 // Save window coordinates and size so they can be restored on recreation
                 if window.is_maximized().unwrap_or(false) == false {
                     if let Ok(pos) = window.outer_position() {
@@ -697,7 +715,11 @@ fn main() {
                         *size_lock = Some(size);
                     }
                 }
-                // Allow default close/destroy flow so WebView2 completely unloads from RAM
+                // Allow default close/destroy flow so the renderer unloads.
+            }
+            #[cfg(target_os = "linux")]
+            if matches!(event, tauri::WindowEvent::Destroyed) && window.label() == "main" {
+                linux_desktop::release_idle_webkit(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -743,8 +765,8 @@ fn main() {
         .expect("error while building tauri application");
 
     app.run(|_app_handle, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
-            api.prevent_exit();
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            if lifecycle::keep_tray_alive(code) { api.prevent_exit(); }
         }
     });
 }
