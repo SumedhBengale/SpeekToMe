@@ -4,6 +4,37 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+cpal = "0.15.3"
+hound = "3.5.1"
+reqwest = { version = "0.12.12", features = ["blocking", "multipart", "json", "stream"] }
+arboard = { version = "3.4.1", features = ["wayland-data-control"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "=2.12.0", features = ["tray-icon"] }
+window-vibrancy = "0.5.2"
+opus = "0.3.1"
+ogg = "0.8"
+keyring = "2.1.2"
+zeroize = { version = "1.8.1", features = ["derive"] }
+rand = "0.8"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+futures-util = "0.3"
+silero-vad-crs = { version = "0.4.0", features = ["auto"] }
+base64 = "0.22"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "global_shortcuts", "remote_desktop", "screencast"] }
+libpulse-binding = "2.30"
+libpulse-simple-binding = "2.29"
+notify-rust = "4.18"
+gtk = "0.18.2"
+libloading = "0.8"
+
+[target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59.0", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
@@ -15,27 +46,7 @@ windows-sys = { version = "0.59.0", features = [
     "Win32_System_Threading",
     "Win32_System_Console",
 ] }
-cpal = "0.15.3"
-hound = "3.5.1"
-reqwest = { version = "0.12.12", features = ["blocking", "multipart", "json", "stream"] }
-arboard = "3.4.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tauri = { version = "2.11.5", features = [] }
-window-vibrancy = "0.5.2"
 winreg = "0.55.0"
-opus = "0.3.1"
-ogg = "0.8"
-keyring = "2.1.2"
-zeroize = { version = "1.8.1", features = ["derive"] }
-rand = "0.8"
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-tokio = { version = "1", features = ["sync", "rt", "macros"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-futures-util = "0.3"
-silero-vad-crs = { version = "0.4.0", features = ["auto"] }
-base64 = "0.22"
 
 [build-dependencies]
 tauri-build = { version = "2.0.3", features = [] }
-

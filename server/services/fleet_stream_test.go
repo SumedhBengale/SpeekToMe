@@ -272,3 +272,56 @@ func TestWorkerVocabularyBoundsPreserveASRForLegacyInvalidEntries(t *testing.T) 
 		t.Fatal("valid dictionary rejected")
 	}
 }
+
+func TestFleetForwardsOneExplicitSpeakingLanguage(t *testing.T) {
+	for _, tc := range []struct{ active, want string }{{"en", "en-US"}, {"hi", "hi-IN"}, {"auto", "auto"}} {
+		t.Run(tc.active, func(t *testing.T) {
+			received := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.CloseNow()
+				_, data, err := conn.Read(r.Context())
+				if err != nil {
+					return
+				}
+				var control struct {
+					Session struct {
+						Language string `json:"language"`
+					} `json:"session"`
+				}
+				if err = json.Unmarshal(data, &control); err != nil {
+					return
+				}
+				received <- control.Session.Language
+				for {
+					if _, _, err := conn.Read(r.Context()); err != nil {
+						return
+					}
+				}
+			}))
+			defer server.Close()
+			t.Setenv("SPEEKTOME_FLEET_URL", server.URL)
+			token := filepath.Join(t.TempDir(), "token")
+			os.WriteFile(token, []byte("01234567890123456789012345678901"), 0600)
+			t.Setenv("SPEEKTOME_WORKER_TOKEN_FILE", token)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			session, err := createFleetStreamingSession(ctx, "self_hosted_nemotron_3_5", []string{tc.active}, "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer session.Close(websocket.StatusNormalClosure, "")
+			select {
+			case got := <-received:
+				if got != tc.want {
+					t.Errorf("model language=%q, want %q", got, tc.want)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		})
+	}
+}

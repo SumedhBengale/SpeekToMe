@@ -34,6 +34,7 @@ const (
 
 // MeetingStreamStartPayload sent by client upon WebSocket connection
 type MeetingStreamStartPayload struct {
+	Language   string `json:"language,omitempty"`
 	Type       string `json:"type"` // "start"
 	Title      string `json:"title"`
 	SampleRate int    `json:"sample_rate"` // 16000
@@ -361,9 +362,19 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var startPayload MeetingStreamStartPayload
-	if msgType == websocket.MessageText {
-		_ = json.Unmarshal(data, &startPayload)
+	if msgType != websocket.MessageText || json.Unmarshal(data, &startPayload) != nil || startPayload.Type != "start" {
+		_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{Type: "error", Error: "Expected a start message with one language string"})
+		return
 	}
+
+	language, languageErr := utils.ResolveSpeakingLanguage(startPayload.Language, user.Languages)
+	if languageErr != nil {
+		_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{Type: "error", Error: languageErr.Error()})
+		return
+	}
+	requestUser := *user
+	requestUser.Languages = []string{language}
+	user = &requestUser
 
 	title := strings.TrimSpace(startPayload.Title)
 	if title == "" {
@@ -407,7 +418,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	}
 	micLang := utils.ResolveNemotronLanguage(user.Languages)
 	micURL := resolveUnifiedStreamURL(streamBaseURL, false, micLang, fmt.Sprintf("meeting-%d-%d-mic", user.ID, nowNs))
-	lbURL := resolveUnifiedStreamURL(streamBaseURL, true, "en", fmt.Sprintf("meeting-%d-%d-lb", user.ID, nowNs))
+	lbURL := resolveUnifiedStreamURL(streamBaseURL, true, micLang, fmt.Sprintf("meeting-%d-%d-lb", user.ID, nowNs))
 
 	log.Printf("[MEETING STREAM UPSTREAM] Connecting Mic stream to: %s", micURL)
 	log.Printf("[MEETING STREAM UPSTREAM] Connecting Loopback stream to: %s", lbURL)

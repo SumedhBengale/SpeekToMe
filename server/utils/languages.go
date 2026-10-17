@@ -8,10 +8,10 @@ import (
 )
 
 type Language struct {
-	Code   string `json:"code"`             // 2-letter ISO 639-1 code (e.g. "en", "hi")
-	Name   string `json:"name"`             // Display name (e.g. "English", "Hindi")
-	Locale string `json:"locale"`           // Inference locale (e.g. "en-US", "hi-IN")
-	Tier   string `json:"tier,omitempty"`   // Tier from model card ("transcription-ready", "broad-coverage", "adaptation-ready")
+	Code   string `json:"code"`           // 2-letter ISO 639-1 code (e.g. "en", "hi")
+	Name   string `json:"name"`           // Display name (e.g. "English", "Hindi")
+	Locale string `json:"locale"`         // Inference locale (e.g. "en-US", "hi-IN")
+	Tier   string `json:"tier,omitempty"` // Tier from model card ("transcription-ready", "broad-coverage", "adaptation-ready")
 }
 
 // SupportedLanguages defines the 35 languages supported by Nemotron 3.5 ASR Streaming 0.6b and Whisper.
@@ -182,18 +182,36 @@ func GetCodeForLocale(localeOrCode string) string {
 	return key
 }
 
-// ResolveNemotronLanguage determines the language parameter to pass to NeMo-Speech.cpp / Nemotron 3.5.
-// If a single language is specified, its exact BCP-47 locale is returned (e.g. "hi-IN", "en-US").
-// If multiple languages or zero are specified, "auto" is returned so Nemotron's built-in multi-lingual
-// classifier and language tagger runs dynamically.
-func ResolveNemotronLanguage(userLanguages []string) string {
-	if len(userLanguages) == 1 {
-		clean := strings.TrimSpace(userLanguages[0])
-		if clean != "" && clean != "auto" {
-			return GetLocaleForCode(clean)
+// ResolveSpeakingLanguage resolves a single per-recording choice. Older clients
+// default to their first saved spoken language; only an explicit auto enables detection.
+func ResolveSpeakingLanguage(requested string, spoken []string) (string, error) {
+	clean := strings.ToLower(strings.TrimSpace(requested))
+	if clean == "" {
+		clean = "en"
+		if len(spoken) > 0 {
+			clean = strings.ToLower(strings.TrimSpace(spoken[0]))
 		}
 	}
-	return "auto"
+	if clean == "auto" {
+		return "auto", nil
+	}
+	valid, err := ValidateLanguages([]string{clean})
+	if err != nil {
+		return "", err
+	}
+	return valid[0], nil
+}
+
+// ResolveNemotronLanguage maps the one active choice to a model locale.
+func ResolveNemotronLanguage(languages []string) string {
+	language, err := ResolveSpeakingLanguage("", languages)
+	if err != nil {
+		return "en-US"
+	}
+	if language == "auto" {
+		return "auto"
+	}
+	return GetLocaleForCode(language)
 }
 
 // ValidateLanguages validates that given language codes/locales belong to the supported set,
@@ -255,4 +273,3 @@ func FormatLanguagesJSON(langs []string) string {
 	b, _ := json.Marshal(valid)
 	return string(b)
 }
-

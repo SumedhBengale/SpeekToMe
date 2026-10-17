@@ -2,6 +2,10 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Serialize, Deserialize};
+#[cfg(target_os = "linux")]
+use libpulse_binding::{sample::{Format as PulseFormat, Spec as PulseSpec}, stream::Direction as PulseDirection};
+#[cfg(target_os = "linux")]
+use libpulse_simple_binding::Simple as PulseSimple;
 
 pub use crate::audio_processing::{is_speech, resample_to_16k_mono, encode_opus_ogg};
 
@@ -34,6 +38,7 @@ pub fn write_wav_to_memory(samples: &[i16], sample_rate: u32, channels: u16) -> 
 
 // Background recording thread routine (manages non-Send WASAPI stream)
 pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
+    let language = crate::speaking_language();
     // Introduce a short delay so the start chime has time to play before CPAL starts input recording.
     // This prevents audio driver profile/channel switching conflicts.
     std::thread::sleep(std::time::Duration::from_millis(150));
@@ -200,6 +205,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     token.clone(),
                     enhance,
                     custom_prompt.clone(),
+                    language.clone(),
                 ) {
                     Ok(handle) => Some(handle),
                     Err(e) => {
@@ -880,7 +886,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     println!("Recording finished. Samples: {}, Speech detected: {}", samples.len(), has_speech);
                     
                     if has_speech {
-                        crate::api::process_and_paste(samples, sample_rate, channels);
+                        crate::api::process_and_paste(samples, sample_rate, channels, language);
                     } else {
                         println!("Silence or keyboard click detected. Transcription request skipped.");
                         crate::win32::hide_overlay();
@@ -928,6 +934,11 @@ pub struct MeetingRecordingState {
     pub mic_stream: Option<SendStream>,
     pub loopback_stream: Option<SendStream>,
     pub shutdown_tx: Option<std::sync::mpsc::Sender<()>>,
+ pub recording_thread: Option<std::thread::JoinHandle<Result<(),String>>>,
+    #[cfg(target_os = "linux")]
+    pub pulse_loopback_shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    #[cfg(target_os = "linux")]
+    pub pulse_loopback_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 pub static MEETING_STATE: std::sync::OnceLock<Mutex<MeetingRecordingState>> = std::sync::OnceLock::new();
@@ -938,6 +949,11 @@ pub fn get_meeting_state() -> &'static Mutex<MeetingRecordingState> {
             mic_stream: None,
             loopback_stream: None,
             shutdown_tx: None,
+            recording_thread: None,
+            #[cfg(target_os = "linux")]
+            pulse_loopback_shutdown: None,
+            #[cfg(target_os = "linux")]
+            pulse_loopback_thread: None,
         })
     })
 }
@@ -1034,142 +1050,102 @@ pub fn start_meeting_recording(
         _ => return Err("Unsupported microphone sample format".into()),
     };
 
-    println!("[AUDIO MEETING LOG] Querying default output (loopback) device...");
+    #[cfg(windows)]
     let mut loopback_rate = 48000;
+    #[cfg(windows)]
     let mut loopback_channels = 2;
-    let loopback_stream_opt = match host.default_output_device() {
-        Some(loopback_device) => {
+    #[cfg(windows)]
+    let loopback_stream_opt = {
+        println!("[AUDIO MEETING LOG] Querying default output (loopback) device...");
+        let mut stream_opt = None;
+        if let Some(loopback_device) = host.default_output_device() {
             let out_name = loopback_device.name().unwrap_or_else(|_| "Unknown Output".to_string());
-            match loopback_device.default_output_config() {
-                Ok(loopback_config) => {
-                    loopback_rate = loopback_config.sample_rate().0;
-                    loopback_channels = loopback_config.channels();
-                    let loopback_sample_format = loopback_config.sample_format();
-                    println!("[AUDIO MEETING LOG] Loopback output device: '{}', rate: {}Hz, channels: {}, format: {:?}", out_name, loopback_rate, loopback_channels, loopback_sample_format);
-                    let loopback_buf_c = loopback_buffer.clone();
-                    let loopback_err_fn = |err| eprintln!("[AUDIO MEETING LOG ERROR] Loopback stream error: {}", err);
-
-                    let built_stream = match loopback_sample_format {
-                        cpal::SampleFormat::F32 => {
-                            match loopback_device.build_input_stream(
-                                &loopback_config.clone().into(),
-                                move |data: &[f32], _| {
-                                    if !data.is_empty() {
-                                        let mut sum_squares = 0.0;
-                                        for &sample in data {
-                                            sum_squares += sample * sample;
-                                        }
-                                        let rms = (sum_squares / data.len() as f32).sqrt();
-                                        LOOPBACK_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
-                                    }
-                                    if let Ok(mut buf) = loopback_buf_c.lock() {
-                                        for &sample in data {
-                                            let i16_val = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                                            buf.push(i16_val);
-                                        }
-                                    }
-                                },
-                                loopback_err_fn,
-                                None
-                            ) {
-                                Ok(s) => {
-                                    println!("[AUDIO MEETING LOG] Successfully built F32 loopback input stream!");
-                                    Some(s)
-                                }
-                                Err(e) => {
-                                    eprintln!("[AUDIO MEETING LOG ERROR] Failed to build F32 loopback stream: {}", e);
-                                    None
-                                }
-                            }
-                        }
-                        cpal::SampleFormat::I16 => {
-                            match loopback_device.build_input_stream(
-                                &loopback_config.clone().into(),
-                                move |data: &[i16], _| {
-                                    if !data.is_empty() {
-                                        let mut sum_squares = 0.0;
-                                        for &sample in data {
-                                            let normalized = sample as f32 / i16::MAX as f32;
-                                            sum_squares += normalized * normalized;
-                                        }
-                                        let rms = (sum_squares / data.len() as f32).sqrt();
-                                        LOOPBACK_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
-                                    }
-                                    if let Ok(mut buf) = loopback_buf_c.lock() {
-                                        buf.extend_from_slice(data);
-                                    }
-                                },
-                                loopback_err_fn,
-                                None
-                            ) {
-                                Ok(s) => {
-                                    println!("[AUDIO MEETING LOG] Successfully built I16 loopback input stream!");
-                                    Some(s)
-                                }
-                                Err(e) => {
-                                    eprintln!("[AUDIO MEETING LOG ERROR] Failed to build I16 loopback stream: {}", e);
-                                    None
-                                }
-                            }
-                        }
-                        cpal::SampleFormat::U16 => {
-                            match loopback_device.build_input_stream(
-                                &loopback_config.clone().into(),
-                                move |data: &[u16], _| {
-                                    if !data.is_empty() {
-                                        let mut sum_squares = 0.0;
-                                        for &sample in data {
-                                            let normalized = (sample as f32 - 32768.0) / 32768.0;
-                                            sum_squares += normalized * normalized;
-                                        }
-                                        let rms = (sum_squares / data.len() as f32).sqrt();
-                                        LOOPBACK_VOLUME.store(((rms * 2500.0).clamp(0.0, 1000.0)) as u32, Ordering::Relaxed);
-                                    }
-                                    if let Ok(mut buf) = loopback_buf_c.lock() {
-                                        for &sample in data {
-                                            let i16_val = (sample as i32 - 32768) as i16;
-                                            buf.push(i16_val);
-                                        }
-                                    }
-                                },
-                                loopback_err_fn,
-                                None
-                            ) {
-                                Ok(s) => {
-                                    println!("[AUDIO MEETING LOG] Successfully built U16 loopback input stream!");
-                                    Some(s)
-                                }
-                                Err(e) => {
-                                    eprintln!("[AUDIO MEETING LOG ERROR] Failed to build U16 loopback stream: {}", e);
-                                    None
-                                }
-                            }
-                        }
-                        _ => {
-                            eprintln!("[AUDIO MEETING LOG WARNING] Unsupported loopback format: {:?}", loopback_sample_format);
-                            None
-                        }
-                    };
-                    built_stream
-                }
-                Err(e) => {
-                    eprintln!("[AUDIO MEETING LOG WARNING] Failed to query default output config for loopback: {}", e);
-                    None
-                }
+            if let Ok(config) = loopback_device.default_output_config() {
+                loopback_rate = config.sample_rate().0;
+                loopback_channels = config.channels();
+                let buffer = loopback_buffer.clone();
+                let err = |e| eprintln!("[AUDIO MEETING LOG ERROR] Loopback stream error: {e}");
+                stream_opt = match config.sample_format() {
+                    cpal::SampleFormat::F32 => loopback_device.build_input_stream(&config.clone().into(), move |d: &[f32], _| {
+                        let rms = if d.is_empty() { 0.0 } else { (d.iter().map(|x| x*x).sum::<f32>() / d.len() as f32).sqrt() };
+                        LOOPBACK_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
+                        if let Ok(mut b) = buffer.lock() { b.extend(d.iter().map(|x| (x * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16)); }
+                    }, err, None).ok(),
+                    cpal::SampleFormat::I16 => loopback_device.build_input_stream(&config.clone().into(), move |d: &[i16], _| {
+                        let rms = if d.is_empty() { 0.0 } else { (d.iter().map(|x| (*x as f32 / i16::MAX as f32).powi(2)).sum::<f32>() / d.len() as f32).sqrt() };
+                        LOOPBACK_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
+                        if let Ok(mut b) = buffer.lock() { b.extend_from_slice(d); }
+                    }, err, None).ok(),
+                    cpal::SampleFormat::U16 => loopback_device.build_input_stream(&config.clone().into(), move |d: &[u16], _| {
+                        let rms = if d.is_empty() { 0.0 } else { (d.iter().map(|x| ((*x as f32 - 32768.0) / 32768.0).powi(2)).sum::<f32>() / d.len() as f32).sqrt() };
+                        LOOPBACK_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
+                        if let Ok(mut b) = buffer.lock() { b.extend(d.iter().map(|x| (*x as i32 - 32768) as i16)); }
+                    }, err, None).ok(),
+                    other => { eprintln!("[AUDIO MEETING LOG WARNING] Unsupported loopback format: {other:?}"); None }
+                };
+                println!("[AUDIO MEETING LOG] Windows loopback device '{out_name}', {loopback_rate}Hz, {loopback_channels} channels");
             }
         }
-        None => {
-            eprintln!("[AUDIO MEETING LOG WARNING] No default output device found for loopback capture.");
-            None
-        }
+        stream_opt
     };
 
+    #[cfg(target_os = "linux")]
+    let (loopback_rate, loopback_channels, pulse_loopback_shutdown, pulse_loopback_thread) = {
+        // PipeWire provides this PulseAudio protocol source even when the session uses
+        // PipeWire natively. The special name resolves to the monitor of the default sink.
+        let rate = 48_000u32;
+        let channels = 2u8;
+        let spec = PulseSpec { format: PulseFormat::S16NE, channels, rate };
+        if !spec.is_valid() { return Err("Invalid PulseAudio monitor capture format".into()); }
+        let stream = PulseSimple::new(
+            None,
+            "SpeekTo.Me",
+            PulseDirection::Record,
+            Some("@DEFAULT_MONITOR@"),
+            "Meeting output capture",
+            &spec,
+            None,
+            None,
+        ).map_err(|e| format!("Could not open the default output monitor through PulseAudio/PipeWire: {e}"))?;
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_shutdown = shutdown.clone();
+        let buffer = loopback_buffer.clone();
+        let thread = std::thread::Builder::new().name("speektome-output-monitor".into()).spawn(move || {
+            // Read 10 ms blocks so shutdown is observed promptly and the capture buffer
+            // advances continuously, including during silence, preserving the 48 kHz clock.
+            const FRAMES: usize = 480;
+            let mut bytes = [0u8; FRAMES * 2 * 2];
+            while !thread_shutdown.load(Ordering::Relaxed) {
+                if let Err(e) = stream.read(&mut bytes) {
+                    eprintln!("[AUDIO MEETING LOG ERROR] Output monitor capture stopped: {e}");
+                    break;
+                }
+                if thread_shutdown.load(Ordering::Relaxed) { break; }
+                let rms = bytes.chunks_exact(2).map(|b| {
+                    let x = i16::from_ne_bytes([b[0], b[1]]) as f32 / i16::MAX as f32;
+                    x * x
+                }).sum::<f32>() / (FRAMES * channels as usize) as f32;
+                LOOPBACK_VOLUME.store((rms.sqrt() * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
+                if let Ok(mut out) = buffer.lock() {
+                    out.extend(bytes.chunks_exact(2).map(|b| i16::from_ne_bytes([b[0], b[1]])));
+                }
+            }
+        })?;
+        println!("[AUDIO MEETING LOG] PulseAudio/PipeWire default sink monitor capture started at {rate}Hz, {channels} channels");
+        (rate, channels as u16, Some(shutdown), Some(thread))
+    };
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let (loopback_rate, loopback_channels) = (48000u32, 2u16);
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let loopback_stream_opt: Option<cpal::Stream> = None;
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
     println!("[AUDIO MEETING LOG] Starting mic stream playback...");
     mic_stream.play()?;
     println!("[AUDIO MEETING LOG] Mic stream playing!");
 
+    #[cfg(windows)]
     if let Some(ref lb) = loopback_stream_opt {
         println!("[AUDIO MEETING LOG] Starting loopback stream playback...");
         if let Err(e) = lb.play() {
@@ -1179,7 +1155,8 @@ pub fn start_meeting_recording(
         }
     }
 
-    std::thread::spawn(move || {
+    let (recording_ready_tx, recording_ready_rx) = std::sync::mpsc::channel();
+    let recording_thread=std::thread::spawn(move || {
         let mic_path = {
             let mut p = output_ogg_path.clone();
             p.set_extension("mic.ogg");
@@ -1195,21 +1172,21 @@ pub fn start_meeting_recording(
             Ok(enc) => enc,
             Err(e) => {
                 eprintln!("Failed to create Opus mixed encoder: {:?}", e);
-                return;
+                return Err(format!("Audio recording initialization failed: {:?}", e));
             }
         };
         let mut encoder_mic = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
             Ok(enc) => enc,
             Err(e) => {
                 eprintln!("Failed to create Opus mic encoder: {:?}", e);
-                return;
+                return Err(format!("Audio recording initialization failed: {:?}", e));
             }
         };
         let mut encoder_loopback = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
             Ok(enc) => enc,
             Err(e) => {
                 eprintln!("Failed to create Opus loopback encoder: {:?}", e);
-                return;
+                return Err(format!("Audio recording initialization failed: {:?}", e));
             }
         };
 
@@ -1222,21 +1199,21 @@ pub fn start_meeting_recording(
             Ok(f) => f,
             Err(e) => {
                 eprintln!("Failed to create mixed Ogg output file: {:?}", e);
-                return;
+                return Err(format!("Audio recording initialization failed: {:?}", e));
             }
         };
         let file_mic = match std::fs::File::create(&mic_path) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("Failed to create mic Ogg output file: {:?}", e);
-                return;
+                return Err(format!("Audio recording initialization failed: {:?}", e));
             }
         };
         let file_loopback = match std::fs::File::create(&loopback_path) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("Failed to create loopback Ogg output file: {:?}", e);
-                return;
+                return Err(format!("Audio recording initialization failed: {:?}", e));
             }
         };
 
@@ -1273,15 +1250,16 @@ pub fn start_meeting_recording(
         tags.extend_from_slice(vendor);
         tags.extend_from_slice(&0u32.to_le_bytes());
 
-        let _ = writer_mixed.write_packet(head.clone().into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, 0);
-        let _ = writer_mixed.write_packet(tags.clone().into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+        writer_mixed.write_packet(head.clone().into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
+        writer_mixed.write_packet(tags.clone().into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
 
-        let _ = writer_mic.write_packet(head.clone().into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, 0);
-        let _ = writer_mic.write_packet(tags.clone().into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+        writer_mic.write_packet(head.clone().into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
+        writer_mic.write_packet(tags.clone().into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
 
-        let _ = writer_loopback.write_packet(head.clone().into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, 0);
-        let _ = writer_loopback.write_packet(tags.clone().into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, 0);
+        writer_loopback.write_packet(head.clone().into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
+        writer_loopback.write_packet(tags.clone().into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
 
+        let _ = recording_ready_tx.send(());
         let mut mic_stream_buffer: Vec<i16> = Vec::new();
         let mut loopback_stream_buffer: Vec<i16> = Vec::new();
 
@@ -1314,6 +1292,11 @@ pub fn start_meeting_recording(
                 break;
             }
             loop_count += 1;
+            if loop_count % 20 == 0 {
+             writer_mixed.inner().sync_data().map_err(|e|e.to_string())?;
+             writer_mic.inner().sync_data().map_err(|e|e.to_string())?;
+             writer_loopback.inner().sync_data().map_err(|e|e.to_string())?;
+            }
 
             let mic_raw = {
                 let mut lock = mic_buffer.lock().unwrap();
@@ -1330,8 +1313,8 @@ pub fn start_meeting_recording(
             total_mic_samples += mic_16k.len();
             total_lb_samples += loopback_16k.len();
 
-            mic_stream_buffer.extend_from_slice(&mic_16k);
-            loopback_stream_buffer.extend_from_slice(&loopback_16k);
+            if stream_tx.is_some() {mic_stream_buffer.extend_from_slice(&mic_16k);}
+            if stream_tx.is_some() {loopback_stream_buffer.extend_from_slice(&loopback_16k);}
 
             mic_carry_encode.extend_from_slice(&mic_16k);
             loopback_carry_encode.extend_from_slice(&loopback_16k);
@@ -1339,7 +1322,7 @@ pub fn start_meeting_recording(
             // Synchronize loopback time clock if WASAPI loopback device paused during silence
             if total_lb_samples < total_mic_samples {
                 let missing = total_mic_samples - total_lb_samples;
-                loopback_stream_buffer.resize(loopback_stream_buffer.len() + missing, 0);
+                if stream_tx.is_some() {loopback_stream_buffer.resize(loopback_stream_buffer.len() + missing, 0);}
                 loopback_carry_encode.resize(loopback_carry_encode.len() + missing, 0);
                 total_lb_samples = total_mic_samples;
             }
@@ -1434,7 +1417,7 @@ pub fn start_meeting_recording(
                     granule_pos_mic += 2880;
                     if let Ok(len) = encoder_mic.encode(&mic_block[start..end], &mut encoded_buf_mic) {
                         let packet = encoded_buf_mic[..len].to_vec();
-                        let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mic);
+                        writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, if granule_pos_mic % 14400 == 0 {ogg::writing::PacketWriteEndInfo::EndPage}else{ogg::writing::PacketWriteEndInfo::NormalPacket}, granule_pos_mic).map_err(|e|format!("Audio recording write failed: {}",e))?;
                     }
                 }
 
@@ -1445,7 +1428,7 @@ pub fn start_meeting_recording(
                     granule_pos_lb += 2880;
                     if let Ok(len) = encoder_loopback.encode(&lb_block[start..end], &mut encoded_buf_lb) {
                         let packet = encoded_buf_lb[..len].to_vec();
-                        let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_lb);
+                        writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, if granule_pos_lb % 14400 == 0 {ogg::writing::PacketWriteEndInfo::EndPage}else{ogg::writing::PacketWriteEndInfo::NormalPacket}, granule_pos_lb).map_err(|e|format!("Audio recording write failed: {}",e))?;
                     }
                 }
 
@@ -1459,7 +1442,7 @@ pub fn start_meeting_recording(
                     granule_pos_mixed += 2880;
                     if let Ok(len) = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed) {
                         let packet = encoded_buf_mixed[..len].to_vec();
-                        let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mixed);
+                        writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, if granule_pos_mixed % 14400 == 0 {ogg::writing::PacketWriteEndInfo::EndPage}else{ogg::writing::PacketWriteEndInfo::NormalPacket}, granule_pos_mixed).map_err(|e|format!("Audio recording write failed: {}",e))?;
                     }
                 }
 
@@ -1480,8 +1463,8 @@ pub fn start_meeting_recording(
         let mic_16k = resample_to_16k_mono(&mic_raw, mic_rate, mic_channels);
         let loopback_16k = resample_to_16k_mono(&loopback_raw, loopback_rate, loopback_channels);
 
-        mic_stream_buffer.extend_from_slice(&mic_16k);
-        loopback_stream_buffer.extend_from_slice(&loopback_16k);
+        if stream_tx.is_some() {mic_stream_buffer.extend_from_slice(&mic_16k);}
+        if stream_tx.is_some() {loopback_stream_buffer.extend_from_slice(&loopback_16k);}
 
         mic_carry_encode.extend_from_slice(&mic_16k);
         loopback_carry_encode.extend_from_slice(&loopback_16k);
@@ -1536,13 +1519,13 @@ pub fn start_meeting_recording(
                 granule_pos_mic += 2880;
                 if let Ok(len) = encoder_mic.encode(&mic_carry_encode[start..end], &mut encoded_buf_mic) {
                     let packet = encoded_buf_mic[..len].to_vec();
-                    let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mic);
+                    writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, if granule_pos_mic % 14400 == 0 {ogg::writing::PacketWriteEndInfo::EndPage}else{ogg::writing::PacketWriteEndInfo::NormalPacket}, granule_pos_mic).map_err(|e|format!("Audio recording write failed: {}",e))?;
                 }
 
                 granule_pos_lb += 2880;
                 if let Ok(len) = encoder_loopback.encode(&loopback_carry_encode[start..end], &mut encoded_buf_lb) {
                     let packet = encoded_buf_lb[..len].to_vec();
-                    let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_lb);
+                    writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, if granule_pos_lb % 14400 == 0 {ogg::writing::PacketWriteEndInfo::EndPage}else{ogg::writing::PacketWriteEndInfo::NormalPacket}, granule_pos_lb).map_err(|e|format!("Audio recording write failed: {}",e))?;
                 }
 
                 let mut mixed_frame = [0i16; CHUNK_60MS];
@@ -1552,7 +1535,7 @@ pub fn start_meeting_recording(
                 granule_pos_mixed += 2880;
                 if let Ok(len) = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed) {
                     let packet = encoded_buf_mixed[..len].to_vec();
-                    let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::NormalPacket, granule_pos_mixed);
+                    writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, if granule_pos_mixed % 14400 == 0 {ogg::writing::PacketWriteEndInfo::EndPage}else{ogg::writing::PacketWriteEndInfo::NormalPacket}, granule_pos_mixed).map_err(|e|format!("Audio recording write failed: {}",e))?;
                 }
             }
 
@@ -1567,13 +1550,13 @@ pub fn start_meeting_recording(
                 granule_pos_mic += 2880;
                 if let Ok(len) = encoder_mic.encode(&mic_final, &mut encoded_buf_mic) {
                     let packet = encoded_buf_mic[..len].to_vec();
-                    let _ = writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mic);
+                    writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mic).map_err(|e|format!("Audio recording write failed: {}",e))?;
                 }
 
                 granule_pos_lb += 2880;
                 if let Ok(len) = encoder_loopback.encode(&lb_final, &mut encoded_buf_lb) {
                     let packet = encoded_buf_lb[..len].to_vec();
-                    let _ = writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_lb);
+                    writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_lb).map_err(|e|format!("Audio recording write failed: {}",e))?;
                 }
 
                 let mut mixed_frame = [0i16; CHUNK_60MS];
@@ -1583,7 +1566,7 @@ pub fn start_meeting_recording(
                 granule_pos_mixed += 2880;
                 if let Ok(len) = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed) {
                     let packet = encoded_buf_mixed[..len].to_vec();
-                    let _ = writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mixed);
+                    writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mixed).map_err(|e|format!("Audio recording write failed: {}",e))?;
                 }
             }
         }
@@ -1592,21 +1575,39 @@ pub fn start_meeting_recording(
             let _ = w.finalize();
         }
 
+        writer_mixed.inner().sync_all().map_err(|e|e.to_string())?;
+        writer_mic.inner().sync_all().map_err(|e|e.to_string())?;
+        writer_loopback.inner().sync_all().map_err(|e|e.to_string())?;
         let energy_path = output_ogg_path.with_extension("energy.json");
         if let Ok(json_bytes) = serde_json::to_vec(&energy_log) {
             let _ = std::fs::write(energy_path, json_bytes);
         }
+        Ok(())
     });
 
     let mut state = get_meeting_state().lock().unwrap_or_else(|e| e.into_inner());
     state.mic_stream = Some(SendStream(mic_stream));
-    state.loopback_stream = loopback_stream_opt.map(SendStream);
+    #[cfg(windows)]
+    { state.loopback_stream = loopback_stream_opt.map(SendStream); }
+    #[cfg(not(windows))]
+    { state.loopback_stream = None; }
+    #[cfg(target_os = "linux")]
+    {
+        state.pulse_loopback_shutdown = pulse_loopback_shutdown;
+        state.pulse_loopback_thread = pulse_loopback_thread;
+    }
     state.shutdown_tx = Some(shutdown_tx);
+    state.recording_thread = Some(recording_thread);
+    drop(state);
+    if recording_ready_rx.recv_timeout(std::time::Duration::from_secs(5)).is_err() {
+        let error = stop_meeting_recording().err().unwrap_or_else(|| "Recording storage initialization timed out".to_string());
+        return Err(error.into());
+    }
 
     Ok(())
 }
 
-pub fn stop_meeting_recording() {
+pub fn stop_meeting_recording() -> Result<(),String> {
     let mut state = get_meeting_state().lock().unwrap_or_else(|e| e.into_inner());
 
     if let Some(tx) = state.shutdown_tx.take() {
@@ -1615,9 +1616,23 @@ pub fn stop_meeting_recording() {
 
     state.mic_stream = None;
     state.loopback_stream = None;
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(stop) = state.pulse_loopback_shutdown.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        if let Some(worker) = state.pulse_loopback_thread.take() {
+            // pa_simple_read may block if the monitor is suspended. The stop
+            // flag is checked after it wakes; do not freeze the UI on join.
+            drop(worker);
+        }
+    }
 
     MIC_VOLUME.store(0, Ordering::Relaxed);
     LOOPBACK_VOLUME.store(0, Ordering::Relaxed);
+ let writer=state.recording_thread.take();drop(state);
+ if let Some(writer)=writer {writer.join().map_err(|_|"Meeting audio finalization failed".to_string())??;}
+ Ok(())
 }
 
 pub fn decode_ogg_to_wav(ogg_path: &std::path::Path) -> Result<Vec<u8>, String> {
@@ -1658,5 +1673,3 @@ pub fn decode_ogg_to_wav(ogg_path: &std::path::Path) -> Result<Vec<u8>, String> 
 
     Ok(wav_cursor.into_inner())
 }
-
-

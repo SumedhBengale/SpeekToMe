@@ -57,8 +57,9 @@ pub fn start_meeting_streaming_session(
     title: String,
     turns_cache: Option<std::sync::Arc<std::sync::Mutex<Vec<ClientMeetingTurn>>>>,
 ) -> Result<MeetingStreamHandle, String> {
+    let language = crate::speaking_language();
     let ws_url = get_meeting_stream_ws_url(&api_url, &token);
-    println!("[MEETING STREAM] Connecting to live meeting WebSocket: {}", ws_url);
+    println!("[MEETING STREAM] Connecting to live meeting WebSocket (language: {})", language);
 
     let (tx_audio, rx_audio) = channel::<MeetingStreamAudioMessage>();
     let (tx_final, rx_final) = channel::<Result<String, String>>();
@@ -94,6 +95,7 @@ pub fn start_meeting_streaming_session(
             let start_payload = serde_json::json!({
                 "type": "start",
                 "title": title,
+                "language": language,
                 "sample_rate": 16000,
                 "channels": 1
             });

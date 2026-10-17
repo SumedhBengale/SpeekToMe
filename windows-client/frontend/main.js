@@ -12,6 +12,59 @@ let unlistenLoginFailed = null;
 let currentStep = 1;
 let API_URL = "https://api.speekto.me";
 
+const IS_LINUX_CLIENT = /linux/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`);
+const DEFAULT_HOTKEY = 'Ctrl + Win';
+
+function configureLinuxSettings() {
+  if (!IS_LINUX_CLIENT) {
+    return;
+  }
+
+  document.documentElement.dataset.platform = 'linux';
+  [document.getElementById('hotkey-select'), document.getElementById('onboard-hotkey-select')].forEach(select => {
+    if (!select) return;
+    // Keep the same predefined shortcuts and stored values across platforms.
+    // Linux desktops call the Windows key Meta (or Super), so only change its label.
+    [...select.options].forEach(option => {
+      option.hidden = false;
+      option.textContent = option.textContent.replace(/Windows/g, 'Meta');
+    });
+  });
+
+  document.querySelectorAll('.autostart-hint').forEach(hint => {
+    hint.textContent = 'Automatically launch SpeekTo.Me when you sign in.';
+  });
+
+  const typingTitle = document.querySelector('#typing-mode-check + .checkmark + .checkbox-label-block .checkbox-title');
+  const typingHint = document.querySelector('#typing-mode-check + .checkmark + .checkbox-label-block .setting-hint');
+  if (typingTitle) typingTitle.textContent = 'Type text with simulated keystrokes';
+  if (typingHint) typingHint.textContent = 'Off: paste the completed text. Characters unavailable on your keyboard layout also use paste to preserve the text.';
+
+  const onboardTypingTitle = document.querySelector('#onboard-typing-mode-check + .checkmark + .checkbox-label-block .checkbox-title');
+  const onboardTypingHint = document.querySelector('#onboard-typing-mode-check + .checkmark + .checkbox-label-block .setting-hint');
+  if (onboardTypingTitle) onboardTypingTitle.textContent = 'Type text with simulated keystrokes';
+  if (onboardTypingHint) onboardTypingHint.textContent = 'Off: paste the completed text. Characters unavailable on your keyboard layout also use paste to preserve the text.';
+}
+
+async function loadLinuxCapabilityStatus() {
+  if (!IS_LINUX_CLIENT) return;
+  const status = document.getElementById('linux-capability-status');
+  if (!status) return;
+  status.hidden = false;
+  status.textContent = 'Checking desktop shortcut and text insertion permissions…';
+  try {
+    const capabilities = await invoke('get_linux_capabilities');
+    const shortcut = capabilities?.shortcut ? 'Shortcut ready' : 'Shortcut permission needed';
+    const insertion = capabilities?.insertion ? 'Text insertion ready' : 'Text insertion permission needed';
+    status.textContent = [shortcut, insertion, capabilities?.detail].filter(Boolean).join(' · ');
+  } catch (error) {
+    console.warn('[LINUX] Capability status is unavailable:', error);
+    status.textContent = 'Shortcut and text insertion permission status is unavailable.';
+  }
+}
+
+configureLinuxSettings();
+
 function isUserPro(info) {
   if (!info) return false;
   const active = (info.plan_active === true || info.plan_active === 1 || info.plan_active === 'true' || info.plan_active === '1');
@@ -377,6 +430,39 @@ let SUPPORTED_LANGUAGES = [
 ];
 
 let selectedLanguages = ["en"];
+let speakingLanguage = "en";
+
+function renderSpeakingLanguages() {
+  if (speakingLanguage !== 'auto' && !selectedLanguages.includes(speakingLanguage)) {
+    speakingLanguage = selectedLanguages[0] || 'en';
+  }
+  for (const id of ['client-speaking-language', 'onboard-speaking-language']) {
+    const select = document.getElementById(id);
+    if (!select) continue;
+    select.replaceChildren();
+    for (const code of ['auto', ...selectedLanguages]) {
+      const option = document.createElement('option');
+      option.value = code;
+      option.textContent = code === 'auto' ? 'Automatic' : getLanguageName(code);
+      select.appendChild(option);
+    }
+    select.value = speakingLanguage;
+  }
+  syncCustomSelects();
+}
+
+async function chooseSpeakingLanguage(event) {
+  const choice = event.target.value;
+  try {
+    speakingLanguage = await invoke('set_active_language', { language: choice });
+    if (currentConfig) currentConfig.active_language = speakingLanguage;
+    showToast('Speaking language: ' + (speakingLanguage === 'auto' ? 'Automatic' : getLanguageName(speakingLanguage)), 'Applies to the next recording', 'info');
+  } catch (err) {
+    showToast(String(err), 'Languages', 'error');
+  }
+  renderSpeakingLanguages();
+}
+
 
 function getLanguageName(code) {
   const item = SUPPORTED_LANGUAGES.find(l => l.code === code);
@@ -384,6 +470,7 @@ function getLanguageName(code) {
 }
 
 function renderClientLanguageUI() {
+  renderSpeakingLanguages();
   const containers = [
     { chips: document.getElementById('client-lang-chips'), count: document.getElementById('client-lang-count') },
     { chips: document.getElementById('onboard-lang-chips'), count: document.getElementById('onboard-lang-count') }
@@ -558,6 +645,9 @@ async function saveLanguagesToBackend() {
     showToast("Spoken languages saved!", "Languages", "info");
   } catch (err) {
     showToast(err || "Failed to update language preferences.", "Languages", "error");
+    const saved = await invoke('get_config');
+    selectedLanguages = saved.languages || ['en'];
+    speakingLanguage = saved.active_language || selectedLanguages[0];
     renderClientLanguageUI();
   }
 }
@@ -565,6 +655,18 @@ async function saveLanguagesToBackend() {
 async function init() {
   // Initialize Custom Themed Dropdowns immediately before any async backend calls
   initCustomSelects();
+  for (const id of ['client-speaking-language', 'onboard-speaking-language']) {
+    document.getElementById(id)?.addEventListener('change', chooseSpeakingLanguage);
+  }
+  await listen('speaking-language-changed', ({ payload }) => {
+    speakingLanguage = payload.language;
+    if (Array.isArray(payload.languages) && payload.languages.length) selectedLanguages = payload.languages;
+    if (currentConfig) {
+      currentConfig.active_language = speakingLanguage;
+      currentConfig.languages = [...selectedLanguages];
+    }
+    renderClientLanguageUI();
+  });
 
   // 0. Synchronously bind all core UI listeners first so buttons are ALWAYS responsive
   const saveBtnEl = document.getElementById('save-btn');
@@ -737,6 +839,8 @@ async function init() {
     currentConfig = await invoke('get_config');
     console.log("[INIT] Config loaded:", currentConfig);
     applyConfigToUI(currentConfig);
+    loadLinuxCapabilityStatus();
+    if (IS_LINUX_CLIENT) setInterval(loadLinuxCapabilityStatus, 3000);
 
     // 3. Fetch user information status & update dashboard UI
     const userInfo = await invoke('get_user_info');
@@ -1020,6 +1124,8 @@ async function init() {
 function initCustomSelects() {
   const selects = document.querySelectorAll('select.fluent-select');
   selects.forEach(select => {
+    // Language choices change at runtime; keep the accessible native select.
+    if (select.id.endsWith("-speaking-language")) return;
     if (select.parentElement && select.parentElement.classList.contains('custom-select-wrapper')) {
       return;
     }
@@ -1053,7 +1159,7 @@ function initCustomSelects() {
     menu.className = 'custom-select-menu';
     menu.setAttribute('role', 'listbox');
 
-    Array.from(select.options).forEach(opt => {
+    Array.from(select.options).filter(opt => !opt.hidden).forEach(opt => {
       const optEl = document.createElement('div');
       optEl.className = 'custom-select-option' + (opt.value === select.value ? ' selected' : '');
       optEl.setAttribute('role', 'option');
@@ -1219,7 +1325,7 @@ function applyConfigToUI(config) {
   }
 
   // General settings inputs
-  if (hotkeySelect) hotkeySelect.value = config.hotkey || 'Ctrl + Win';
+  if (hotkeySelect) hotkeySelect.value = normalizeConfiguredHotkey(config.hotkey);
   if (hotkeyModeSelect) hotkeyModeSelect.value = config.hotkey_mode || 'hold';
   if (autostartCheck) autostartCheck.checked = Boolean(config.autostart);
   if (typingModeCheck) typingModeCheck.checked = Boolean(config.typing_mode);
@@ -1255,7 +1361,7 @@ function applyConfigToUI(config) {
   }
 
   // Onboarding inputs
-  if (onboardHotkeySelect) onboardHotkeySelect.value = config.hotkey || 'Ctrl + Win';
+  if (onboardHotkeySelect) onboardHotkeySelect.value = normalizeConfiguredHotkey(config.hotkey);
   if (onboardHotkeyModeSelect) onboardHotkeyModeSelect.value = config.hotkey_mode || 'hold';
   if (onboardAutostartCheck) onboardAutostartCheck.checked = Boolean(config.autostart);
   if (onboardStreamingModeCheck) {
@@ -1270,12 +1376,17 @@ function applyConfigToUI(config) {
   applyAppTheme(config.theme || 'forest');
 
   if (config.languages && Array.isArray(config.languages) && config.languages.length > 0) {
+    speakingLanguage = config.active_language || config.languages[0] || "en";
     selectedLanguages = config.languages;
     renderClientLanguageUI();
   }
 
   // Sync custom dropdown displays with applied config values
   syncCustomSelects();
+}
+
+function normalizeConfiguredHotkey(hotkey) {
+  return hotkey || DEFAULT_HOTKEY;
 }
 
 function cssColorToBgr(colorStr) {
@@ -1331,8 +1442,10 @@ function gatherConfigFromUI(isOnboarding) {
     const themeName = onboardThemeSelect ? onboardThemeSelect.value : 'forest';
     const colors = getPillColorsForTheme(themeName);
     return {
+      languages: [...selectedLanguages],
+      active_language: speakingLanguage,
       api_url: api_url,
-      hotkey: onboardHotkeySelect ? onboardHotkeySelect.value : 'Ctrl + Win',
+      hotkey: onboardHotkeySelect ? onboardHotkeySelect.value : DEFAULT_HOTKEY,
       hotkey_mode: onboardHotkeyModeSelect ? onboardHotkeyModeSelect.value : 'hold',
       autostart: onboardAutostartCheck ? onboardAutostartCheck.checked : false,
       typing_mode: onboardTypingModeCheck ? onboardTypingModeCheck.checked : false,
@@ -1355,8 +1468,10 @@ function gatherConfigFromUI(isOnboarding) {
     const themeName = themeSelect ? themeSelect.value : 'forest';
     const colors = getPillColorsForTheme(themeName);
     return {
+      languages: [...selectedLanguages],
+      active_language: speakingLanguage,
       api_url: api_url,
-      hotkey: hotkeySelect ? hotkeySelect.value : 'Ctrl + Win',
+      hotkey: hotkeySelect ? hotkeySelect.value : DEFAULT_HOTKEY,
       hotkey_mode: hotkeyModeSelect ? hotkeyModeSelect.value : 'hold',
       autostart: autostartCheck ? autostartCheck.checked : false,
       typing_mode: typingModeCheck ? typingModeCheck.checked : false,
@@ -2232,8 +2347,7 @@ async function loadVocabulary() {
   }
 }
 
-// Run initialization
-document.addEventListener('DOMContentLoaded', init);
+// Initialization is registered once, after all controllers are defined.
 
 // ==========================================
 // Meetings & Notes Feature Controller
@@ -2294,7 +2408,7 @@ function setupMeetingsUI() {
     listen('meeting-session-ready', () => {
       const badge = document.getElementById('meetings-live-status-badge');
       if (badge) {
-        badge.textContent = "Live Connected";
+        badge.textContent = "Recording locally";
         badge.style.color = "#57bf7c";
       }
     });
@@ -2429,7 +2543,7 @@ function showMeetingsEmpty(message) {
 
 let currentMeetingsReqId = 0;
 
-async function loadMeetings() {
+async function loadMeetings(quiet = false) {
   const listGrid = document.getElementById('meetings-list');
   if (!listGrid) return;
 
@@ -2442,7 +2556,7 @@ async function loadMeetings() {
   }
 
   // Display the loading state while server fetch is in progress
-  showMeetingsLoading();
+  if (!quiet) showMeetingsLoading();
 
   try {
     const res = await fetch(`${API_URL}/meetings`, {
@@ -2460,10 +2574,12 @@ async function loadMeetings() {
 
     window.allMeetings = Array.isArray(meetings) ? meetings : [];
     renderMeetingsList(window.allMeetings);
+    await appendPendingLocalMeetings();
   } catch (err) {
     if (reqId !== currentMeetingsReqId) return;
     console.error("Failed to load meetings:", err);
-    showMeetingsEmpty('Error connecting to SpeekTo.Me server. Please check your connection.');
+    if (!quiet) showMeetingsEmpty('Error connecting to SpeekTo.Me server. Please check your connection.');
+    await appendPendingLocalMeetings();
   }
 }
 
@@ -2615,6 +2731,12 @@ function renderMeetingsList(meetings) {
 
     leftGroup.appendChild(iconBadge);
     leftGroup.appendChild(title);
+    if (m.processing_status && m.processing_status !== 'completed') {
+      const status = document.createElement('span');
+      status.textContent = m.processing_status === 'failed' ? 'Processing failed' : m.processing_status === 'processing' ? 'Processing' : 'Queued';
+      status.className = 'meeting-processing-status';
+      leftGroup.appendChild(status);
+    }
 
     // Three dots menu wrapper
     const menuWrapper = document.createElement('div');
@@ -2662,6 +2784,18 @@ function renderMeetingsList(meetings) {
     });
 
     dropdown.appendChild(viewItem);
+    if (m.processing_status === 'failed' && m.client_id) {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'meeting-dropdown-item'; retry.textContent = 'Retry processing';
+      retry.addEventListener('click', async e => {
+        e.stopPropagation(); retry.disabled = true;
+        try {
+          const response = await fetch(`${API_URL}/v1/meetings/jobs/${encodeURIComponent(m.client_id)}/retry`, {method:'POST', headers:{Authorization:`Bearer ${currentConfig.session_token}`}});
+          if (!response.ok) throw new Error(await response.text());
+          await loadMeetings(true);
+        } catch (error) { showToast(String(error), 'Retry failed', 'error'); retry.disabled = false; }
+      });
+      dropdown.appendChild(retry);
+    }
     dropdown.appendChild(deleteItem);
 
     menuBtn.addEventListener('click', (e) => {
@@ -3701,7 +3835,7 @@ function rehydrateActiveMeeting(activeMeeting) {
   // 5. Update status badge
   const badge = document.getElementById('meetings-live-status-badge');
   if (badge) {
-    badge.textContent = "Live Connected";
+    badge.textContent = "Recording locally";
     badge.style.color = "#57bf7c";
   }
 
@@ -3716,7 +3850,7 @@ function rehydrateActiveMeeting(activeMeeting) {
     } else {
       turnsList.innerHTML = `
         <div id="meetings-live-waiting-text" class="live-waiting-text">
-          Listening for speech from microphone and remote attendees...
+          Recording microphone and system audio. Transcription and speaker identification start after you stop.
         </div>
       `;
     }
@@ -3767,13 +3901,13 @@ async function startMeetingRecording() {
   if (turnsList) {
     turnsList.innerHTML = `
       <div id="meetings-live-waiting-text" class="live-waiting-text">
-        Listening for speech from microphone and remote attendees...
+        Recording microphone and system audio. Transcription and speaker identification start after you stop.
       </div>
     `;
   }
   const badge = document.getElementById('meetings-live-status-badge');
   if (badge) {
-    badge.textContent = "Connecting...";
+    badge.textContent = "Starting recording...";
     badge.style.color = "#888";
   }
 
@@ -3784,6 +3918,7 @@ async function startMeetingRecording() {
   try {
     console.log("[MEETING FRONTEND] Invoking start_meeting command on Tauri backend...");
     currentMeetingFile = await invoke('start_meeting', { title: "Recording..." });
+    if (badge) { badge.textContent="Recording locally"; badge.style.color="#4ec9b0"; }
     console.log("[MEETING FRONTEND] start_meeting returned successfully. Filepath:", currentMeetingFile);
   } catch (err) {
     console.error("[MEETING FRONTEND ERROR] Failed to start meeting recording:", err);
@@ -3832,7 +3967,7 @@ async function stopMeetingRecording() {
 
   try {
     console.log("[MEETING FRONTEND] Invoking stop_meeting command on Tauri backend...");
-    const res = await invoke('stop_meeting');
+    const res = await invoke('stop_meeting', {title});
     currentMeetingFile = null;
     console.log("[MEETING FRONTEND] stop_meeting returned:", res);
     let m = null;
@@ -3846,7 +3981,11 @@ async function stopMeetingRecording() {
       m = JSON.parse(resultJson);
     }
 
-    if (m && m.id) {
+    if (m && ['queued','processing'].includes(m.status)) {
+      showDashboardView();
+      loadMeetings();
+      await showAlertDialog({title:"Meeting uploaded",message:"Your meeting is queued for transcription and speaker identification. You can close the app; results will be saved to your meeting history.",type:"info"});
+    } else if (m && m.id) {
       console.log("[MEETING FRONTEND] Successfully finalized meeting note! ID:", m.id);
       showDashboardView();
       loadMeetings();
@@ -3966,4 +4105,31 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
   init();
+}
+
+// Only poll while pending server jobs are visible. Processing survives this UI.
+setInterval(() => {
+  const pane = document.getElementById('tab-meetings');
+  if (document.hidden || !pane?.classList.contains('active')) return;
+  if ((window.allMeetings || []).some(m => ['queued', 'processing'].includes(m.processing_status))) loadMeetings(true);
+}, 10000);
+
+async function appendPendingLocalMeetings() {
+  try {
+    const local = await invoke('list_local_meetings');
+    const grid = document.getElementById('meetings-list'); if (!grid) return;
+    grid.querySelectorAll('.local-pending-meeting').forEach(card => card.remove());
+    const remote = new Set((window.allMeetings || []).map(meeting => meeting.client_id));
+    for (const meeting of local) {
+      if (remote.has(meeting.id) || !['recorded','uploading','failed','processing_failed'].includes(meeting.status)) continue;
+      document.getElementById('meetings-empty-msg')?.classList.add('hidden'); grid.classList.remove('hidden'); grid.style.display='grid';
+      const card=document.createElement('div'); card.className='meeting-card local-pending-meeting';
+      const title=document.createElement('div'); title.className='meeting-card-title'; title.textContent=meeting.title || 'Local recording'; card.appendChild(title);
+      const status=document.createElement('div'); status.textContent=meeting.status === 'uploading' ? 'Uploading audio' : 'Audio saved locally. Upload pending.'; card.appendChild(status);
+      if (meeting.error) {const error=document.createElement('div'); error.textContent=meeting.error; card.appendChild(error);}
+      const retry=document.createElement('button'); retry.type='button'; retry.className='fluent-button'; retry.textContent='Retry upload'; retry.disabled=meeting.status==='uploading';
+      retry.addEventListener('click',async()=>{retry.disabled=true;try{await invoke('retry_upload_meeting',{filepath:meeting.filepath});await loadMeetings(true);}catch(error){showToast(String(error),'Upload pending','error');retry.disabled=false;}});
+      card.appendChild(retry); grid.appendChild(card);
+    }
+  } catch(error) {console.warn('Cannot list pending local meeting audio',error);}
 }

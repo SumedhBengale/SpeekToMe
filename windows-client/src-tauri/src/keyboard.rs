@@ -117,7 +117,7 @@ pub fn get_selected_text() -> Option<String> {
     }
 
     // 3. Release physical modifiers so SendInput Ctrl+C is clean
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         release_modifier_keys();
         thread::sleep(Duration::from_millis(30));
@@ -418,41 +418,180 @@ pub fn simulate_backspaces(count: usize) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub fn simulate_copy() {
+    let _ = send_linux_chord(0x63);
+}
+
+#[cfg(target_os = "linux")]
+fn send_linux_chord(key: i32) -> Result<(), String> {
+    // XKB keysyms: Control_L, requested key. The portal translates them in
+    // the compositor, so this reaches native Wayland applications.
+    crate::linux_portal::send_keys(vec![0xffe3, 1, key, 1, key, 0, 0xffe3, 0])
+}
+
+#[cfg(target_os = "linux")]
+pub fn simulate_paste() {
+    if crate::linux_focus::focused_target() == crate::linux_focus::Focus::NotEditable {
+        crate::win32::show_tray_notification(
+            "SpeekTo.Me copied your text",
+            "No editable field is focused. Your text is on the clipboard.",
+            crate::win32::NotificationLevel::Info,
+        );
+        return;
+    }
+    if let Err(err) = send_linux_chord(0x76) {
+        eprintln!("[KEYBOARD] Portal paste failed: {err}");
+        crate::win32::show_tray_notification(
+            "SpeekTo.Me copied your text",
+            "Desktop keyboard control is unavailable. Your text is on the clipboard.",
+            crate::win32::NotificationLevel::Warning,
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn release_modifier_keys() {}
+
+#[cfg(target_os = "linux")]
+pub fn simulate_single_key(vk: u32) {
+    let key = match vk { 0x08 => 0xff08, 0x0d => 0xff0d, _ => return };
+    if let Err(err) = crate::linux_portal::send_keys(vec![key, 1, key, 0]) {
+        eprintln!("[KEYBOARD] Portal key failed: {err}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn simulate_key_down(vk: u32) {
+    if let Err(err) = crate::linux_portal::send_keys(vec![vk as i32, 1]) {
+        eprintln!("[KEYBOARD] Portal key down failed: {err}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn simulate_key_up(vk: u32) {
+    if let Err(err) = crate::linux_portal::send_keys(vec![vk as i32, 0]) {
+        eprintln!("[KEYBOARD] Portal key up failed: {err}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn simulate_typing(text: &str) {
+    // Keep a usable copy if the focused surface has no editable widget.
+    let clipboard_ready = Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_owned()))
+        .is_ok();
+    if crate::linux_focus::focused_target() == crate::linux_focus::Focus::NotEditable {
+        crate::win32::show_tray_notification(
+            if clipboard_ready { "SpeekTo.Me copied your text" } else { "SpeekTo.Me could not copy your text" },
+            if clipboard_ready { "No editable field is focused. Your text is on the clipboard." } else { "No editable field is focused and the clipboard is unavailable." },
+            if clipboard_ready { crate::win32::NotificationLevel::Info } else { crate::win32::NotificationLevel::Warning },
+        );
+        return;
+    }
+    if !text.is_ascii() {
+        // The RemoteDesktop portal can only map keysyms in the compositor's
+        // current keyboard layout. Pasting preserves arbitrary dictation text.
+        if clipboard_ready {
+            simulate_paste();
+        } else {
+            crate::win32::show_tray_notification(
+                "SpeekTo.Me could not insert your text",
+                "The clipboard is unavailable, so these characters could not be pasted.",
+                crate::win32::NotificationLevel::Warning,
+            );
+        }
+        return;
+    }
+    for ch in text.chars() {
+        if ch == '\r' { continue; }
+        let (keysym, shifted) = match ch {
+            '\n' => (0xff0d, false),
+            'A'..='Z' => (ch.to_ascii_lowercase() as i32, true),
+            '!' => (b'1' as i32, true),
+            '@' => (b'2' as i32, true),
+            '#' => (b'3' as i32, true),
+            '$' => (b'4' as i32, true),
+            '%' => (b'5' as i32, true),
+            '^' => (b'6' as i32, true),
+            '&' => (b'7' as i32, true),
+            '*' => (b'8' as i32, true),
+            '(' => (b'9' as i32, true),
+            ')' => (b'0' as i32, true),
+            '_' => (b'-' as i32, true),
+            '+' => (b'=' as i32, true),
+            '{' => (b'[' as i32, true),
+            '}' => (b']' as i32, true),
+            '|' => (b'\\' as i32, true),
+            ':' => (b';' as i32, true),
+            '"' => (b'\'' as i32, true),
+            '<' => (b',' as i32, true),
+            '>' => (b'.' as i32, true),
+            '?' => (b'/' as i32, true),
+            '~' => (b'`' as i32, true),
+            c => (c as i32, false),
+        };
+        let keys = if shifted {
+            vec![0xffe1, 1, keysym, 1, keysym, 0, 0xffe1, 0]
+        } else {
+            vec![keysym, 1, keysym, 0]
+        };
+        if let Err(err) = crate::linux_portal::send_keys(keys) {
+            eprintln!("[KEYBOARD] Portal typing failed: {err}");
+            crate::win32::show_tray_notification(
+                "SpeekTo.Me copied your text",
+                if clipboard_ready { "Typing stopped because desktop keyboard control is unavailable. The full text is on the clipboard." } else { "Typing stopped and the clipboard is unavailable." },
+                crate::win32::NotificationLevel::Warning,
+            );
+            break;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn simulate_backspaces(count: usize) {
+    for _ in 0..count { simulate_single_key(0x08); }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn simulate_paste() {
     println!("[KEYBOARD] simulate_paste is not supported on this platform.");
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn release_modifier_keys() {}
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn simulate_single_key(_vk: u32) {
     println!("[KEYBOARD] simulate_single_key is not supported on this platform.");
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn simulate_key_down(_vk: u32) {
     println!("[KEYBOARD] simulate_key_down is not supported on this platform.");
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn simulate_key_up(_vk: u32) {
     println!("[KEYBOARD] simulate_key_up is not supported on this platform.");
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn simulate_typing(text: &str) {
     println!("[KEYBOARD] simulate_typing: {}", text);
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn simulate_backspaces(count: usize) {
     println!("[KEYBOARD] simulate_backspaces: {}", count);
 }
 
 pub fn normalize_newlines(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\n', "\r\n")
+    let normalized = text.replace("\r\n", "\n");
+    #[cfg(target_os = "windows")]
+    { normalized.replace('\n', "\r\n") }
+    #[cfg(not(target_os = "windows"))]
+    { normalized }
 }
 
 // ==========================================
@@ -476,6 +615,7 @@ pub fn paste_text(text: &str) {
             }
         };
 
+        #[cfg(not(target_os = "linux"))]
         let original_text = ctx.get_text().ok();
 
         if let Err(e) = ctx.set_text(normalized.clone()) {
@@ -487,6 +627,9 @@ pub fn paste_text(text: &str) {
         thread::sleep(Duration::from_millis(80));
         simulate_paste();
 
+        // On Linux, accessibility metadata may not identify a focused editor.
+        // Keep the dictated text available if injection had nowhere to go.
+        #[cfg(not(target_os = "linux"))]
         if let Some(orig) = original_text {
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(250));
@@ -573,7 +716,10 @@ mod tests {
     #[test]
     fn test_normalize_newlines() {
         let unix = "Line 1\nLine 2\n\nLine 3";
+        #[cfg(target_os = "windows")]
         let expected = "Line 1\r\nLine 2\r\n\r\nLine 3";
+        #[cfg(not(target_os = "windows"))]
+        let expected = unix;
         assert_eq!(normalize_newlines(unix), expected);
 
         let windows = "Line 1\r\nLine 2\r\n\r\nLine 3";

@@ -118,6 +118,7 @@ pub fn start_streaming_session(
     token: String,
     enhance: bool,
     custom_prompt: String,
+    language: String,
 ) -> Result<StreamSessionHandle, String> {
     let (audio_tx, mut audio_rx) = unbounded_channel::<StreamAudioMessage>();
     let (final_tx, final_rx) = channel::<Result<StreamFinalResult, String>>();
@@ -126,7 +127,7 @@ pub fn start_streaming_session(
     let ws_url = get_stream_ws_url(&api_url, &token);
 
     tauri::async_runtime::spawn(async move {
-        println!("[STREAM CLIENT] Connecting to WebSocket: {}", ws_url);
+        println!("[STREAM CLIENT] Connecting to transcription WebSocket (language: {})", language);
         let ws_stream = match connect_async(&ws_url).await {
             Ok((stream, _)) => {
                 println!("[STREAM CLIENT] WebSocket connection established successfully!");
@@ -149,6 +150,7 @@ pub fn start_streaming_session(
             "channels": 1,
             "enhance": enhance,
             "prompt": custom_prompt,
+            "language": language,
             "capabilities": ["continuous_stream", "chunked_vad"]
         });
 

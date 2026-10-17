@@ -85,11 +85,11 @@ func TestResolveNemotronLanguage(t *testing.T) {
 	if got := ResolveNemotronLanguage([]string{"en"}); got != "en-US" {
 		t.Errorf("Expected 'en-US', got %s", got)
 	}
-	if got := ResolveNemotronLanguage([]string{"en", "hi"}); got != "auto" {
-		t.Errorf("Expected 'auto' for multiple languages, got %s", got)
+	if got := ResolveNemotronLanguage([]string{"en", "hi"}); got != "en-US" {
+		t.Errorf("Expected first saved language for older clients, got %s", got)
 	}
-	if got := ResolveNemotronLanguage([]string{}); got != "auto" {
-		t.Errorf("Expected 'auto' for empty languages, got %s", got)
+	if got := ResolveNemotronLanguage([]string{}); got != "en-US" {
+		t.Errorf("Expected English for empty saved languages, got %s", got)
 	}
 }
 
@@ -107,5 +107,32 @@ func TestValidateLanguages(t *testing.T) {
 	_, err = ValidateLanguages([]string{"klingon"})
 	if err == nil {
 		t.Errorf("Expected error for unsupported language, got nil")
+	}
+}
+
+func TestSpeakingLanguageRequest(t *testing.T) {
+	cases := []struct {
+		requested string
+		spoken    []string
+		want      string
+		fail      bool
+	}{
+		{"hi", []string{"en", "hi"}, "hi", false},
+		{"en", []string{"hi", "en"}, "en", false},
+		{"auto", []string{"en"}, "auto", false},
+		{" HI-IN ", []string{"en", "hi"}, "hi", false},
+		{"", []string{"en", "hi"}, "en", false},
+		{"", nil, "en", false},
+		{"en,hi", []string{"en", "hi"}, "", true},
+		{"invalid", nil, "", true},
+	}
+	for _, tc := range cases {
+		got, err := ResolveSpeakingLanguage(tc.requested, tc.spoken)
+		if (err != nil) != tc.fail || got != tc.want {
+			t.Errorf("request %q: got %q, %v", tc.requested, got, err)
+		}
+	}
+	if got := ResolveNemotronLanguage([]string{"auto"}); got != "auto" {
+		t.Fatal(got)
 	}
 }

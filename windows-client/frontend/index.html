@@ -374,7 +374,7 @@
                 <span class="checkmark"></span>
                 <div class="checkbox-label-block">
                   <span class="checkbox-title">Start on Boot</span>
-                  <span class="setting-hint">Auto-launch in system tray</span>
+                  <span class="setting-hint autostart-hint">Auto-launch in system tray</span>
                 </div>
               </label>
             </div>
@@ -386,7 +386,7 @@
         <!-- Step 4: Spoken Languages -->
         <div class="onboarding-step" id="onboard-step-4">
           <h2>Spoken Languages</h2>
-          <p class="step-desc">Select your spoken languages to optimize speech recognition speed and accuracy.</p>
+          <p class="step-desc">Save the languages you speak, then choose one speaking language for each recording.</p>
 
           <input type="hidden" id="onboard-model-select" value="whisper-large-v3-turbo">
 
@@ -395,7 +395,10 @@
               <label class="setting-title">Spoken Languages</label>
               <span id="onboard-lang-count" class="lang-count-badge">1/5</span>
             </div>
-            <span class="setting-hint" style="margin-bottom: 8px; display: block;">1 language locks engine for max speed. Multiple languages guide multi-lingual detection.</span>
+            <span class="setting-hint" style="margin-bottom: 8px; display: block;">This list makes your languages available in the speaking language selector.</span>
+            <label for="onboard-speaking-language" class="setting-title">Speaking language</label>
+            <select id="onboard-speaking-language" class="fluent-select"><option value="auto">Automatic</option></select>
+            <span class="setting-hint" style="display:block;margin-bottom:12px">Automatic detects the language. Changes apply to the next recording.</span>
             <div id="onboard-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
             <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
               <div style="position: relative; flex: 1;">
@@ -641,6 +644,8 @@
             </div>
           </div>
 
+          <div id="linux-capability-status" class="setting-hint" role="status" aria-live="polite" hidden></div>
+
           <!-- Trigger Mode -->
           <div class="setting-row">
             <div class="setting-left">
@@ -666,7 +671,7 @@
           </div>
         </div>
 
-        <!-- Spoken Language Preferences Card -->
+        <!-- Languages I speak Card -->
         <div class="settings-card languages-card">
           <div class="languages-card-header">
             <div class="dictation-icon-box">
@@ -677,17 +682,22 @@
               </svg>
             </div>
             <div class="languages-header-content">
-              <h3 class="languages-card-title">Spoken Language Preferences</h3>
+              <h3 class="languages-card-title">Languages I speak</h3>
               <p class="languages-card-desc">
-                1 language locks Whisper for max speed & accuracy.<br>
-                Multiple languages guide Whisper multi-lingual detection without translating.
+                Save the languages you speak. Choose one speaking language below or from the tray menu.
               </p>
             </div>
             <span id="client-lang-count" class="lang-pill-count">1 / 5</span>
           </div>
 
           <div class="languages-section-group">
-            <div class="languages-section-label">Selected Languages</div>
+            <label class="languages-section-label" for="client-speaking-language">Speaking language</label>
+            <select id="client-speaking-language" class="fluent-select"><option value="auto">Automatic</option></select>
+            <p class="setting-hint">Switch quickly by right-clicking the tray icon. Changes apply to the next recording. Automatic lets ASR detect the language.</p>
+          </div>
+          <div class="languages-divider"></div>
+          <div class="languages-section-group">
+            <div class="languages-section-label">Languages I speak</div>
             <div id="client-lang-chips" class="languages-chips-list">
               <!-- Rendered dynamically -->
             </div>
@@ -828,7 +838,7 @@
               <span class="checkmark"></span>
               <div class="checkbox-label-block">
                 <span class="checkbox-title">Start SpeekTo.Me on system startup</span>
-                <span class="setting-hint">Automatically launches the app in the tray when Windows boots.</span>
+                <span class="setting-hint autostart-hint">Automatically launches the app in the tray when Windows boots.</span>
               </div>
             </label>
           </div>
@@ -1255,15 +1265,15 @@
                 <input type="text" id="meeting-title-input" class="fluent-input" placeholder="e.g. Project Sync with Team" style="width: 100%; box-sizing: border-box;">
               </div>
 
-              <!-- Real-Time Live Transcript Feed -->
+              <!-- Local meeting recording status -->
               <div class="live-meeting-feed-wrapper" style="max-width: 540px; margin: 0 auto 20px auto; text-align: left;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                  <span style="font-size: 12px; font-weight: 600; color: var(--text-secondary);">⚡ LIVE TRANSCRIPTION & DIARIZATION</span>
-                  <span id="meetings-live-status-badge" class="live-status-pill">Dual-Server Active</span>
+                  <span style="font-size: 12px; font-weight: 600; color: var(--text-secondary);">MEETING AUDIO RECORDING</span>
+                  <span id="meetings-live-status-badge" class="live-status-pill">Recording locally</span>
                 </div>
                 <div id="meetings-live-turns-list" class="live-turns-container">
                   <div id="meetings-live-waiting-text" class="live-waiting-text">
-                    Listening for speech from microphone and remote attendees...
+                    Microphone and system audio are saved locally. Transcription and speaker identification run after the meeting.
                   </div>
                 </div>
               </div>

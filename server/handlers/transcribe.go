@@ -40,6 +40,15 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	language, languageErr := utils.ResolveSpeakingLanguage(r.FormValue("language"), user.Languages)
+	if languageErr != nil {
+		http.Error(w, languageErr.Error(), http.StatusBadRequest)
+		return
+	}
+	requestUser := *user
+	requestUser.Languages = []string{language}
+	user = &requestUser
+
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Bad request: missing file parameter", http.StatusBadRequest)

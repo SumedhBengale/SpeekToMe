@@ -173,7 +173,7 @@ func TestMeetingUploadResumesAndIsolatesUsers(t *testing.T) {
 	for _, channel := range []string{"mic", "system", "mixed"} {
 		files[channel] = MeetingFile{Size: int64(len(audio)), SHA: hex.EncodeToString(sum[:])}
 	}
-	manifest, _ := json.Marshal(MeetingUpload{ID: "resumable", Title: "Test", Files: files})
+	manifest, _ := json.Marshal(MeetingUpload{ID: "resumable", Title: "Test", Files: files, Language: "hi"})
 	send := func(method, path, token, offset string, data []byte) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, bytes.NewReader(data))
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -186,6 +186,10 @@ func TestMeetingUploadResumesAndIsolatesUsers(t *testing.T) {
 	}
 	if w := send("POST", "/v1/meetings/jobs", "owner", "", manifest); w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+	var savedLanguage string
+	if err := database.GetDB().QueryRow(`SELECT language FROM meeting_jobs WHERE client_id='resumable'`).Scan(&savedLanguage); err != nil || savedLanguage != "hi" {
+		t.Fatalf("meeting language was not persisted: %q, %v", savedLanguage, err)
 	}
 	endpoint := "/v1/meetings/jobs/resumable/audio/mic"
 	if w := send("PUT", endpoint, "owner", "0", audio[:4]); w.Code != 204 || w.Header().Get("Upload-Offset") != "4" {
@@ -209,5 +213,33 @@ func TestMeetingUploadResumesAndIsolatesUsers(t *testing.T) {
 	}
 	if w := send("POST", "/v1/meetings/jobs/resumable/commit", "owner", "", nil); w.Code != 422 {
 		t.Fatal("checksum not enforced", w.Code, w.Body.String())
+	}
+}
+
+func TestMeetingLanguageSurvivesAccountChangesAndMigration(t *testing.T) {
+	database, err := db.NewDatabase(filepath.Join(t.TempDir(), "language.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	sql := database.GetDB()
+	_, err = sql.Exec(`INSERT INTO users(id,email,languages) VALUES(1,'language@example.com','["en","hi"]');
+        CREATE TABLE meeting_jobs (job_key TEXT PRIMARY KEY,user_id INTEGER,language TEXT NOT NULL DEFAULT '');
+        INSERT INTO meeting_jobs VALUES('saved',1,'hi'),('automatic',1,'auto'),('legacy',1,'');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := &MeetingJobs{db: sql}
+	if got := jobs.language("legacy"); got != "en-US" {
+		t.Fatal(got)
+	}
+	_, err = sql.Exec(`UPDATE users SET languages='["fr"]' WHERE id=1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"saved": "hi-IN", "automatic": "auto", "legacy": "en-US"} {
+		if got := jobs.language(key); got != want {
+			t.Errorf("%s: %s != %s", key, got, want)
+		}
 	}
 }

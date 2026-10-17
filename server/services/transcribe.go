@@ -201,9 +201,9 @@ type WhisperSegment struct {
 }
 
 func BuildWhisperPrompt(userLanguages []string) (string, string) {
-	valid, err := utils.ValidateLanguages(userLanguages)
-	if err != nil || len(valid) == 0 {
-		valid = []string{"en"}
+	active, err := utils.ResolveSpeakingLanguage("", userLanguages)
+	if err != nil {
+		active = "en"
 	}
 
 	langParam := ""
@@ -221,15 +221,9 @@ func BuildWhisperPrompt(userLanguages []string) (string, string) {
 
 	promptStr := basePrompt
 
-	if len(valid) == 1 {
-		langParam = valid[0]
-	} else {
-		var names []string
-		for _, code := range valid {
-			names = append(names, utils.GetLanguageName(code))
-		}
-		// Append language instruction to base prompt
-		promptStr = fmt.Sprintf("%s The transcription should be in the following identified languages: %s.", basePrompt, strings.Join(names, ", "))
+	// Whisper-compatible APIs use an omitted language for automatic detection.
+	if active != "auto" {
+		langParam = active
 	}
 
 	return langParam, promptStr

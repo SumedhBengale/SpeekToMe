@@ -85,11 +85,23 @@ pub fn open_browser(url: &str) {
             );
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("open")
-            .arg(url)
-            .spawn();
+        // Keep the URL as one argument and reject non-web schemes so this
+        // helper cannot accidentally hand a command-like payload to a handler.
+        if url.starts_with("https://") || url.starts_with("http://") {
+            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if url.starts_with("https://") || url.starts_with("http://") {
+            let _ = std::process::Command::new("open").arg(url).spawn();
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        let _ = url;
     }
 }
 
@@ -146,7 +158,7 @@ pub fn listen_for_token() -> Option<String> {
     None
 }
 
-pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
+pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, language: String) {
     let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
     let (token_opt, model, enhance, custom_prompt, transcription_mode, api_url) = {
         let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
@@ -197,15 +209,15 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16) {
 
     tauri::async_runtime::spawn(async move {
         let transcript_result = if transcription_mode == "stream" {
-            match stream_transcribe_audio(&api_url, &token, ogg_opus_bytes.clone(), enhance, &custom_prompt).await {
+            match stream_transcribe_audio(&api_url, &token, ogg_opus_bytes.clone(), enhance, &custom_prompt, &language).await {
                 Ok(res) => Ok(res),
                 Err(err) => {
                     println!("[STREAM WARNING] Streaming transcription failed ({}), falling back to batch API...", err);
-                    transcribe_audio(&api_url, &token, ogg_opus_bytes, &model, enhance, &custom_prompt).await
+                    transcribe_audio(&api_url, &token, ogg_opus_bytes, &model, enhance, &custom_prompt, &language).await
                 }
             }
         } else {
-            transcribe_audio(&api_url, &token, ogg_opus_bytes, &model, enhance, &custom_prompt).await
+            transcribe_audio(&api_url, &token, ogg_opus_bytes, &model, enhance, &custom_prompt, &language).await
         };
 
         match transcript_result {
@@ -411,6 +423,7 @@ pub async fn stream_transcribe_audio(
     ogg_opus_bytes: Vec<u8>,
     enhance: bool,
     custom_prompt: &str,
+    language: &str,
 ) -> Result<TranscribeResult, String> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
@@ -429,6 +442,7 @@ pub async fn stream_transcribe_audio(
         "channels": 1,
         "enhance": enhance,
         "prompt": custom_prompt,
+        "language": language,
     });
 
     write.send(Message::Text(start_payload.to_string())).await
@@ -447,11 +461,14 @@ pub async fn stream_transcribe_audio(
             Ok(Message::Text(text)) => {
                 if let Ok(event) = serde_json::from_str::<crate::stream::StreamEventResponse>(&text) {
                     if event.event_type == "final" {
+                        crate::win32::set_preview_text(&event.text);
                         return Ok(TranscribeResult {
                             text: event.text,
                             log_id: event.log_id,
                             ack_token: event.ack_token,
                         });
+                    } else if event.event_type == "interim" && !event.text.is_empty() {
+                        crate::win32::set_preview_text(&event.text);
                     } else if event.event_type == "error" {
                         return Err(event.error.unwrap_or_else(|| "Server streaming transcription error".to_string()));
                     }
@@ -499,6 +516,7 @@ pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, Str
     let status = res.status();
     if status.is_success() {
         let info = res.json::<UserInfo>().await.map_err(|e| format!("Failed to parse user info: {}", e))?;
+ crate::meeting_upload::cache_account(token,&info.email);
         if let Some(limit) = info.transform_input_tokens {
             crate::set_transform_word_limit(limit);
             println!("[CONFIG SYNC] Dynamic transform input word limit updated from user info: {}", limit);
@@ -677,6 +695,7 @@ pub async fn transcribe_audio(
     model: &str,
     enhance: bool,
     custom_prompt: &str,
+    language: &str,
 ) -> Result<TranscribeResult, String> {
     let client = create_client();
     let part = reqwest::multipart::Part::bytes(ogg_opus_bytes)
@@ -686,6 +705,7 @@ pub async fn transcribe_audio(
 
     let form = reqwest::multipart::Form::new()
         .part("file", part)
+        .text("language", language.to_string())
         .text("model", model.to_string())
         .text("enhance", enhance.to_string())
         .text("prompt", custom_prompt.to_string());
@@ -918,6 +938,7 @@ pub async fn upload_meeting(
     api_url: &str,
     token: &str,
     title: &str,
+    language: &str,
     mixed_bytes: Vec<u8>,
     mic_bytes: Option<Vec<u8>>,
     loopback_bytes: Option<Vec<u8>>,
@@ -931,7 +952,8 @@ pub async fn upload_meeting(
 
     let mut form = reqwest::multipart::Form::new()
         .part("file", mixed_part)
-        .text("title", title.to_string());
+        .text("title", title.to_string())
+        .text("language", language.to_string());
 
     if let Some(mic) = mic_bytes {
         let mic_part = reqwest::multipart::Part::bytes(mic)

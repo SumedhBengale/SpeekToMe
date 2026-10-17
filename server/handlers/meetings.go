@@ -60,6 +60,15 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		title = fmt.Sprintf("Meeting on %s", time.Now().Format("2006-01-02 15:04"))
 	}
 
+	language, languageErr := utils.ResolveSpeakingLanguage(r.FormValue("language"), user.Languages)
+	if languageErr != nil {
+		http.Error(w, languageErr.Error(), http.StatusBadRequest)
+		return
+	}
+	requestUser := *user
+	requestUser.Languages = []string{language}
+	user = &requestUser
+
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Missing file parameter", http.StatusBadRequest)

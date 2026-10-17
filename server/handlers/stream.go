@@ -25,6 +25,7 @@ import (
 )
 
 type StreamStartPayload struct {
+	Language     string   `json:"language,omitempty"`
 	Type         string   `json:"type"`   // "start"
 	Format       string   `json:"format"` // "opus" | "wav" | "pcm" | "ogg_opus"
 	SampleRate   int      `json:"sample_rate"`
@@ -135,9 +136,19 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var startPayload StreamStartPayload
-	if msgType == websocket.MessageText {
-		_ = json.Unmarshal(data, &startPayload)
+	if msgType != websocket.MessageText || json.Unmarshal(data, &startPayload) != nil || startPayload.Type != "start" {
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Expected a start message with one language string"})
+		return
 	}
+
+	language, languageErr := utils.ResolveSpeakingLanguage(startPayload.Language, user.Languages)
+	if languageErr != nil {
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: languageErr.Error()})
+		return
+	}
+	requestUser := *user
+	requestUser.Languages = []string{language}
+	user = &requestUser
 
 	log.Printf("[STREAM START] Session initialized | User ID: %d | Lang: %v | Enhance: %v | Prompt: %q | Capabilities: %v | Vocab: %d terms",
 		user.ID, user.Languages, startPayload.Enhance, startPayload.Prompt, startPayload.Capabilities, len(vocabTerms))

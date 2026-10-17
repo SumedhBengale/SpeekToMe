@@ -35,9 +35,10 @@ type MeetingFile struct {
 	SHA  string `json:"sha256"`
 }
 type MeetingUpload struct {
-	ID    string                 `json:"id"`
-	Title string                 `json:"title"`
-	Files map[string]MeetingFile `json:"files"`
+	Language string                 `json:"language,omitempty"`
+	ID       string                 `json:"id"`
+	Title    string                 `json:"title"`
+	Files    map[string]MeetingFile `json:"files"`
 }
 type MeetingJobs struct {
 	app                *App
@@ -80,6 +81,34 @@ func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
  UNIQUE(user_id,client_id)); CREATE INDEX IF NOT EXISTS idx_meeting_jobs_queue ON meeting_jobs(status,next_attempt,lease_until);`)
 	if e != nil {
 		return e
+	}
+	// Additive migration preserves existing durable jobs across server restarts.
+	var hasLanguage bool
+	columns, err := jobs.db.Query("PRAGMA table_info(meeting_jobs)")
+	if err != nil {
+		return err
+	}
+	for columns.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var defaultValue any
+		if err = columns.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+			columns.Close()
+			return err
+		}
+		if name == "language" {
+			hasLanguage = true
+		}
+	}
+	if err = columns.Err(); err != nil {
+		columns.Close()
+		return err
+	}
+	columns.Close()
+	if !hasLanguage {
+		if _, err = jobs.db.Exec("ALTER TABLE meeting_jobs ADD COLUMN language TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
 	}
 	jobs.diarization, e = newMeetingDiarization(jobs)
 	if e != nil {
@@ -125,6 +154,11 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid meeting manifest", 400)
 		return
 	}
+	language, languageErr := utils.ResolveSpeakingLanguage(req.Language, user.Languages)
+	if languageErr != nil {
+		http.Error(w, languageErr.Error(), 400)
+		return
+	}
 	if req.Title == "" {
 		req.Title = "Meeting"
 	}
@@ -152,7 +186,7 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage durability unavailable", 503)
 		return
 	}
-	_, e = j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,client_id) DO NOTHING`, key, user.ID, req.ID, req.Title, string(data), time.Now().Unix())
+	_, e = j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,created_at,language) VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id,client_id) DO NOTHING`, key, user.ID, req.ID, req.Title, string(data), time.Now().Unix(), language)
 	if e != nil {
 		http.Error(w, "database unavailable", 503)
 		return
@@ -752,13 +786,20 @@ func probeMeetingDuration(ctx context.Context, path string) ([]byte, error) {
 }
 
 func (j *MeetingJobs) language(key string) string {
+	var language string
+	if j.db.QueryRow(`SELECT language FROM meeting_jobs WHERE job_key=?`, key).Scan(&language) == nil && language != "" {
+		return utils.ResolveNemotronLanguage([]string{language})
+	}
+	// Jobs uploaded before this migration have no saved choice.
 	var encoded string
 	if j.db.QueryRow(`SELECT COALESCE(u.languages,'["en"]') FROM users u JOIN meeting_jobs j ON u.id=j.user_id WHERE j.job_key=?`, key).Scan(&encoded) != nil {
 		return "en-US"
 	}
 	var languages []string
 	json.Unmarshal([]byte(encoded), &languages)
-	return utils.ResolveNemotronLanguage(languages)
+	resolved := utils.ResolveNemotronLanguage(languages)
+	_, _ = j.db.Exec(`UPDATE meeting_jobs SET language=? WHERE job_key=? AND language=''`, resolved, key)
+	return resolved
 }
 
 func (j *MeetingJobs) retryHandler(w http.ResponseWriter, r *http.Request) {

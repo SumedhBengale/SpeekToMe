@@ -1335,6 +1335,18 @@ mod win32_impl {
                         let meeting_str = encode_wide("🔴 Open Active Meeting");
                         windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING, 3, meeting_str.as_ptr());
                     }
+                    let language_options = crate::speaking_language_options();
+                    let active_language = crate::speaking_language();
+                    let language_menu = windows_sys::Win32::UI::WindowsAndMessaging::CreatePopupMenu();
+                    for (index, (code, name)) in language_options.iter().enumerate() {
+                        let label = encode_wide(name);
+                        let flags = windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING
+                            | if code == &active_language { windows_sys::Win32::UI::WindowsAndMessaging::MF_CHECKED } else { 0 };
+                        windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(language_menu, flags, 1000 + index, label.as_ptr());
+                    }
+                    let language_label = encode_wide("Speaking language");
+                    windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu,
+                        windows_sys::Win32::UI::WindowsAndMessaging::MF_POPUP, language_menu as usize, language_label.as_ptr());
                     let settings_str = encode_wide("Settings");
                     let exit_str = encode_wide("Exit");
                     windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING, 1, settings_str.as_ptr());
@@ -1355,7 +1367,9 @@ mod win32_impl {
                     );
                     windows_sys::Win32::UI::WindowsAndMessaging::DestroyMenu(menu);
                     
-                    if cmd == 1 || cmd == 3 {
+                    if cmd >= 1000 && (cmd as usize - 1000) < language_options.len() {
+                        let _ = crate::set_active_language(language_options[cmd as usize - 1000].0.clone());
+                    } else if cmd == 1 || cmd == 3 {
                         if let Some(app) = crate::TAURI_APP.get() {
                             crate::show_or_create_settings_window(app);
                         }
@@ -2111,6 +2125,7 @@ pub use win32_impl::{
 // ==========================================
 #[cfg(not(target_os = "windows"))]
 mod win32_stub {
+    static PREVIEW_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
     pub struct SendHWND(pub *mut std::ffi::c_void);
     unsafe impl Send for SendHWND {}
     unsafe impl Sync for SendHWND {}
@@ -2130,37 +2145,77 @@ mod win32_stub {
         Error,
     }
 
-    pub fn show_tray_notification(_title: &str, _message: &str, _level: NotificationLevel) {}
+    pub fn show_tray_notification(title: &str, message: &str, _level: NotificationLevel) {
+        #[cfg(target_os = "linux")]
+        crate::linux_desktop::notify(title, message);
+    }
 
     pub fn calculate_pill_position(_config: &crate::config::AppConfig, _width: i32, _height: i32) -> (i32, i32) {
         (0, 0)
     }
 
-    pub fn update_overlay_position() {}
+    pub fn update_overlay_position() {
+        #[cfg(target_os = "linux")]
+        crate::linux_desktop::update_overlay_position();
+    }
 
-    pub fn show_overlay() {}
+    pub fn show_overlay() {
+        #[cfg(target_os = "linux")]
+        crate::linux_desktop::show_overlay();
+    }
 
-    pub fn hide_overlay() {}
+    pub fn hide_overlay() {
+        #[cfg(target_os = "linux")]
+        {
+            *PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
+                .lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+            crate::linux_desktop::set_preview_text("");
+            crate::linux_desktop::hide_overlay();
+        }
+    }
 
-    pub fn show_meeting_overlay() {}
+    pub fn show_meeting_overlay() {
+        #[cfg(target_os = "linux")]
+        {
+            set_preview_state(PreviewState::Meeting);
+            crate::linux_desktop::set_preview_text("Recording meeting…");
+            crate::linux_desktop::show_overlay();
+        }
+    }
 
-    pub fn hide_meeting_overlay() {}
+    pub fn hide_meeting_overlay() {
+        #[cfg(target_os = "linux")]
+        hide_overlay();
+    }
 
     pub fn update_tray_tooltip(_text: &str) {}
 
-    pub fn show_preview() {}
+    pub fn show_preview() { show_overlay(); }
 
-    pub fn hide_preview() {}
+    pub fn hide_preview() { hide_overlay(); }
 
-    pub fn set_preview_text(_text: &str) {}
-
-    pub fn get_preview_text() -> String {
-        String::new()
+    pub fn set_preview_text(text: &str) {
+        *PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
+            .lock().unwrap_or_else(|e| e.into_inner()) = text.to_string();
+        #[cfg(target_os = "linux")]
+        crate::linux_desktop::set_preview_text(text);
     }
 
-    pub fn set_preview_state(_state: PreviewState) {}
+    pub fn get_preview_text() -> String {
+        PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
+            .lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
 
-    pub fn update_preview_position() {}
+    pub fn set_preview_state(state: PreviewState) {
+        #[cfg(target_os = "linux")]
+        crate::linux_desktop::set_preview_state(state as u8);
+        match state {
+            PreviewState::Hidden => hide_overlay(),
+            PreviewState::Listening | PreviewState::Processing | PreviewState::Meeting => show_overlay(),
+        }
+    }
+
+    pub fn update_preview_position() { update_overlay_position(); }
 
     pub fn play_chime(_start: bool) {}
 

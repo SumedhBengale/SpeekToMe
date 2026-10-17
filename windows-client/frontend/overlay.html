@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpeekTo.Me</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+    canvas { display: block; width: 420px; height: 140px; }
+    @media (prefers-reduced-motion: reduce) { canvas { animation: none; } }
+  </style>
+</head>
+<body>
+  <canvas id="pill" width="840" height="280" role="img" aria-label="Dictation status"></canvas>
+  <script>
+    const canvas = document.getElementById('pill');
+    const ctx = canvas.getContext('2d');
+    let background = '#27221F';
+    let wave = '#57BF7C';
+    let previewText = '';
+    let pillX = 179;
+    let pillY = 0;
+    let state = 'hidden';
+    let level = 0;
+    let smoothed = 0;
+    let frame = 0;
+    let lastPoll = 0;
+    let lastDraw = 0;
+
+    window.setTheme = (pillBackground, waveColor) => {
+      if (/^#[\da-f]{6}$/i.test(pillBackground)) background = pillBackground;
+      if (/^#[\da-f]{6}$/i.test(waveColor)) wave = waveColor;
+    };
+    window.setPreviewState = value => {
+      state = value || 'hidden';
+      if (state === 'hidden') previewText = '';
+      canvas.setAttribute('aria-label', `Dictation ${state}`);
+      if (state === 'hidden') ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
+    window.setStatus = text => {
+      previewText = String(text || '');
+      canvas.setAttribute('aria-label', previewText || `Dictation ${state}`);
+    };
+    window.setOverlayLayout = (x, y) => {
+      pillX = Number(x) || 0;
+      pillY = Number(y) || 0;
+    };
+
+    if (window.__TAURI__?.core?.invoke) {
+      window.__TAURI__.core.invoke('get_config').then(config => {
+        const hex = value => `#${(Number(value) & 0xffffff).toString(16).padStart(6, '0')}`;
+        window.setTheme(hex(config.pill_bg_color), hex(config.pill_wave_color));
+      }).catch(() => {});
+    }
+
+    function draw(timestamp) {
+      requestAnimationFrame(draw);
+      if (timestamp - lastDraw < 30) return;
+      lastDraw = timestamp;
+      if (state === 'hidden') return;
+      if (timestamp - lastPoll > 80 && window.__TAURI__?.core?.invoke) {
+        lastPoll = timestamp;
+        window.__TAURI__.core.invoke('get_audio_level').then(value => { level = Number(value) || 0; }).catch(() => {});
+      }
+
+      const width = 420;
+      const height = 140;
+      const scale = canvas.width / width;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.scale(scale, scale);
+      const pillWidth = 62;
+      const pillHeight = 24;
+      const centerY = pillY + pillHeight / 2;
+      ctx.beginPath();
+      ctx.roundRect(pillX + 0.5, pillY + 0.5, 61, 23, 11.5);
+      ctx.fillStyle = background;
+      ctx.globalAlpha = 235 / 255;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      smoothed = smoothed * 0.8 + level * 0.2;
+      const baseline = smoothed > 2 ? 5 : 2.5;
+      const dynamicGain = Math.min(smoothed / 4, 2.5);
+      const scaledVolume = baseline + dynamicGain;
+      ctx.fillStyle = wave;
+      const barWidth = 2.5;
+      const gap = 2;
+      const startX = pillX + (pillWidth - (5 * barWidth + 4 * gap)) / 2;
+      for (let i = 0; i < 5; i++) {
+        const phase = frame * (state === 'processing' ? 0.12 : 0.1) + i * (state === 'processing' ? 0.75 : 0.7);
+        const barHeight = state === 'processing'
+          ? 2.2 + 2.5 * ((Math.sin(phase) + 1) / 2)
+          : Math.max(2, Math.min(8, scaledVolume * (0.35 + 0.65 * Math.abs(Math.sin(phase)))));
+        const x = startX + i * (barWidth + gap);
+        const y = centerY - barHeight + 0.8;
+        const h = barHeight * 2 - 1.6;
+        ctx.beginPath();
+        ctx.roundRect(x, y, barWidth, h, 1.25);
+        ctx.fill();
+      }
+
+      if (previewText.trim()) {
+        const maxTextWidth = 370;
+        const lineHeight = 18;
+        ctx.font = '13px system-ui, sans-serif';
+        const words = previewText.trim().split(/\s+/);
+        const lines = [];
+        let line = '';
+        for (const word of words) {
+          const candidate = line ? `${line} ${word}` : word;
+          if (line && ctx.measureText(candidate).width > maxTextWidth) {
+            lines.push(line);
+            line = word;
+          } else {
+            line = candidate;
+          }
+        }
+        if (line) lines.push(line);
+        if (lines.length > 4) {
+          lines.length = 4;
+          let finalLine = lines[3];
+          while (finalLine && ctx.measureText(`${finalLine}…`).width > maxTextWidth) {
+            finalLine = finalLine.slice(0, -1);
+          }
+          lines[3] = `${finalLine.trimEnd()}…`;
+        }
+        const textWidth = Math.max(...lines.map(value => ctx.measureText(value).width));
+        const cardWidth = Math.min(394, Math.max(160, textWidth + 24));
+        const cardHeight = lines.length * lineHeight + 16;
+        const cardX = Math.max(4, Math.min(width - cardWidth - 4, pillX + pillWidth / 2 - cardWidth / 2));
+        const cardY = pillY > height / 2
+          ? Math.max(4, pillY - cardHeight - 8)
+          : Math.min(height - cardHeight - 4, pillY + pillHeight + 8);
+        ctx.beginPath();
+        ctx.roundRect(cardX, cardY, cardWidth, cardHeight, 7);
+        ctx.globalAlpha = 0.96;
+        ctx.fillStyle = background;
+        ctx.fill();
+        ctx.globalAlpha = 0.64;
+        ctx.strokeStyle = wave;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        const hex = background.slice(1);
+        const red = parseInt(hex.slice(0, 2), 16);
+        const green = parseInt(hex.slice(2, 4), 16);
+        const blue = parseInt(hex.slice(4, 6), 16);
+        ctx.fillStyle = (0.299 * red + 0.587 * green + 0.114 * blue) > 128 ? '#181022' : '#F5F5FA';
+        ctx.textBaseline = 'top';
+        lines.forEach((value, index) => ctx.fillText(value, cardX + 12, cardY + 8 + index * lineHeight));
+      }
+      ctx.restore();
+      frame += 1;
+    }
+
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>

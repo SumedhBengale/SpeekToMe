@@ -64,6 +64,9 @@ pub struct AppConfig {
     
     #[serde(default)]
     pub languages: Option<Vec<String>>,
+
+    #[serde(default)]
+    pub active_language: String,
     
     #[serde(default = "default_pill_position_mode")]
     pub pill_position_mode: String,
@@ -84,6 +87,20 @@ pub struct AppConfig {
     pub pill_wave_color: u32,
 }
 
+impl AppConfig {
+    pub fn speaking_language(&self) -> String {
+        let spoken = self.languages.as_deref().unwrap_or(&[]);
+        if self.active_language == "auto" || spoken.contains(&self.active_language) {
+            return self.active_language.clone();
+        }
+        spoken.first().cloned().unwrap_or_else(|| "en".into())
+    }
+
+    pub fn normalize_speaking_language(&mut self) {
+        self.active_language = self.speaking_language();
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -101,6 +118,7 @@ impl Default for AppConfig {
             theme: "forest".to_string(),
             transcription_mode: default_transcription_mode(),
             languages: Some(vec!["en".to_string()]),
+            active_language: "en".into(),
             pill_position_mode: default_pill_position_mode(),
             pill_predefined_position: default_pill_predefined_position(),
             pill_custom_x: default_pill_custom_x(),
@@ -112,6 +130,7 @@ impl Default for AppConfig {
 }
 
 pub fn get_config_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
     if let Ok(app_data) = std::env::var("APPDATA") {
         let mut path = std::path::PathBuf::from(app_data);
         path.push("SpeekToMe");
@@ -128,12 +147,55 @@ pub fn get_config_path() -> std::path::PathBuf {
     } else {
         std::path::PathBuf::from("speektome_config.json")
     }
+    #[cfg(target_os = "linux")]
+    {
+        let config_root = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config")));
+
+        if let Some(root) = config_root {
+            let directory = root.join("SpeekToMe");
+            let path = directory.join("config.json");
+
+            // Older Linux builds wrote to ~/.config/SpeekToMe regardless of
+            // XDG_CONFIG_HOME. Preserve those settings when migrating.
+            if !path.exists() {
+                if let Some(home) = std::env::var_os("HOME") {
+                    let legacy = std::path::PathBuf::from(home)
+                        .join(".config")
+                        .join("SpeekToMe")
+                        .join("config.json");
+                    if legacy != path && legacy.is_file() {
+                        let _ = std::fs::create_dir_all(&directory);
+                        let _ = std::fs::copy(legacy, &path);
+                    }
+                }
+            }
+
+            let _ = std::fs::create_dir_all(&directory);
+            path
+        } else {
+            std::path::PathBuf::from("speektome_config.json")
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let directory = std::path::PathBuf::from(home).join(".config").join("SpeekToMe");
+            let _ = std::fs::create_dir_all(&directory);
+            directory.join("config.json")
+        } else {
+            std::path::PathBuf::from("speektome_config.json")
+        }
+    }
 }
 
 pub fn load_config() -> AppConfig {
     let path = get_config_path();
     if let Ok(data) = std::fs::read_to_string(&path) {
-        if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+        if let Ok(mut config) = serde_json::from_str::<AppConfig>(&data) {
+            config.normalize_speaking_language();
             return config;
         }
     }
@@ -143,8 +205,26 @@ pub fn load_config() -> AppConfig {
 pub fn save_config(config: &AppConfig) {
     let path = get_config_path();
     if let Ok(data) = serde_json::to_string_pretty(config) {
-        let _ = std::fs::write(path, data);
+        use std::io::Write;
+        let temporary = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| -> std::io::Result<()> {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+            let mut file = options.open(&temporary)?;
+            file.write_all(data.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            crate::meeting_upload::replace_file(&temporary, &path)
+        })();
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&temporary);
+            eprintln!("[CONFIG] Could not save settings: {}", error);
+        }
     }
+    #[cfg(target_os = "linux")]
+    crate::linux_util::sync_autostart(config.autostart);
 }
 
 pub fn parse_hotkey_combo(name: &str) -> u32 {
@@ -188,4 +268,32 @@ pub fn parse_hotkey_combo(name: &str) -> u32 {
     }
 
     (vk << 16) | (mask & 0xFFFF)
+}
+
+#[cfg(test)]
+mod speaking_language_tests {
+    use super::*;
+    #[test]
+    fn old_config_defaults_to_first_spoken_language() {
+        let mut json = serde_json::to_value(AppConfig::default()).unwrap();
+        json.as_object_mut().unwrap().remove("active_language");
+        json["languages"] = serde_json::json!(["hi", "en"]);
+        let mut config: AppConfig = serde_json::from_value(json).unwrap();
+        config.normalize_speaking_language();
+        assert_eq!(config.active_language, "hi");
+    }
+    #[test]
+    fn automatic_is_explicit_and_removed_languages_fall_back() {
+        let mut config = AppConfig::default();
+        config.languages = Some(vec!["en".into(), "hi".into()]);
+        assert_eq!(config.speaking_language(), "en");
+        config.active_language = "hi".into();
+        assert_eq!(config.speaking_language(), "hi");
+        config.languages = Some(vec!["en".into()]);
+        assert_eq!(config.speaking_language(), "en");
+        config.active_language = "auto".into();
+        assert_eq!(config.speaking_language(), "auto");
+        let restored: AppConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(restored.speaking_language(), "auto");
+    }
 }
