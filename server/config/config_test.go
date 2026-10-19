@@ -43,7 +43,7 @@ func TestSyncConfigsFromDBWithJSON(t *testing.T) {
 	customJSON := ModelsConfig{
 		BatchProviders: map[string]BatchProviderConfig{
 			"bedrock_voxtral_mini_3b":           {Enabled: false, Priority: 1, Model: "mistral.voxtral-mini-3b-2507"},
-			"bedrock_voxtral_small_24b":          {Enabled: false, Priority: 2, Model: "mistral.voxtral-small-24b-2507"},
+			"bedrock_voxtral_small_24b":         {Enabled: false, Priority: 2, Model: "mistral.voxtral-small-24b-2507"},
 			"deepinfra_whisper_large_v3_turbo":  {Enabled: true, Priority: 1, Model: "openai/whisper-large-v3-turbo"},
 			"groq_whisper_large_v3_turbo":       {Enabled: false, Priority: 2, Model: "whisper-large-v3-turbo"},
 			"cloudflare_whisper_large_v3_turbo": {Enabled: true, Priority: 3, Model: "@cf/openai/whisper-large-v3-turbo"},
@@ -71,6 +71,10 @@ func TestSyncConfigsFromDBWithJSON(t *testing.T) {
 	batchOrder := active.GetActiveBatchFallbackOrder()
 	if len(batchOrder) != 2 || batchOrder[0] != "deepinfra_whisper_large_v3_turbo" || batchOrder[1] != "cloudflare_whisper_large_v3_turbo" {
 		t.Errorf("Expected fallback order ['deepinfra_whisper_large_v3_turbo', 'cloudflare_whisper_large_v3_turbo']; got %v", batchOrder)
+	}
+	batchModels := active.GetActiveBatchSTTModels()
+	if len(batchModels) != 2 || batchModels[0].Provider != "deepinfra" || batchModels[1].Provider != "cloudflare" {
+		t.Fatalf("Database configuration must also control runtime transcription candidates: %+v", batchModels)
 	}
 }
 
@@ -191,4 +195,3 @@ func TestSyncConfigsFromDBWithNewDecoupledSchema(t *testing.T) {
 		t.Errorf("Expected active command models [bedrock], got %v", cmd)
 	}
 }
-

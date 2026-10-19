@@ -175,8 +175,8 @@ func (c *LLMProviderConfig) UnmarshalJSON(data []byte) error {
 
 // STTModelSpec defines a decoupled batch or pseudo-streaming transcription model candidate.
 type STTModelSpec struct {
-	Provider           string   `json:"provider"`                      // "bedrock" | "groq" | "deepinfra" | "cloudflare" | "self_hosted" | "custom"
-	Model              string   `json:"model"`                         // e.g. "openai/whisper-large-v3-turbo", "mistral.voxtral-mini-3b-2507"
+	Provider           string   `json:"provider"` // "bedrock" | "groq" | "deepinfra" | "cloudflare" | "self_hosted" | "custom"
+	Model              string   `json:"model"`    // e.g. "openai/whisper-large-v3-turbo", "mistral.voxtral-mini-3b-2507"
 	Enabled            bool     `json:"enabled"`
 	TimeoutMs          int      `json:"timeout_ms,omitempty"`
 	FailFast           bool     `json:"fail_fast,omitempty"`
@@ -220,11 +220,11 @@ type OnboardingPromoConfig struct {
 
 func DefaultOnboardingPromoConfig() OnboardingPromoConfig {
 	return OnboardingPromoConfig{
-		BadgeText:    "⚡ SPEEKTO.ME PRO UNLIMITED",
-		Title:        "Transform the way you write.",
-		Subtitle:     "Unlock unlimited high-speed AI dictation across all your desktop & web apps with zero monthly caps.",
-		Price:        "$2",
-		Period:       "/ month",
+		BadgeText: "⚡ SPEEKTO.ME PRO UNLIMITED",
+		Title:     "Transform the way you write.",
+		Subtitle:  "Unlock unlimited high-speed AI dictation across all your desktop & web apps with zero monthly caps.",
+		Price:     "$2",
+		Period:    "/ month",
 		Features: []string{
 			"Unlimited AI Voice Transcription (No 1-hour monthly cap)",
 			"Ultra-low latency priority queue (<300ms)",
@@ -772,13 +772,6 @@ func (p *ProviderConfig) GetActiveBatchSTTModels() []STTModelSpec {
 			active = append(active, spec)
 		}
 	}
-	if len(active) == 0 {
-		for _, spec := range DefaultModelsConfig().BatchSTTModels {
-			if spec.Enabled {
-				active = append(active, spec)
-			}
-		}
-	}
 	return active
 }
 
@@ -787,13 +780,6 @@ func (p *ProviderConfig) GetActiveStreamingSTTModels() []STTStreamingModelSpec {
 	for _, spec := range p.Models.StreamingSTTModels {
 		if spec.Enabled && strings.TrimSpace(spec.Model) != "" {
 			active = append(active, spec)
-		}
-	}
-	if len(active) == 0 {
-		for _, spec := range DefaultModelsConfig().StreamingSTTModels {
-			if spec.Enabled {
-				active = append(active, spec)
-			}
 		}
 	}
 	return active
@@ -903,6 +889,13 @@ func (m *CachedConfigManager) GetRawAll() map[string]string {
 func (m *CachedConfigManager) Set(c ProviderConfig, raw map[string]string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if raw["models_config_json"] != m.rawConfigs["models_config_json"] {
+		var batchModels []string
+		for _, spec := range c.GetActiveBatchSTTModels() {
+			batchModels = append(batchModels, spec.Provider+"/"+spec.Model)
+		}
+		log.Printf("[CONFIG] Active batch transcription models in fallback order: %v", batchModels)
+	}
 	if len(c.Models.EnhancementModels) > 0 {
 		enh := make([]ModelSpec, len(c.Models.EnhancementModels))
 		copy(enh, c.Models.EnhancementModels)
@@ -979,16 +972,20 @@ func ParseRawConfigs(dbConfigs map[string]string) (ProviderConfig, map[string]st
 			if len(parsed.CommandModels) > 0 {
 				models.CommandModels = parsed.CommandModels
 			}
-			if len(parsed.BatchSTTModels) > 0 {
+			if parsed.BatchSTTModels != nil {
 				models.BatchSTTModels = parsed.BatchSTTModels
+			} else if parsed.BatchProviders != nil {
+				models.BatchSTTModels = legacyBatchSTTModels(parsed.BatchProviders)
 			}
-			if len(parsed.StreamingSTTModels) > 0 {
+			if parsed.StreamingSTTModels != nil {
 				models.StreamingSTTModels = parsed.StreamingSTTModels
+			} else if parsed.StreamingProviders != nil {
+				models.StreamingSTTModels = legacyStreamingSTTModels(parsed.StreamingProviders)
 			}
-			if len(parsed.BatchProviders) > 0 {
+			if parsed.BatchProviders != nil {
 				models.BatchProviders = parsed.BatchProviders
 			}
-			if len(parsed.StreamingProviders) > 0 {
+			if parsed.StreamingProviders != nil {
 				models.StreamingProviders = parsed.StreamingProviders
 			}
 			if len(parsed.LLMProviders) > 0 {

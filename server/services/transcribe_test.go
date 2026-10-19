@@ -5,11 +5,59 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"speektome-server/config"
 	"speektome-server/pipeline"
 )
+
+func TestBatchTranscriptionUsesLegacyDatabaseConfiguration(t *testing.T) {
+	origCfg, origRaw := config.ConfigManager.Get(), config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(origCfg, origRaw)
+	origKey := config.DeepInfraAPIKey
+	config.DeepInfraAPIKey = "test-key"
+	defer func() { config.DeepInfraAPIKey = origKey }()
+	pipeline.GlobalCircuitBreaker.Reset()
+	defer pipeline.GlobalCircuitBreaker.Reset()
+
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Error(err)
+			return
+		}
+		defer r.MultipartForm.RemoveAll()
+		model := r.FormValue("model")
+		calls = append(calls, model)
+		if model == "primary" {
+			http.Error(w, "mock provider unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "Database routing works."})
+	}))
+	defer srv.Close()
+	providers := map[string]config.BatchProviderConfig{
+		"deepinfra_disabled": {Enabled: false, Priority: 1, Model: "disabled", BaseURL: srv.URL},
+		"deepinfra_french":   {Enabled: true, Priority: 1, Model: "french-only", BaseURL: srv.URL, SupportedLanguages: []string{"fr"}},
+		"deepinfra_primary":  {Enabled: true, Priority: 2, Model: "primary", BaseURL: srv.URL},
+		"deepinfra_backup":   {Enabled: true, Priority: 3, Model: "backup", BaseURL: srv.URL},
+	}
+	data, err := json.Marshal(map[string]interface{}{"batch_providers": providers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, raw := config.ParseRawConfigs(map[string]string{"models_config_json": string(data)})
+	config.ConfigManager.Set(cfg, raw)
+	text, _, provider, _, err := RunWhisperTranscribeWithModel(context.Background(), []byte("mock audio"), "hardcoded-default", []string{"en"})
+	if err != nil || text != "Database routing works." || provider != "deepinfra" {
+		t.Fatalf("Legacy database route failed: text=%q provider=%q error=%v", text, provider, err)
+	}
+	if !reflect.DeepEqual(calls, []string{"primary", "backup"}) {
+		t.Fatalf("Database priorities, enabled flags and language filters must control HTTP requests: %v", calls)
+	}
+}
 
 func TestRunWhisperTranscribeWithModel_Fallback(t *testing.T) {
 	origCfg := config.ConfigManager.Get()
