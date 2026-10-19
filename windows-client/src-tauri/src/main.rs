@@ -135,6 +135,15 @@ fn request_desktop_permissions() {
 }
 
 #[tauri::command]
+async fn repair_desktop_permissions() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    { tauri::async_runtime::spawn_blocking(macos_desktop::repair_permissions)
+        .await.map_err(|error| error.to_string())? }
+    #[cfg(not(target_os = "macos"))]
+    { Err("Desktop permission repair is only available on macOS.".into()) }
+}
+
+#[tauri::command]
 async fn validate_hotkey(value: String) -> Result<String, String> {
     let report = hotkey_conflicts::check(&value).await?;
     report.ensure_allowed()?;
@@ -797,6 +806,7 @@ fn main() {
             get_desktop_platform,
             get_linux_capabilities,
             request_desktop_permissions,
+            repair_desktop_permissions,
             get_audio_level,
             save_config,
             validate_hotkey,

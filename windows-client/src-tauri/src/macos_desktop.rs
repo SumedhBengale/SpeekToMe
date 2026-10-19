@@ -49,6 +49,23 @@ pub fn request_permissions() {
         s2m_request_notifications();
     }
 }
+/// Explicit Settings repair action. Reset only denied keyboard services for our
+/// bundle, through Apple's supported utility. Approval still belongs to the user.
+pub fn repair_permissions() -> Result<(), String> {
+    let bits = unsafe { s2m_permissions() };
+    for (service, granted) in [("Accessibility", bits & 2 != 0), ("ListenEvent", bits & 4 != 0)] {
+        if granted { continue; }
+        let output = std::process::Command::new("/usr/bin/tccutil")
+            .args(["reset", service, "me.speekto.SpeekToMe"])
+            .output().map_err(|error| format!("Could not reset {service}: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("Could not reset {service}: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+        eprintln!("[MACOS PERMISSIONS] Reset denied {service} record; fresh user approval required.");
+    }
+    request_permissions();
+    Ok(())
+}
 extern "C" fn shortcut_edge(pressed: bool) {
     let _ = std::panic::catch_unwind(|| {
         if !crate::SIMULATING_KEY.load(Ordering::SeqCst) {

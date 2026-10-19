@@ -60,16 +60,16 @@ async function loadLinuxCapabilityStatus() {
       { ready: capabilities?.insertion, label: 'Text insertion' },
       ...(IS_MAC_CLIENT ? [
         { ready: capabilities?.microphone, label: 'Microphone' },
-        { ready: capabilities?.input_monitoring, label: 'Input Monitoring' }
+        { ready: capabilities?.input_monitoring, label: 'Input Monitoring', optional: capabilities?.shortcut }
       ] : [])
-    ].forEach(({ ready, label }) => {
+    ].forEach(({ ready, label, optional }) => {
       const item = document.createElement('span');
-      item.className = 'shortcut-status-item' + (ready ? ' is-ready' : ' needs-permission');
+      item.className = 'shortcut-status-item' + (ready || optional ? ' is-ready' : ' needs-permission');
       item.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle>${ready ? '<path d="m8 12 3 3 5-6"></path>' : '<path d="M12 7v6m0 4h.01"></path>'}</svg>`;
-      item.append(document.createTextNode(label + (ready ? ' ready' : ' permission needed')));
+      item.append(document.createTextNode(label + (ready ? ' ready' : optional ? ' optional' : ' permission needed')));
       status.appendChild(item);
     });
-    if (IS_MAC_CLIENT && (!capabilities?.shortcut || !capabilities?.insertion || !capabilities?.microphone || !capabilities?.input_monitoring)) {
+    if (IS_MAC_CLIENT && (!capabilities?.shortcut || !capabilities?.insertion || !capabilities?.microphone)) {
       const button = document.createElement('button');
       button.type = 'button';
       button.id = 'macos-permissions-button';
@@ -78,8 +78,28 @@ async function loadLinuxCapabilityStatus() {
       button.addEventListener('click', () => invoke('request_desktop_permissions'));
       status.appendChild(button);
       const help = document.createElement('span');
-      help.textContent = 'Allow SpeekTo.Me in System Settings → Privacy & Security. If already enabled after a development rebuild, remove the old entry and add this app again. Return here after granting access; if Shortcut stays unavailable, quit and reopen the app.';
+      help.textContent = 'Allow SpeekTo.Me in System Settings → Privacy & Security. Already enabled but still blocked? Repair saved permissions, then approve the fresh entry. If Shortcut stays unavailable, quit and reopen the app.';
       status.appendChild(help);
+      if (!capabilities?.shortcut || !capabilities?.insertion) {
+        const repair = document.createElement('button');
+        repair.type = 'button';
+        repair.id = 'macos-repair-permissions-button';
+        repair.className = 'fluent-button';
+        repair.textContent = 'Repair saved permissions';
+        repair.title = 'Clear denied keyboard access records for SpeekTo.Me so macOS can ask for fresh approval.';
+        repair.addEventListener('click', async () => {
+          repair.disabled = true;
+          try {
+            await invoke('repair_desktop_permissions');
+            help.textContent = 'Old denied keyboard permission records cleared. Enable SpeekTo.Me in the macOS permission pane, then return here. Microphone approval is preserved.';
+          } catch (error) {
+            help.textContent = 'Permission repair failed: ' + String(error);
+          } finally {
+            repair.disabled = false;
+          }
+        });
+        status.appendChild(repair);
+      }
     }
   } catch (error) {
     console.warn('[LINUX] Capability status is unavailable:', error);

@@ -18,10 +18,12 @@ async function settingsFor(platform) {
   Object.defineProperty(w.document, 'readyState', { value: 'loading' });
   const calls = [];
   let capabilities = { shortcut: true, insertion: false };
+  let repairError = null;
   w.__TAURI__ = {
     core: { invoke: async (command, args) => {
       calls.push(command);
       if (command === 'save_config') calls.push({ config: JSON.parse(JSON.stringify(args.config)) });
+      if (command === 'repair_desktop_permissions' && repairError) throw new Error(repairError);
       if (command === 'get_desktop_platform') return platform;
       if (command === 'get_linux_capabilities') return capabilities;
       if (command === 'check_hotkey_conflicts') return { conflicts: [], verified: true };
@@ -55,10 +57,23 @@ async function settingsFor(platform) {
     permissions.click();
     await Promise.resolve();
     assert.ok(calls.includes('request_desktop_permissions'));
-    assert.match(d.getElementById('linux-capability-status').textContent, /remove the old entry/);
+    assert.match(d.getElementById('linux-capability-status').textContent, /Repair saved permissions/);
+    d.getElementById('macos-repair-permissions-button').click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(calls.includes('repair_desktop_permissions'));
+    assert.match(d.getElementById('linux-capability-status').textContent, /Microphone approval is preserved/);
+    repairError = 'macOS reset unavailable';
+    const repair = d.getElementById('macos-repair-permissions-button');
+    repair.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(d.getElementById('linux-capability-status').textContent, /Permission repair failed:.*macOS reset unavailable/);
+    assert.equal(repair.disabled, false);
+    repairError = null;
     capabilities = { shortcut: true, insertion: true, microphone: true, input_monitoring: false };
     await w.settingsTest.loadLinuxCapabilityStatus();
-    assert.match(d.getElementById('linux-capability-status').textContent, /Input Monitoring permission needed/);
+    assert.match(d.getElementById('linux-capability-status').textContent, /Input Monitoring optional/);
+    assert.equal(d.getElementById('macos-permissions-button'), null, 'Optional Input Monitoring must not keep access button stuck');
+    assert.equal(d.getElementById('macos-repair-permissions-button'), null);
     capabilities.input_monitoring = true;
     await w.settingsTest.loadLinuxCapabilityStatus();
     assert.match(d.getElementById('linux-capability-status').textContent, /Input Monitoring ready/);
@@ -107,7 +122,7 @@ async function settingsFor(platform) {
   assert.deepEqual(calls.find(call => typeof call === 'object').config, changed,
     `${platform}: Save & Apply must send the same complete payload to Rust`);
   assert.equal(d.getElementById('save-btn').disabled, false);
-  const controls = [...d.querySelectorAll('input,select,button')].map(el => el.id).filter(id => id !== 'macos-permissions-button');
+  const controls = [...d.querySelectorAll('input,select,button')].map(el => el.id).filter(id => id !== 'macos-permissions-button' && id !== 'macos-repair-permissions-button');
   dom.window.close();
   return { normal, changed, controls };
 }
