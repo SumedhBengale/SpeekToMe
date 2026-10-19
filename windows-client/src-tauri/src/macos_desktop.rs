@@ -52,6 +52,10 @@ pub fn request_permissions() {
 extern "C" fn shortcut_edge(pressed: bool) {
     let _ = std::panic::catch_unwind(|| {
         if !crate::SIMULATING_KEY.load(Ordering::SeqCst) {
+            eprintln!("[MACOS SHORTCUT] {} (signed_in={}, allowed={})",
+                if pressed { "pressed" } else { "released" },
+                crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::SeqCst),
+                crate::HOTKEY_ALLOWED.load(Ordering::SeqCst));
             crate::shortcuts::on_edge(pressed);
         }
     });
@@ -160,9 +164,16 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
         std::thread::spawn(|| {
+            let mut previous = None;
             while !crate::lifecycle::is_quitting() {
-                unsafe {
-                    s2m_run_listener(shortcut_edge);
+                let result = unsafe { s2m_run_listener(shortcut_edge) };
+                if previous != Some(result) {
+                    eprintln!("[MACOS SHORTCUT] {}", if result == 0 {
+                        "Waiting for keyboard permission. Enable SpeekTo.Me in Privacy & Security → Accessibility or Input Monitoring. If already enabled for an older build, remove that entry and add this app again."
+                    } else if result < 0 {
+                        "macOS refused the keyboard listener. Reopen the app after granting Input Monitoring."
+                    } else { "Keyboard listener stopped; retrying." });
+                    previous = Some(result);
                 }
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }

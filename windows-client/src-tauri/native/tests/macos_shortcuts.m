@@ -26,6 +26,15 @@ int main(void) {
         event(kCGEventFlagsChanged, 55, kCGEventFlagMaskControl, false);
         assert(releases == 1);
         event(kCGEventFlagsChanged, 59, 0, false);
+        // The user's Ctrl+Shift modifier-only hold must also reach the edge.
+        presses = releases = 0; triggerDown = chordActive = false;
+        s2m_set_shortcut(3);
+        event(kCGEventFlagsChanged, 56, kCGEventFlagMaskShift, false);
+        event(kCGEventFlagsChanged, 59, kCGEventFlagMaskControl | kCGEventFlagMaskShift, false);
+        assert(presses == 1 && releases == 0);
+        event(kCGEventFlagsChanged, 59, kCGEventFlagMaskShift, false);
+        event(kCGEventFlagsChanged, 56, 0, false);
+        assert(presses == 1 && releases == 1);
         // Use F8 so this test is independent of the current letter layout.
         presses = releases = 0; triggerDown = chordActive = false;
         s2m_set_shortcut((0x77 << 16) | 1);

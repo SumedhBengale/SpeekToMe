@@ -17,12 +17,13 @@ async function settingsFor(platform) {
   w.document.addEventListener = (type, ...args) => { if (type !== 'DOMContentLoaded') add(type, ...args); };
   Object.defineProperty(w.document, 'readyState', { value: 'loading' });
   const calls = [];
+  let capabilities = { shortcut: true, insertion: false };
   w.__TAURI__ = {
     core: { invoke: async (command, args) => {
       calls.push(command);
       if (command === 'save_config') calls.push({ config: JSON.parse(JSON.stringify(args.config)) });
       if (command === 'get_desktop_platform') return platform;
-      if (command === 'get_linux_capabilities') return { shortcut: true, insertion: false };
+      if (command === 'get_linux_capabilities') return capabilities;
       if (command === 'check_hotkey_conflicts') return { conflicts: [], verified: true };
       return null;
     } },
@@ -54,6 +55,15 @@ async function settingsFor(platform) {
     permissions.click();
     await Promise.resolve();
     assert.ok(calls.includes('request_desktop_permissions'));
+    assert.match(d.getElementById('linux-capability-status').textContent, /remove the old entry/);
+    capabilities = { shortcut: true, insertion: true, microphone: true, input_monitoring: false };
+    await w.settingsTest.loadLinuxCapabilityStatus();
+    assert.match(d.getElementById('linux-capability-status').textContent, /Input Monitoring permission needed/);
+    capabilities.input_monitoring = true;
+    await w.settingsTest.loadLinuxCapabilityStatus();
+    assert.match(d.getElementById('linux-capability-status').textContent, /Input Monitoring ready/);
+    assert.equal(d.getElementById('macos-permissions-button'), null);
+
   }
   const config = {
     languages: ['en', 'hi'], active_language: 'hi', api_url: 'https://test.invalid',

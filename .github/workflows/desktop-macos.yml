@@ -29,6 +29,9 @@ jobs:
             -framework CoreMedia -framework CoreAudio -framework AudioToolbox \
             -framework ServiceManagement -o /tmp/speektome-native-tests
           /tmp/speektome-native-tests
+      - name: Development signing survives rebuilds
+        working-directory: windows-client
+        run: python3 tests/macos-development-signing.py
       - name: Build Intel and Apple Silicon clients
         working-directory: windows-client
         run: |

@@ -50,7 +50,7 @@ async function loadLinuxCapabilityStatus() {
   linuxCapabilityStatusPending = true;
   try {
     const capabilities = await invoke('get_linux_capabilities');
-    const state = `${Boolean(capabilities?.shortcut)}:${Boolean(capabilities?.insertion)}:${Boolean(capabilities?.microphone)}:${Boolean(capabilities?.system_audio)}`;
+    const state = `${Boolean(capabilities?.shortcut)}:${Boolean(capabilities?.insertion)}:${Boolean(capabilities?.microphone)}:${Boolean(capabilities?.system_audio)}:${Boolean(capabilities?.input_monitoring)}`;
     if (status.dataset.state === state) return;
     status.dataset.state = state;
     status.hidden = false;
@@ -58,7 +58,10 @@ async function loadLinuxCapabilityStatus() {
     [
       { ready: capabilities?.shortcut, label: 'Shortcut' },
       { ready: capabilities?.insertion, label: 'Text insertion' },
-      ...(IS_MAC_CLIENT ? [{ ready: capabilities?.microphone, label: 'Microphone' }] : [])
+      ...(IS_MAC_CLIENT ? [
+        { ready: capabilities?.microphone, label: 'Microphone' },
+        { ready: capabilities?.input_monitoring, label: 'Input Monitoring' }
+      ] : [])
     ].forEach(({ ready, label }) => {
       const item = document.createElement('span');
       item.className = 'shortcut-status-item' + (ready ? ' is-ready' : ' needs-permission');
@@ -66,7 +69,7 @@ async function loadLinuxCapabilityStatus() {
       item.append(document.createTextNode(label + (ready ? ' ready' : ' permission needed')));
       status.appendChild(item);
     });
-    if (IS_MAC_CLIENT && (!capabilities?.shortcut || !capabilities?.insertion || !capabilities?.microphone)) {
+    if (IS_MAC_CLIENT && (!capabilities?.shortcut || !capabilities?.insertion || !capabilities?.microphone || !capabilities?.input_monitoring)) {
       const button = document.createElement('button');
       button.type = 'button';
       button.id = 'macos-permissions-button';
@@ -75,7 +78,7 @@ async function loadLinuxCapabilityStatus() {
       button.addEventListener('click', () => invoke('request_desktop_permissions'));
       status.appendChild(button);
       const help = document.createElement('span');
-      help.textContent = 'Allow SpeekTo.Me in System Settings → Privacy & Security. Return here after granting access.';
+      help.textContent = 'Allow SpeekTo.Me in System Settings → Privacy & Security. If already enabled after a development rebuild, remove the old entry and add this app again. Return here after granting access; if Shortcut stays unavailable, quit and reopen the app.';
       status.appendChild(help);
     }
   } catch (error) {

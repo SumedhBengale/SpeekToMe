@@ -48,6 +48,12 @@ void s2m_request_permissions(void) {
         NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
         AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
         CGRequestListenEventAccess();
+        // Take the user to the missing grant, including when macOS retained an
+        // obsolete entry for a differently signed development build.
+        NSString *pane = !AXIsProcessTrusted() ? @"Privacy_Accessibility" :
+            !CGPreflightListenEventAccess() ? @"Privacy_ListenEvent" : nil;
+        if (pane) [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:
+            [@"x-apple.systempreferences:com.apple.preference.security?" stringByAppendingString:pane]]];
     });
 }
 void s2m_set_shortcut(uint32_t combo) {
@@ -136,10 +142,12 @@ int s2m_run_listener(void (*edge)(bool)) {
         chordActive = triggerDown = false;
         eventTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionListenOnly,
             CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp) | CGEventMaskBit(kCGEventFlagsChanged), onEvent, NULL);
-        if (!eventTap) return 0;
+        if (!eventTap) return -1;
         CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(NULL, eventTap, 0);
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
+        CGEventTapEnable(eventTap, true);
         atomic_store(&listenerReady, true);
+        fprintf(stderr, "[MACOS SHORTCUT] Global keyboard listener ready\n");
         CFRunLoopRun();
         atomic_store(&listenerReady, false);
         CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
