@@ -6,9 +6,6 @@ type CF = *const c_void;
 #[cfg_attr(target_os = "macos", link(name = "Carbon", kind = "framework"))]
 extern "C" {
     fn CopySymbolicHotKeys(keys: *mut CF) -> i32;
-    static kHISymbolicHotKeyEnabled: CF;
-    static kHISymbolicHotKeyCode: CF;
-    static kHISymbolicHotKeyModifiers: CF;
     fn TISCopyCurrentKeyboardLayoutInputSource() -> CF;
     fn TISGetInputSourceProperty(source: CF, key: CF) -> CF;
     static kTISPropertyUnicodeKeyLayoutData: CF;
@@ -29,6 +26,11 @@ extern "C" {
 #[cfg_attr(target_os = "macos", link(name = "CoreFoundation", kind = "framework"))]
 extern "C" {
     fn CFRelease(value: CF);
+    fn CFStringCreateWithCString(
+        allocator: CF,
+        value: *const std::ffi::c_char,
+        encoding: u32,
+    ) -> CF;
     fn CFArrayGetCount(value: CF) -> isize;
     fn CFArrayGetValueAtIndex(value: CF, index: isize) -> CF;
     fn CFDictionaryGetValue(value: CF, key: CF) -> CF;
@@ -108,7 +110,18 @@ fn semantic_function_modifier(modifiers: u32, code: u16) -> bool {
             (0x70..=0x83).contains(&vk) || (0x21..=0x28).contains(&vk) || vk == 0x2E
         })
 }
+pub fn is_main_thread() -> bool {
+    unsafe extern "C" {
+        fn pthread_main_np() -> i32;
+    }
+    unsafe { pthread_main_np() != 0 }
+}
+
 pub fn check(combo: u32) -> Result<Vec<Conflict>, String> {
+    if !is_main_thread() {
+        return Err("macOS keyboard-layout queries require the main thread.".into());
+    }
+
     unsafe {
         let mut array = std::ptr::null();
         if CopySymbolicHotKeys(&mut array) != 0 || array.is_null() {
@@ -127,15 +140,30 @@ pub fn check(combo: u32) -> Result<Vec<Conflict>, String> {
             CFDataGetBytePtr(layout).cast()
         };
         let mut unavailable_layout = false;
+        // Carbon defines these keys as CFSTR macros, not exported symbols.
+        // Declaring extern statics compiles but fails to link on a real Mac.
+        let key = |value: &'static [u8]| {
+            Owned(CFStringCreateWithCString(
+                std::ptr::null(),
+                value.as_ptr().cast(),
+                0x08000100,
+            ))
+        };
+        let enabled_key = key(b"kHISymbolicHotKeyEnabled\0");
+        let code_key = key(b"kHISymbolicHotKeyCode\0");
+        let modifiers_key = key(b"kHISymbolicHotKeyModifiers\0");
+        if enabled_key.0.is_null() || code_key.0.is_null() || modifiers_key.0.is_null() {
+            return Err("macOS shortcut key allocation failed.".into());
+        }
         for index in 0..CFArrayGetCount(array.0) {
             let dict = CFArrayGetValueAtIndex(array.0, index);
-            let enabled = CFDictionaryGetValue(dict, kHISymbolicHotKeyEnabled);
+            let enabled = CFDictionaryGetValue(dict, enabled_key.0);
             if enabled.is_null() || CFBooleanGetValue(enabled) == 0 {
                 continue;
             }
             let (Some(code), Some(modifiers)) = (
-                number(CFDictionaryGetValue(dict, kHISymbolicHotKeyCode)),
-                number(CFDictionaryGetValue(dict, kHISymbolicHotKeyModifiers)),
+                number(CFDictionaryGetValue(dict, code_key.0)),
+                number(CFDictionaryGetValue(dict, modifiers_key.0)),
             ) else {
                 continue;
             };
@@ -203,6 +231,12 @@ pub fn check(combo: u32) -> Result<Vec<Conflict>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn background_layout_query_is_rejected_before_calling_carbon() {
+        let result = std::thread::spawn(|| check(0x4b0005)).join().unwrap();
+        assert!(result.unwrap_err().contains("main thread"));
+    }
     #[test]
     fn carbon_modifiers_and_special_keys_match_shared_representation() {
         assert_eq!(modifier_mask(4096 | 2048), 5);

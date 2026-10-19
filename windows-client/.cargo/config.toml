@@ -2,3 +2,6 @@
 # audiopus_sys bundles an older Opus CMake project. Set this before dependency
 # build scripts run so it also builds with CMake 4; build.rs runs too late.
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+
+# Align native dependency builds with the macOS bundle minimum.
+MACOSX_DEPLOYMENT_TARGET = "13.0"

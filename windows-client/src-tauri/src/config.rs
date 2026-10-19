@@ -182,7 +182,17 @@ pub fn get_config_path() -> std::path::PathBuf {
             std::path::PathBuf::from("speektome_config.json")
         }
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        let root = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        let directory = root.join("Library/Application Support/SpeekToMe");
+        let _ = std::fs::create_dir_all(&directory);
+        let path = directory.join("config.json");
+        let legacy = root.join(".config/SpeekToMe/config.json");
+        if !path.exists() && legacy.is_file() { let _ = std::fs::copy(legacy, &path); }
+        path
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         if let Ok(home) = std::env::var("HOME") {
             let directory = std::path::PathBuf::from(home).join(".config").join("SpeekToMe");
@@ -228,6 +238,8 @@ pub fn save_config(config: &AppConfig) {
     }
     #[cfg(target_os = "linux")]
     crate::linux_util::sync_autostart(config.autostart);
+    #[cfg(target_os = "macos")]
+    crate::macos_desktop::sync_autostart(config.autostart);
     #[cfg(target_os = "windows")]
     if let Err(error) = crate::windows_autostart::sync(config.autostart) {
         eprintln!("[CONFIG] Could not update launch at sign-in: {}", error);

@@ -1,0 +1,36 @@
+name: macOS desktop
+on:
+  pull_request:
+    paths: ['windows-client/**', '.github/workflows/desktop-macos.yml']
+  push:
+    branches: [master]
+    paths: ['windows-client/**', '.github/workflows/desktop-macos.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build tools and Rust targets
+        run: |
+          command -v cmake || brew install cmake
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - name: Shared Rust tests
+        working-directory: windows-client
+        run: cargo test --locked
+      - name: Native shortcut adapter tests
+        working-directory: windows-client/src-tauri
+        run: |
+          xcrun clang -fobjc-arc -fblocks -mmacosx-version-min=13.0 native/tests/macos_shortcuts.m \
+            -framework AppKit -framework ApplicationServices -framework AVFoundation \
+            -framework Carbon -framework UserNotifications -framework ScreenCaptureKit \
+            -framework CoreMedia -framework CoreAudio -framework AudioToolbox \
+            -framework ServiceManagement -o /tmp/speektome-native-tests
+          /tmp/speektome-native-tests
+      - name: Build Intel and Apple Silicon clients
+        working-directory: windows-client
+        run: |
+          cargo build --locked --target x86_64-apple-darwin
+          cargo build --locked --target aarch64-apple-darwin

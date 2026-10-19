@@ -44,20 +44,21 @@ async function configureDesktopSettings() {
 let linuxCapabilityStatusPending = false;
 
 async function loadLinuxCapabilityStatus() {
-  if (!IS_LINUX_CLIENT) return;
+  if (!IS_LINUX_CLIENT && !IS_MAC_CLIENT) return;
   const status = document.getElementById('linux-capability-status');
   if (!status || linuxCapabilityStatusPending) return;
   linuxCapabilityStatusPending = true;
   try {
     const capabilities = await invoke('get_linux_capabilities');
-    const state = `${Boolean(capabilities?.shortcut)}:${Boolean(capabilities?.insertion)}`;
+    const state = `${Boolean(capabilities?.shortcut)}:${Boolean(capabilities?.insertion)}:${Boolean(capabilities?.microphone)}:${Boolean(capabilities?.system_audio)}`;
     if (status.dataset.state === state) return;
     status.dataset.state = state;
     status.hidden = false;
     status.replaceChildren();
     [
       { ready: capabilities?.shortcut, label: 'Shortcut' },
-      { ready: capabilities?.insertion, label: 'Text insertion' }
+      { ready: capabilities?.insertion, label: 'Text insertion' },
+      ...(IS_MAC_CLIENT ? [{ ready: capabilities?.microphone, label: 'Microphone' }] : [])
     ].forEach(({ ready, label }) => {
       const item = document.createElement('span');
       item.className = 'shortcut-status-item' + (ready ? ' is-ready' : ' needs-permission');
@@ -65,6 +66,18 @@ async function loadLinuxCapabilityStatus() {
       item.append(document.createTextNode(label + (ready ? ' ready' : ' permission needed')));
       status.appendChild(item);
     });
+    if (IS_MAC_CLIENT && (!capabilities?.shortcut || !capabilities?.insertion || !capabilities?.microphone)) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.id = 'macos-permissions-button';
+      button.className = 'fluent-button';
+      button.textContent = 'Grant Desktop Access';
+      button.addEventListener('click', () => invoke('request_desktop_permissions'));
+      status.appendChild(button);
+      const help = document.createElement('span');
+      help.textContent = 'Allow SpeekTo.Me in System Settings → Privacy & Security. Return here after granting access.';
+      status.appendChild(help);
+    }
   } catch (error) {
     console.warn('[LINUX] Capability status is unavailable:', error);
     if (!status.dataset.state) {
@@ -872,7 +885,7 @@ async function init() {
     console.log("[INIT] Config loaded:", currentConfig);
     applyConfigToUI(currentConfig);
     loadLinuxCapabilityStatus();
-    if (IS_LINUX_CLIENT) setInterval(loadLinuxCapabilityStatus, 3000);
+    if (IS_LINUX_CLIENT || IS_MAC_CLIENT) setInterval(loadLinuxCapabilityStatus, 3000);
 
     // 3. Fetch user information status & update dashboard UI
     const userInfo = await invoke('get_user_info');

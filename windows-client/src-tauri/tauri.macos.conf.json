@@ -1,0 +1,11 @@
+{
+  "identifier": "me.speekto.SpeekToMe",
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": "Entitlements.plist",
+      "hardenedRuntime": true
+    }
+  }
+}

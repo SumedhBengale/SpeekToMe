@@ -14,6 +14,10 @@ mod hotkey_linux;
 mod hotkey_macos;
 #[cfg(any(target_os = "linux", test))]
 mod portal_gestures;
+#[cfg(target_os = "macos")]
+mod macos_desktop;
+#[cfg(target_os = "macos")]
+mod macos_audio;
 mod lifecycle;
 pub mod audio;
 pub mod audio_processing;
@@ -73,6 +77,9 @@ pub fn set_transform_word_limit(limit: usize) {
     TRANSFORM_INPUT_WORD_LIMIT.store(limit, Ordering::Relaxed);
 }
 
+// A single expansion also emits the macOS embedded Info.plist exactly once.
+pub fn desktop_context() -> tauri::Context<tauri::Wry> { tauri::generate_context!() }
+
 pub fn sync_active_config_atomics(config: &AppConfig) {
     ACTIVE_HOTKEY_COMBO.store(config::parse_hotkey_combo(&config.hotkey), Ordering::SeqCst);
     let mode_byte = if config.hotkey_mode == "toggle" { 1 } else { 0 };
@@ -83,6 +90,8 @@ pub fn sync_active_config_atomics(config: &AppConfig) {
     ACTIVE_SOUND_FEEDBACK.store(config.sound_feedback, Ordering::SeqCst);
     ACTIVE_HAS_SESSION_TOKEN.store(config.session_token.is_some(), Ordering::SeqCst);
     shortcuts::settings_changed();
+    #[cfg(target_os = "macos")]
+    macos_desktop::sync_settings(config);
     #[cfg(target_os = "linux")]
     linux_desktop::sync_overlay_theme();
 }
@@ -113,8 +122,16 @@ fn get_desktop_platform() -> &'static str {
 fn get_linux_capabilities() -> serde_json::Value {
     #[cfg(target_os = "linux")]
     { serde_json::to_value(linux_portal::capabilities()).unwrap_or_default() }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    { macos_desktop::capabilities() }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     { serde_json::json!({"shortcut": true, "insertion": true, "detail": ""}) }
+}
+
+#[tauri::command]
+fn request_desktop_permissions() {
+    #[cfg(target_os = "macos")]
+    macos_desktop::request_permissions();
 }
 
 #[tauri::command]
@@ -145,7 +162,7 @@ async fn save_config(app: tauri::AppHandle, mut config: AppConfig) -> Result<(),
     let report = hotkey_conflicts::check(&config.hotkey).await?;
     report.ensure_allowed()?;
     config.hotkey = report.canonical;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let _ = &app;
     #[cfg(target_os = "linux")]
     let (old_hotkey, old_hotkey_mode) = {
@@ -180,7 +197,7 @@ async fn save_config(app: tauri::AppHandle, mut config: AppConfig) -> Result<(),
 
 #[tauri::command]
 fn update_tray_theme(app: tauri::AppHandle, theme: String) {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let _ = &app;
     crate::win32::update_tray_icon_for_theme(&theme);
     #[cfg(target_os = "windows")]
@@ -416,6 +433,8 @@ fn notify_language_changed() {
         let _ = app.emit("speaking-language-changed", serde_json::json!({"language": config.speaking_language(), "languages": config.languages}));
         #[cfg(target_os = "linux")]
         linux_desktop::refresh_language_menu(app);
+        #[cfg(target_os = "macos")]
+        macos_desktop::refresh_language_menu(app);
     }
 }
 
@@ -470,8 +489,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
             .title("SpeekTo.Me Settings")
             .resizable(true)
-            .transparent(false)
-            .decorations(false)
+            .decorations(cfg!(target_os = "macos"))
             .skip_taskbar(false)
             .min_inner_size(840.0, 650.0);
 
@@ -621,7 +639,7 @@ fn run_native_overlay_diagnostic() {
         win32::set_preview_state(win32::PreviewState::Listening);
         gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(7), move || lifecycle::quit(&handle));
         Ok(())
-    }).build(tauri::generate_context!()).expect("native overlay diagnostic");
+    }).build(desktop_context()).expect("native overlay diagnostic");
     app.run(|_, event| {
         if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
             if lifecycle::keep_tray_alive(code) { api.prevent_exit(); }
@@ -656,7 +674,11 @@ fn main() {
         return;
     }
 
-    println!("[STARTUP 1] Starting SpeekTo.Me Windows Client...");
+    #[cfg(target_os = "macos")]
+    if !macos_desktop::ensure_single_instance() { return; }
+    #[cfg(target_os = "macos")]
+    if std::env::args().any(|arg| arg == "--diagnose-macos") { macos_desktop::run_diagnostic(); return; }
+    println!("[STARTUP 1] Starting SpeekTo.Me desktop client...");
 
     // Install process-level default CryptoProvider for rustls / tokio-tungstenite TLS
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -714,6 +736,8 @@ fn main() {
                 linux_desktop::setup(&handle)?;
                 linux_portal::start();
             }
+            #[cfg(target_os = "macos")]
+            macos_desktop::setup(&handle)?;
             shortcuts::start();
             println!("[STARTUP 7b] TAURI_APP set.");
 
@@ -772,6 +796,7 @@ fn main() {
             get_config,
             get_desktop_platform,
             get_linux_capabilities,
+            request_desktop_permissions,
             get_audio_level,
             save_config,
             validate_hotkey,
@@ -811,10 +836,12 @@ fn main() {
 
     println!("[STARTUP 9] Running Tauri event loop...");
     let app = app
-        .build(tauri::generate_context!())
+        .build(desktop_context())
         .expect("error while building tauri application");
 
     app.run(|_app_handle, event| {
+        #[cfg(target_os = "macos")]
+        if matches!(&event, tauri::RunEvent::Reopen { .. }) { show_or_create_settings_window(_app_handle); }
         if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
             if lifecycle::keep_tray_alive(code) { api.prevent_exit(); }
         }

@@ -39,14 +39,22 @@ async function settingsFor(platform) {
   await w.settingsTest.configureDesktopSettings();
   const d = w.document;
   assert.equal(d.documentElement.dataset.platform, platform);
-  const keyLabel = platform === 'linux' ? 'Meta' : 'Windows';
+  const keyLabel = platform === 'macos' ? 'Command' : platform === 'linux' ? 'Meta' : 'Windows';
   for (const id of ['hotkey-select', 'onboard-hotkey-select']) {
     assert.equal(d.getElementById(id).options[0].textContent, `Ctrl + ${keyLabel} (Recommended)`);
     assert.equal(d.getElementById(id).options[0].value, 'Ctrl + Win');
   }
   await w.settingsTest.loadLinuxCapabilityStatus();
-  assert.equal(calls.includes('get_linux_capabilities'), platform === 'linux');
-  assert.equal(d.getElementById('linux-capability-status').hidden, platform !== 'linux');
+  assert.equal(calls.includes('get_linux_capabilities'), platform !== 'windows');
+  assert.equal(d.getElementById('linux-capability-status').hidden, platform === 'windows');
+  if (platform === 'macos') {
+    const permissions = d.getElementById('macos-permissions-button');
+    assert.ok(permissions, 'Mac permission recovery must be reachable');
+    assert.match(d.getElementById('linux-capability-status').textContent, /Microphone permission needed/);
+    permissions.click();
+    await Promise.resolve();
+    assert.ok(calls.includes('request_desktop_permissions'));
+  }
   const config = {
     languages: ['en', 'hi'], active_language: 'hi', api_url: 'https://test.invalid',
     session_token: 'fixture-only', hotkey: 'Ctrl + Shift + K', hotkey_mode: 'toggle',
@@ -89,7 +97,7 @@ async function settingsFor(platform) {
   assert.deepEqual(calls.find(call => typeof call === 'object').config, changed,
     `${platform}: Save & Apply must send the same complete payload to Rust`);
   assert.equal(d.getElementById('save-btn').disabled, false);
-  const controls = [...d.querySelectorAll('input,select,button')].map(el => el.id);
+  const controls = [...d.querySelectorAll('input,select,button')].map(el => el.id).filter(id => id !== 'macos-permissions-button');
   dom.window.close();
   return { normal, changed, controls };
 }
@@ -97,6 +105,8 @@ async function settingsFor(platform) {
 (async () => {
   const windows = await settingsFor('windows');
   const linux = await settingsFor('linux');
+  const macos = await settingsFor('macos');
+  assert.deepEqual(macos, windows, 'macOS must preserve the shared controls and settings schema');
   assert.deepEqual(linux, windows, 'Both native platforms must expose the same controls and saved settings');
-  console.log('Windows/Linux settings parity, onboarding, native platform labels, permissions and round-trip checks passed.');
+  console.log('Windows/Linux/macOS settings parity, onboarding, native platform labels, permissions and round-trip checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

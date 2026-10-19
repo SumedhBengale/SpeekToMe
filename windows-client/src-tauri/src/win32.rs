@@ -1832,6 +1832,8 @@ mod win32_stub {
     pub fn show_tray_notification(title: &str, message: &str, _level: NotificationLevel) {
         #[cfg(target_os = "linux")]
         crate::linux_desktop::notify(title, message);
+        #[cfg(target_os = "macos")]
+        crate::macos_desktop::notify(title, message);
     }
 
     pub fn calculate_pill_position(_config: &crate::config::AppConfig, _width: i32, _height: i32) -> (i32, i32) {
@@ -1841,14 +1843,23 @@ mod win32_stub {
     pub fn update_overlay_position() {
         #[cfg(target_os = "linux")]
         crate::linux_desktop::update_overlay_position();
+        #[cfg(target_os = "macos")]
+        crate::macos_desktop::update_position();
     }
 
     pub fn show_overlay() {
         #[cfg(target_os = "linux")]
         crate::linux_desktop::show_overlay();
+        #[cfg(target_os = "macos")]
+        crate::macos_desktop::show_overlay();
     }
 
     pub fn hide_overlay() {
+        #[cfg(target_os = "macos")]
+        {
+            *PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new())).lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+            crate::macos_desktop::set_state(0);
+        }
         #[cfg(target_os = "linux")]
         {
             *PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
@@ -1859,6 +1870,8 @@ mod win32_stub {
     }
 
     pub fn show_meeting_overlay() {
+        #[cfg(target_os = "macos")]
+        set_preview_state(PreviewState::Meeting);
         #[cfg(target_os = "linux")]
         {
             set_preview_state(PreviewState::Meeting);
@@ -1868,7 +1881,7 @@ mod win32_stub {
     }
 
     pub fn hide_meeting_overlay() {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         hide_overlay();
     }
 
@@ -1883,6 +1896,8 @@ mod win32_stub {
             .lock().unwrap_or_else(|e| e.into_inner()) = text.to_string();
         #[cfg(target_os = "linux")]
         crate::linux_desktop::set_preview_text(text);
+        #[cfg(target_os = "macos")]
+        crate::macos_desktop::set_preview_text(text);
     }
 
     pub fn get_preview_text() -> String {
@@ -1891,6 +1906,8 @@ mod win32_stub {
     }
 
     pub fn set_preview_state(state: PreviewState) {
+        #[cfg(target_os = "macos")]
+        crate::macos_desktop::set_state(state as u8);
         #[cfg(target_os = "linux")]
         crate::linux_desktop::set_preview_state(state as u8);
         match state {
@@ -1901,7 +1918,10 @@ mod win32_stub {
 
     pub fn update_preview_position() { update_overlay_position(); }
 
-    pub fn play_chime(_start: bool) {}
+    pub fn play_chime(_start: bool) {
+        #[cfg(target_os = "macos")]
+        crate::macos_desktop::chime(_start);
+    }
 
     pub fn ensure_single_instance() {}
 

@@ -117,7 +117,7 @@ pub fn get_selected_text() -> Option<String> {
     }
 
     // 3. Release physical modifiers so SendInput Ctrl+C is clean
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     {
         release_modifier_keys();
         thread::sleep(Duration::from_millis(30));
@@ -553,35 +553,71 @@ pub fn simulate_backspaces(count: usize) {
     for _ in 0..count { simulate_single_key(0x08); }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub fn simulate_copy() { let _ = crate::macos_desktop::chord(false); }
+
+#[cfg(target_os = "macos")]
+pub fn simulate_paste() {
+    if let Err(error) = crate::macos_desktop::chord(true) {
+        crate::win32::show_tray_notification("SpeekTo.Me copied your text", error, crate::win32::NotificationLevel::Warning);
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn release_modifier_keys() {}
+
+#[cfg(target_os = "macos")]
+pub fn simulate_single_key(vk: u32) { simulate_key_down(vk); simulate_key_up(vk); }
+
+#[cfg(target_os = "macos")]
+pub fn simulate_key_down(vk: u32) { crate::macos_desktop::key(vk, true); }
+
+#[cfg(target_os = "macos")]
+pub fn simulate_key_up(vk: u32) { crate::macos_desktop::key(vk, false); }
+
+#[cfg(target_os = "macos")]
+pub fn simulate_typing(text: &str) {
+    crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = crate::macos_desktop::type_text(text);
+    crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Err(error) = result {
+        let _ = Clipboard::new().and_then(|mut c| c.set_text(text.to_owned()));
+        crate::win32::show_tray_notification("SpeekTo.Me could not insert your text", error, crate::win32::NotificationLevel::Warning);
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn simulate_backspaces(count: usize) { for _ in 0..count { simulate_single_key(8); } }
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn simulate_paste() {
     println!("[KEYBOARD] simulate_paste is not supported on this platform.");
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn release_modifier_keys() {}
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn simulate_single_key(_vk: u32) {
     println!("[KEYBOARD] simulate_single_key is not supported on this platform.");
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn simulate_key_down(_vk: u32) {
     println!("[KEYBOARD] simulate_key_down is not supported on this platform.");
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn simulate_key_up(_vk: u32) {
     println!("[KEYBOARD] simulate_key_up is not supported on this platform.");
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn simulate_typing(text: &str) {
     println!("[KEYBOARD] simulate_typing: {}", text);
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn simulate_backspaces(count: usize) {
     println!("[KEYBOARD] simulate_backspaces: {}", count);
 }

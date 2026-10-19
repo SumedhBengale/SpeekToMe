@@ -926,6 +926,8 @@ unsafe impl Sync for SendStream {}
 pub struct MeetingRecordingState {
     pub mic_stream: Option<SendStream>,
     pub loopback_stream: Option<SendStream>,
+    #[cfg(target_os = "macos")]
+    pub macos_loopback: Option<crate::macos_audio::Capture>,
     pub shutdown_tx: Option<std::sync::mpsc::Sender<()>>,
  pub recording_thread: Option<std::thread::JoinHandle<Result<(),String>>>,
     #[cfg(target_os = "linux")]
@@ -941,6 +943,8 @@ pub fn get_meeting_state() -> &'static Mutex<MeetingRecordingState> {
         Mutex::new(MeetingRecordingState {
             mic_stream: None,
             loopback_stream: None,
+            #[cfg(target_os = "macos")]
+            macos_loopback: None,
             shutdown_tx: None,
             recording_thread: None,
             #[cfg(target_os = "linux")]
@@ -1102,9 +1106,13 @@ pub fn start_meeting_recording(
         (rate, channels as u16, Some(shutdown), Some(thread))
     };
 
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    let macos_loopback = crate::macos_audio::Capture::start(loopback_buffer.clone())?;
+    #[cfg(target_os = "macos")]
+    let (loopback_rate, loopback_channels) = (48_000u32, 2u16);
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     let (loopback_rate, loopback_channels) = (48000u32, 2u16);
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     let loopback_stream_opt: Option<cpal::Stream> = None;
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
@@ -1490,6 +1498,8 @@ pub fn start_meeting_recording(
 
     let mut state = get_meeting_state().lock().unwrap_or_else(|e| e.into_inner());
     state.mic_stream = Some(SendStream(mic_stream));
+    #[cfg(target_os = "macos")]
+    { state.macos_loopback = Some(macos_loopback); }
     #[cfg(windows)]
     { state.loopback_stream = loopback_stream_opt.map(SendStream); }
     #[cfg(not(windows))]
@@ -1519,6 +1529,8 @@ pub fn stop_meeting_recording() -> Result<(),String> {
 
     state.mic_stream = None;
     state.loopback_stream = None;
+    #[cfg(target_os = "macos")]
+    { state.macos_loopback = None; }
     #[cfg(target_os = "linux")]
     {
         if let Some(stop) = state.pulse_loopback_shutdown.take() {

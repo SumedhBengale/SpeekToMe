@@ -143,9 +143,23 @@ async fn native_check(combo: u32) -> Result<Vec<Conflict>, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        return tokio::task::spawn_blocking(move || crate::hotkey_macos::check(combo))
+        // Carbon input-source APIs assert the main queue on modern macOS.
+        // Startup already runs on it; settings commands arrive on Tokio workers.
+        if crate::hotkey_macos::is_main_thread() {
+            return crate::hotkey_macos::check(combo);
+        }
+        let app = crate::TAURI_APP
+            .get()
+            .ok_or("macOS application event loop is not ready.")?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(crate::hotkey_macos::check(combo));
+        })
+        .map_err(|e| e.to_string())?;
+        return tokio::time::timeout(std::time::Duration::from_secs(3), rx)
             .await
-            .map_err(|_| "macOS shortcut check failed.".to_string())?;
+            .map_err(|_| "macOS shortcut check timed out.".to_string())?
+            .map_err(|_| "macOS shortcut check was interrupted.".to_string())?;
     }
     #[allow(unreachable_code)]
     Err("This desktop does not expose a supported global shortcut check.".into())
@@ -224,7 +238,12 @@ mod tests {
     }
     #[tokio::test]
     async fn recorder_command_enforces_the_same_native_policy_as_save() {
-        let result = crate::validate_hotkey("Ctrl + A".into()).await;
+        let select_all = if cfg!(target_os = "macos") {
+            "Command + A"
+        } else {
+            "Ctrl + A"
+        };
+        let result = crate::validate_hotkey(select_all.into()).await;
         assert!(result.unwrap_err().contains("Select All"));
     }
     #[test]

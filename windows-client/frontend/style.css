@@ -5138,3 +5138,6 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
 .command-allowance progress::-webkit-progress-value { background: var(--accent-color); border-radius: 8px; }
 .command-allowance progress::-moz-progress-bar { background: var(--accent-color); border-radius: 8px; }
 .command-allowance .command-usage-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); opacity: 1; }
+
+/* macOS uses its native window controls and title bar. */
+html[data-platform="macos"] .window-titlebar { display: none; }
