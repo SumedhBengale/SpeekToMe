@@ -5,6 +5,9 @@ pub mod config;
 mod windows_autostart;
 mod gestures;
 mod shortcuts;
+mod native_overlay;
+#[cfg(target_os = "macos")]
+mod macos_overlay;
 mod hotkey;
 mod hotkey_conflicts;
 #[cfg(target_os = "linux")]

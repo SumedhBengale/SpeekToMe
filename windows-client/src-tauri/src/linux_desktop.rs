@@ -225,20 +225,13 @@ fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, width: f64, height: f6
     cr.arc(x + radius, y + radius, radius, pi, 3.0 * pi / 2.0);
     cr.close_path();
 }
-fn color(value: u32) -> (f64, f64, f64) {
-    (
-        ((value >> 16) & 255) as f64 / 255.0,
-        ((value >> 8) & 255) as f64 / 255.0,
-        (value & 255) as f64 / 255.0,
-    )
-}
 fn draw_overlay(cr: &gtk::cairo::Context) {
     cr.set_operator(gtk::cairo::Operator::Source);
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
     let _ = cr.paint();
     cr.set_operator(gtk::cairo::Operator::Over);
-    let background = color(crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed));
-    let wave = color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed));
+    let background = crate::native_overlay::color(crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed));
+    let wave = crate::native_overlay::color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed));
     NATIVE_OVERLAY.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(overlay) = slot.as_mut() else { return };
@@ -248,50 +241,24 @@ fn draw_overlay(cr: &gtk::cairo::Context) {
         let _ = cr.fill();
         cr.set_source_rgb(wave.0, wave.1, wave.2);
         let level = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed) as f64;
-        overlay.smoothed = overlay.smoothed * 0.8 + level * 0.2;
-        let volume =
-            (if overlay.smoothed > 2.0 { 5.0 } else { 2.5 }) + (overlay.smoothed / 4.0).min(2.5);
+        overlay.smoothed = crate::native_overlay::smooth_volume(overlay.smoothed, level);
         let processing = OVERLAY_STATE.load(Ordering::SeqCst) == 2;
-        for i in 0..5 {
-            let phase =
-                overlay.frame as f64 * (if processing { 0.12 } else { 0.1 }) + i as f64 * 0.7;
-            let h = if processing {
-                2.2 + 2.5 * ((phase.sin() + 1.0) / 2.0)
-            } else {
-                (volume * (0.35 + 0.65 * phase.sin().abs())).clamp(2.0, 8.0)
-            };
-            rounded_rect(
-                cr,
-                x + 20.75 + i as f64 * 4.5,
-                y + 12.0 - h + 0.8,
-                2.5,
-                h * 2.0 - 1.6,
-                1.2,
-            );
+        for bar in crate::native_overlay::bars(x, y, overlay.frame, overlay.smoothed, processing) {
+            rounded_rect(cr, bar.x, bar.y, bar.width, bar.height, 1.2);
             let _ = cr.fill();
         }
         if overlay.has_preview {
             let (width, height) = overlay.layout.pixel_size();
-            let width = (width as f64 + 24.0).clamp(160.0, 394.0);
-            let height = (height as f64 + 16.0).min(104.0);
-            let card_x = (x + 31.0 - width / 2.0).clamp(4.0, 420.0 - width - 4.0);
-            let card_y = if y > 70.0 {
-                (y - height - 8.0).max(4.0)
-            } else {
-                (y + 32.0).min(140.0 - height - 4.0)
-            };
-            rounded_rect(cr, card_x, card_y, width, height, 7.0);
+            let card = crate::native_overlay::preview_card(x, y, width as f64, height as f64);
+            rounded_rect(cr, card.x, card.y, card.width, card.height, 7.0);
             cr.set_source_rgba(background.0, background.1, background.2, 0.96);
             let _ = cr.fill_preserve();
             cr.set_source_rgba(wave.0, wave.1, wave.2, 0.64);
             cr.set_line_width(1.0);
             let _ = cr.stroke();
-            if background.0 * 0.299 + background.1 * 0.587 + background.2 * 0.114 > 0.5 {
-                cr.set_source_rgb(24.0 / 255.0, 16.0 / 255.0, 34.0 / 255.0);
-            } else {
-                cr.set_source_rgb(245.0 / 255.0, 245.0 / 255.0, 250.0 / 255.0);
-            }
-            cr.move_to(card_x + 12.0, card_y + 8.0);
+            let text = crate::native_overlay::text_color(background);
+            cr.set_source_rgb(text.0, text.1, text.2);
+            cr.move_to(card.x + 12.0, card.y + 8.0);
             pangocairo::functions::show_layout(cr, &overlay.layout);
         }
         overlay.frame += 1;
@@ -429,22 +396,10 @@ fn configure_overlay_position(window: &tauri::Window, config: &crate::config::Ap
 
     let custom = config.pill_position_mode == "custom";
     let position = config.pill_predefined_position.as_str();
-    let pill_x = if custom {
-        0.0
-    } else if position.ends_with("Right") {
-        358.0
-    } else if position.ends_with("Left") {
-        0.0
-    } else {
-        179.0
-    };
-    let pill_y = if custom {
-        0.0
-    } else if position.starts_with("Bottom") {
-        116.0
-    } else {
-        0.0
-    };
+    let design = crate::native_overlay::placement(monitor_width, monitor_height,
+        if custom { 4 } else { crate::native_overlay::position_code(position) },
+        config.pill_custom_x as f64, config.pill_custom_y as f64);
+    let (pill_x, pill_y) = (design.pill_x, design.pill_y);
     let (x, y) = if custom {
         (config.pill_custom_x as f64, config.pill_custom_y as f64)
     } else {

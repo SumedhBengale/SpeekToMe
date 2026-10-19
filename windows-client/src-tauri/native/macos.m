@@ -20,11 +20,14 @@ static void (*shortcutEdge)(bool);
 static CFMachPortRef eventTap;
 static bool chordActive, triggerDown;
 static NSPanel *panel;
-static NSTextField *previewLabel;
+typedef struct { double x, y, pill_x, pill_y; } S2MOverlayPlacement;
+static void (*overlayDraw)(CGContextRef, double, double);
+static S2MOverlayPlacement (*overlayPlacement)(double, double, int, double, double);
+static NSTimer *overlayTimer;
+static double surfaceWidth, surfaceHeight, pillX, pillY;
+static uint64_t drawFrames;
 static int overlayState;
 static NSString *previewText = @"";
-static uint32_t backgroundColor = 0x202020;
-static uint32_t foregroundColor = 0xffffff;
 static int placement;
 static double customX, customY;
 
@@ -203,57 +206,59 @@ int s2m_key(uint32_t vk, bool down) {
     if (code == 0xffff) return 0;
     postKey(code, down, 0, NULL, 0); return 1;
 }
-static NSColor *rgb(uint32_t value) {
-    return [NSColor colorWithRed:((value >> 16) & 255)/255.0 green:((value >> 8) & 255)/255.0 blue:(value & 255)/255.0 alpha:0.94];
+// AppKit owns only the window, redraw scheduling and native context. The shared
+// design, waveform animation, colors and CoreText rendering are all Rust.
+void s2m_overlay_callbacks(double width, double height,
+    void (*draw)(CGContextRef, double, double),
+    S2MOverlayPlacement (*layout)(double, double, int, double, double)) {
+    mainAsync(^{ surfaceWidth = width; surfaceHeight = height; overlayDraw = draw; overlayPlacement = layout; });
 }
 @interface S2MPanelView : NSView
 @end
 @implementation S2MPanelView
+- (BOOL)isOpaque { return NO; }
 - (void)drawRect:(NSRect)dirtyRect {
-    [rgb(backgroundColor) setFill];
-    [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:18 yRadius:18] fill];
+    if (overlayDraw) { overlayDraw(NSGraphicsContext.currentContext.CGContext, pillX, pillY); drawFrames++; }
 }
 @end
 static void updatePanel(void) {
+    if (!overlayDraw || !overlayPlacement) return;
     if (!panel) {
-        panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 420, 70)
+        panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, surfaceWidth, surfaceHeight)
             styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
         panel.level = NSStatusWindowLevel;
         panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
-        panel.hidesOnDeactivate = NO; panel.opaque = NO; panel.hasShadow = YES;
+        panel.hidesOnDeactivate = NO; panel.opaque = NO; panel.hasShadow = NO;
         panel.ignoresMouseEvents = YES;
-        panel.contentView = [[S2MPanelView alloc] initWithFrame:NSMakeRect(0, 0, 420, 70)];
-        previewLabel = [NSTextField wrappingLabelWithString:@""];
-        previewLabel.frame = NSMakeRect(16, 10, 388, 50);
-        previewLabel.font = [NSFont systemFontOfSize:15 weight:NSFontWeightMedium];
-        [panel.contentView addSubview:previewLabel];
+        panel.backgroundColor = NSColor.clearColor;
+        panel.contentView = [[S2MPanelView alloc] initWithFrame:NSMakeRect(0, 0, surfaceWidth, surfaceHeight)];
     }
     NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
     NSRect frame = screen.visibleFrame;
-    double x = NSMidX(frame) - 210, y = NSMinY(frame) + 50;
-    if (placement == 1) y = NSMaxY(frame) - 110;
-    if (placement == 2) { x = NSMinX(frame) + 30; y = NSMidY(frame) - 35; }
-    if (placement == 3) { x = NSMaxX(frame) - 450; y = NSMidY(frame) - 35; }
-    if (placement == 5 || placement == 6) y = NSMaxY(frame) - 110;
-    if (placement == 5 || placement == 7) x = NSMinX(frame) + 30;
-    if (placement == 6 || placement == 8) x = NSMaxX(frame) - 450;
-    if (placement == 4) { x = NSMinX(frame) + customX; y = NSMaxY(frame) - customY - 70; }
-    x = fmax(NSMinX(frame), fmin(x, NSMaxX(frame) - 420));
-    y = fmax(NSMinY(frame), fmin(y, NSMaxY(frame) - 70));
-    [panel setFrameOrigin:NSMakePoint(x, y)];
-    panel.backgroundColor = NSColor.clearColor;
+    S2MOverlayPlacement layout = overlayPlacement(frame.size.width, frame.size.height, placement, customX, customY);
+    pillX = layout.pill_x; pillY = layout.pill_y;
+    [panel setFrameOrigin:NSMakePoint(NSMinX(frame) + layout.x, NSMaxY(frame) - layout.y - surfaceHeight)];
     [panel.contentView setNeedsDisplay:YES];
-    previewLabel.textColor = rgb(foregroundColor);
-    NSString *state = overlayState == 1 ? @"Listening…" : overlayState == 2 ? @"Transcribing…" : @"Recording meeting…";
-    previewLabel.stringValue = previewText.length ? previewText : state;
-    if (overlayState) [panel orderFrontRegardless]; else [panel orderOut:nil];
+    if (overlayState) {
+        [panel orderFrontRegardless];
+        if (!overlayTimer) {
+            overlayTimer = [NSTimer timerWithTimeInterval:1.0/30.0 repeats:YES block:^(NSTimer *timer) {
+                [panel.contentView setNeedsDisplay:YES];
+            }];
+            [NSRunLoop.mainRunLoop addTimer:overlayTimer forMode:NSRunLoopCommonModes];
+        }
+    } else {
+        [overlayTimer invalidate]; overlayTimer = nil;
+        [panel.contentView display]; // Clear cached Rust text/layout before hiding.
+        [panel orderOut:nil];
+    }
 }
 void s2m_overlay(int state, const char *text) {
     NSString *value = text ? [NSString stringWithUTF8String:text] : @"";
     mainAsync(^{ overlayState = state; previewText = value ?: @""; updatePanel(); });
 }
-void s2m_overlay_style(uint32_t background, uint32_t foreground, int position, double x, double y) {
-    mainAsync(^{ backgroundColor = background; foregroundColor = foreground; placement = position; customX = x; customY = y; if (panel) updatePanel(); });
+void s2m_overlay_style(int position, double x, double y) {
+    mainAsync(^{ placement = position; customX = x; customY = y; if (panel) updatePanel(); });
 }
 void s2m_chime(bool start) {
     mainAsync(^{ [[NSSound soundNamed:start ? @"Tink" : @"Pop"] play]; });
@@ -393,7 +398,11 @@ char *s2m_overlay_snapshot(void) {
     dispatch_block_t block = ^{
         NSDictionary *info = @{
             @"visible": @(panel.isVisible), @"state": @(overlayState),
-            @"text": previewLabel.stringValue ?: @"", @"panel_class": panel ? NSStringFromClass(panel.class) : @"none",
+            @"text": previewText ?: @"",
+            @"renderer": overlayDraw ? @"Rust/CoreGraphics/CoreText" : @"none",
+            @"width": @(surfaceWidth), @"height": @(surfaceHeight),
+            @"pill_x": @(pillX), @"pill_y": @(pillY),
+            @"draw_frames": @(drawFrames), @"animation_active": @(overlayTimer != nil), @"panel_class": panel ? NSStringFromClass(panel.class) : @"none",
             @"content_class": panel ? NSStringFromClass(panel.contentView.class) : @"none",
             @"takes_focus": @(panel.canBecomeKeyWindow),
             @"bundle_id": NSBundle.mainBundle.bundleIdentifier ?: @"unbundled"

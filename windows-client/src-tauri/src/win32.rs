@@ -780,12 +780,8 @@ mod win32_impl {
             smoothed = ((smoothed as f32 * 0.8) + (raw_vol as f32 * 0.2)) as u32;
             SMOOTHED_VOLUME.store(smoothed, Ordering::Relaxed);
 
-            let baseline = if smoothed > 2 { 5.0 } else { 2.5 };
-            let dynamic_gain = (smoothed as f32 / 4.0).min(2.5);
-            let scaled_vol = baseline + dynamic_gain;
-
             static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed) as f32;
+            let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
 
             let bar_r = (wave_color & 0xFF) as u32;
             let bar_g = ((wave_color >> 8) & 0xFF) as u32;
@@ -804,14 +800,9 @@ mod win32_impl {
             let is_processing = state == PreviewState::Processing;
 
             for i in 0..5 {
-                let bar_height = if is_processing {
-                    let wave_phase = frame * 0.12 + (i as f32) * 0.75;
-                    2.2 + 2.5 * ((wave_phase.sin() + 1.0) / 2.0)
-                } else {
-                    let phase = frame * 0.1 + (i as f32) * 0.7;
-                    let multiplier = 0.35 + 0.65 * (phase.sin().abs());
-                    (scaled_vol * multiplier).clamp(2.0, 8.0)
-                };
+                let bar_height = crate::native_overlay::bar_height(
+                    frame as u64, i, smoothed as f64, is_processing,
+                ) as f32;
 
                 let x_center = start_x + (i as f32) * (bar_width + gap) + bar_width / 2.0;
                 let y_start = center_y - bar_height + 0.8;

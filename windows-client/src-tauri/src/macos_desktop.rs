@@ -7,6 +7,7 @@ use std::sync::{
 use tauri::{
     menu::{CheckMenuItem, MenuBuilder, SubmenuBuilder},
     tray::TrayIconBuilder,
+    Manager,
 };
 
 static STATE: AtomicU8 = AtomicU8::new(0);
@@ -24,7 +25,7 @@ unsafe extern "C" {
     fn s2m_type(text: *const u16, count: usize) -> i32;
     fn s2m_key(vk: u32, down: bool) -> i32;
     fn s2m_overlay(state: i32, text: *const c_char);
-    fn s2m_overlay_style(background: u32, foreground: u32, position: i32, x: f64, y: f64);
+    fn s2m_overlay_style(position: i32, x: f64, y: f64);
     fn s2m_chime(start: bool);
     fn s2m_notify(title: *const c_char, body: *const c_char);
 }
@@ -84,19 +85,10 @@ pub fn sync_settings(config: &crate::config::AppConfig) {
     let position = if config.pill_position_mode == "custom" {
         4
     } else {
-        match config.pill_predefined_position.replace(' ', "").as_str() {
-            "TopCenter" => 1,
-            "TopLeft" => 5,
-            "TopRight" => 6,
-            "BottomLeft" => 7,
-            "BottomRight" => 8,
-            _ => 0,
-        }
+        crate::native_overlay::position_code(&config.pill_predefined_position)
     };
     unsafe {
         s2m_overlay_style(
-            config.pill_bg_color,
-            config.pill_wave_color,
             position,
             config.pill_custom_x as f64,
             config.pill_custom_y as f64,
@@ -152,6 +144,7 @@ pub fn refresh_language_menu(app: &tauri::AppHandle) {
 }
 pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory)?;
+    crate::macos_overlay::install();
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu(app)?)
         .tooltip("SpeekTo.Me");
@@ -217,6 +210,8 @@ pub fn set_preview_text(text: &str) {
         s2m_overlay(STATE.load(Ordering::SeqCst) as i32, text.as_ptr());
     }
 }
+pub fn overlay_state() -> u8 { STATE.load(Ordering::SeqCst) }
+
 pub fn set_state(state: u8) {
     STATE.store(state, Ordering::SeqCst);
     let text = if state == 0 {
@@ -296,6 +291,17 @@ pub fn sync_autostart(enabled: bool) {
     }
 }
 
+fn native_overlay_snapshot() -> serde_json::Value {
+    unsafe {
+        let value = s2m_overlay_snapshot();
+        let result = if value.is_null() { serde_json::Value::Null } else {
+            serde_json::from_str(&std::ffi::CStr::from_ptr(value).to_string_lossy()).unwrap_or_default()
+        };
+        if !value.is_null() { s2m_free(value); }
+        result
+    }
+}
+
 /// Bounded native smoke test. No uploads, account changes or synthesized input.
 pub fn run_diagnostic() {
     let app = tauri::Builder::default().setup(|app| {
@@ -313,24 +319,38 @@ pub fn run_diagnostic() {
                 Ok(report) => serde_json::to_value(report).unwrap(),
                 Err(error) => serde_json::json!({"error": error}),
             };
-            let report = serde_json::json!({
+            let mut report = serde_json::json!({
                 "platform": std::env::consts::OS, "architecture": std::env::consts::ARCH,
                 "capabilities": capabilities(), "input_devices": devices,
                 "native_shortcut_check": shortcut_check,
-                "native_overlay": unsafe {
-                    let value = s2m_overlay_snapshot();
-                    let result = if value.is_null() { serde_json::Value::Null } else {
-                        serde_json::from_str::<serde_json::Value>(&std::ffi::CStr::from_ptr(value).to_string_lossy()).unwrap_or_default()
-                    };
-                    if !value.is_null() { s2m_free(value); }
-                    result
-                },
+                "native_overlay": native_overlay_snapshot(),
+                "webview_windows": handle.webview_windows().len(),
                 "configuration": crate::config::get_config_path(),
             });
             let path = std::env::var_os("SPEEKTOME_DIAGNOSTIC_REPORT").map(std::path::PathBuf::from)
                 .unwrap_or_else(|| crate::config::get_config_path().with_file_name("macos-diagnostic.json"));
             let screenshot = cstring(&path.with_extension("png").to_string_lossy());
             let _ = unsafe { s2m_save_overlay_image(screenshot.as_ptr()) };
+            let mut states = Vec::new();
+            for (name, text, state, volume) in [
+                ("pill", "", crate::win32::PreviewState::Listening, 20),
+                ("preview", "Native preview · नमस्ते · 日本語 · مرحبا", crate::win32::PreviewState::Listening, 20),
+                ("processing", "Polishing the transcription…", crate::win32::PreviewState::Processing, 0),
+                ("hidden", "", crate::win32::PreviewState::Hidden, 0),
+            ] {
+                crate::audio::CURRENT_VOLUME.store(volume, Ordering::Relaxed);
+                crate::win32::set_preview_text(text);
+                crate::win32::set_preview_state(state);
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let file = path.with_file_name(format!("macos-overlay-{name}.png"));
+                let png = cstring(&file.to_string_lossy());
+                let saved = unsafe { s2m_save_overlay_image(png.as_ptr()) };
+                states.push(serde_json::json!({"name": name, "snapshot": native_overlay_snapshot(),
+                    "image_saved": saved, "image": file, "webview_windows": handle.webview_windows().len()}));
+            }
+            report["overlay_states"] = serde_json::json!(states);
+            crate::win32::set_preview_text("Native preview · नमस्ते · 日本語 · مرحبا");
+            crate::win32::set_preview_state(crate::win32::PreviewState::Listening);
             let _ = std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap());
             eprintln!("[MACOS DIAGNOSTIC] {report}");
             std::thread::sleep(std::time::Duration::from_secs(8));

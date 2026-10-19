@@ -37,6 +37,9 @@ fn main() {
         println!("cargo:rustc-link-lib=static=speektome_macos");
         for framework in [
             "AppKit",
+            "CoreGraphics",
+            "CoreText",
+            "CoreFoundation",
             "ApplicationServices",
             "AVFoundation",
             "Carbon",
