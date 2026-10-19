@@ -19,6 +19,7 @@ export default function TurnstileWidget({ onVerify, resetTrigger }) {
         try {
           widgetIdRef.current = window.turnstile.render(containerRef.current, {
             sitekey: SITE_KEY,
+            size: 'flexible',
             action: 'turnstile-spin-v2',
             callback: (token) => {
               if (onVerify) onVerify(token);

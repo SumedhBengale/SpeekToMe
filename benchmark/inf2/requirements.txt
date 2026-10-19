@@ -1,0 +1,7 @@
+# Use the AMI's supported torch/torch-neuronx/neuronx-cc versions on Inf2.
+# Install CPU torch separately for local correctness checks only.
+transformers==5.18.0
+soundfile==0.14.0
+scipy==1.18.1
+sentencepiece==0.2.2
+librosa==0.11.0

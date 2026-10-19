@@ -1,61 +1,22 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-
-export default function Navbar({ token, user, onLogout }) {
+export default function Navbar({ token, onLogout }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
-
-  const isActive = (path) => location.pathname === path;
-
-  return (
-    <nav className="navbar">
-      <Link to="/" className="nav-logo" onClick={() => setMobileOpen(false)}>
-        <img src="/assets/logo.svg" alt="SpeekTo.Me Logo" className="brand-logo-icon" />
-        SpeekTo<span className="logo-dot">.</span>Me
-      </Link>
-
-      <ul className={`nav-links ${mobileOpen ? 'open' : ''}`}>
-        <li className={`nav-item ${isActive('/') ? 'active' : ''}`}>
-          <Link to="/" onClick={() => { setMobileOpen(false); window.scrollTo(0, 0); }}>Home</Link>
-        </li>
-        <li className={`nav-item ${isActive('/about') ? 'active' : ''}`}>
-          <Link to="/about" onClick={() => { setMobileOpen(false); window.scrollTo(0, 0); }}>About Us</Link>
-        </li>
-        <li className={`nav-item ${isActive('/pricing') ? 'active' : ''}`}>
-          <Link to="/pricing" onClick={() => { setMobileOpen(false); window.scrollTo(0, 0); }}>Pricing</Link>
-        </li>
-      </ul>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        {token ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Link to="/dashboard" className="btn btn-primary nav-btn" onClick={() => { setMobileOpen(false); window.scrollTo(0, 0); }}>
-              Dashboard
-            </Link>
-            <button 
-              onClick={() => { onLogout && onLogout(); setMobileOpen(false); window.scrollTo(0, 0); }} 
-              className="btn btn-secondary nav-btn"
-              style={{ cursor: 'pointer' }}
-            >
-              Sign Out
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Link to="/login" className="btn btn-secondary nav-btn" onClick={() => { setMobileOpen(false); window.scrollTo(0, 0); }}>
-              Sign In
-            </Link>
-            <Link to="/pricing" className="btn btn-primary nav-btn" onClick={() => { setMobileOpen(false); window.scrollTo(0, 0); }}>
-              Get Started
-            </Link>
-          </div>
-        )}
-
-
-        <div className={`nav-hamburger ${mobileOpen ? 'open' : ''}`} onClick={() => setMobileOpen(!mobileOpen)}>
-          <span></span><span></span><span></span>
-        </div>
-      </div>
-    </nav>
-  );
+  const toggleRef = useRef(null);
+  useEffect(() => { setMobileOpen(false); }, [location.pathname]);
+  useEffect(() => {
+    const close = (event) => { if (event.key === 'Escape') { setMobileOpen(false); toggleRef.current?.focus(); } };
+    if (mobileOpen) document.addEventListener('keydown', close);
+    return () => document.removeEventListener('keydown', close);
+  }, [mobileOpen]);
+  const closeMenu = () => setMobileOpen(false);
+  return <nav className="navbar" aria-label="Main navigation">
+    <Link to="/" className="nav-logo" onClick={closeMenu}><img src="/assets/logo.svg" alt="" className="brand-logo-icon" /><span>SpeekTo<span className="logo-dot">.</span>Me</span></Link>
+    <button ref={toggleRef} type="button" className={`nav-hamburger ${mobileOpen ? 'open' : ''}`} aria-label={mobileOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={mobileOpen} aria-controls="main-navigation" onClick={() => setMobileOpen(!mobileOpen)}><span /><span /><span /></button>
+    <div id="main-navigation" className={`nav-menu ${mobileOpen ? 'open' : ''}`}>
+      <ul className="nav-links">{[['/', 'Home'], ['/about', 'About Us'], ['/pricing', 'Pricing']].map(([path, label]) => <li className={`nav-item ${location.pathname === path ? 'active' : ''}`} key={path}><Link to={path} aria-current={location.pathname === path ? 'page' : undefined} onClick={closeMenu}>{label}</Link></li>)}</ul>
+      <div className="nav-actions">{token ? <><Link to="/dashboard" className="btn btn-primary nav-btn" onClick={closeMenu}>Dashboard</Link><button type="button" className="btn btn-secondary nav-btn" onClick={() => { onLogout?.(); closeMenu(); }}>Sign Out</button></> : <><Link to="/login" className="btn btn-secondary nav-btn" onClick={closeMenu}>Sign In</Link><Link to="/pricing" className="btn btn-primary nav-btn" onClick={closeMenu}>Get Started</Link></>}</div>
+    </div>
+  </nav>;
 }

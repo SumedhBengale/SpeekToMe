@@ -1,0 +1,29 @@
+{
+  "duration": 20.712,
+  "turns": [
+    {
+      "speaker": "maya",
+      "start": 0,
+      "end": 7.272,
+      "text": "Hi everyone, I'm Maya. I lead design. Today we're checking the new onboarding flow."
+    },
+    {
+      "speaker": "alex",
+      "start": 7.272,
+      "end": 12.864,
+      "text": "I'm Alex, the engineer. The updated screens are ready for review."
+    },
+    {
+      "speaker": "sam",
+      "start": 12.864,
+      "end": 18.264,
+      "text": "And I'm Sam from product. I'll collect feedback and share the next steps."
+    },
+    {
+      "speaker": "maya",
+      "start": 18.264,
+      "end": 20.712,
+      "text": "Great, let's get started."
+    }
+  ]
+}

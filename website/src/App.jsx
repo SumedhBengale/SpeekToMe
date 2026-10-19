@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
+import CommandUsage from './components/CommandUsage';
 import HomePage from './pages/HomePage';
 import AboutPage from './pages/AboutPage';
 import PricingPage from './pages/PricingPage';
@@ -127,6 +128,24 @@ export default function App() {
       }
     }
   }, [token]);
+
+  useEffect(() => {
+    if (!token || route !== 'dashboard') return;
+    let disposed = false;
+    const refreshAllowance = async () => {
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) {
+          const data = await res.json();
+          if (!disposed) setUser(data);
+        }
+      } catch { /* Preserve the last successful account snapshot while offline. */ }
+    };
+    refreshAllowance();
+    window.addEventListener('focus', refreshAllowance);
+    return () => { disposed = true; window.removeEventListener('focus', refreshAllowance); };
+  }, [token, route, activeSubTab]);
 
   const fetchUserProfile = async () => {
     setLoading(true);
@@ -927,6 +946,7 @@ export default function App() {
   // Render marketing pages for public routes
   const renderMarketingLayout = (Component) => (
     <>
+      <ScrollToTop />
       <Navbar token={token} user={user} onLogout={handleLogoutLocal} />
       <Component />
       <Footer />
@@ -959,7 +979,7 @@ export default function App() {
       <ScrollToTop />
       {/* 1. Header */}
 
-      <header class="dashboard-header">
+      <header className="dashboard-header">
         <a href="/" className="logo" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>
           <img src={logoSvg} alt="SpeekTo.Me Logo" style={{ width: '26px', height: '26px', marginRight: '8px', verticalAlign: 'middle', display: 'inline-block' }} />
           SpeekTo<span className="logo-dot">.</span>Me
@@ -1380,6 +1400,7 @@ export default function App() {
 
           {activeSubTab === 'stats' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              <CommandUsage usage={user.command_usage} />
               {/* Top Row: Usage Analytics & Plan Tier (Side by Side) */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
                 <div className="card" style={{ marginBottom: 0 }}>

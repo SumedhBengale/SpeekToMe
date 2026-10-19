@@ -1,3 +1,4 @@
+import CommandAllowanceTerms from '../components/CommandAllowanceTerms';
 import React from 'react';
 import { Link } from 'react-router-dom';
 
@@ -71,6 +72,7 @@ export default function PricingPage() {
               <span className="period text-muted" style={{ fontSize: '13px' }}>/ month</span>
             </div>
 
+            <CommandAllowanceTerms />
             <div className="plan-features-header" style={{ fontWeight: '600', marginBottom: '14px', fontSize: '13.5px' }}>Everything in Starter, plus</div>
             <ul className="pricing-features-list" style={{ listStyle: 'none', padding: 0, margin: '0 0 24px 0', display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13.5px' }}>
 
@@ -85,6 +87,10 @@ export default function PricingPage() {
               <li style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                 <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>✓</span>
                 <span><strong>Guaranteed High-priority under load</strong></span>
+              </li>
+              <li style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>✓</span>
+                <span>Generous monthly Command Mode usage</span>
               </li>
               <li style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                 <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>✓</span>

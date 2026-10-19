@@ -1,0 +1,15 @@
+# Current g6f ASR-only deployment profile — 2026-10-08
+
+Virginia optimizations are now part of the reproducible bootstrap: 560 ms Opus-to-PCM coalescing (17920 bytes), RNNT right context 6, left context 8 chunks in the pinned runtime, maximum batch 32, arena 40, queue delay 5000 µs, ingress cohort 120000 µs, HTTP threads 80, CUDA graphs enabled by unsetting GGML_CUDA_DISABLE_GRAPHS, CUDA_DEVICE_SCHEDULE=2. Native runtime is unchanged, v0.2.0 pinned 6a3ca369370782acee0dd155e34394ba60b920c4. Source/runtime hashes are retained in fleet-manifest.json.
+
+Gateway pipeline telemetry and authenticated metadata are preserved. Default production live admission remains 20 until the fresh-worker capacity tests establish a safe operating point. Metadata advertises only streaming_transcription and meeting_transcription, max_diarization_requests=0. Meeting mic/system transcription routes are retained; meeting diarization and native diarization paths return 404. WebSocket session updates requesting speaker diarization close with 1008. Missing/wrong bearer tokens receive 401.
+
+Diarization model entries were removed from all manifest profiles. Bootstrap downloads only ASR, removes inherited diarization GGUFs from worker/legacy model directories, creates no diarization runtime config, and readiness smoke tests only ASR. Shared model objects in S3 are retained for a future separate diarization server; no active worker manifest references them. Immutable old releases remain rollback history rather than being edited under their hashes.
+
+The four active fleet regions (us-east-1, us-east-2, us-west-2, ca-central-1) currently share one private artifact bucket: speektome-inference-ACCOUNT_ID-us-east-1. Both fleet pins and manual-launch aliases are updated. Publishing S3 alone is insufficient: coordinator user_data pins are changed as part of release deployment. Source check-ready.sh and both amd64/arm64 gateway binaries are included in the content-addressed release.
+
+The coordinator remains desired=2. No main application diarization-routing changes are included; those belong to the future dedicated diarization-server task. Benchmark results will be documented separately. Earlier CPU/mixed-workload reports are historical evidence, not current deployment instructions.
+
+Automatic APT upgrade/download and update-notifier timers are disabled on ephemeral inference workers; bootstrap waits for running APT maintenance to stop before installing dependencies. SSH update MOTD checks are disabled because they can consume a whole CPU core. Base-image security updates must be applied during image maintenance, not live inference. This policy was added after unattended kernel/package upgrades contaminated a 22-stream test on 2026-10-08.
+
+Verification note (2026-10-08): `CUDA_DEVICE_SCHEDULE=2` is present in the service environment, but the pinned NeMo/ggml source does not read that variable. Do not describe it as a confirmed CUDA scheduling optimization. CUDA scheduling policies require the relevant CUDA API; no such change was applied in this investigation. See validation/variance-investigation/REPORT.md for controlled cold/warm results.

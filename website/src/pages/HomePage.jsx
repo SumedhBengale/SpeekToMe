@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import LiveFormattingDemo from '../components/LiveFormattingDemo';
+import WritingExamples from '../components/WritingExamples';
+import DesktopDictationDemo from '../components/DesktopDictationDemo';
 import TurnstileWidget from '../components/TurnstileWidget';
 
 
@@ -156,9 +157,10 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Hero Right Visualizer — Live Formatting Demo (Raw -> Redaction -> Polished Text) */}
-        <div className="hero-visualizer reveal-right visible" style={{ flex: 1, minWidth: '320px' }}>
-          <LiveFormattingDemo />
+        {/* Product demo reusing the desktop client UI. */}
+        <div className="hero-visualizer reveal-right visible" >
+          <p className="subtitle" style={{ textAlign: 'center', margin: '0 auto 24px' }}>Pro includes generous monthly usage for Command Mode. <a href="/pricing#command-mode-allowance">See allowance details</a>.</p>
+          <DesktopDictationDemo />
         </div>
 
 
@@ -203,7 +205,7 @@ export default function HomePage() {
       <section className="section section-alt section-bordered">
         <div className="container">
           <div className="split-section reverse" style={{ display: 'flex', alignItems: 'center', gap: '48px', flexWrap: 'wrap' }}>
-            <div className="split-content reveal-right" style={{ flex: 1, minWidth: '280px' }}>
+            <div className="split-content reveal-right" style={{ flex: 1, minWidth: 0 }}>
               <h2>One key to <span className="heading-accent">rule them all</span>.</h2>
               <p className="text-large" style={{ marginTop: '16px', marginBottom: '24px', lineHeight: '1.6' }}>
                 SpeekTo.Me intercepts your Right Ctrl Key at the OS level — no app switching, no menu navigation. Hold to speak, release to paste. It works in any text field, in any application, on any screen.
@@ -222,7 +224,7 @@ export default function HomePage() {
               </ul>
             </div>
 
-            <div className="split-visual reveal-left" style={{ flex: 1, minWidth: '280px', display: 'flex', justifyContent: 'center' }}>
+            <div className="split-visual reveal-left" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center' }}>
               <div className="keyboard-key-container">
                 <button
                   className={`key-3d-button ${isKeyPressed ? 'pressed' : ''}`}
@@ -257,7 +259,7 @@ export default function HomePage() {
             <p className="subtitle" style={{ margin: '0 auto' }}>Dictate everywhere you work — desktop, mobile, and browser extensions.</p>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+          <div className="platform-cards">
 
             {/* Windows — LIVE */}
             <div style={{ background: 'var(--bg-canvas)', border: '2px solid #240a12', borderRadius: '20px', padding: '20px 24px', boxShadow: '4px 4px 0px #240a12', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -367,17 +369,7 @@ export default function HomePage() {
 
 
 
-      {/* 4. LIVE DEMO — BEFORE/AFTER */}
-      <section className="section section-alt section-bordered demo-section">
-        <div className="container">
-          <div className="section-header text-center">
-            <h2>From messy speech to <span className="heading-accent">polished text</span>.</h2>
-            <p className="subtitle" style={{ margin: '0 auto' }}>Watch how SpeekTo.Me transforms raw dictation into clean, professional writing in real time.</p>
-          </div>
-
-          <LiveFormattingDemo />
-        </div>
-      </section>
+      <WritingExamples />
 
 
       {/* 5. HOW IT WORKS — 3 STEPS */}
@@ -410,7 +402,7 @@ export default function HomePage() {
               <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'var(--color-btn-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', marginBottom: '16px' }}>3</div>
               <h3 style={{ fontSize: '20px', marginBottom: '12px' }}>Release to Type</h3>
               <p className="text-muted" style={{ fontSize: '14px', lineHeight: '1.6' }}>
-                Release the hotkey. Our transcription system converts and formats your audio instantly, pasting the text into your active window.
+                Release the hotkey. Our transcription system converts your speech into text and pastes it into your active window.
               </p>
             </div>
           </div>
@@ -473,6 +465,7 @@ export default function HomePage() {
             <input
               type="email"
               placeholder="you@example.com"
+              aria-label="Email address for product updates"
               value={newsletterEmail}
               onChange={(e) => setNewsletterEmail(e.target.value)}
               disabled={subscribed || subscribing}

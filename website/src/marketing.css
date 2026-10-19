@@ -1,5 +1,4 @@
 /* speekto.me — Premium Wisprflow-Inspired Design System */
-@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Figtree:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
 /* ═══════════════════════════════════════════
    DESIGN TOKENS
@@ -328,7 +327,7 @@ p {
   font-size: 28px;
 }
 
-.nav-links {
+.navbar .nav-links {
   display: flex;
   gap: 36px;
   list-style: none;
@@ -3029,7 +3028,7 @@ p {
     padding: 4px 0;
   }
 
-  .nav-links {
+  .navbar .nav-links {
     position: fixed;
     top: 70px;
     left: 0;
@@ -3049,15 +3048,15 @@ p {
     z-index: 999;
   }
 
-  .nav-links.active,
-  .nav-links.open,
-  .nav-hamburger.open~.nav-links {
+  .navbar .nav-links.active,
+  .navbar .nav-links.open,
+  .navbar .nav-hamburger.open~.nav-links {
     transform: translateY(0);
     opacity: 1;
     pointer-events: auto;
   }
 
-  .nav-links .nav-item a {
+  .navbar .nav-links .nav-item a {
     font-size: 18px;
     font-weight: 600;
     display: block;
@@ -3249,13 +3248,13 @@ p {
     margin-right: 6px !important;
   }
 
-  .nav-links {
+  .navbar .nav-links {
     top: 60px !important;
     padding: 20px 5% 24px 5% !important;
     gap: 14px !important;
   }
 
-  .nav-links .nav-item a {
+  .navbar .nav-links .nav-item a {
     font-size: 16px !important;
     padding: 6px 0 !important;
   }

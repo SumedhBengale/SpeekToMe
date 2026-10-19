@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
 :root {
   --bg-canvas: #fff9fa;          /* Soft Pastel Blush */
@@ -1384,3 +1383,15 @@ a:not(.btn):not(.logo):not(.nav-logo):not(.footer-social-icon):hover::after {
 }
 
 
+
+.command-allowance-card { margin-bottom: 0; }
+.command-allowance-card progress { display: block; width: 100%; height: 8px; margin: 12px 0; accent-color: var(--color-btn-accent, #635bff); }
+.command-allowance-card summary { cursor: pointer; margin-top: 14px; }
+.command-allowance-card dl > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 0; }
+.command-allowance-card dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.command-usage-note { font-size: 13px; line-height: 1.6; opacity: .75; }
+
+.command-allowance-card progress { appearance: none; border: 0; border-radius: 8px; overflow: hidden; background: #eee5e8; }
+.command-allowance-card progress::-webkit-progress-bar { background: #eee5e8; border-radius: 8px; }
+.command-allowance-card progress::-webkit-progress-value { background: #cc4f72; border-radius: 8px; }
+.command-allowance-card progress::-moz-progress-bar { background: #cc4f72; border-radius: 8px; }

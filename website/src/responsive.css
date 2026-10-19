@@ -1,0 +1,131 @@
+/* Shared layout contract for public pages and account screens. */
+:root { --section-padding: clamp(56px, 7vw, 96px); --color-success: #16803c; --shadow-flat: 0 4px 18px rgba(36,10,18,.07); --shadow-hover: 0 8px 24px rgba(36,10,18,.12); }
+html { scroll-padding-top: 100px; }
+body { overflow-x: clip; }
+#root { min-width: 0; }
+button, input, select, textarea { font: inherit; }
+:focus-visible { outline: 3px solid #a5325d; outline-offset: 4px; }
+.btn { min-height: 44px; box-shadow: var(--shadow-flat); text-align: center; }
+.btn:hover:not(:disabled) { box-shadow: var(--shadow-hover); }
+.btn:disabled { transform: none; }
+.navbar { height: 80px; padding: 12px max(24px, calc((100% - 1200px) / 2)); border-bottom: var(--border-light); }
+.nav-logo { gap: 0; white-space: nowrap; }
+.nav-logo .logo-dot { font-size: inherit; }
+.nav-menu { display: flex; align-items: center; justify-content: space-between; flex: 1; margin-left: clamp(40px, 10vw, 160px); gap: 24px; }
+.nav-hamburger { background: none; border: 0; padding: 10px; width: 44px; height: 44px; flex-shrink: 0; }
+.home-page, .about-page, .pricing-page { padding-top: 80px; }
+.hero { min-height: 0; max-width: 1280px; padding: 72px 32px 88px; grid-template-columns: minmax(0,.9fr) minmax(0,1.1fr); gap: 48px; }
+.hero::before, .hero::after { max-width: 100%; }
+.hero-text h1 { font-size: clamp(44px,4.6vw,68px); line-height: 1.08; letter-spacing: -2px; }
+.hero-text, .hero-visualizer, .split-content, .split-visual { min-width: 0; }
+.hero-text p { font-size: 17px; }
+.hero-actions { flex-wrap: wrap; }
+.hero-badge-top { font-size: 10px; letter-spacing: .08em; box-shadow: none; border: var(--border-light); }
+.live-demo-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.demo-card { height: auto; min-height: 360px; padding: 20px; border: var(--border-light); box-shadow: var(--shadow-flat); }
+.demo-text-box { flex: 1; min-height: 230px; overflow: visible; font-size: 13px; }
+.demo-card-header { min-height: 58px; align-content: flex-start; }
+.demo-card-title { font-size: 10px; letter-spacing: .04em; }
+.demo-card-footer { gap: 8px; align-items: center; margin-top: 16px; }
+.demo-card-footer svg { flex-shrink: 0; }
+.demo-card-footer-ai { flex-wrap: wrap; }
+.demo-replay-btn { min-height: 36px; }
+.platform-cards { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+.platform-cards > div { gap: 16px; flex-wrap: wrap; }
+.platform-cards > div > span { white-space: nowrap; }
+.section-bordered { border-width: 1px; border-color: rgba(36,10,18,.12); }
+.section[style] > .container { padding-inline: 0; }
+.about-hero { padding-top: 72px !important; }
+.about-hero h1, .pricing-wrapper h1 { font-size: clamp(36px,4.5vw,60px) !important; line-height: 1.12; font-weight: 600 !important; letter-spacing: -1.5px !important; }
+.about-grid-3 > div, .about-grid-4 > div { min-width: 0; }
+.pricing-cards { align-items: stretch; }
+.pricing-cards > * { display: flex; flex-direction: column; min-width: 0; }
+.pricing-badge { position: static; align-self: flex-start; }
+.pricing-features-list { flex: 1; }
+.pricing-cards .btn { margin-top: auto; }
+.editorial-container { padding-top: 128px; overflow-wrap: anywhere; }
+.footer-content { display: grid !important; grid-template-columns: 1.2fr 1fr; gap: 64px !important; }
+.footer-links-group { justify-content: space-between; gap: 32px !important; }
+.footer-bottom p { font-size: 12px; }
+.newsletter-section input { max-width: 100%; min-width: 0; }
+.cf-turnstile { min-width: 0; width: 100%; }
+.dashboard-header { gap: 16px; flex-wrap: wrap; border-bottom: var(--border-light); }
+.dashboard-header .nav-links { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.dashboard-main, .dashboard-grid > *, .profile-info-value { min-width: 0; overflow-wrap: anywhere; }
+.pricing-grid { grid-template-columns: repeat(auto-fit,minmax(min(100%,320px),1fr)); }
+.meetings-grid { grid-template-columns: repeat(auto-fill,minmax(min(100%,300px),1fr)); }
+.modal-overlay { overflow-y: auto; padding: 16px; }
+.modal-content { max-height: calc(100dvh - 32px); overflow-y: auto; }
+@media (max-width: 1050px) {
+  .hero { grid-template-columns: minmax(0,1fr); max-width: 800px; text-align: center; }
+  .hero-text p { margin-inline: auto; max-width: 600px; }
+  .hero-actions, .os-badges, .os-badge-container { justify-content: center; }
+  .hero-text h1 { max-width: 680px; margin-inline: auto; }
+}
+@media (max-width: 900px) {
+  .navbar { height: 68px; padding: 12px 20px !important; }
+  .navbar .nav-hamburger { display: flex; }
+  .nav-menu { display: none; position: absolute; top: 100%; left: 0; right: 0; margin: 0; padding: 20px; background: var(--bg-canvas); border-bottom: var(--border-light); box-shadow: var(--shadow-md); max-height: calc(100dvh - 68px); overflow-y: auto; }
+  .nav-menu.open { display: flex; flex-direction: column; align-items: stretch; gap: 20px; }
+  .navbar .nav-links { position: static; width: auto; padding: 0 !important; border: 0; background: none; box-shadow: none; transform: none; opacity: 1; pointer-events: auto; gap: 4px !important; }
+  .navbar .nav-item a { display: block; min-height: 44px; padding: 10px 0 !important; }
+  .navbar .nav-actions { display: grid; grid-template-columns: 1fr 1fr; margin: 0; width: 100%; gap: 12px; }
+  .home-page, .about-page, .pricing-page { padding-top: 68px; }
+  .footer-content { gap: 32px !important; }
+}
+@media (max-width: 600px) {
+  .hero { padding: 44px 20px 56px; gap: 32px; }
+  .hero-text h1 { font-size: clamp(36px,9vw,50px) !important; letter-spacing: -1.3px; }
+  .hero-text p { font-size: 16px; }
+  .hero-badge-top { padding: 7px 12px; margin-bottom: 20px; }
+  .live-demo-grid, .platform-cards { grid-template-columns: minmax(0,1fr); }
+  .demo-card { min-height: 320px; padding: 20px; }
+  .demo-card-header { min-height: 48px; }
+  .demo-text-box { min-height: 190px; font-size: 14px; padding: 14px; }
+  .demo-card-footer-ai { flex-direction: row; }
+  .demo-replay-btn { width: auto; padding: 8px 12px; }
+  .platform-cards > div { padding: 20px !important; }
+  .section[style], .platforms-section, .cta-banner { padding: 48px 20px !important; }
+  .section > .container { padding-inline: 20px; }
+  .section[style] > .container { padding-inline: 0; }
+  .split-section { flex-direction: column; gap: 32px !important; align-items: stretch !important; }
+  .keyboard-key-container { padding: 32px 16px; max-width: 100%; }
+  .key-3d-button { width: min(240px,100%); }
+  .about-hero { padding: 48px 20px !important; }
+  .about-hero .container { padding: 0; }
+  .about-grid-3, .about-grid-4 { gap: 16px; }
+  .about-grid-3 > div, .about-grid-4 > div { padding: 24px !important; }
+  .pricing-wrapper { padding: 48px 20px !important; }
+  .pricing-cards > * { max-width: 440px !important; padding: 28px 24px !important; }
+  .editorial-container { padding: 108px 20px 56px; }
+  .footer-content { grid-template-columns: 1fr; }
+  .footer-links-group { display: grid !important; grid-template-columns: 1fr 1fr; gap: 24px !important; }
+  .footer-bottom { align-items: flex-start !important; text-align: left; }
+  .auth-page { padding: 24px 16px; align-items: flex-start; min-height: 0; }
+  .auth-box { padding: 28px 20px; }
+  .auth-input { font-size: 16px; }
+  .dashboard-header { padding: 16px; }
+  .dashboard-header .nav-links { width: 100%; }
+  .nav-user { overflow-wrap: anywhere; }
+  .dashboard-main { padding: 24px 16px; }
+  .card { padding: 20px; }
+  .tab-navigation { flex-wrap: wrap; gap: 8px; }
+  .logs-table-container { min-width: 0; max-width: 100%; overflow-x: auto; }
+  .modal-actions { flex-direction: column; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .marquee-track, .marquee-track-reverse { width: auto; flex-wrap: wrap; justify-content: center; }
+  .marquee-curved-1, .marquee-curved-2 { transform: none; }
+}
+/* Keep decorative hero orbs inside the hero's layout bounds. */
+.hero { overflow: clip; }
+.about-grid-3 > div, .about-grid-4 > div, .platform-cards > div {
+  border: var(--border-light) !important;
+  box-shadow: var(--shadow-flat) !important;
+  border-radius: 18px !important;
+}
+.keyboard-key-container { border: var(--border-light); box-shadow: var(--shadow-flat); }
+.nav-hamburger { align-items: center; justify-content: center; }
+.nav-hamburger span { flex-shrink: 0; }
