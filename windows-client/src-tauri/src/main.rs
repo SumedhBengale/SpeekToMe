@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 pub mod config;
+#[cfg(any(target_os = "windows", test))]
+mod windows_autostart;
 mod gestures;
 mod shortcuts;
 mod hotkey;
@@ -100,6 +102,11 @@ pub fn get_active_config() -> &'static Mutex<AppConfig> {
 #[tauri::command]
 fn get_config() -> AppConfig {
     get_active_config().lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[tauri::command]
+fn get_desktop_platform() -> &'static str {
+    std::env::consts::OS
 }
 
 #[tauri::command]
@@ -763,6 +770,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
+            get_desktop_platform,
             get_linux_capabilities,
             get_audio_level,
             save_config,

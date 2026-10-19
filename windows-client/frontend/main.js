@@ -12,45 +12,33 @@ let unlistenLoginFailed = null;
 let currentStep = 1;
 let API_URL = "https://api.speekto.me";
 
-const IS_LINUX_CLIENT = /linux/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`);
-const IS_MAC_CLIENT = /mac/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`);
+// The native build identifies its platform; WebView user agents are not authoritative.
+let IS_LINUX_CLIENT = false;
+let IS_MAC_CLIENT = false;
 const DEFAULT_HOTKEY = 'Ctrl + Win';
 function displayHotkey(value) {
   return value.replace(/\bWin\b/g, IS_MAC_CLIENT ? 'Command' : (IS_LINUX_CLIENT ? 'Meta' : 'Windows'));
 }
 
-function configureLinuxSettings() {
-  if (IS_MAC_CLIENT) {
-    [document.getElementById('hotkey-select'), document.getElementById('onboard-hotkey-select')].forEach(select => {
-      if (select) [...select.options].forEach(option => { option.textContent = option.textContent.replace(/Windows/g, 'Command'); });
-    });
-  }
-  if (!IS_LINUX_CLIENT) { return; }
-
-  document.documentElement.dataset.platform = 'linux';
+async function configureDesktopSettings() {
+  const platform = await invoke('get_desktop_platform');
+  IS_LINUX_CLIENT = platform === 'linux';
+  IS_MAC_CLIENT = platform === 'macos';
+  document.documentElement.dataset.platform = platform;
   [document.getElementById('hotkey-select'), document.getElementById('onboard-hotkey-select')].forEach(select => {
     if (!select) return;
-    // Keep the same predefined shortcuts and stored values across platforms.
-    // Linux desktops call the Windows key Meta (or Super), so only change its label.
+    // Stored shortcut names stay identical on every platform.
     [...select.options].forEach(option => {
-      option.hidden = false;
-      option.textContent = option.textContent.replace(/Windows/g, 'Meta');
+      const recommended = option.value === DEFAULT_HOTKEY ? ' (Recommended)' : '';
+      option.textContent = displayHotkey(option.value) + recommended;
     });
   });
 
-  document.querySelectorAll('.autostart-hint').forEach(hint => {
-    hint.textContent = 'Automatically launch SpeekTo.Me when you sign in.';
+  document.querySelectorAll('[data-typing-hint]').forEach(hint => {
+    hint.textContent = IS_LINUX_CLIENT
+      ? 'Off: paste the completed text. Characters unavailable on your keyboard layout also use paste to preserve the text.'
+      : 'Off: paste the completed text. On: insert text using simulated keystrokes.';
   });
-
-  const typingTitle = document.querySelector('#typing-mode-check + .checkmark + .checkbox-label-block .checkbox-title');
-  const typingHint = document.querySelector('#typing-mode-check + .checkmark + .checkbox-label-block .setting-hint');
-  if (typingTitle) typingTitle.textContent = 'Type text with simulated keystrokes';
-  if (typingHint) typingHint.textContent = 'Off: paste the completed text. Characters unavailable on your keyboard layout also use paste to preserve the text.';
-
-  const onboardTypingTitle = document.querySelector('#onboard-typing-mode-check + .checkmark + .checkbox-label-block .checkbox-title');
-  const onboardTypingHint = document.querySelector('#onboard-typing-mode-check + .checkmark + .checkbox-label-block .setting-hint');
-  if (onboardTypingTitle) onboardTypingTitle.textContent = 'Type text with simulated keystrokes';
-  if (onboardTypingHint) onboardTypingHint.textContent = 'Off: paste the completed text. Characters unavailable on your keyboard layout also use paste to preserve the text.';
 }
 
 let linuxCapabilityStatusPending = false;
@@ -87,8 +75,6 @@ async function loadLinuxCapabilityStatus() {
     linuxCapabilityStatusPending = false;
   }
 }
-
-configureLinuxSettings();
 
 function isUserPro(info) {
   if (!info) return false;
@@ -695,7 +681,8 @@ async function saveLanguagesToBackend() {
 }
 
 async function init() {
-  // Initialize Custom Themed Dropdowns immediately before any async backend calls
+  // Resolve native labels before custom dropdowns copy the option text.
+  await configureDesktopSettings();
   initCustomSelects();
   await listen('account-limit-error', ({ payload }) => {
     showToast(payload.message, payload.feature + ' limit', 'warning');
@@ -1682,60 +1669,49 @@ function getPillColorsForTheme(themeName) {
 }
 
 function gatherConfigFromUI(isOnboarding) {
-  const api_url = currentConfig ? currentConfig.api_url : null;
-  if (isOnboarding) {
-    const themeName = onboardThemeSelect ? onboardThemeSelect.value : 'forest';
-    const colors = getPillColorsForTheme(themeName);
-    return {
-      languages: [...selectedLanguages],
-      active_language: speakingLanguage,
-      api_url: api_url,
-      hotkey: onboardHotkeySelect ? onboardHotkeySelect.value : DEFAULT_HOTKEY,
-      hotkey_mode: onboardHotkeyModeSelect ? onboardHotkeyModeSelect.value : 'hold',
-      autostart: onboardAutostartCheck ? onboardAutostartCheck.checked : false,
-      typing_mode: onboardTypingModeCheck ? onboardTypingModeCheck.checked : false,
-      sound_feedback: onboardSoundFeedbackCheck ? onboardSoundFeedbackCheck.checked : true,
-      model: onboardModelSelect ? onboardModelSelect.value : 'whisper-large-v3-turbo',
-      enhance: true,
-      transcription_mode: (onboardStreamingModeCheck && onboardStreamingModeCheck.checked) ? "stream" : "batch",
-      command_mode: currentConfig ? (currentConfig.command_mode !== false) : true,
-      custom_prompt: "",
-      session_token: currentConfig ? currentConfig.session_token : null,
-      theme: themeName,
-      pill_position_mode: currentConfig ? currentConfig.pill_position_mode : 'predefined',
-      pill_predefined_position: currentConfig ? currentConfig.pill_predefined_position : 'Top Center',
-      pill_custom_x: currentConfig ? currentConfig.pill_custom_x : 0,
-      pill_custom_y: currentConfig ? currentConfig.pill_custom_y : 60,
-      pill_bg_color: colors.bg,
-      pill_wave_color: colors.wave
+  const prefix = isOnboarding ? 'onboard-' : '';
+  const value = (id, fallback) => document.getElementById(prefix + id)?.value ?? fallback;
+  const checked = (id, fallback) => document.getElementById(prefix + id)?.checked ?? fallback;
+  const themeName = value('theme-select', 'forest');
+  const colors = getPillColorsForTheme(themeName);
+  const saved = currentConfig || {};
+  // Both screens edit the same schema. Retain fields without a control here,
+  // including server/session state and existing overlay settings in onboarding.
+  const config = {
+    ...saved,
+    languages: [...selectedLanguages],
+    active_language: speakingLanguage,
+    api_url: saved.api_url ?? null,
+    session_token: saved.session_token ?? null,
+    hotkey: value('hotkey-select', DEFAULT_HOTKEY),
+    hotkey_mode: value('hotkey-mode-select', 'hold'),
+    autostart: checked('autostart-check', false),
+    typing_mode: checked('typing-mode-check', false),
+    sound_feedback: checked('sound-feedback-check', true),
+    model: value('model-select', 'whisper-large-v3-turbo'),
+    enhance: saved.enhance ?? true,
+    transcription_mode: checked('streaming-mode-check', false) ? 'stream' : 'batch',
+    command_mode: checked('command-mode-check', saved.command_mode !== false),
+    custom_prompt: saved.custom_prompt ?? '',
+    theme: themeName,
+    pill_position_mode: saved.pill_position_mode ?? 'predefined',
+    pill_predefined_position: saved.pill_predefined_position ?? 'Top Center',
+    pill_custom_x: saved.pill_custom_x ?? 0,
+    pill_custom_y: saved.pill_custom_y ?? 60,
+    pill_bg_color: colors.bg,
+    pill_wave_color: colors.wave
+  };
+  if (!isOnboarding) {
+    const coordinate = (id, fallback) => {
+      const number = Number.parseInt(value(id, ''), 10);
+      return Number.isFinite(number) ? number : fallback;
     };
-  } else {
-    const themeName = themeSelect ? themeSelect.value : 'forest';
-    const colors = getPillColorsForTheme(themeName);
-    return {
-      languages: [...selectedLanguages],
-      active_language: speakingLanguage,
-      api_url: api_url,
-      hotkey: hotkeySelect ? hotkeySelect.value : DEFAULT_HOTKEY,
-      hotkey_mode: hotkeyModeSelect ? hotkeyModeSelect.value : 'hold',
-      autostart: autostartCheck ? autostartCheck.checked : false,
-      typing_mode: typingModeCheck ? typingModeCheck.checked : false,
-      sound_feedback: soundFeedbackCheck ? soundFeedbackCheck.checked : true,
-      model: modelSelect ? modelSelect.value : 'whisper-large-v3-turbo',
-      enhance: true,
-      transcription_mode: (streamingModeCheck && streamingModeCheck.checked) ? "stream" : "batch",
-      command_mode: (commandModeCheck ? commandModeCheck.checked : (currentConfig ? (currentConfig.command_mode !== false) : true)),
-      custom_prompt: "",
-      session_token: currentConfig ? currentConfig.session_token : null,
-      theme: themeName,
-      pill_position_mode: pillPosModeSelect ? pillPosModeSelect.value : 'predefined',
-      pill_predefined_position: pillPredefinedSelect ? pillPredefinedSelect.value : 'Top Center',
-      pill_custom_x: pillCustomX ? parseInt(pillCustomX.value, 10) || 0 : 0,
-      pill_custom_y: pillCustomY ? parseInt(pillCustomY.value, 10) || 0 : 60,
-      pill_bg_color: colors.bg,
-      pill_wave_color: colors.wave
-    };
+    config.pill_position_mode = value('pill-pos-mode-select', config.pill_position_mode);
+    config.pill_predefined_position = value('pill-predefined-select', config.pill_predefined_position);
+    config.pill_custom_x = coordinate('pill-custom-x', config.pill_custom_x);
+    config.pill_custom_y = coordinate('pill-custom-y', config.pill_custom_y);
   }
+  return config;
 }
 
 let isSavingInProgress = false;

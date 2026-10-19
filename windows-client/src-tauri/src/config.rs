@@ -228,6 +228,10 @@ pub fn save_config(config: &AppConfig) {
     }
     #[cfg(target_os = "linux")]
     crate::linux_util::sync_autostart(config.autostart);
+    #[cfg(target_os = "windows")]
+    if let Err(error) = crate::windows_autostart::sync(config.autostart) {
+        eprintln!("[CONFIG] Could not update launch at sign-in: {}", error);
+    }
 }
 
 pub fn parse_hotkey_combo(name: &str) -> u32 {
