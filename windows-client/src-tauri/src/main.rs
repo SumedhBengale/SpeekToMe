@@ -22,6 +22,9 @@ mod macos_desktop;
 #[cfg(target_os = "macos")]
 mod macos_audio;
 mod lifecycle;
+mod settings_lifecycle;
+#[cfg(any(target_os = "macos", test))]
+mod macos_browser;
 pub mod audio;
 pub mod audio_processing;
 pub mod meeting_echo;
@@ -113,6 +116,7 @@ pub fn get_active_config() -> &'static Mutex<AppConfig> {
 
 #[tauri::command]
 fn get_config() -> AppConfig {
+    settings_lifecycle::note_config_read();
     get_active_config().lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
@@ -225,23 +229,12 @@ fn update_tray_theme(app: tauri::AppHandle, theme: String) {
 // Recording, shortcuts, tray actions and uploads run in native Rust code.
 #[tauri::command]
 fn hide_window(window: tauri::WebviewWindow) {
-    if window.is_maximized().unwrap_or(false) == false {
-        if let Ok(pos) = window.outer_position() {
-            let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-            *pos_lock = Some(pos);
-        }
-        if let Ok(size) = window.inner_size() {
-            let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-            *size_lock = Some(size);
-        }
-    }
-    // The close handler saves geometry and allows the webview to be destroyed.
-    let _ = window.close();
+    settings_lifecycle::dismiss(window.app_handle());
 }
 
 #[tauri::command]
 fn minimize_window(window: tauri::WebviewWindow) {
-    let _ = window.minimize();
+    settings_lifecycle::dismiss(window.app_handle());
 }
 
 static LAST_MAXIMIZE_TOGGLE: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
@@ -500,6 +493,9 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
     } else {
         let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
             .title("SpeekTo.Me Settings")
+            // All durable preferences/auth live in Rust. Give each macOS
+            // Settings view its own disposable WebKit website-data store.
+            .incognito(cfg!(target_os = "macos"))
             .resizable(true)
             .decorations(cfg!(target_os = "macos"))
             .skip_taskbar(false)
@@ -519,6 +515,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
 
         match builder.build() {
             Ok(window) => {
+                settings_lifecycle::watch(&window);
                 #[cfg(target_os = "windows")]
                 if let Ok(hwnd_ptr) = window.hwnd() {
                     let hwnd = hwnd_ptr.0 as *mut std::ffi::c_void;
@@ -659,6 +656,51 @@ fn run_native_overlay_diagnostic() {
     });
 }
 
+fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+            get_config,
+            get_desktop_platform,
+            get_linux_capabilities,
+            request_desktop_permissions,
+            repair_desktop_permissions,
+            get_audio_level,
+            save_config,
+            validate_hotkey,
+            check_hotkey_conflicts,
+            set_shortcut_capture,
+            hide_window,
+            start_login,
+            logout,
+            get_user_info,
+            login_with_credentials,
+            signup_with_credentials,
+            get_vocabulary,
+            add_vocabulary_term,
+            delete_vocabulary_term,
+            update_languages,
+            set_active_language,
+            get_supported_languages,
+            start_meeting,
+            stop_meeting,
+            cancel_meeting,
+            get_active_meeting,
+            get_meeting_levels,
+            upload_meeting,
+            list_local_meetings,
+            get_local_meeting_audio,
+            retry_upload_meeting,
+            delete_local_meeting,
+            get_api_url,
+            open_external_url,
+            validate_prompt,
+            minimize_window,
+            is_window_maximized,
+            toggle_maximize_window,
+            close_window,
+            update_tray_theme
+        ]
+}
+
 fn main() {
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
@@ -690,6 +732,7 @@ fn main() {
     if !macos_desktop::ensure_single_instance() { return; }
     #[cfg(target_os = "macos")]
     if std::env::args().any(|arg| arg == "--diagnose-macos") { macos_desktop::run_diagnostic(); return; }
+    if std::env::args().any(|arg| arg == "--diagnose-settings-lifecycle") { settings_lifecycle::run_diagnostic(); return; }
     println!("[STARTUP 1] Starting SpeekTo.Me desktop client...");
 
     // Install process-level default CryptoProvider for rustls / tokio-tungstenite TLS
@@ -783,69 +826,8 @@ fn main() {
             println!("[STARTUP 8] Setup completed successfully!");
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = &api;
-                // Save window coordinates and size so they can be restored on recreation
-                if window.is_maximized().unwrap_or(false) == false {
-                    if let Ok(pos) = window.outer_position() {
-                        let mut pos_lock = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-                        *pos_lock = Some(pos);
-                    }
-                    if let Ok(size) = window.inner_size() {
-                        let mut size_lock = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
-                        *size_lock = Some(size);
-                    }
-                }
-                // Allow default close/destroy flow so the renderer unloads.
-            }
-            #[cfg(target_os = "linux")]
-            if matches!(event, tauri::WindowEvent::Destroyed) && window.label() == "main" {
-                linux_desktop::release_idle_webkit(window.app_handle());
-            }
-        })
-        .invoke_handler(tauri::generate_handler![
-            get_config,
-            get_desktop_platform,
-            get_linux_capabilities,
-            request_desktop_permissions,
-            repair_desktop_permissions,
-            get_audio_level,
-            save_config,
-            validate_hotkey,
-            check_hotkey_conflicts,
-            set_shortcut_capture,
-            hide_window,
-            start_login,
-            logout,
-            get_user_info,
-            login_with_credentials,
-            signup_with_credentials,
-            get_vocabulary,
-            add_vocabulary_term,
-            delete_vocabulary_term,
-            update_languages,
-            set_active_language,
-            get_supported_languages,
-            start_meeting,
-            stop_meeting,
-            cancel_meeting,
-            get_active_meeting,
-            get_meeting_levels,
-            upload_meeting,
-            list_local_meetings,
-            get_local_meeting_audio,
-            retry_upload_meeting,
-            delete_local_meeting,
-            get_api_url,
-            open_external_url,
-            validate_prompt,
-            minimize_window,
-            is_window_maximized,
-            toggle_maximize_window,
-            close_window,
-            update_tray_theme
-        ]);
+        .on_window_event(settings_lifecycle::on_window_event)
+        .invoke_handler(settings_invoke_handler());
 
     println!("[STARTUP 9] Running Tauri event loop...");
     let app = app

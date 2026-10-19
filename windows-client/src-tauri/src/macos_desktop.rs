@@ -13,6 +13,12 @@ use tauri::{
 static STATE: AtomicU8 = AtomicU8::new(0);
 unsafe extern "C" {
     fn s2m_permissions() -> u32;
+    fn s2m_settings_observers(background: extern "C" fn(bool));
+    fn s2m_track_settings(view: *mut std::ffi::c_void);
+    fn s2m_prepare_settings_close(view: *mut std::ffi::c_void);
+    fn s2m_settings_snapshot() -> *mut c_char;
+    fn s2m_browser_idle_cleanup();
+    fn s2m_finish_settings_close();
     fn s2m_overlay_snapshot() -> *mut c_char;
     fn s2m_save_overlay_image(path: *const c_char) -> bool;
     fn s2m_free(value: *mut c_char);
@@ -31,6 +37,54 @@ unsafe extern "C" {
 }
 fn cstring(s: &str) -> CString {
     CString::new(s.replace('\0', "")).unwrap()
+}
+
+extern "C" fn settings_backgrounded(minimized_only: bool) {
+    let _ = std::panic::catch_unwind(|| {
+        if let Some(app) = crate::TAURI_APP.get() {
+            if let Some(window) = app.get_webview_window("main") {
+                if !minimized_only || window.is_minimized().unwrap_or(false) {
+                    crate::settings_lifecycle::dismiss(app);
+                }
+            }
+        }
+    });
+}
+
+pub fn track_settings(window: &tauri::WebviewWindow) {
+    let _ = window.with_webview(|view| unsafe { s2m_track_settings(view.inner()); });
+}
+
+pub fn prepare_settings_close(window: &tauri::WebviewWindow) {
+    let _ = window.with_webview(|view| unsafe { s2m_prepare_settings_close(view.inner()); });
+}
+
+pub fn settings_snapshot() -> serde_json::Value {
+    unsafe {
+        let value = s2m_settings_snapshot();
+        if value.is_null() { return serde_json::Value::Null; }
+        let result = serde_json::from_str(&std::ffi::CStr::from_ptr(value).to_string_lossy()).unwrap_or_default();
+        s2m_free(value);
+        result
+    }
+}
+
+pub fn release_idle_browser(app: &tauri::AppHandle) {
+    unsafe { s2m_finish_settings_close(); }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        let services = crate::macos_browser::cached_services();
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let snapshot = settings_snapshot();
+            if handle.webview_windows().is_empty() && snapshot["live_webviews"] == 0 {
+                let stopped = crate::macos_browser::terminate_cached(&services);
+                unsafe { s2m_browser_idle_cleanup(); }
+                eprintln!("[WINDOW] macOS Settings released; stopped {stopped} cached browser helpers: {}", settings_snapshot());
+            }
+        });
+    });
 }
 
 pub fn capabilities() -> serde_json::Value {
@@ -145,6 +199,7 @@ pub fn refresh_language_menu(app: &tauri::AppHandle) {
 pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory)?;
     crate::macos_overlay::install();
+    unsafe { s2m_settings_observers(settings_backgrounded); }
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu(app)?)
         .tooltip("SpeekTo.Me");

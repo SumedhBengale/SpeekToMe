@@ -1,6 +1,6 @@
-# Desktop tray lifecycle and native Linux status UI
+# Desktop Settings lifecycle and native status UI
 
-Closing or hiding Settings destroys its webview. The tray, keyboard shortcuts,
+Closing, hiding or using the app's Minimize-to-tray control force-destroys Settings and its webview. Switching to another application while Settings remains visible keeps the form open. The tray, keyboard shortcuts,
 audio capture and durable meeting upload run in Rust and remain available.
 Settings is recreated on demand with its last in-session geometry.
 
@@ -57,3 +57,17 @@ python3 windows-client/tests/linux-memory-probe.py <PID>
 ```
 
 No main-server, inference-worker or S3 launch-config changes are needed.
+
+## Settings teardown on macOS and Linux
+
+`settings_lifecycle.rs` owns the production close/hide/minimize policy and geometry retention. Native macOS miniaturization and application Hide notifications use the same teardown. GTK iconify/hide notifications are observed where the window manager exposes them. Pending GTK callbacks carry a window generation so an old window cannot close a freshly reopened Settings window.
+
+On Wayland, compositor-side minimization is not reliably exposed as GTK's iconified state. The app's own Minimize-to-tray button always destroys Settings; unsupported compositor-only state detection is not replaced with focus-loss dismissal. This preserves visible forms when switching applications. The lifecycle diagnostic records this unavailable native-minimize case explicitly on Wayland.
+
+macOS Settings uses a disposable nonpersistent website-data store; durable settings and authentication remain in Rust. Teardown stops loading, clears native delegates and responder references, detaches the webview/content hierarchy, and advances the AppKit event/autorelease cycle. Weak native tracking verifies actual WKWebView, data-store and process-pool deallocation. Cleanup only proceeds with no live Settings webview. It reads this application's own `launchctl print pid/<host-pid>` service namespace, validates active WebKit service PIDs and their system WebKit executable paths, rechecks membership and signals those same-user helpers. It does not use root privileges, private WebKit APIs or global kill-by-name commands. A freshly reopened Settings window cancels idle cleanup. Idle malloc pressure relief returns unused native heap pages.
+
+The bounded `--diagnose-settings-lifecycle` mode uses the actual Settings frontend, production invoke handlers and teardown. It checks repeated close, Hide, Minimize-to-tray, supported native minimize, macOS application Hide, and rapid reopen during the old window's delayed cleanup. It records webview counts, successful configuration IPC reads, retained account state, native object counts and macOS RSS/physical footprint in `settings-lifecycle-diagnostic.json` beside the app configuration. It performs normal Settings reads but does not record audio, start uploads or alter permissions. Native capture is not started during the diagnostic.
+
+Browser teardown and the native host's remaining RAM are separate measurements. Destroying Settings does not unload every shared framework/code page from the operating-system process. The Windows under-10-MB idle benchmark must not be claimed for macOS/Linux without comparable release-build measurements.
+
+Validated on 2026-10-19: seven macOS Settings cycles (including application Hide, native minimize and rapid reopen) ended with zero tracked WKWebView/data-store/process-pool objects and zero owned WebKit helpers. The Rust host and account state survived; the normal Tahoe client was restarted with keyboard permissions intact. The final debug host sample was about 25.2 MiB physical footprint / 69.5 MiB RSS, so the Windows under-10-MB benchmark is not yet achieved. Linux Wayland close/hide/app-minimize and rapid reopen passed with no final WebKit helpers. Rust tests passed on Linux (60) and macOS (56); Intel/ARM macOS builds, Windows GNU cross-check and native shortcut tests passed. Windows runtime behavior was not exercised.

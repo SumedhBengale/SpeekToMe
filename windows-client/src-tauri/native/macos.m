@@ -5,6 +5,9 @@
 #import <UserNotifications/UserNotifications.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreMedia/CoreMedia.h>
+#import <WebKit/WebKit.h>
+#include <mach/mach.h>
+#include <malloc/malloc.h>
 #include <stdatomic.h>
 #include <unistd.h>
 
@@ -33,6 +36,92 @@ static double customX, customY;
 
 static void mainAsync(dispatch_block_t block) {
     if ([NSThread isMainThread]) block(); else dispatch_async(dispatch_get_main_queue(), block);
+}
+
+// Weak tracking proves the WKWebView/configuration is deallocated, rather than
+// merely removed from Tauri's window map. It never keeps browser objects alive.
+static NSHashTable *settingsViews, *settingsStores, *settingsPools;
+static id miniaturizeObserver, hideObserver;
+void s2m_settings_observers(void (*background)(bool)) {
+    mainAsync(^{
+        if (!miniaturizeObserver) miniaturizeObserver = [NSNotificationCenter.defaultCenter
+            addObserverForName:NSWindowDidMiniaturizeNotification object:nil queue:NSOperationQueue.mainQueue
+            usingBlock:^(NSNotification *note) { dispatch_async(dispatch_get_main_queue(), ^{ background(true); }); }];
+        if (!hideObserver) hideObserver = [NSNotificationCenter.defaultCenter
+            addObserverForName:NSApplicationDidHideNotification object:nil queue:NSOperationQueue.mainQueue
+            usingBlock:^(NSNotification *note) { dispatch_async(dispatch_get_main_queue(), ^{
+                if (!NSApp.isHidden) return;
+                background(false);
+                // AppKit keeps hidden windows for a later unhide. Flush that
+                // retention after closing Settings; the accessory app stays
+                // in the tray with no Settings window and takes no focus.
+                dispatch_async(dispatch_get_main_queue(), ^{ [NSApp unhideWithoutActivation]; });
+            }); }];
+    });
+}
+void s2m_track_settings(void *pointer) {
+    @autoreleasepool {
+    if (NSApp.isHidden) [NSApp unhideWithoutActivation];
+    WKWebView *view = (__bridge WKWebView *)pointer;
+    if (!view) return;
+    if (!settingsViews) {
+        settingsViews = NSHashTable.weakObjectsHashTable;
+        settingsStores = NSHashTable.weakObjectsHashTable;
+        settingsPools = NSHashTable.weakObjectsHashTable;
+    }
+    [settingsViews addObject:view];
+    [settingsStores addObject:view.configuration.websiteDataStore];
+    [settingsPools addObject:view.configuration.processPool];
+    }
+}
+void s2m_prepare_settings_close(void *pointer) {
+    @autoreleasepool {
+        WKWebView *view = (__bridge WKWebView *)pointer;
+        if (!view) return;
+        [view stopLoading];
+        view.navigationDelegate = nil;
+        view.UIDelegate = nil;
+        NSWindow *window = view.window;
+        [window makeFirstResponder:nil];
+        window.initialFirstResponder = nil;
+        [view removeFromSuperview];
+        if (window) window.contentView = [[NSView alloc] initWithFrame:window.contentView.frame];
+    }
+}
+void s2m_finish_settings_close(void) {
+    mainAsync(^{
+        @autoreleasepool {
+            // Advance the AppKit event/autorelease cycle even with no visible
+            // windows. No keyboard/mouse input or focus change is generated.
+            NSEvent *event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0
+                context:nil subtype:0 data1:0 data2:0];
+            [NSApp postEvent:event atStart:NO];
+        }
+    });
+}
+void s2m_browser_idle_cleanup(void) {
+    @autoreleasepool { malloc_zone_pressure_relief(NULL, 0); }
+}
+char *s2m_settings_snapshot(void) {
+    __block char *result = NULL;
+    dispatch_block_t block = ^{
+        @autoreleasepool {
+            struct task_vm_info info = {0};
+            mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+            task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count);
+            NSDictionary *value = @{
+                @"live_webviews": @(settingsViews.allObjects.count),
+                @"live_data_stores": @(settingsStores.allObjects.count),
+                @"live_process_pools": @(settingsPools.allObjects.count),
+                @"resident_bytes": @(info.resident_size), @"footprint_bytes": @(info.phys_footprint)
+            };
+            NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
+            result = strdup([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding].UTF8String);
+        }
+    };
+    if ([NSThread isMainThread]) block(); else dispatch_sync(dispatch_get_main_queue(), block);
+    return result;
 }
 
 uint32_t s2m_permissions(void) {
@@ -240,6 +329,7 @@ static void updatePanel(void) {
     [panel setFrameOrigin:NSMakePoint(NSMinX(frame) + layout.x, NSMaxY(frame) - layout.y - surfaceHeight)];
     [panel.contentView setNeedsDisplay:YES];
     if (overlayState) {
+        if (NSApp.isHidden) [NSApp unhideWithoutActivation];
         [panel orderFrontRegardless];
         if (!overlayTimer) {
             overlayTimer = [NSTimer timerWithTimeInterval:1.0/30.0 repeats:YES block:^(NSTimer *timer) {
