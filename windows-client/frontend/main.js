@@ -13,12 +13,19 @@ let currentStep = 1;
 let API_URL = "https://api.speekto.me";
 
 const IS_LINUX_CLIENT = /linux/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`);
+const IS_MAC_CLIENT = /mac/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`);
 const DEFAULT_HOTKEY = 'Ctrl + Win';
+function displayHotkey(value) {
+  return value.replace(/\bWin\b/g, IS_MAC_CLIENT ? 'Command' : (IS_LINUX_CLIENT ? 'Meta' : 'Windows'));
+}
 
 function configureLinuxSettings() {
-  if (!IS_LINUX_CLIENT) {
-    return;
+  if (IS_MAC_CLIENT) {
+    [document.getElementById('hotkey-select'), document.getElementById('onboard-hotkey-select')].forEach(select => {
+      if (select) [...select.options].forEach(option => { option.textContent = option.textContent.replace(/Windows/g, 'Command'); });
+    });
   }
+  if (!IS_LINUX_CLIENT) { return; }
 
   document.documentElement.dataset.platform = 'linux';
   [document.getElementById('hotkey-select'), document.getElementById('onboard-hotkey-select')].forEach(select => {
@@ -46,20 +53,38 @@ function configureLinuxSettings() {
   if (onboardTypingHint) onboardTypingHint.textContent = 'Off: paste the completed text. Characters unavailable on your keyboard layout also use paste to preserve the text.';
 }
 
+let linuxCapabilityStatusPending = false;
+
 async function loadLinuxCapabilityStatus() {
   if (!IS_LINUX_CLIENT) return;
   const status = document.getElementById('linux-capability-status');
-  if (!status) return;
-  status.hidden = false;
-  status.textContent = 'Checking desktop shortcut and text insertion permissions…';
+  if (!status || linuxCapabilityStatusPending) return;
+  linuxCapabilityStatusPending = true;
   try {
     const capabilities = await invoke('get_linux_capabilities');
-    const shortcut = capabilities?.shortcut ? 'Shortcut ready' : 'Shortcut permission needed';
-    const insertion = capabilities?.insertion ? 'Text insertion ready' : 'Text insertion permission needed';
-    status.textContent = [shortcut, insertion, capabilities?.detail].filter(Boolean).join(' · ');
+    const state = `${Boolean(capabilities?.shortcut)}:${Boolean(capabilities?.insertion)}`;
+    if (status.dataset.state === state) return;
+    status.dataset.state = state;
+    status.hidden = false;
+    status.replaceChildren();
+    [
+      { ready: capabilities?.shortcut, label: 'Shortcut' },
+      { ready: capabilities?.insertion, label: 'Text insertion' }
+    ].forEach(({ ready, label }) => {
+      const item = document.createElement('span');
+      item.className = 'shortcut-status-item' + (ready ? ' is-ready' : ' needs-permission');
+      item.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle>${ready ? '<path d="m8 12 3 3 5-6"></path>' : '<path d="M12 7v6m0 4h.01"></path>'}</svg>`;
+      item.append(document.createTextNode(label + (ready ? ' ready' : ' permission needed')));
+      status.appendChild(item);
+    });
   } catch (error) {
     console.warn('[LINUX] Capability status is unavailable:', error);
-    status.textContent = 'Shortcut and text insertion permission status is unavailable.';
+    if (!status.dataset.state) {
+      status.hidden = false;
+      status.textContent = 'Permission status is unavailable.';
+    }
+  } finally {
+    linuxCapabilityStatusPending = false;
   }
 }
 
@@ -432,35 +457,29 @@ let SUPPORTED_LANGUAGES = [
 let selectedLanguages = ["en"];
 let speakingLanguage = "en";
 
-function renderSpeakingLanguages() {
-  if (speakingLanguage !== 'auto' && !selectedLanguages.includes(speakingLanguage)) {
+let languageUpdatePending = false;
+
+function normalizeSpeakingLanguage() {
+  if (!selectedLanguages.length) selectedLanguages = ['en'];
+  if (!selectedLanguages.includes(speakingLanguage)) {
     speakingLanguage = selectedLanguages[0] || 'en';
   }
-  for (const id of ['client-speaking-language', 'onboard-speaking-language']) {
-    const select = document.getElementById(id);
-    if (!select) continue;
-    select.replaceChildren();
-    for (const code of ['auto', ...selectedLanguages]) {
-      const option = document.createElement('option');
-      option.value = code;
-      option.textContent = code === 'auto' ? 'Automatic' : getLanguageName(code);
-      select.appendChild(option);
-    }
-    select.value = speakingLanguage;
-  }
-  syncCustomSelects();
 }
 
-async function chooseSpeakingLanguage(event) {
-  const choice = event.target.value;
+async function chooseSpeakingLanguage(choice) {
+  if (languageUpdatePending || choice === speakingLanguage || !selectedLanguages.includes(choice)) return;
+  languageUpdatePending = true;
+  renderClientLanguageUI();
   try {
     speakingLanguage = await invoke('set_active_language', { language: choice });
     if (currentConfig) currentConfig.active_language = speakingLanguage;
-    showToast('Speaking language: ' + (speakingLanguage === 'auto' ? 'Automatic' : getLanguageName(speakingLanguage)), 'Applies to the next recording', 'info');
+    showToast(getLanguageName(speakingLanguage) + ' is now your current language.', 'Applies to the next recording', 'info');
   } catch (err) {
     showToast(String(err), 'Languages', 'error');
+  } finally {
+    languageUpdatePending = false;
+    renderClientLanguageUI();
   }
-  renderSpeakingLanguages();
 }
 
 
@@ -470,29 +489,43 @@ function getLanguageName(code) {
 }
 
 function renderClientLanguageUI() {
-  renderSpeakingLanguages();
+  normalizeSpeakingLanguage();
   const containers = [
-    { chips: document.getElementById('client-lang-chips'), count: document.getElementById('client-lang-count') },
-    { chips: document.getElementById('onboard-lang-chips'), count: document.getElementById('onboard-lang-count') }
+    { chips: document.getElementById('client-lang-chips'), count: document.getElementById('client-lang-count'), prefix: 'client' },
+    { chips: document.getElementById('onboard-lang-chips'), count: document.getElementById('onboard-lang-count'), prefix: 'onboard' }
   ];
 
-  containers.forEach(({ chips: chipsContainer, count: countEl }) => {
-    if (countEl) {
-      countEl.textContent = `${selectedLanguages.length} / 5`;
+  containers.forEach(({ chips: chipsContainer, count: countEl, prefix }) => {
+    if (countEl) countEl.textContent = `${selectedLanguages.length} / 5`;
+    const status = document.getElementById(`${prefix}-language-status`);
+    if (status) status.textContent = `${getLanguageName(speakingLanguage)} is your current language. Changes apply to your next recording.`;
+    const atLimit = selectedLanguages.length >= 5;
+    const input = document.getElementById(`${prefix}-lang-search-input`);
+    const add = document.getElementById(`${prefix}-add-lang-btn`);
+    if (input) {
+      input.disabled = languageUpdatePending || atLimit;
+      input.title = atLimit ? 'Remove a language before adding another.' : '';
     }
+    if (add) add.disabled = languageUpdatePending || atLimit;
     if (!chipsContainer) return;
 
-    chipsContainer.innerHTML = '';
+    chipsContainer.replaceChildren();
     selectedLanguages.forEach(code => {
+      const name = getLanguageName(code);
+      const current = code === speakingLanguage;
       const chip = document.createElement('span');
-      chip.className = 'lang-chip';
-      chip.innerHTML = `<span>${escapeHtml(getLanguageName(code))}</span> <button type="button" class="lang-chip-remove" title="Remove">&times;</button>`;
-      
-      chip.querySelector('button').addEventListener('click', () => {
-        if (selectedLanguages.length <= 1) {
-          showToast("At least 1 language must be selected.", "Languages", "warning");
-          return;
-        }
+      chip.className = 'lang-chip' + (current ? ' is-current' : '');
+      chip.innerHTML = `<button type="button" class="lang-chip-star" aria-pressed="${current}" aria-label="${escapeHtml(current ? name + ' is your current language' : 'Use ' + name + ' for transcription')}" title="${escapeHtml(current ? 'Current language' : 'Make ' + name + ' current')}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.78 5.63 6.22.91-4.5 4.39 1.06 6.2L12 17.2l-5.56 2.93 1.06-6.2L3 9.54l6.22-.91L12 3Z"></path></svg>
+      </button><span>${escapeHtml(name)}</span>${current ? '<span class="lang-chip-current">Current</span>' : ''}
+      <button type="button" class="lang-chip-remove" aria-label="Remove ${escapeHtml(name)}" title="${selectedLanguages.length <= 1 ? 'Keep at least one language' : 'Remove ' + escapeHtml(name)}">&times;</button>`;
+      const star = chip.querySelector('.lang-chip-star');
+      star.disabled = languageUpdatePending;
+      star.addEventListener('click', () => chooseSpeakingLanguage(code));
+      const remove = chip.querySelector('.lang-chip-remove');
+      remove.disabled = languageUpdatePending || selectedLanguages.length <= 1;
+      remove.addEventListener('click', () => {
+        if (languageUpdatePending || selectedLanguages.length <= 1) return;
         selectedLanguages = selectedLanguages.filter(c => c !== code);
         saveLanguagesToBackend();
       });
@@ -550,7 +583,7 @@ function setupLanguageCombobox(inputId, dropdownId, addBtnId) {
   }
 
   function addSelectedLanguage(code) {
-    if (!code) return;
+    if (!code || languageUpdatePending) return;
     if (selectedLanguages.length >= 5) {
       showToast("You can select at most 5 spoken languages.", "Languages", "warning");
       dropdownEl.classList.add('hidden');
@@ -638,16 +671,25 @@ function setupLanguageCombobox(inputId, dropdownId, addBtnId) {
 }
 
 async function saveLanguagesToBackend() {
+  if (languageUpdatePending) return;
+  languageUpdatePending = true;
+  renderClientLanguageUI();
   try {
     const updated = await invoke('update_languages', { languages: selectedLanguages });
     selectedLanguages = updated || selectedLanguages;
-    renderClientLanguageUI();
-    showToast("Spoken languages saved!", "Languages", "info");
+    normalizeSpeakingLanguage();
+    if (currentConfig) {
+      currentConfig.languages = [...selectedLanguages];
+      currentConfig.active_language = speakingLanguage;
+    }
+    showToast('Languages saved. ' + getLanguageName(speakingLanguage) + ' is your current language.', 'Languages', 'info');
   } catch (err) {
-    showToast(err || "Failed to update language preferences.", "Languages", "error");
-    const saved = await invoke('get_config');
-    selectedLanguages = saved.languages || ['en'];
-    speakingLanguage = saved.active_language || selectedLanguages[0];
+    showToast(String(err || 'Failed to update language preferences.'), 'Languages', 'error');
+    const saved = await invoke('get_config').catch(() => currentConfig || {});
+    selectedLanguages = saved.languages?.length ? [...saved.languages] : ['en'];
+    speakingLanguage = saved.active_language || selectedLanguages[0] || 'en';
+  } finally {
+    languageUpdatePending = false;
     renderClientLanguageUI();
   }
 }
@@ -655,9 +697,9 @@ async function saveLanguagesToBackend() {
 async function init() {
   // Initialize Custom Themed Dropdowns immediately before any async backend calls
   initCustomSelects();
-  for (const id of ['client-speaking-language', 'onboard-speaking-language']) {
-    document.getElementById(id)?.addEventListener('change', chooseSpeakingLanguage);
-  }
+  await listen('account-limit-error', ({ payload }) => {
+    showToast(payload.message, payload.feature + ' limit', 'warning');
+  });
   await listen('speaking-language-changed', ({ payload }) => {
     speakingLanguage = payload.language;
     if (Array.isArray(payload.languages) && payload.languages.length) selectedLanguages = payload.languages;
@@ -789,6 +831,9 @@ async function init() {
       }
     });
   });
+
+  setupHotkeyRecorder('');
+  setupHotkeyRecorder('onboard-');
 
   // 1.5. Attach live dirty detection listeners across all dashboard inputs
   const dashboardInputs = [
@@ -1123,7 +1168,7 @@ async function init() {
 
 function refreshCustomSelectMenu(select, wrapper, labelSpan, menu) {
   const trigger = wrapper.querySelector('.custom-select-trigger');
-  const signature = JSON.stringify(Array.from(select.options, opt => [opt.value, opt.textContent, opt.hidden]));
+  const signature = JSON.stringify(Array.from(select.options, opt => [opt.value, opt.textContent, opt.hidden, opt.disabled, opt.title]));
   if (menu.dataset.optionsSignature !== signature) {
     menu.replaceChildren();
     Array.from(select.options).filter(opt => !opt.hidden).forEach(opt => {
@@ -1132,9 +1177,13 @@ function refreshCustomSelectMenu(select, wrapper, labelSpan, menu) {
       optEl.setAttribute('role', 'option');
       optEl.setAttribute('data-value', opt.value);
       optEl.textContent = opt.textContent;
+      optEl.setAttribute('aria-disabled', String(opt.disabled));
+      optEl.title = opt.title;
+      if (opt.disabled) optEl.classList.add('is-disabled');
 
       optEl.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (opt.disabled) return;
         select.value = opt.value;
         labelSpan.textContent = opt.textContent;
 
@@ -1208,6 +1257,7 @@ function initCustomSelects() {
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
       const isOpen = wrapper.classList.contains('open');
+      if (!isOpen && select.id.endsWith('hotkey-select')) checkHotkeyPresets(select, true);
       document.querySelectorAll('.custom-select-wrapper.open').forEach(w => {
         if (w !== wrapper) {
           w.classList.remove('open');
@@ -1332,7 +1382,7 @@ function applyConfigToUI(config) {
   }
 
   // General settings inputs
-  if (hotkeySelect) hotkeySelect.value = normalizeConfiguredHotkey(config.hotkey);
+  setHotkeyOption(hotkeySelect, normalizeConfiguredHotkey(config.hotkey));
   if (hotkeyModeSelect) hotkeyModeSelect.value = config.hotkey_mode || 'hold';
   if (autostartCheck) autostartCheck.checked = Boolean(config.autostart);
   if (typingModeCheck) typingModeCheck.checked = Boolean(config.typing_mode);
@@ -1368,7 +1418,7 @@ function applyConfigToUI(config) {
   }
 
   // Onboarding inputs
-  if (onboardHotkeySelect) onboardHotkeySelect.value = normalizeConfiguredHotkey(config.hotkey);
+  setHotkeyOption(onboardHotkeySelect, normalizeConfiguredHotkey(config.hotkey));
   if (onboardHotkeyModeSelect) onboardHotkeyModeSelect.value = config.hotkey_mode || 'hold';
   if (onboardAutostartCheck) onboardAutostartCheck.checked = Boolean(config.autostart);
   if (onboardStreamingModeCheck) {
@@ -1392,6 +1442,194 @@ function applyConfigToUI(config) {
   syncCustomSelects();
 }
 
+
+function setHotkeyOption(select, value) {
+  if (!select) return;
+  // Only retain the latest custom entry; presets remain available.
+  [...select.options].filter(option => option.dataset.custom === 'true').forEach(option => option.remove());
+  if (![...select.options].some(option => option.value === value)) {
+    const option = new Option(displayHotkey(value) + ' (Custom)', value);
+    option.dataset.custom = 'true';
+    select.add(option);
+  }
+  select.value = value;
+  syncCustomSelects();
+  updateHotkeyWarning(select);
+}
+
+// Per-control generations prevent a slow conflict check for an earlier
+// selection from replacing the warning for the current one.
+const hotkeyWarningRequests = new WeakMap();
+async function updateHotkeyWarning(select) {
+  if (!select) return;
+  const warning = document.getElementById(select.id.replace('hotkey-select', 'hotkey-conflict-warning'));
+  if (!warning) return;
+  const request = (hotkeyWarningRequests.get(select) || 0) + 1;
+  hotkeyWarningRequests.set(select, request);
+  const value = select.value;
+  try {
+    const report = await invoke('check_hotkey_conflicts', { value });
+    if (hotkeyWarningRequests.get(select) !== request || select.value !== value) return;
+    const conflicts = report.conflicts;
+    const selected = select.options[select.selectedIndex];
+    if (selected) {
+      selected.hidden = conflicts.length > 0;
+      selected.disabled = conflicts.length > 0;
+      syncCustomSelects();
+    }
+    warning.classList.toggle('is-blocked', conflicts.length > 0);
+    warning.hidden = !conflicts.length && report.system_check !== 'unknown';
+    warning.textContent = conflicts.length
+      ? `${displayHotkey(value)} cannot be used: reserved for ${conflicts.slice(0, 3).map(c => c.action).join('; ')}. Choose another shortcut.`
+      : (report.system_check === 'unknown' ? `${report.detail} Standard shortcut reservations are still enforced.` : '');
+  } catch (error) {
+    if (hotkeyWarningRequests.get(select) !== request || select.value !== value) return;
+    warning.hidden = false;
+    warning.textContent = 'Could not check this shortcut. Save & Apply will verify it again before changing your settings.';
+  }
+}
+
+// Check predefined choices once per settings window, shared by onboarding and
+// General. Native save validation always performs a fresh check.
+const presetHotkeyChecks = new Map();
+async function checkHotkeyPresets(select, refresh = false) {
+  await Promise.all([...select.options].filter(option => !option.dataset.custom).map(async option => {
+    if (refresh || !presetHotkeyChecks.has(option.value)) {
+      presetHotkeyChecks.set(option.value, invoke('check_hotkey_conflicts', { value: option.value }));
+    }
+    try {
+      const report = await presetHotkeyChecks.get(option.value);
+      // Keep the backing value for a previously saved shortcut so filtering
+      // never silently changes preferences. Omit blocked choices from both menus.
+      option.hidden = report.conflicts.length > 0;
+      option.disabled = report.conflicts.length > 0;
+      option.title = report.conflicts.length ? `Reserved for ${report.conflicts.map(c => c.action).join('; ')}` : '';
+    } catch { /* Save validation remains authoritative if discovery failed. */ }
+  }));
+  syncCustomSelects();
+}
+
+let activeHotkeyRecorder = null;
+function setupHotkeyRecorder(prefix) {
+  const button = document.getElementById(`${prefix}hotkey-record`);
+  const select = document.getElementById(`${prefix}hotkey-select`);
+  const hint = document.getElementById(`${prefix}hotkey-record-hint`);
+  if (!button || !select || !hint) return;
+  const defaultHint = hint.textContent;
+  select.addEventListener('change', () => {
+    updateHotkeyWarning(select);
+    hint.textContent = `Selected ${displayHotkey(select.value)}.${prefix ? '' : ' Save & Apply to activate it.'}${IS_LINUX_CLIENT ? ' Your desktop may ask you to approve this shortcut.' : ''}`;
+  });
+  updateHotkeyWarning(select);
+  checkHotkeyPresets(select);
+  button.addEventListener('click', async () => {
+    if (activeHotkeyRecorder) {
+      const same = activeHotkeyRecorder.button === button;
+      activeHotkeyRecorder.stop();
+      if (same) return;
+    }
+    const held = new Set();
+    let candidate = null;
+    let triggerCode = null;
+    let stopped = false;
+    const recorder = { button, stop };
+    function stop(message = defaultHint) {
+      if (stopped) return;
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener('keydown', keydown, true);
+      document.removeEventListener('keyup', keyup, true);
+      window.removeEventListener('blur', blur);
+      document.removeEventListener('visibilitychange', visibility);
+      button.textContent = 'Record shortcut';
+      button.classList.remove('is-recording');
+      select.disabled = false;
+      const trigger = select.parentElement.querySelector('.custom-select-trigger');
+      if (trigger) trigger.disabled = false;
+      hint.textContent = message;
+      hint.classList.remove('has-error');
+      if (activeHotkeyRecorder === recorder) activeHotkeyRecorder = null;
+      invoke('set_shortcut_capture', { active: false }).catch(console.warn);
+    }
+    function blur() { stop(); }
+    function visibility() { if (document.hidden) stop(); }
+    function keydown(event) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.key === 'Escape') { stop(); return; }
+      if (event.repeat || event.isComposing) return;
+      hint.classList.remove('has-error');
+      held.add(event.code);
+      const mods = [];
+      if (event.ctrlKey) mods.push('Ctrl');
+      if (event.shiftKey) mods.push('Shift');
+      if (event.altKey) mods.push('Alt');
+      if (event.metaKey) mods.push('Win');
+      if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(event.key)) {
+        if (!candidate || !candidate.hasKey) {
+          candidate = { value: event.code === 'AltRight' && (mods.length <= 1 || event.getModifierState('AltGraph')) ? 'Right Alt' : mods.join(' + '), hasKey: false };
+        }
+      } else {
+        if (triggerCode && triggerCode !== event.code && held.has(triggerCode)) {
+          stop('Use one key with modifiers. Click Record shortcut to try again.');
+          return;
+        }
+        triggerCode = event.code;
+        if (event.code.startsWith('Numpad')) {
+          candidate = null;
+          hint.textContent = 'Use the main keyboard rather than the number pad. Esc cancels.';
+          return;
+        }
+        const digit = /^Digit([0-9])$/.exec(event.code);
+        const key = digit ? digit[1] : (event.key === ' ' ? 'Space' : event.key);
+        candidate = { value: [...mods, key].join(' + '), hasKey: true };
+      }
+      hint.textContent = candidate?.value ? `Release to use ${displayHotkey(candidate.value)}. Esc cancels.` : 'Press your shortcut. Esc cancels.';
+    }
+    async function keyup(event) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      held.delete(event.code);
+      if (held.size || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey || !candidate) return;
+      const value = candidate.value;
+      // Native validation is the authority for both capture and persisted settings.
+      try {
+        const canonical = await invoke('validate_hotkey', { value });
+        if (stopped) return;
+        stop(`Selected ${displayHotkey(canonical)}.${prefix ? '' : ' Save & Apply to activate it.'}${IS_LINUX_CLIENT ? ' Your desktop may ask you to approve this shortcut.' : ''}`);
+        setHotkeyOption(select, canonical);
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (error) {
+        if (!stopped) {
+          candidate = null;
+          hint.classList.add('has-error');
+          hint.textContent = `${error} Try another shortcut, or press Esc to cancel.`;
+        }
+      }
+    }
+    activeHotkeyRecorder = recorder;
+    button.textContent = 'Cancel';
+    button.classList.add('is-recording');
+    select.disabled = true;
+    const trigger = select.parentElement.querySelector('.custom-select-trigger');
+    if (trigger) trigger.disabled = true;
+    select.parentElement.classList.remove('open');
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    hint.textContent = 'Press your shortcut, then release all keys. Esc cancels.';
+    const timer = setTimeout(() => stop('Shortcut recording timed out. Click Record shortcut to try again.'), 25000);
+    try {
+      await invoke('set_shortcut_capture', { active: true });
+      if (stopped) {
+        await invoke('set_shortcut_capture', { active: false });
+        return;
+      }
+      document.addEventListener('keydown', keydown, true);
+      document.addEventListener('keyup', keyup, true);
+      window.addEventListener('blur', blur);
+      document.addEventListener('visibilitychange', visibility);
+    } catch (error) { stop(`Could not record a shortcut: ${error}`); }
+  });
+}
 function normalizeConfiguredHotkey(hotkey) {
   return hotkey || DEFAULT_HOTKEY;
 }
@@ -1892,7 +2130,34 @@ function formatDate(dateStr) {
   }
 }
 
+function updateCommandUsage(userInfo) {
+  const usage = userInfo?.command_usage;
+  const label = document.getElementById('command-remaining');
+  if (!label) return;
+  const meter = document.getElementById('command-usage-meter');
+  const reset = document.getElementById('command-reset');
+  meter.hidden = true;
+  reset.textContent = '';
+  label.removeAttribute('aria-label');
+  label.classList.remove('is-message');
+  if (!usage) { label.classList.add('is-message'); label.textContent = 'Usage unavailable'; reset.textContent = 'Refresh your account to try again.'; return; }
+  if (!usage.enabled) { label.classList.add('is-message'); label.textContent = 'Pro feature'; reset.textContent = 'Available with an active Pro subscription.'; return; }
+  const used = Math.max(0, Math.min(100, 100 - usage.remaining_percent));
+  const percentUsed = percent => percent > 0 && percent < 1 ? '<1% used' : `${Math.floor(percent)}% used`;
+  const exhausted = usage.input_remaining <= 0 || usage.output_remaining <= 0;
+  label.textContent = percentUsed(used);
+  label.setAttribute('aria-label', `${used > 0 && used < 1 ? 'Less than one' : Math.floor(used)} percent of monthly Command Mode usage limit used`);
+  meter.hidden = false;
+  meter.value = used;
+  reset.textContent = exhausted
+    ? `${usage.input_remaining <= 0 ? 'Input' : 'Output'} allowance reached. ${usage.renewal_pending ? 'Awaiting renewal confirmation.' : `Resets ${formatDate(usage.resets_at)}.`}`
+    : usage.renewal_pending ? 'Awaiting renewal confirmation' : `Resets ${formatDate(usage.resets_at)}`;
+  reset.title = usage.renewal_pending ? 'Your current billing period has ended. Your allowance refreshes when subscription renewal is confirmed.' : '';
+
+}
+
 function updateAuthUI(userInfo) {
+  updateCommandUsage(userInfo);
   const accountDesc = document.getElementById('account-desc');
   
   if (userInfo) {
@@ -1956,20 +2221,23 @@ function updateAuthUI(userInfo) {
     }
     const maxSeconds = isPaid ? (userInfo.monthly_limit_seconds || 180000.0) : (userInfo.monthly_limit_seconds || 3600.0);
     const usageSeconds = userInfo.duration_seconds || 0.0;
-    const percent = Math.min(100.0, (usageSeconds / maxSeconds) * 100.0);
     
     const subUsagePercent = document.getElementById('sub-usage-percent');
-    const subUsageBar = document.getElementById('sub-usage-bar');
     
     if (subUsagePercent) {
       const usage = formatUsageParts(usageSeconds, maxSeconds, isPaid);
       if (usage.isUnlimited) {
-        subUsagePercent.innerHTML = `${usage.usedStr} / ${usage.totalStr} <span class="info-bubble" title="${usage.fupTooltip}" aria-label="${usage.fupTooltip}">ⓘ</span>`;
+        subUsagePercent.innerHTML = `${usage.totalStr}
+          <button type="button" class="info-bubble" title="${usage.fupTooltip}" aria-label="${usage.fupTooltip}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="M12 11v6M12 7h.01"></path>
+            </svg>
+          </button>`;
       } else {
-        subUsagePercent.textContent = usage.display;
+        subUsagePercent.textContent = usage.totalStr;
       }
     }
-    if (subUsageBar) subUsageBar.style.width = `${percent.toFixed(1)}%`;
 
     if (accountDesc) {
       accountDesc.textContent = "Manage your account and subscription.";
@@ -2431,6 +2699,13 @@ function setupMeetingsUI() {
       } catch (e) {
         console.error("[MEETING EVENT ERROR] Failed to parse meeting-completed payload:", e);
       }
+    });
+    listen('meeting-recording-stopped', async () => {
+      clearInterval(timerInterval);
+      clearInterval(recordingInterval);
+      currentMeetingFile = null;
+      showDashboardView();
+      await loadMeetings(true);
     });
     listen('meeting-error', (event) => {
       const badge = document.getElementById('meetings-live-status-badge');
@@ -4024,9 +4299,11 @@ async function stopMeetingRecording() {
   }
   console.log("[MEETING FRONTEND] Stopping meeting with title:", title);
 
+  let recordingSaved = false;
   try {
     console.log("[MEETING FRONTEND] Invoking stop_meeting command on Tauri backend...");
     const res = await invoke('stop_meeting', {title});
+    recordingSaved = true;
     currentMeetingFile = null;
     console.log("[MEETING FRONTEND] stop_meeting returned:", res);
     let m = null;
@@ -4040,7 +4317,7 @@ async function stopMeetingRecording() {
       m = JSON.parse(resultJson);
     }
 
-    if (m && ['queued','processing'].includes(m.status)) {
+    if (m && ['queued','processing','analyzing'].includes(m.status)) {
       showDashboardView();
       loadMeetings();
       await showAlertDialog({title:"Meeting uploaded",message:"Your meeting is queued for transcription and speaker identification. You can close the app; results will be saved to your meeting history.",type:"info"});
@@ -4055,11 +4332,11 @@ async function stopMeetingRecording() {
   } catch (err) {
     console.error("[MEETING FRONTEND ERROR] Failed to finalize meeting note:", err);
     currentMeetingFile = null;
-    await showAlertDialog({
-      title: "Finalization Failed",
-      message: "Failed to finalize meeting note: " + err,
-      type: "error"
-    });
+    if (recordingSaved) {
+    showToast("Your recording is saved on this device and will upload automatically when available. " + String(err), "Recording saved; upload pending", "warning");
+    } else {
+      showToast("Could not finish saving the recording: " + String(err), "Recording save problem", "error");
+    }
     showDashboardView();
     loadMeetings();
   }

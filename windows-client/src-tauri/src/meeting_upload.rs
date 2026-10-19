@@ -10,6 +10,24 @@ use std::{
     time::Duration,
 };
 static UPLOAD_LOCK: Mutex<()> = Mutex::new(());
+static RETRY_AT: Mutex<BTreeMap<String, std::time::Instant>> = Mutex::new(BTreeMap::new());
+fn defer_retry(filepath: &str, response: &reqwest::blocking::Response) {
+    if !response.status().is_success() {
+        if let Some(seconds) = response
+            .headers()
+            .get("Retry-After")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            if let Some(at) = std::time::Instant::now().checked_add(Duration::from_secs(seconds)) {
+                RETRY_AT
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(filepath.to_string(), at);
+            }
+        }
+    }
+}
 pub fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
@@ -44,15 +62,14 @@ fn manifest_file(path: &Path) -> Result<Value, String> {
     }
     Ok(json!({"size":size,"sha256":format!("{:x}",hash.finalize())}))
 }
-fn response(response: reqwest::blocking::Response) -> Result<Value, String> {
+fn response(response: reqwest::blocking::Response, filepath: &str) -> Result<Value, String> {
+    defer_retry(filepath, &response);
     let status = response.status();
     let body = response.text().map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!(
-            "Meeting server returned {}: {}",
-            status,
-            body.chars().take(300).collect::<String>()
-        ));
+        let message = crate::account_errors::message(status.as_u16(), &body);
+        crate::account_errors::notify("Meetings", &message);
+        return Err(message);
     }
     serde_json::from_str(&body).map_err(|e| e.to_string())
 }
@@ -84,6 +101,7 @@ pub fn upload(filepath: &str) -> Result<String, String> {
             .bearer_auth(&token)
             .send()
             .map_err(|e| e.to_string())?,
+        filepath,
     )?;
     let user = account
         .get("email")
@@ -111,7 +129,7 @@ pub fn upload(filepath: &str) -> Result<String, String> {
             .send()
             .map_err(|e| e.to_string())?;
         if existing.status().is_success() {
-            let state = response(existing)?;
+            let state = response(existing, filepath)?;
             let status = state["status"].as_str().unwrap_or("queued");
             if status != "uploading" {
                 let local_status = if status == "failed" {
@@ -135,7 +153,7 @@ pub fn upload(filepath: &str) -> Result<String, String> {
                 return Ok(state.to_string());
             }
         } else if existing.status().as_u16() != 404 {
-            return Err(format!("Cannot query meeting ({})", existing.status()));
+            return response(existing, filepath).map(|_| String::new());
         }
         let mut manifest = BTreeMap::new();
         for (channel, path) in &files {
@@ -148,6 +166,7 @@ pub fn upload(filepath: &str) -> Result<String, String> {
                 .json(&json!({"id":record.id,"title":record.title,"files":manifest,"language":record.language}))
                 .send()
                 .map_err(|e| e.to_string())?,
+            filepath,
         )?;
         if state["status"] == "uploading" {
             crate::update_meeting_status(filepath, "uploading", None);
@@ -177,7 +196,12 @@ pub fn upload(filepath: &str) -> Result<String, String> {
                         .send()
                         .map_err(|e| e.to_string())?;
                     if !response.status().is_success() {
-                        return Err(format!("Upload interrupted ({})", response.status()));
+                        defer_retry(filepath, &response);
+                        let status = response.status().as_u16();
+                        let body = response.text().unwrap_or_default();
+                        let message = crate::account_errors::message(status, &body);
+                        crate::account_errors::notify("Meetings", &message);
+                        return Err(message);
                     }
                     let next = response
                         .headers()
@@ -197,6 +221,7 @@ pub fn upload(filepath: &str) -> Result<String, String> {
                     .bearer_auth(&token)
                     .send()
                     .map_err(|e| e.to_string())?,
+                filepath,
             )?;
         }
         let status = state["status"].as_str().unwrap_or("queued");
@@ -215,6 +240,12 @@ pub fn upload(filepath: &str) -> Result<String, String> {
         }
         Ok(state.to_string())
     })();
+    if result.is_ok() {
+        RETRY_AT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(filepath);
+    }
     if let Err(error) = &result {
         crate::update_meeting_status(filepath, "failed", Some(error.clone()));
     }
@@ -224,6 +255,7 @@ pub fn start_recovery() {
     std::thread::spawn(|| {
         loop {
             std::thread::sleep(Duration::from_secs(30));
+            crate::meeting_session::release_pending();
             let active = {
                 crate::CURRENT_MEETING_PATH
                     .lock()
@@ -231,6 +263,16 @@ pub fn start_recovery() {
                     .clone()
             };
             for record in crate::load_meeting_index() {
+                if RETRY_AT
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&record.filepath)
+                    .map(|at| *at > std::time::Instant::now())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+
                 if record.status == "completed"
                     || record.status == "uploaded"
                     || record.status == "processing_failed"
@@ -309,6 +351,7 @@ pub fn retry(filepath: &str) -> Result<String, String> {
             .bearer_auth(token)
             .send()
             .map_err(|e| e.to_string())?,
+        filepath,
     )?;
     crate::update_meeting_status(filepath, "queued", None);
     Ok(state.to_string())

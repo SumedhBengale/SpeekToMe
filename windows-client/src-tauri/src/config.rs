@@ -42,7 +42,7 @@ pub struct AppConfig {
     pub api_url: Option<String>,
     
     #[serde(default = "default_hotkey")]
-    pub hotkey: String,       // "Ctrl + Shift", "Ctrl + Space", "Ctrl + Win", "Alt + Space", "Ctrl + Alt", "Shift + Space"
+    pub hotkey: String,       // Validated shortcut name, shared by presets and custom combinations.
     
     #[serde(default = "default_hotkey_mode")]
     pub hotkey_mode: String,  // "hold" | "toggle"
@@ -90,13 +90,16 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn speaking_language(&self) -> String {
         let spoken = self.languages.as_deref().unwrap_or(&[]);
-        if self.active_language == "auto" || spoken.contains(&self.active_language) {
+        if spoken.contains(&self.active_language) && self.active_language != "auto" {
             return self.active_language.clone();
         }
         spoken.first().cloned().unwrap_or_else(|| "en".into())
     }
 
     pub fn normalize_speaking_language(&mut self) {
+        if self.languages.as_ref().map_or(true, |languages| languages.is_empty()) {
+            self.languages = Some(vec!["en".into()]);
+        }
         self.active_language = self.speaking_language();
     }
 }
@@ -228,46 +231,7 @@ pub fn save_config(config: &AppConfig) {
 }
 
 pub fn parse_hotkey_combo(name: &str) -> u32 {
-    let lower = name.to_lowercase();
-    let mut mask: u32 = 0;
-    let mut vk: u32 = 0;
-
-    if lower.contains("right alt") || lower.contains("ralt") {
-        vk = 0xA5; // VK_RMENU
-    } else if lower.contains("caps lock") || lower.contains("capslock") {
-        vk = 0x14; // VK_CAPITAL
-    } else if lower.contains("f8") {
-        vk = 0x77; // VK_F8
-    } else if lower.contains("f9") {
-        vk = 0x78; // VK_F9
-    } else if lower.contains("f12") {
-        vk = 0x7B; // VK_F12
-    } else {
-        if lower.contains("ctrl") || lower.contains("control") {
-            mask |= HOTKEY_CTRL;
-        }
-        if lower.contains("shift") {
-            mask |= HOTKEY_SHIFT;
-        }
-        if lower.contains("alt") {
-            mask |= HOTKEY_ALT;
-        }
-        if lower.contains("win") {
-            mask |= HOTKEY_WIN;
-        }
-        if lower.contains("space") {
-            vk = 0x20; // VK_SPACE
-        } else if lower.ends_with("+ z") || lower.ends_with(" z") || lower == "z" {
-            vk = 0x5A; // VK_Z
-        }
-    }
-
-    if mask == 0 && vk == 0 {
-        // Fallback default: Ctrl + Win
-        mask = HOTKEY_CTRL | HOTKEY_WIN;
-    }
-
-    (vk << 16) | (mask & 0xFFFF)
+    crate::hotkey::parse(name).map(|h| h.combo).unwrap_or(HOTKEY_CTRL | HOTKEY_WIN)
 }
 
 #[cfg(test)]
@@ -283,7 +247,29 @@ mod speaking_language_tests {
         assert_eq!(config.active_language, "hi");
     }
     #[test]
-    fn automatic_is_explicit_and_removed_languages_fall_back() {
+    fn empty_saved_languages_start_with_starred_english() {
+        let mut config = AppConfig::default();
+        for languages in [None, Some(vec![])] {
+            config.languages = languages;
+            config.active_language = String::new();
+            config.normalize_speaking_language();
+            assert_eq!(config.languages, Some(vec!["en".into()]));
+            assert_eq!(config.active_language, "en");
+        }
+    }
+    #[test]
+    fn removing_the_star_uses_the_first_remaining_language() {
+        let mut config = AppConfig::default();
+        config.languages = Some(vec!["fr".into(), "hi".into()]);
+        config.active_language = "en".into();
+        config.normalize_speaking_language();
+        assert_eq!(config.active_language, "fr");
+        config.active_language = "auto".into();
+        config.normalize_speaking_language();
+        assert_eq!(config.active_language, "fr");
+    }
+    #[test]
+    fn removed_or_automatic_languages_fall_back_to_first_saved_language() {
         let mut config = AppConfig::default();
         config.languages = Some(vec!["en".into(), "hi".into()]);
         assert_eq!(config.speaking_language(), "en");
@@ -292,8 +278,8 @@ mod speaking_language_tests {
         config.languages = Some(vec!["en".into()]);
         assert_eq!(config.speaking_language(), "en");
         config.active_language = "auto".into();
-        assert_eq!(config.speaking_language(), "auto");
+        assert_eq!(config.speaking_language(), "en");
         let restored: AppConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
-        assert_eq!(restored.speaking_language(), "auto");
+        assert_eq!(restored.speaking_language(), "en");
     }
 }

@@ -25,15 +25,10 @@ pub fn quit(app: &tauri::AppHandle) {
     // Best-effort audio finalization runs off the UI thread and cannot extend
     // the hard deadline. Existing local recording recovery handles interruptions.
     std::thread::spawn(|| {
-        if let Some(state) = crate::STATE.get() {
-            if let Ok(mut state) = state.try_lock() {
-                if let Some(stop) = state.stop_tx.take() {
-                    let _ = stop.send(true);
-                }
-            }
-        }
+        crate::shortcuts::cancel();
         if crate::audio::MEETING_STATE.get().is_some() {
             let _ = crate::audio::stop_meeting_recording();
+            crate::meeting_session::finish();
         }
     });
     app.exit(0);

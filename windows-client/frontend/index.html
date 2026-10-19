@@ -279,17 +279,19 @@
                 </div>
               </div>
               <div class="setting-control">
-                <select id="onboard-hotkey-select" class="fluent-select">
+                <div class="hotkey-picker"><select id="onboard-hotkey-select" class="fluent-select">
                   <option value="Ctrl + Win">Ctrl + Windows (Recommended)</option>
-                  <option value="Alt + Space">Alt + Space</option>
                   <option value="Ctrl + Space">Ctrl + Space</option>
                   <option value="Right Alt">Right Alt (Single Key)</option>
                   <option value="F8">F8 (Single Key)</option>
-                  <option value="Ctrl + Shift + Z">Ctrl + Shift + Z</option>
                   <option value="Ctrl + Shift">Ctrl + Shift</option>
                   <option value="Ctrl + Alt">Ctrl + Alt</option>
                   <option value="Shift + Space">Shift + Space</option>
                 </select>
+<button type="button" class="hotkey-record-btn" id="onboard-hotkey-record">Record shortcut</button>
+<span class="hotkey-record-hint" id="onboard-hotkey-record-hint" aria-live="polite">Use modifiers with a letter, number or navigation key, or a function key alone. Reserved shortcuts cannot be used. Some other apps may have bindings that cannot be detected.</span>
+<div class="hotkey-conflict-warning" id="onboard-hotkey-conflict-warning" role="status" aria-live="polite" hidden></div>
+</div>
               </div>
             </div>
 
@@ -386,20 +388,18 @@
         <!-- Step 4: Spoken Languages -->
         <div class="onboarding-step" id="onboard-step-4">
           <h2>Spoken Languages</h2>
-          <p class="step-desc">Save the languages you speak, then choose one speaking language for each recording.</p>
+          <p class="step-desc">Add up to 5 languages. Star the language you want to use for transcription.</p>
 
           <input type="hidden" id="onboard-model-select" value="whisper-large-v3-turbo">
 
           <div class="settings-card compact-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <label class="setting-title">Spoken Languages</label>
+              <label class="setting-title">Languages I Speak</label>
               <span id="onboard-lang-count" class="lang-count-badge">1/5</span>
             </div>
-            <span class="setting-hint" style="margin-bottom: 8px; display: block;">This list makes your languages available in the speaking language selector.</span>
-            <label for="onboard-speaking-language" class="setting-title">Speaking language</label>
-            <select id="onboard-speaking-language" class="fluent-select"><option value="auto">Automatic</option></select>
-            <span class="setting-hint" style="display:block;margin-bottom:12px">Automatic detects the language. Changes apply to the next recording.</span>
-            <div id="onboard-lang-chips" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
+            <p class="setting-hint" style="margin-bottom: 12px;">Your first language is starred automatically. Click another star to change your current language.</p>
+            <div id="onboard-lang-chips" class="languages-chips-list" aria-label="Saved languages" style="margin-bottom: 12px;"></div>
+            <p id="onboard-language-status" class="setting-hint" aria-live="polite" style="margin-bottom: 12px;">English is your current language. Changes apply to your next recording.</p>
             <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
               <div style="position: relative; flex: 1;">
                 <input type="text" id="onboard-lang-search-input" class="fluent-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
@@ -627,24 +627,25 @@
               <div class="setting-info">
                 <label for="hotkey-select" class="setting-title">Trigger Hotkey</label>
                 <span class="setting-desc">Choose the keyboard shortcut to activate SpeekTo.Me.</span>
+                <div id="linux-capability-status" class="shortcut-status" role="status" aria-live="polite" hidden></div>
               </div>
             </div>
             <div class="setting-control">
-              <select id="hotkey-select" class="fluent-select">
+              <div class="hotkey-picker"><select id="hotkey-select" class="fluent-select">
                 <option value="Ctrl + Win">Ctrl + Windows (Recommended)</option>
-                <option value="Alt + Space">Alt + Space</option>
                 <option value="Ctrl + Space">Ctrl + Space</option>
                 <option value="Right Alt">Right Alt (Single Key)</option>
                 <option value="F8">F8 (Single Key)</option>
-                <option value="Ctrl + Shift + Z">Ctrl + Shift + Z</option>
                 <option value="Ctrl + Shift">Ctrl + Shift</option>
                 <option value="Ctrl + Alt">Ctrl + Alt</option>
                 <option value="Shift + Space">Shift + Space</option>
               </select>
+<button type="button" class="hotkey-record-btn" id="hotkey-record">Record shortcut</button>
+<span class="hotkey-record-hint" id="hotkey-record-hint" aria-live="polite">Use modifiers with a letter, number or navigation key, or a function key alone. Reserved shortcuts cannot be used. Some other apps may have bindings that cannot be detected.</span>
+<div class="hotkey-conflict-warning" id="hotkey-conflict-warning" role="status" aria-live="polite" hidden></div>
+</div>
             </div>
           </div>
-
-          <div id="linux-capability-status" class="setting-hint" role="status" aria-live="polite" hidden></div>
 
           <!-- Trigger Mode -->
           <div class="setting-row">
@@ -682,23 +683,16 @@
               </svg>
             </div>
             <div class="languages-header-content">
-              <h3 class="languages-card-title">Languages I speak</h3>
+              <h3 class="languages-card-title">Languages I Speak</h3>
               <p class="languages-card-desc">
-                Save the languages you speak. Choose one speaking language below or from the tray menu.
+                Save up to 5 languages. Star one to use for transcription.
               </p>
             </div>
             <span id="client-lang-count" class="lang-pill-count">1 / 5</span>
           </div>
 
           <div class="languages-section-group">
-            <label class="languages-section-label" for="client-speaking-language">Speaking language</label>
-            <select id="client-speaking-language" class="fluent-select"><option value="auto">Automatic</option></select>
-            <p class="setting-hint">Switch quickly by right-clicking the tray icon. Changes apply to the next recording. Automatic lets ASR detect the language.</p>
-          </div>
-          <div class="languages-divider"></div>
-          <div class="languages-section-group">
-            <div class="languages-section-label">Languages I speak</div>
-            <div id="client-lang-chips" class="languages-chips-list">
+            <div id="client-lang-chips" class="languages-chips-list" aria-label="Saved languages">
               <!-- Rendered dynamically -->
             </div>
           </div>
@@ -726,7 +720,7 @@
               <line x1="12" y1="16" x2="12" y2="12"></line>
               <line x1="12" y1="8" x2="12.01" y2="8"></line>
             </svg>
-            <span>You can add up to 5 languages.</span>
+            <span id="client-language-status" aria-live="polite">English is your current language. Changes apply to your next recording.</span>
           </div>
         </div>
 
@@ -890,7 +884,7 @@
               <span class="plan-pill-tag">PRO</span>
             </div>
             <p class="dictation-feature-desc">
-              Select text in any application and double-tap your hotkey to rewrite, edit, format, or transform it with voice commands.
+              Select text to rewrite, edit, format, or transform it with voice commands. In Push to Talk, tap once, then hold the hotkey to speak your command. In Hands-Free, double-tap to start Command Mode, then tap once to submit.
             </p>
             <div id="command-mode-pro-hint" class="streaming-pro-hint" style="display: none; margin-top: 6px;">
               Pro plan feature. Upgrade on your Web Dashboard to unlock AI command mode.
@@ -1146,25 +1140,29 @@
                 <span class="account-row-label">Activated On</span>
                 <span id="sub-activated" class="account-row-val">N/A</span>
               </div>
-              <div class="account-row">
-                <span class="account-row-label">Transcribed</span>
-                <span id="sub-usage" class="account-row-val">0 seconds</span>
-              </div>
 
-              <div class="account-table-dashed-divider"></div>
-
-              <div class="account-usage-section">
-                <div class="account-usage-header">
-                  <span>Usage</span>
-                  <span id="sub-usage-percent" class="account-usage-text">0s / 1h</span>
-                </div>
-                <div class="account-progress-track">
-                  <div id="sub-usage-bar" class="account-progress-fill" style="width: 0%;"></div>
-                </div>
-              </div>
             </div>
           </div>
 
+          <div class="settings-card account-card" id="transcription-usage">
+            <div class="account-card-header">Transcription</div>
+            <div class="account-table-body">
+              <div class="account-row"><span class="account-row-label">Monthly usage</span><span id="sub-usage" class="account-row-val">0 seconds</span></div>
+              <div class="account-row"><span class="account-row-label">Monthly limit</span><span id="sub-usage-percent" class="account-usage-text">—</span></div>
+            </div>
+          </div>
+
+          <div class="settings-card account-card command-allowance" id="command-allowance">
+            <div class="account-card-header">Command Mode</div>
+            <div class="command-allowance-heading account-row">
+              <span class="account-row-label">Monthly usage</span>
+              <span id="command-remaining" class="command-remaining" role="status">Usage unavailable</span>
+            </div>
+            <div class="command-allowance-body">
+              <progress id="command-usage-meter" max="100" value="0" aria-label="Command Mode monthly usage limit used" hidden></progress>
+              <p id="command-reset" class="command-usage-note"></p>
+            </div>
+          </div>
           <button id="logout-btn" class="account-logout-btn">Log Out</button>
         </div>
       </div>

@@ -7,7 +7,6 @@ mod win32_impl {
     use std::ptr;
     use std::sync::atomic::Ordering;
     use std::sync::Mutex;
-    use std::thread;
     use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, RECT};
@@ -1389,36 +1388,6 @@ mod win32_impl {
         }
     }
 
-    unsafe fn get_active_modifier_mask(vk_code: u32, is_keydown: bool) -> u32 {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-        let mut mask = 0;
-
-        let ctrl_pressed = (GetAsyncKeyState(0x11) as u16 & 0x8000) != 0;
-        let shift_pressed = (GetAsyncKeyState(0x10) as u16 & 0x8000) != 0;
-        let alt_pressed = (GetAsyncKeyState(0x12) as u16 & 0x8000) != 0;
-        let win_pressed = ((GetAsyncKeyState(0x5B) as u16 & 0x8000) != 0) || ((GetAsyncKeyState(0x5C) as u16 & 0x8000) != 0);
-
-        let is_ctrl = vk_code == 0x11 || vk_code == 0xA2 || vk_code == 0xA3;
-        let is_shift = vk_code == 0x10 || vk_code == 0xA0 || vk_code == 0xA1;
-        let is_alt = vk_code == 0x12 || vk_code == 0xA4 || vk_code == 0xA5;
-        let is_win = vk_code == 0x5B || vk_code == 0x5C;
-
-        if (ctrl_pressed && (!is_ctrl || is_keydown)) || (is_ctrl && is_keydown) {
-            mask |= crate::config::HOTKEY_CTRL;
-        }
-        if (shift_pressed && (!is_shift || is_keydown)) || (is_shift && is_keydown) {
-            mask |= crate::config::HOTKEY_SHIFT;
-        }
-        if (alt_pressed && (!is_alt || is_keydown)) || (is_alt && is_keydown) {
-            mask |= crate::config::HOTKEY_ALT;
-        }
-        if (win_pressed && (!is_win || is_keydown)) || (is_win && is_keydown) {
-            mask |= crate::config::HOTKEY_WIN;
-        }
-
-        mask
-    }
-
     fn is_key_part_of_combo(vk_code: u32, req_modifiers: u32, req_vk: u32) -> bool {
         if req_vk != 0 && vk_code == req_vk {
             return true;
@@ -1457,349 +1426,64 @@ mod win32_impl {
         !is_modifier_key(vk_code)
     }
 
-    static LAST_HOTKEY_PRESS_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-    static LAST_HOTKEY_RELEASE_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    // Latch the physical chord independently from recording state. The chord
+    // remains down while processing or copying selected text, so repeats and
+    // trailing modifier releases cannot count as another input.
+    static PHYSICAL_CHORD: std::sync::OnceLock<Mutex<crate::gestures::ChordLatch>> = std::sync::OnceLock::new();
     static LAST_WIN_HOTKEY_ACTIVE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
     pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code >= 0 {
-            let kb_struct = *(lparam as *const KBDLLHOOKSTRUCT);
-
-            // Never process synthetic or software-injected keystrokes (SendInput, keybd_event).
-            // Bit 4 (0x10) = LLKHF_INJECTED (injected from any process)
-            // Bit 1 (0x02) = LLKHF_LOWER_IL_INJECTED (injected from lower integrity process)
-            if (kb_struct.flags & 0x12) != 0 || crate::SIMULATING_KEY.load(Ordering::SeqCst) {
-                return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+        if code < 0 { return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam); }
+        let kb = *(lparam as *const KBDLLHOOKSTRUCT);
+        // Ignore injected input, but keep real releases even while the app is
+        // copying a selection. SIMULATING_KEY used to swallow those releases.
+        if (kb.flags & 0x12) != 0 {
+            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+        }
+        let vk = kb.vkCode;
+        let combo = crate::ACTIVE_HOTKEY_COMBO.load(Ordering::Relaxed);
+        let modifiers = combo & 0xFFFF;
+        let trigger = combo >> 16;
+        let down = wparam as u32 == WM_KEYDOWN || wparam as u32 == WM_SYSKEYDOWN;
+        let up = wparam as u32 == WM_KEYUP || wparam as u32 == WM_SYSKEYUP;
+        let part = is_key_part_of_combo(vk, modifiers, trigger);
+        let mut chord = PHYSICAL_CHORD.get_or_init(|| Mutex::new(crate::gestures::ChordLatch::default()))
+            .lock().unwrap_or_else(|e| e.into_inner());
+        if crate::shortcuts::selecting() || !crate::HOTKEY_ALLOWED.load(Ordering::SeqCst) {
+            if down || up { let _ = chord.edge(vk, down, combo); }
+            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+        }
+        let was_active = chord.active();
+        let edge = if down || up { chord.edge(vk, down, combo) } else { None };
+        let mut suppress = part && (was_active || chord.active()) && should_suppress_key(vk);
+        if down && was_active && !part && crate::ACTIVE_HOTKEY_MODE.load(Ordering::Relaxed) == 0
+            && crate::shortcuts::is_capturing() {
+            crate::shortcuts::cancel();
+        }
+        if let Some(pressed) = edge {
+            if pressed && !crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::SeqCst) {
+                show_tray_notification("SpeekTo.Me — Sign In Required",
+                    "Please sign in in Settings to start voice dictation.", NotificationLevel::Warning);
+                if let Some(app) = crate::TAURI_APP.get() { crate::show_or_create_settings_window(app); }
+            } else {
+                crate::shortcuts::on_edge(pressed);
             }
-
-            let vk_code = kb_struct.vkCode;
-            
-            let combo_code = crate::ACTIVE_HOTKEY_COMBO.load(Ordering::Relaxed);
-            let is_toggle_mode = crate::ACTIVE_HOTKEY_MODE.load(Ordering::Relaxed) == 1;
-            let req_modifiers = combo_code & 0xFFFF;
-            let req_vk = (combo_code >> 16) as u32;
-
-            let wparam_usize = wparam as usize;
-            let is_down = wparam_usize == WM_KEYDOWN as usize || wparam_usize == WM_SYSKEYDOWN as usize;
-            let is_up = wparam_usize == WM_KEYUP as usize || wparam_usize == WM_SYSKEYUP as usize;
-
-            if is_down {
-                let mod_mask = get_active_modifier_mask(vk_code, true);
-                let modifiers_match = (mod_mask & req_modifiers) == req_modifiers;
-                let trigger_match = if req_vk != 0 {
-                    vk_code == req_vk && modifiers_match
-                } else {
-                    mod_mask == req_modifiers && is_key_part_of_combo(vk_code, req_modifiers, req_vk)
-                };
-
-                let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-
-                if is_toggle_mode {
-                    if trigger_match {
-                        if crate::ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
-                            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
-                        }
-                        if (req_modifiers & crate::config::HOTKEY_WIN) != 0 {
-                            crate::keyboard::suppress_win_key_start_menu();
-                        }
-                        let now = std::time::Instant::now();
-                        if state.is_key_held {
-                            let elapsed = state.press_time.map(|t| now.duration_since(t)).unwrap_or_default();
-                            if elapsed <= Duration::from_millis(1000) && !state.is_command_mode && crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst) {
-                                // Double tap in toggle mode within 1 second!
-                                state.is_command_mode = true;
-                                set_preview_text("✨ Command Mode (Listening...)");
-                                thread::spawn(move || {
-                                    let selected = crate::keyboard::get_selected_text();
-                                    println!("\n=======================================================");
-                                    println!("✨ [COMMAND MODE ACTIVATED — DOUBLE-TAP DETECTED]");
-                                    match &selected {
-                                        Some(text) if !text.trim().is_empty() => {
-                                            let words = text.split_whitespace().count();
-                                            println!("Selected text from active application ({} characters, {} words):", text.trim().len(), words);
-                                            println!("-------------------------------------------------------");
-                                            println!("{}", text.trim());
-                                            let max_words = crate::get_transform_word_limit();
-                                            if words > max_words {
-                                                println!("[COMMAND MODE WARNING] Selected text exceeds {} words.", max_words);
-                                                show_tray_notification(
-                                                    "SpeekTo.Me — Text Too Long",
-                                                    &format!("Text longer than {} words is not supported at the moment.", max_words),
-                                                    NotificationLevel::Warning,
-                                                );
-                                            }
-                                        }
-                                        _ => {
-                                            println!("(No text was selected in the active application)");
-                                        }
-                                    }
-                                    println!("=======================================================\n");
-
-                                    let mut s = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                                    s.selected_text = selected;
-                                });
-                                if should_suppress_key(vk_code) {
-                                    return 1;
-                                }
-                                return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
-                            }
-
-                            // Toggle off: Stop recording & enter Processing state
-                            state.is_key_held = false;
-                            state.press_time = None;
-                            set_preview_state(PreviewState::Processing);
-                            if let Some(tx) = state.stop_tx.take() {
-                                let _ = tx.send(true);
-                            }
-                        } else {
-                            // Toggle on: Start recording
-                            let has_token = crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::Relaxed);
-                            if !has_token {
-                                windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x00000010);
-                                show_tray_notification(
-                                    "SpeekTo.Me — Sign In Required",
-                                    "Please sign in to your SpeekTo.Me account in Settings to start voice dictation.",
-                                    NotificationLevel::Warning,
-                                );
-                                if let Some(app) = crate::TAURI_APP.get() {
-                                    crate::show_or_create_settings_window(app);
-                                }
-                                println!("Please log in from SpeekTo.Me Settings before dictating!");
-                                return if should_suppress_key(vk_code) { 1 } else { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
-                            }
-                            state.is_key_held = true;
-                            state.is_command_mode = false;
-                            state.selected_text = None;
-                            state.press_time = Some(now);
-                            set_preview_text("");
-                            set_preview_state(PreviewState::Listening);
-                            show_overlay();
-                            play_chime(true);
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            state.stop_tx = Some(tx);
-                            thread::spawn(move || {
-                                crate::audio::recording_thread(rx);
-                            });
-                        }
-                        if should_suppress_key(vk_code) {
-                            return 1;
-                        }
-                    }
-                } else {
-                    // Hold Mode (Push-to-Talk)
-                    if state.is_key_held {
-                        if is_key_part_of_combo(vk_code, req_modifiers, req_vk) {
-                            if (req_modifiers & crate::config::HOTKEY_WIN) != 0 && (vk_code == 0x5B || vk_code == 0x5C) {
-                                *LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
-                            }
-                            // Suppress auto-repeat for action keys and Win key so characters/Start menu never trigger
-                            if should_suppress_key(vk_code) {
-                                return 1;
-                            }
-                        } else {
-                            // 3rd-key detection! Abort recording cleanly
-                            state.is_key_held = false;
-                            state.press_time = None;
-                            if let Some(tx) = state.stop_tx.take() {
-                                let _ = tx.send(false); // abort recording
-                            }
-                            hide_overlay();
-                            hide_preview();
-                            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
-                        }
-                    } else if trigger_match {
-                        if crate::ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
-                            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
-                        }
-                        if (req_modifiers & crate::config::HOTKEY_WIN) != 0 {
-                            *LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
-                            crate::keyboard::suppress_win_key_start_menu();
-                        }
-                        let has_token = crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::Relaxed);
-                        if !has_token {
-                            windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x00000010);
-                            show_tray_notification(
-                                "SpeekTo.Me — Sign In Required",
-                                "Please sign in to your SpeekTo.Me account in Settings to start voice dictation.",
-                                NotificationLevel::Warning,
-                            );
-                            if let Some(app) = crate::TAURI_APP.get() {
-                                crate::show_or_create_settings_window(app);
-                            }
-                            println!("Please log in from SpeekTo.Me Settings before dictating!");
-                            return if should_suppress_key(vk_code) { 1 } else { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
-                        }
-
-                        let now = std::time::Instant::now();
-                        let is_double_press = {
-                            let mut last_press = LAST_HOTKEY_PRESS_TIME.lock().unwrap_or_else(|e| e.into_inner());
-                            let mut last_release = LAST_HOTKEY_RELEASE_TIME.lock().unwrap_or_else(|e| e.into_inner());
-
-                            let hit = if let Some(t_rel) = *last_release {
-                                now.duration_since(t_rel) <= Duration::from_millis(1000)
-                            } else if let Some(t_press) = *last_press {
-                                now.duration_since(t_press) <= Duration::from_millis(1200)
-                            } else {
-                                false
-                            };
-
-                            if hit {
-                                *last_press = None;
-                                *last_release = None;
-                                true
-                            } else {
-                                *last_press = Some(now);
-                                false
-                            }
-                        };
-
-                        let cmd_enabled = crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst);
-                        state.is_key_held = true;
-                        state.press_time = Some(now);
-                        state.is_command_mode = is_double_press && cmd_enabled;
-                        state.selected_text = None;
-
-                        if is_double_press && cmd_enabled {
-                            set_preview_text("✨ Command Mode (Listening...)");
-                            thread::spawn(move || {
-                                let selected = crate::keyboard::get_selected_text();
-                                println!("\n=======================================================");
-                                println!("✨ [COMMAND MODE ACTIVATED — DOUBLE-PRESS DETECTED]");
-                                match &selected {
-                                    Some(text) if !text.trim().is_empty() => {
-                                        let words = text.split_whitespace().count();
-                                        println!("Selected text from active application ({} characters, {} words):", text.trim().len(), words);
-                                        println!("-------------------------------------------------------");
-                                        println!("{}", text.trim());
-                                        let max_words = crate::get_transform_word_limit();
-                                        if words > max_words {
-                                            println!("[COMMAND MODE WARNING] Selected text exceeds {} words.", max_words);
-                                            show_tray_notification(
-                                                "SpeekTo.Me — Text Too Long",
-                                                &format!("Text longer than {} words is not supported at the moment.", max_words),
-                                                NotificationLevel::Warning,
-                                            );
-                                        }
-                                    }
-                                    _ => {
-                                        println!("(No text was selected in the active application)");
-                                    }
-                                }
-                                println!("=======================================================\n");
-
-                                let mut s = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                                s.selected_text = selected;
-                            });
-                        } else {
-                            set_preview_text("");
-                        }
-
-                        set_preview_state(PreviewState::Listening);
-                        show_overlay();
-                        play_chime(true);
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        state.stop_tx = Some(tx);
-                        thread::spawn(move || {
-                            crate::audio::recording_thread(rx);
-                        });
-
-                        if should_suppress_key(vk_code) {
-                            return 1;
-                        }
-                    }
-                }
-            } else if is_up {
-                // If our hotkey combo uses the Windows key and a Win key is released,
-                // check if the hotkey was active or released within the last 600ms.
-                // This ensures trailing Win key releases (when user releases Ctrl slightly before Win)
-                // NEVER trigger the Windows Start Menu!
-                if (req_modifiers & crate::config::HOTKEY_WIN) != 0 && (vk_code == 0x5B || vk_code == 0x5C) {
-                    let was_active_recently = {
-                        let last_active = LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
-                        last_active.map(|t| t.elapsed() < Duration::from_millis(600)).unwrap_or(false)
-                    };
-                    let is_held = {
-                        let state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                        state.is_key_held
-                    };
-                    if was_active_recently || is_held {
-                        crate::keyboard::suppress_win_key_start_menu();
-                        if !is_toggle_mode && is_held {
-                            let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                            let now = std::time::Instant::now();
-                            let press_dur = state.press_time.map(|t| now.duration_since(t)).unwrap_or_default();
-                            if state.is_command_mode {
-                                *LAST_HOTKEY_RELEASE_TIME.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                                *LAST_HOTKEY_PRESS_TIME.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                            } else {
-                                *LAST_HOTKEY_RELEASE_TIME.lock().unwrap_or_else(|e| e.into_inner()) = Some(now);
-                            }
-                            state.is_key_held = false;
-                            state.press_time = None;
-
-                            if press_dur < Duration::from_millis(350) && !state.is_command_mode && crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst) {
-                                if let Some(tx) = state.stop_tx.take() {
-                                    let _ = tx.send(false);
-                                }
-                                hide_overlay();
-                                hide_preview();
-                                return 1;
-                            }
-
-                            set_preview_state(PreviewState::Processing);
-                            if let Some(tx) = state.stop_tx.take() {
-                                let _ = tx.send(true);
-                            }
-                        }
-                        return 1;
-                    }
-                }
-
-                if !is_toggle_mode {
-                    let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                    if state.is_key_held && is_key_part_of_combo(vk_code, req_modifiers, req_vk) {
-                        if (req_modifiers & crate::config::HOTKEY_WIN) != 0 {
-                            *LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
-                            crate::keyboard::suppress_win_key_start_menu();
-                        }
-                        let now = std::time::Instant::now();
-                        let press_dur = state.press_time.map(|t| now.duration_since(t)).unwrap_or_default();
-                        if state.is_command_mode {
-                            *LAST_HOTKEY_RELEASE_TIME.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                            *LAST_HOTKEY_PRESS_TIME.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                        } else {
-                            *LAST_HOTKEY_RELEASE_TIME.lock().unwrap_or_else(|e| e.into_inner()) = Some(now);
-                        }
-
-                        state.is_key_held = false;
-                        state.press_time = None;
-
-                        if press_dur < Duration::from_millis(350) && !state.is_command_mode && crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst) {
-                            // Quick tap in hold mode (< 350ms):
-                            // This is the first tap of a potential double-tap! Abort the brief tap cleanly so it doesn't transcribe silence
-                            if let Some(tx) = state.stop_tx.take() {
-                                let _ = tx.send(false);
-                            }
-                            hide_overlay();
-                            hide_preview();
-                            if should_suppress_key(vk_code) {
-                                return 1;
-                            }
-                            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
-                        }
-
-                        set_preview_state(PreviewState::Processing);
-                        if let Some(tx) = state.stop_tx.take() {
-                            let _ = tx.send(true);
-                        }
-                        if should_suppress_key(vk_code) {
-                            return 1;
-                        }
-                    }
+        }
+        if (modifiers & crate::config::HOTKEY_WIN) != 0 {
+            if chord.active() || was_active {
+                *LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+                crate::keyboard::suppress_win_key_start_menu();
+            }
+            if up && matches!(vk, 0x5B | 0x5C) {
+                let recent = LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
+                    .is_some_and(|at| at.elapsed() < Duration::from_millis(600));
+                if recent {
+                    crate::keyboard::suppress_win_key_start_menu();
+                    suppress = true;
                 }
             }
         }
-        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+        if suppress { 1 } else { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
     }
 
     static CURRENT_TRAY_HICON: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);

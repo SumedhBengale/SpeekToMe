@@ -1,0 +1,1690 @@
+{
+  "version": 1,
+  "reviewed": "2026-10-18",
+  "sources": {
+    "windows": "https://support.microsoft.com/en-us/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec",
+    "windows-apps": "https://support.microsoft.com/en-us/accessibility/windows/keyboard-shortcuts-in-windows",
+    "gnome": "https://developer.gnome.org/hig/reference/keyboard.html",
+    "apple": "https://support.apple.com/en-us/102650",
+    "windows-registration": "https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey",
+    "edge": "https://support.microsoft.com/en-us/edge/keyboard-shortcuts-in-microsoft-edge",
+    "kde": "https://api.kde.org/kstandardshortcut.html"
+  },
+  "entries": [
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + A",
+      "action": "Select All",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + A",
+      "action": "Select All",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + C",
+      "action": "Copy",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Insert",
+      "action": "Copy",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + C",
+      "action": "Copy",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + X",
+      "action": "Cut",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Shift + Delete",
+      "action": "Cut",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + X",
+      "action": "Cut",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + V",
+      "action": "Paste",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Shift + Insert",
+      "action": "Paste",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + V",
+      "action": "Paste",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Z",
+      "action": "Undo",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Z",
+      "action": "Undo",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Y",
+      "action": "Redo",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Shift + Z",
+      "action": "Redo (common app convention)",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + Z",
+      "action": "Redo",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + S",
+      "action": "Save",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + S",
+      "action": "Save",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Shift + S",
+      "action": "Save as",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + S",
+      "action": "Save as",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + O",
+      "action": "Open",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + O",
+      "action": "Open",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + N",
+      "action": "New document",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + N",
+      "action": "New document",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + P",
+      "action": "Print",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + P",
+      "action": "Print",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + F",
+      "action": "Find",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + F",
+      "action": "Find",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + G",
+      "action": "Find next",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "F3",
+      "action": "Find next",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + G",
+      "action": "Find next",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Shift + G",
+      "action": "Find previous",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Shift + F3",
+      "action": "Find previous",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + G",
+      "action": "Find previous",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + W",
+      "action": "Close document",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + F4",
+      "action": "Close document",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + W",
+      "action": "Close document",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "F1",
+      "action": "Help",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "F1",
+      "action": "Help",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + R",
+      "action": "Refresh",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "F5",
+      "action": "Refresh",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + R",
+      "action": "Refresh",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + L",
+      "action": "Focus location",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + L",
+      "action": "Focus location",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + B",
+      "action": "Bold",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + B",
+      "action": "Bold",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + I",
+      "action": "Italic",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + I",
+      "action": "Italic",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + U",
+      "action": "Underline",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + U",
+      "action": "Underline",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Tab",
+      "action": "Next tab",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Page Down",
+      "action": "Next tab",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Shift + Tab",
+      "action": "Previous tab",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Page Up",
+      "action": "Previous tab",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + 0",
+      "action": "Zoom reset",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + 0",
+      "action": "Zoom reset",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Home",
+      "action": "Document start",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Home",
+      "action": "Document start",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + End",
+      "action": "Document end",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + End",
+      "action": "Document end",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Left",
+      "action": "Word navigation",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Right",
+      "action": "Word navigation",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Left",
+      "action": "Word navigation",
+      "source": "kde"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Right",
+      "action": "Word navigation",
+      "source": "kde"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Shift + Left",
+      "action": "Select by word",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Shift + Right",
+      "action": "Select by word",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Shift + Home",
+      "action": "Select line",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Shift + End",
+      "action": "Select line",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + V",
+      "action": "Paste special",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + A",
+      "action": "Deselect",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Q",
+      "action": "Quit",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + H",
+      "action": "Replace",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "F9",
+      "action": "Side pane",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "F10",
+      "action": "Menu",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + P",
+      "action": "Print preview",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + M",
+      "action": "Send",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + Enter",
+      "action": "Properties",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + D",
+      "action": "Bookmark",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Alt + D",
+      "action": "Edit bookmarks",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + Left",
+      "action": "Back",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + Right",
+      "action": "Forward",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + Up",
+      "action": "Parent location",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + Home",
+      "action": "Home location",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + Tab",
+      "action": "Window switch",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Shift + Alt + Tab",
+      "action": "Window switch",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + F6",
+      "action": "Window switch",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Shift + Alt + F6",
+      "action": "Window switch",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + F4",
+      "action": "Close window",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + F7",
+      "action": "Move window",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + F8",
+      "action": "Resize window",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + F5",
+      "action": "Restore window",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Alt + Tab",
+      "action": "System area switch",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + Alt + Tab",
+      "action": "System area switch",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "linux"
+      ],
+      "combination": "Alt + Space",
+      "action": "Window menu",
+      "source": "gnome"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Alt + Tab",
+      "action": "Window switch",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Shift + Alt + Tab",
+      "action": "Window switch",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Alt + Tab",
+      "action": "Window switch",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Alt + Space",
+      "action": "Window menu",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Alt + F4",
+      "action": "Close window",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "F2",
+      "action": "Rename",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Shift + Escape",
+      "action": "Task Manager",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Escape",
+      "action": "Start menu",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Shift",
+      "action": "Keyboard layout switch",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Up",
+      "action": "Paragraph navigation",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Down",
+      "action": "Paragraph navigation",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + L",
+      "action": "Lock screen",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + D",
+      "action": "Show desktop",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + E",
+      "action": "File Explorer",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + R",
+      "action": "Run",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + I",
+      "action": "Settings",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + Tab",
+      "action": "Task view",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + S",
+      "action": "Search",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + A",
+      "action": "Quick settings",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + V",
+      "action": "Clipboard history",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Shift + Win + S",
+      "action": "Screenshot",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + Left",
+      "action": "Arrange window",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + Right",
+      "action": "Arrange window",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + Up",
+      "action": "Arrange window",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + Down",
+      "action": "Arrange window",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + Space",
+      "action": "Input language",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + U",
+      "action": "Accessibility settings",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + P",
+      "action": "Project display",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + X",
+      "action": "Quick link menu",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Win + M",
+      "action": "Minimize windows",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Shift + Win + M",
+      "action": "Restore windows",
+      "source": "windows"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "F12",
+      "action": "Debugger-reserved key",
+      "source": "windows-registration"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + A",
+      "action": "Select All",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + C",
+      "action": "Copy",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + X",
+      "action": "Cut",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + V",
+      "action": "Paste",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Z",
+      "action": "Undo",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + Z",
+      "action": "Redo",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + S",
+      "action": "Save",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + O",
+      "action": "Open",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + N",
+      "action": "New window",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + P",
+      "action": "Print",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + F",
+      "action": "Find",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + G",
+      "action": "Find next",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + G",
+      "action": "Find previous",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + W",
+      "action": "Close window",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Alt + Cmd + W",
+      "action": "Close all windows",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Q",
+      "action": "Quit",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + H",
+      "action": "Hide app",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Alt + Cmd + H",
+      "action": "Hide other apps",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + M",
+      "action": "Minimize",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Alt + Cmd + M",
+      "action": "Minimize app windows",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Tab",
+      "action": "Switch apps",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + Tab",
+      "action": "Switch apps",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Space",
+      "action": "Spotlight",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + Cmd + Space",
+      "action": "Character viewer",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Alt + Cmd + Escape",
+      "action": "Force quit",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + 3",
+      "action": "Screenshot",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + 4",
+      "action": "Screenshot",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + 5",
+      "action": "Screenshot",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + 6",
+      "action": "Screenshot",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + Cmd + Q",
+      "action": "Lock screen",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + Q",
+      "action": "Log out",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Alt + Cmd + Q",
+      "action": "Log out",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + Space",
+      "action": "Input source",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + Alt + Space",
+      "action": "Input source",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + Cmd + F",
+      "action": "Full screen",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + Up",
+      "action": "Mission Control",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + Down",
+      "action": "App windows",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Up",
+      "action": "Document start",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Down",
+      "action": "Document end",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Left",
+      "action": "Line start",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + A",
+      "action": "Line start",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Right",
+      "action": "Line end",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + E",
+      "action": "Line end",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Alt + Backspace",
+      "action": "Delete previous word",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Backspace",
+      "action": "Delete to line start",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Alt + Left",
+      "action": "Word navigation",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Alt + Right",
+      "action": "Word navigation",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + B",
+      "action": "Bold",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + I",
+      "action": "Italic",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + U",
+      "action": "Underline",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Alt + Cmd + V",
+      "action": "Paste matching style",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + D",
+      "action": "Duplicate",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + I",
+      "action": "Info",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + E",
+      "action": "Eject",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + K",
+      "action": "Connect to server",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Shift + Cmd + N",
+      "action": "New folder",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + Backspace",
+      "action": "Move to Trash",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + T",
+      "action": "New tab",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + T",
+      "action": "Reopen tab",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + N",
+      "action": "Private window",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Alt + D",
+      "action": "Focus address bar",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + R",
+      "action": "Refresh bypassing cache",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + F5",
+      "action": "Refresh bypassing cache",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "F11",
+      "action": "Browser full screen",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "F12",
+      "action": "Developer tools",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + I",
+      "action": "Developer tools",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + J",
+      "action": "Developer tools",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + J",
+      "action": "Downloads",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + H",
+      "action": "History",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + D",
+      "action": "Bookmark",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "F3",
+      "action": "Find next",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Shift + F3",
+      "action": "Find previous",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Tab",
+      "action": "Next tab",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Page Down",
+      "action": "Next tab",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Shift + Tab",
+      "action": "Previous tab",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "windows",
+        "linux"
+      ],
+      "combination": "Ctrl + Page Up",
+      "action": "Previous tab",
+      "source": "edge"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + T",
+      "action": "New tab",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Cmd + R",
+      "action": "Refresh",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + K",
+      "action": "Delete to line end",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "macos"
+      ],
+      "combination": "Ctrl + D",
+      "action": "Delete character forward",
+      "source": "apple"
+    },
+    {
+      "platforms": [
+        "windows"
+      ],
+      "combination": "Ctrl + Space",
+      "action": "Input method switch",
+      "source": "windows"
+    }
+  ]
+}

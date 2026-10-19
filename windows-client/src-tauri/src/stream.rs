@@ -48,6 +48,21 @@ pub struct StreamSessionHandle {
     pub tx: UnboundedSender<StreamAudioMessage>,
     pub rx_final: Receiver<Result<StreamFinalResult, String>>,
     pub mode: NegotiatedStreamMode,
+    task: tauri::async_runtime::JoinHandle<()>,
+    interim: std::sync::Arc<std::sync::Mutex<String>>,
+}
+
+impl StreamSessionHandle {
+    pub fn interim_text(&self) -> String {
+        self.interim.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl Drop for StreamSessionHandle {
+    fn drop(&mut self) {
+        // Stop late preview updates from an aborted or timed-out recording.
+        self.task.abort();
+    }
 }
 
 /// Computes the diff between what is currently on screen (`currently_typed`) and `incoming_text`,
@@ -119,6 +134,7 @@ pub fn start_streaming_session(
     enhance: bool,
     custom_prompt: String,
     language: String,
+    context: crate::shortcuts::RecordingContext,
 ) -> Result<StreamSessionHandle, String> {
     let (audio_tx, mut audio_rx) = unbounded_channel::<StreamAudioMessage>();
     let (final_tx, final_rx) = channel::<Result<StreamFinalResult, String>>();
@@ -126,7 +142,10 @@ pub fn start_streaming_session(
 
     let ws_url = get_stream_ws_url(&api_url, &token);
 
-    tauri::async_runtime::spawn(async move {
+    let interim = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let interim_reader = interim.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        let _context = context;
         println!("[STREAM CLIENT] Connecting to transcription WebSocket (language: {})", language);
         let ws_stream = match connect_async(&ws_url).await {
             Ok((stream, _)) => {
@@ -231,6 +250,7 @@ pub fn start_streaming_session(
                                     let current_chunk = chunk_count_reader.load(std::sync::atomic::Ordering::Relaxed);
                                     println!("[STREAM E2E LATENCY] Chunk #{} -> Interim Return: {} ms | Text: {:?}", current_chunk, rtt_ms, event.text);
                                     crate::win32::set_preview_text(&event.text);
+                                    *interim_reader.lock().unwrap_or_else(|e| e.into_inner()) = event.text;
                                 }
                             } else if event.event_type == "final" {
                                 println!("[STREAM FINAL RECEIVED] Final text: {:?}", event.text);
@@ -267,6 +287,8 @@ pub fn start_streaming_session(
         tx: audio_tx,
         rx_final: final_rx,
         mode: negotiated_mode,
+        task,
+        interim,
     })
 }
 

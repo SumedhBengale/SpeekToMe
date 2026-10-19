@@ -1277,7 +1277,7 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: var(--accent-tint);
+  background: var(--bg-card);
   color: var(--text-primary);
   padding: 5px 10px;
   border-radius: 8px;
@@ -3383,7 +3383,7 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   font-weight: 800;
   color: var(--accent-color);
   background: var(--accent-tint);
-  border: 1px solid var(--accent-soft);
+  border: 1px solid var(--border-color);
   padding: 1px 5px;
   border-radius: 6px;
   margin-left: 4px;
@@ -4031,9 +4031,58 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
   border: 1px solid var(--accent-soft);
   font-size: 12.5px;
   font-weight: 600;
-  padding: 5px 12px;
+  padding: 5px 8px;
   border-radius: 8px;
   gap: 6px;
+}
+
+.lang-chip.is-current {
+  background: var(--accent-tint);
+  border-color: var(--accent-color);
+}
+
+.lang-chip-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.lang-chip-star[aria-pressed="true"] {
+  color: var(--accent-color);
+}
+
+.lang-chip-star[aria-pressed="true"] svg {
+  fill: currentColor;
+}
+
+.lang-chip-star:hover {
+  color: var(--accent-color);
+  background: var(--accent-tint);
+}
+
+.lang-chip-star:focus-visible,
+.lang-chip-remove:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.lang-chip-current {
+  color: var(--accent-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.lang-chip button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .lang-chip-remove {
@@ -4284,24 +4333,27 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
 }
 
 .info-bubble {
-  color: var(--text-muted);
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
   cursor: help;
 }
 
-.account-progress-track {
-  width: 100%;
-  height: 5px;
-  background: var(--progress-bg);
-  border-radius: 999px;
-  overflow: hidden;
+.info-bubble:hover {
+  color: var(--accent-color);
 }
 
-.account-progress-fill {
-  height: 100%;
-  background: var(--accent-color);
-  border-radius: 999px;
-  transition: width 0.3s ease;
+.info-bubble:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 
 .account-logout-btn {
@@ -5022,3 +5074,67 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
 .meeting-speaker-dot { width: 8px; height: 8px; border-radius: 50%; }
 .meeting-speaker-save-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
 #meeting-speaker-status { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+
+/* Desktop permission status belongs to the hotkey setting above it. */
+.shortcut-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0 0;
+  min-height: 28px;
+  box-sizing: border-box;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.shortcut-status[hidden] { display: none; }
+.shortcut-status-item {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+.shortcut-status-item svg { flex-shrink: 0; }
+.shortcut-status-item.is-ready svg { color: #15803d; }
+.shortcut-status-item.needs-permission svg { color: #b45309; }
+
+/* Shortcut capture stays within the settings control column. */
+.hotkey-picker { display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: 240px; max-width: 100%; }
+.hotkey-picker .fluent-select { width: 100%; min-width: 0; }
+.hotkey-record-btn { border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-content); color: var(--text-primary); padding: 8px 12px; font: inherit; cursor: pointer; }
+.hotkey-record-btn:hover, .hotkey-record-btn:focus-visible, .hotkey-record-btn.is-recording { border-color: var(--accent-color); outline-color: var(--accent-color); }
+.hotkey-record-hint { color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+
+.hotkey-conflict-warning {
+  border: 1px solid #bc7e25;
+  border-radius: 8px;
+  background: color-mix(in srgb, #d89a26 12%, var(--bg-content));
+  color: var(--text-primary);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.hotkey-conflict-warning[hidden] { display: none; }
+
+.hotkey-conflict-warning.is-blocked { border-color: var(--btn-danger-text); }
+.hotkey-record-hint.has-error { color: var(--btn-danger-text); }
+.custom-select-option.is-disabled { opacity: .5; cursor: not-allowed; }
+.custom-select-option.is-disabled:hover { background: transparent; }
+
+
+/* Command Mode allowance: compact overview with optional token detail. */
+.command-allowance-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.command-allowance .account-card-header { margin-bottom: 14px; }
+.command-remaining { font-size: 13.5px; font-weight: 600; letter-spacing: normal; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.command-remaining.is-message { font-size: 13px; letter-spacing: 0; white-space: normal; text-align: right; }
+.command-allowance [hidden] { display: none; }
+.command-allowance progress { display: block; appearance: none; width: 100%; height: 6px; margin: 12px 0 10px; border: 0; border-radius: 8px; overflow: hidden; background: var(--border-color); }
+.command-allowance progress::-webkit-progress-bar { background: var(--border-color); border-radius: 8px; }
+.command-allowance progress::-webkit-progress-value { background: var(--accent-color); border-radius: 8px; }
+.command-allowance progress::-moz-progress-bar { background: var(--accent-color); border-radius: 8px; }
+.command-allowance .command-usage-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); opacity: 1; }

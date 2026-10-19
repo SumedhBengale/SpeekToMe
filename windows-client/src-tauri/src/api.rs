@@ -12,6 +12,8 @@ pub struct UserInfo {
     pub languages: Option<Vec<String>>,
     pub notification: Option<String>,
     pub transform_input_tokens: Option<usize>,
+    #[serde(default)]
+    pub command_usage: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -158,8 +160,8 @@ pub fn listen_for_token() -> Option<String> {
     None
 }
 
-pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, language: String) {
-    let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
+pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, language: String, context: crate::shortcuts::RecordingContext) {
+    let is_cmd = context.is_command_mode;
     let (token_opt, model, enhance, custom_prompt, transcription_mode, api_url) = {
         let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         (
@@ -178,7 +180,6 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
             println!("No session token available.");
             crate::win32::hide_overlay();
             crate::win32::hide_preview();
-            crate::win32::play_chime(false);
             crate::win32::show_tray_notification(
                 "SpeekTo.Me — Sign In Required",
                 "Please sign in to your SpeekTo.Me account in Settings to start voice dictation.",
@@ -197,7 +198,6 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
             eprintln!("Failed to encode Opus audio: {:?}", e);
             crate::win32::hide_overlay();
             crate::win32::hide_preview();
-            crate::win32::play_chime(false);
             crate::win32::show_tray_notification(
                 "SpeekTo.Me — Audio Error",
                 "Failed to encode microphone audio for transcription.",
@@ -208,6 +208,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
     };
 
     tauri::async_runtime::spawn(async move {
+        let context = context; // Keep the session lease through the complete async operation.
         let transcript_result = if transcription_mode == "stream" {
             match stream_transcribe_audio(&api_url, &token, ogg_opus_bytes.clone(), enhance, &custom_prompt, &language).await {
                 Ok(res) => Ok(res),
@@ -226,10 +227,8 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
                 if !text.is_empty() {
                     crate::win32::set_preview_text(text);
 
-                    let (is_command_mode, selected_text) = {
-                        let state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                        (state.is_command_mode, state.selected_text.clone())
-                    };
+                    let is_command_mode = context.is_command_mode;
+                    let selected_text = context.selected_text.clone();
 
                     if is_command_mode {
                         println!("\n=======================================================");
@@ -351,11 +350,14 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
                             Err(err) => {
                                 eprintln!("[TRANSFORM ERROR] {}", err);
                                 crate::win32::set_preview_text("⚠️ Transformation failed");
-                                crate::win32::show_tray_notification(
-                                    "SpeekTo.Me — Transformation Failed",
-                                    &err,
-                                    crate::win32::NotificationLevel::Warning,
-                                );
+                                if crate::account_errors::is_limit(&err) {
+                                    crate::account_errors::notify("Command Mode", &err);
+                                } else {
+                                    crate::win32::show_tray_notification(
+                                        "SpeekTo.Me — Transformation Failed", &err,
+                                        crate::win32::NotificationLevel::Warning,
+                                    );
+                                }
                             }
                         }
                     } else {
@@ -379,13 +381,11 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
                 }
                 crate::win32::hide_overlay();
                 crate::win32::hide_preview();
-                crate::win32::play_chime(false);
             }
             Err(err) => {
                 eprintln!("Transcription failed: {}", err);
                 crate::win32::hide_overlay();
                 crate::win32::hide_preview();
-                crate::win32::play_chime(false);
 
                 let err_lower = err.to_lowercase();
                 if err_lower.contains("401") || err_lower.contains("unauthorized") || err_lower.contains("invalid token") || err_lower.contains("token expired") {
@@ -732,7 +732,7 @@ pub async fn transcribe_audio(
         if status.as_u16() == 401 {
             Err("401 Unauthorized: Session token is invalid or expired.".to_string())
         } else if status.as_u16() == 429 {
-            Err("429: Monthly transcription limit or quota reached.".to_string())
+            Err(crate::account_errors::message(status.as_u16(), &body_text))
         } else if !body_trimmed.is_empty() {
             Err(body_trimmed)
         } else {
@@ -809,7 +809,8 @@ where
     let status = res.status();
     if !status.is_success() {
         let err_text = res.text().await.unwrap_or_default();
-        return Err(format!("Transformation failed (HTTP {}): {}", status, err_text.trim()));
+        let message = crate::account_errors::message(status.as_u16(), &err_text);
+        return Err(message);
     }
 
     let is_event_stream = res.headers()

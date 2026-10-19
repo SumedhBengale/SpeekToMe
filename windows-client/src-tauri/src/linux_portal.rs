@@ -20,7 +20,6 @@ static REBIND_TX: OnceLock<UnboundedSender<()>> = OnceLock::new();
 static SHORTCUT_READY: AtomicBool = AtomicBool::new(false);
 static INSERTION_READY: AtomicBool = AtomicBool::new(false);
 static SHORTCUT_LABEL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-static LAST_RELEASE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
 // ashpd shares one session-bus connection for the life of the process. Rebinds
 // restart `run()`, but registering that same connection a second time is
 // rejected by the host portal as already associated with an app ID.
@@ -55,26 +54,11 @@ pub fn capabilities() -> LinuxCapabilities {
     }
 }
 
-pub fn supported_hotkey(name: &str) -> &'static str {
-    // XDG Shortcuts syntax is MODIFIER+keysym (for example CTRL+space), not
-    // GTK's <Ctrl>space accelerator syntax. Modifier combinations use the
-    // last pressed modifier as the keysym.
-    match name {
-        "Ctrl + Win" => "CTRL+Super_L",
-        "Alt + Space" => "ALT+space",
-        "Ctrl + Space" => "CTRL+space",
-        "Right Alt" => "Alt_R",
-        "F9" => "F9",
-        "F12" => "F12",
-        "Ctrl + Shift + Z" => "CTRL+SHIFT+z",
-        "Ctrl + Shift" => "CTRL+Shift_L",
-        "Ctrl + Alt" => "CTRL+Alt_L",
-        "Shift + Space" => "SHIFT+space",
-        _ => "F8",
-    }
+pub fn supported_hotkey(name: &str) -> Result<String, String> {
+    crate::hotkey::parse(name).map(|h| h.portal)
 }
 
-fn shortcut_id(name: &str) -> &'static str {
+fn shortcut_id(name: &str) -> String {
     // The portal remembers bindings by app ID and shortcut ID. Reusing one ID
     // for every settings choice makes it keep the first trigger (for example,
     // F8) even after the user selects Ctrl+Meta.
@@ -89,8 +73,9 @@ fn shortcut_id(name: &str) -> &'static str {
         "Shift + Space" => "dictate-shift-space",
         "F9" => "dictate-f9",
         "F12" => "dictate-f12",
-        _ => "dictate", // Preserve an existing F8 portal grant.
-    }
+        "F8" => "dictate", // Preserve an existing F8 portal grant.
+        _ => return format!("dictate-custom-{}", name.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>()),
+    }.into()
 }
 
 pub fn start() {
@@ -108,11 +93,13 @@ pub fn start() {
                 *SHORTCUT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 *INPUT_TX.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 eprintln!("[LINUX PORTAL] {err}");
-                crate::win32::show_tray_notification(
-                    "SpeekTo.Me needs desktop access",
-                    &err,
-                    crate::win32::NotificationLevel::Error,
-                );
+                if crate::HOTKEY_ALLOWED.load(Ordering::SeqCst) {
+                    crate::win32::show_tray_notification(
+                        "SpeekTo.Me needs desktop access",
+                        &err,
+                        crate::win32::NotificationLevel::Error,
+                    );
+                }
                 if rebind_rx.blocking_recv().is_none() {
                     break;
                 }
@@ -175,9 +162,12 @@ async fn run(rebind_rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) -> Result
             .unwrap_or_else(|e| e.into_inner());
         (config.hotkey.clone(), config.hotkey_mode.clone())
     };
+    if !crate::HOTKEY_ALLOWED.load(Ordering::SeqCst) {
+        return Err("The saved shortcut is reserved or occupied. Choose another shortcut in General settings.".into());
+    }
     let helper_chord = crate::linux_keywatch::chord_for(&configured_hotkey, &hotkey_mode);
     let using_helper = helper_chord.is_some();
-    let hotkey = supported_hotkey(&configured_hotkey);
+    let hotkey = supported_hotkey(&configured_hotkey)?;
     let id = shortcut_id(&configured_hotkey);
     let activated = shortcuts
         .receive_activated()
@@ -203,7 +193,7 @@ async fn run(rebind_rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) -> Result
         _keywatch_guard = Some(guard);
         *SHORTCUT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{configured_hotkey} (keyboard helper)"));
     } else {
-        let shortcut = NewShortcut::new(id, "Record or stop dictation").preferred_trigger(Some(hotkey));
+        let shortcut = NewShortcut::new(&id, "Record or stop dictation").preferred_trigger(Some(hotkey.as_str()));
         let result = shortcuts
             .bind_shortcuts(&session, &[shortcut], None, BindShortcutsOptions::default())
             .await
@@ -260,43 +250,39 @@ async fn run(rebind_rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) -> Result
     INSERTION_READY.store(true, Ordering::SeqCst);
     let mut activated = Box::pin(activated);
     let mut deactivated = Box::pin(deactivated);
-    let mut pending_release: Option<Instant> = None;
+    let mut edges = crate::portal_gestures::PortalEdges::default();
+    let mut flush = tokio::time::interval(Duration::from_millis(10));
+    flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
+            // Drain both signal queues before flushing a batch. Their polling
+            // order is unrelated to the user's physical press/release order.
+            biased;
             Some(event) = activated.next(), if !using_helper => {
                 if event.shortcut_id() == id {
-                    eprintln!("[LINUX PORTAL] activated {}", id);
-                    on_shortcut(true);
-                    // Some compositors deliver the two portal signal streams
-                    // together. If deactivation was polled first, apply it
-                    // after activation instead of leaving hold mode running.
-                    if pending_release.take().is_some_and(|at| at.elapsed() < Duration::from_millis(250)) {
-                        on_shortcut(false);
-                    }
+                    edges.push(event.timestamp(), true, Instant::now());
                 }
             }
             Some(event) = deactivated.next(), if !using_helper => {
                 if event.shortcut_id() == id {
-                    eprintln!("[LINUX PORTAL] deactivated {}", id);
-                    let toggle = crate::ACTIVE_HOTKEY_MODE.load(Ordering::SeqCst) == 1;
-                    let active = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_key_held;
-                    if !toggle && !active {
-                        pending_release = Some(Instant::now());
-                    } else {
-                        on_shortcut(false);
-                    }
+                    edges.push(event.timestamp(), false, Instant::now());
+                }
+            }
+            _ = flush.tick(), if !using_helper => {
+                for (pressed, at) in edges.drain() {
+                    crate::shortcuts::on_edge_at(pressed, at);
                 }
             }
             event = keywatch_events.recv(), if using_helper => {
                 match event {
-                    Some(crate::linux_keywatch::Event::Press) => {
+                    Some(crate::linux_keywatch::Event::Press(at)) => {
                         eprintln!("[LINUX KEYWATCH] pressed");
-                        on_shortcut(true);
+                        crate::shortcuts::on_edge_at(true, at);
                     }
-                    Some(crate::linux_keywatch::Event::Release) => {
+                    Some(crate::linux_keywatch::Event::Release(at)) => {
                         eprintln!("[LINUX KEYWATCH] released");
-                        on_shortcut(false);
+                        crate::shortcuts::on_edge_at(false, at);
                     }
                     _ => {
                         abort_active_shortcut();
@@ -331,22 +317,8 @@ async fn run(rebind_rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) -> Result
 }
 
 fn abort_active_shortcut() {
-    let was_active = {
-        let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-        if !state.is_key_held {
-            false
-        } else {
-            state.is_key_held = false;
-            state.press_time = None;
-            if let Some(stop) = state.stop_tx.take() {
-                let _ = stop.send(false);
-            }
-            true
-        }
-    };
-    if was_active {
-        crate::win32::hide_overlay();
-    }
+    crate::shortcuts::cancel();
+    crate::shortcuts::on_edge(false);
 }
 
 /// Pairs are XKB keysyms and press/release state (1/0).
@@ -363,97 +335,15 @@ pub fn send_keys(keys: Vec<i32>) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
-fn on_shortcut(pressed: bool) {
-    if crate::lifecycle::is_quitting() { return; }
-    if crate::ACTIVE_MEETING
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .is_some()
-    {
-        return;
-    }
-    let toggle = crate::ACTIVE_HOTKEY_MODE.load(Ordering::SeqCst) == 1;
-    let mut state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    eprintln!("[LINUX SHORTCUT] {} mode={} active={}", if pressed { "pressed" } else { "released" }, if toggle { "toggle" } else { "hold" }, state.is_key_held);
-    if pressed {
-        if state.is_key_held {
-            if !toggle {
-                return;
-            }
-            let is_command_double_press = LAST_RELEASE
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take()
-                .is_some_and(|last| now.duration_since(last) <= Duration::from_millis(1000));
-            if is_command_double_press
-                && !state.is_command_mode
-                && crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst)
-            {
-                state.is_command_mode = true;
-                state.press_time = Some(now);
-                crate::win32::set_preview_text("✨ Command Mode (Listening...)");
-                std::thread::spawn(|| {
-                    let selected = crate::keyboard::get_selected_text();
-                    crate::get_state()
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .selected_text = selected;
-                });
-                return;
-            }
-            state.is_key_held = false;
-            state.press_time = None;
-            if let Some(stop) = state.stop_tx.take() {
-                let _ = stop.send(true);
-            }
-            crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
-            return;
-        }
-        LAST_RELEASE.lock().unwrap_or_else(|e| e.into_inner()).take();
-        state.is_key_held = true;
-        state.press_time = Some(now);
-        state.is_command_mode = false;
-        state.selected_text = None;
-        crate::win32::set_preview_text("");
-        crate::win32::set_preview_state(crate::win32::PreviewState::Listening);
-        crate::win32::show_overlay();
-        crate::win32::play_chime(true);
-        let (tx, rx) = mpsc::channel();
-        state.stop_tx = Some(tx);
-        std::thread::spawn(move || crate::audio::recording_thread(rx));
-    } else if toggle && state.is_key_held {
-        let elapsed = state.press_time.map(|t| t.elapsed()).unwrap_or_default();
-        if elapsed >= Duration::from_millis(350) {
-            LAST_RELEASE.lock().unwrap_or_else(|e| e.into_inner()).take();
-            state.is_key_held = false;
-            state.press_time = None;
-            crate::win32::set_preview_text("⚠ Hands-Free is selected; Push-to-Talk gesture detected");
-            if let Some(stop) = state.stop_tx.take() {
-                let _ = stop.send(true);
-            }
-            crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
-        } else {
-            *LAST_RELEASE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
-        }
-    } else if !toggle && state.is_key_held {
-        let elapsed = state.press_time.map(|t| t.elapsed()).unwrap_or_default();
-        state.is_key_held = false;
-        state.press_time = None;
-        if !state.is_command_mode {
-            *LAST_RELEASE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
-        }
-        let short_tap = elapsed < Duration::from_millis(350)
-            && !state.is_command_mode
-            && crate::ACTIVE_COMMAND_MODE.load(Ordering::SeqCst);
-        if let Some(stop) = state.stop_tx.take() {
-            let _ = stop.send(!short_tap);
-        }
-        if short_tap {
-            crate::win32::hide_overlay();
-            crate::win32::hide_preview();
-        } else {
-            crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
-        }
+#[cfg(test)]
+mod hotkey_tests {
+    use super::*;
+    #[test]
+    fn portal_bindings_keep_preset_grants_and_separate_custom_chords() {
+        assert_eq!(shortcut_id("F8"), "dictate");
+        assert_eq!(shortcut_id("Ctrl + Shift"), "dictate-ctrl-shift");
+        assert_ne!(shortcut_id("Ctrl + Alt + K"), shortcut_id("Ctrl + Alt + L"));
+        assert_eq!(supported_hotkey("Ctrl + Win + F12").unwrap(), "CTRL+LOGO+F12");
+        assert!(supported_hotkey("invalid").is_err());
     }
 }

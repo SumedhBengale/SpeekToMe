@@ -37,11 +37,13 @@ pub fn write_wav_to_memory(samples: &[i16], sample_rate: u32, channels: u16) -> 
 }
 
 // Background recording thread routine (manages non-Send WASAPI stream)
-pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
+pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::shortcuts::RecordingSession) {
     let language = crate::speaking_language();
+    let _capture_life = session.keep_alive();
     // Introduce a short delay so the start chime has time to play before CPAL starts input recording.
     // This prevents audio driver profile/channel switching conflicts.
     std::thread::sleep(std::time::Duration::from_millis(150));
+    if session.is_cancelled() { return; }
 
     let host = cpal::default_host();
     let device = match host.default_input_device() {
@@ -50,7 +52,6 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
             eprintln!("No input device found!");
             crate::win32::hide_overlay();
             crate::win32::hide_preview();
-            crate::win32::play_chime(false);
             crate::win32::show_tray_notification(
                 "SpeekTo.Me — Microphone Not Found",
                 "No active microphone was detected. Please connect a microphone and check Windows Sound settings.",
@@ -66,7 +67,6 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
             eprintln!("Failed to get default input config: {:?}", e);
             crate::win32::hide_overlay();
             crate::win32::hide_preview();
-            crate::win32::play_chime(false);
             crate::win32::show_tray_notification(
                 "SpeekTo.Me — Audio Device Error",
                 "Failed to configure the default microphone. Please check your audio settings.",
@@ -171,7 +171,6 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                 eprintln!("[AUDIO ERROR] Failed to play stream: {:?}", e);
                 crate::win32::hide_overlay();
                 crate::win32::hide_preview();
-                crate::win32::play_chime(false);
                 crate::win32::show_tray_notification(
                     "SpeekTo.Me — Audio Error",
                     "Failed to start recording audio from the microphone.",
@@ -181,7 +180,12 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
             }
             println!("[AUDIO] Recording started...");
             
-            let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
+            let Some(context) = session.resolve() else {
+                drop(s);
+                CURRENT_VOLUME.store(0, Ordering::Relaxed);
+                return;
+            };
+            let is_cmd = context.is_command_mode;
             let (is_stream_mode, api_url, token, enhance, custom_prompt) = {
                 let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                 (
@@ -206,6 +210,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     enhance,
                     custom_prompt.clone(),
                     language.clone(),
+                    context.clone(),
                 ) {
                     Ok(handle) => Some(handle),
                     Err(e) => {
@@ -251,7 +256,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                             if silence_countdown_active {
                                                 silence_countdown_active = false;
                                                 last_countdown_sec = None;
-                                                let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
+                                                let is_cmd = context.is_command_mode;
                                                 if is_cmd {
                                                     crate::win32::set_preview_text("✨ Command Mode (Listening...)");
                                                 } else {
@@ -262,10 +267,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                             let silence_dur = last_sound_time.elapsed();
                                             if silence_dur >= std::time::Duration::from_secs(15) {
                                                 println!("[AUDIO STREAM] 15 seconds of silence detected. Auto-stopping recording...");
-                                                let mut st = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                                                st.is_key_held = false;
-                                                st.press_time = None;
-                                                st.stop_tx = None;
+                                                context.capture_finished();
                                                 if !had_ever_spoken {
                                                     is_aborted = true;
                                                 }
@@ -334,7 +336,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                             if silence_countdown_active {
                                                 silence_countdown_active = false;
                                                 last_countdown_sec = None;
-                                                let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
+                                                let is_cmd = context.is_command_mode;
                                                 if is_cmd {
                                                     crate::win32::set_preview_text("✨ Command Mode (Listening...)");
                                                 } else {
@@ -345,10 +347,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                             let silence_dur = last_sound_time.elapsed();
                                             if silence_dur >= std::time::Duration::from_secs(15) {
                                                 println!("[AUDIO CHUNKED] 15 seconds of silence detected. Auto-stopping recording...");
-                                                let mut st = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                                                st.is_key_held = false;
-                                                st.press_time = None;
-                                                st.stop_tx = None;
+                                                context.capture_finished();
                                                 if !had_ever_spoken {
                                                     is_aborted = true;
                                                 }
@@ -468,10 +467,9 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     CURRENT_VOLUME.store(0, Ordering::Relaxed);
                     println!("Recording stopped.");
 
-                    let (is_command_mode, selected_text) = {
-                        let state = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                        (state.is_command_mode, state.selected_text.clone())
-                    };
+                    context.capture_finished();
+                    let is_command_mode = context.is_command_mode;
+                    let selected_text = context.selected_text.clone();
 
                     if !is_aborted {
                         crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
@@ -529,7 +527,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                             Ok(Ok(final_result)) => {
                                 println!("[STREAM SUCCESS] Live streaming completed. Final text: {}", final_result.text);
                                 let trimmed = final_result.text.trim().to_string();
-                                let interim = crate::win32::get_preview_text();
+                                let interim = handle.interim_text();
                                 let interim_trimmed = interim.trim().to_string();
 
                                 let final_words = trimmed.split_whitespace().count();
@@ -552,20 +550,20 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                             Ok(Err(e)) => {
                                 eprintln!("[STREAM ERROR] Stream returned error: {}. Falling back to interim preview text.", e);
                                 stream_error_msg = Some(e);
-                                let fallback = crate::win32::get_preview_text();
+                                let fallback = handle.interim_text();
                                 let trimmed = fallback.trim().to_string();
                                 if !trimmed.is_empty() { Some(trimmed) } else { None }
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                                 eprintln!("[STREAM TIMEOUT] Final transcript timed out after 15s. Falling back to interim preview text.");
                                 stream_timed_out = true;
-                                let fallback = crate::win32::get_preview_text();
+                                let fallback = handle.interim_text();
                                 let trimmed = fallback.trim().to_string();
                                 if !trimmed.is_empty() { Some(trimmed) } else { None }
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                                 eprintln!("[STREAM DISCONNECTED] Stream disconnected before final transcript. Falling back to interim preview text.");
-                                let fallback = crate::win32::get_preview_text();
+                                let fallback = handle.interim_text();
                                 let trimmed = fallback.trim().to_string();
                                 if !trimmed.is_empty() { Some(trimmed) } else { None }
                             }
@@ -625,7 +623,9 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                                 let target_clone = target_text;
                                 let cmd_clone = normalized.clone();
 
+                                let transform_context = context.clone();
                                 std::thread::spawn(move || {
+                                    let _context = transform_context;
                                     let rt = match tokio::runtime::Builder::new_current_thread()
                                         .enable_all()
                                         .build()
@@ -805,7 +805,6 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                         crate::win32::hide_overlay();
                         crate::win32::hide_preview();
                     }
-                    crate::win32::play_chime(false);
                     return;
                 }
             }
@@ -836,7 +835,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                             if silence_countdown_active {
                                 silence_countdown_active = false;
                                 last_countdown_sec = None;
-                                let is_cmd = crate::get_state().lock().unwrap_or_else(|e| e.into_inner()).is_command_mode;
+                                let is_cmd = context.is_command_mode;
                                 if is_cmd {
                                     crate::win32::set_preview_text("✨ Command Mode (Listening...)");
                                 } else {
@@ -847,10 +846,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                             let silence_dur = last_sound_time.elapsed();
                             if silence_dur >= std::time::Duration::from_secs(15) {
                                 println!("[AUDIO BATCH] 15 seconds of silence detected. Auto-stopping recording...");
-                                let mut st = crate::get_state().lock().unwrap_or_else(|e| e.into_inner());
-                                st.is_key_held = false;
-                                st.press_time = None;
-                                st.stop_tx = None;
+                                context.capture_finished();
                                 if !had_ever_spoken {
                                     batch_aborted = true;
                                 }
@@ -886,17 +882,16 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                     println!("Recording finished. Samples: {}, Speech detected: {}", samples.len(), has_speech);
                     
                     if has_speech {
-                        crate::api::process_and_paste(samples, sample_rate, channels, language);
+                        context.capture_finished();
+                        crate::api::process_and_paste(samples, sample_rate, channels, language, context);
                     } else {
                         println!("Silence or keyboard click detected. Transcription request skipped.");
                         crate::win32::hide_overlay();
                         crate::win32::hide_preview();
-                        crate::win32::play_chime(false);
                     }
                 } else {
                     crate::win32::hide_overlay();
                     crate::win32::hide_preview();
-                    crate::win32::play_chime(false);
                 }
             } else {
                 drop(s);
@@ -904,14 +899,12 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>) {
                 println!("Recording aborted and discarded.");
                 crate::win32::hide_overlay();
                 crate::win32::hide_preview();
-                crate::win32::play_chime(false);
             }
         }
         Err(e) => {
             eprintln!("Failed to build input stream: {:?}", e);
             crate::win32::hide_overlay();
             crate::win32::hide_preview();
-            crate::win32::play_chime(false);
             crate::win32::show_tray_notification(
                 "SpeekTo.Me — Audio Error",
                 "Failed to initialize the microphone capture stream.",

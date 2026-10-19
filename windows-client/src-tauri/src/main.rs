@@ -1,6 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 pub mod config;
+mod gestures;
+mod shortcuts;
+mod hotkey;
+mod hotkey_conflicts;
+#[cfg(target_os = "linux")]
+mod hotkey_linux;
+#[cfg(any(target_os = "macos", test))]
+#[cfg_attr(test, allow(dead_code))]
+mod hotkey_macos;
+#[cfg(any(target_os = "linux", test))]
+mod portal_gestures;
 mod lifecycle;
 pub mod audio;
 pub mod audio_processing;
@@ -36,7 +47,6 @@ use crate::win32::SendHWND;
 pub static TAURI_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 // Global thread-safe flags
-pub static STATE: OnceLock<Mutex<RecordingState>> = OnceLock::new();
 pub static OVERLAY_HWND: OnceLock<SendHWND> = OnceLock::new();
 pub static ACTIVE_CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
 pub static SIMULATING_KEY: AtomicBool = AtomicBool::new(false);
@@ -44,6 +54,7 @@ pub static LAST_WINDOW_POSITION: OnceLock<Mutex<Option<PhysicalPosition<i32>>>> 
 pub static LAST_WINDOW_SIZE: OnceLock<Mutex<Option<PhysicalSize<u32>>>> = OnceLock::new();
 
 pub static ACTIVE_HOTKEY_COMBO: AtomicU32 = AtomicU32::new(0x00000009); // Ctrl (0x01) + Win (0x08) default
+pub static HOTKEY_ALLOWED: AtomicBool = AtomicBool::new(false);
 pub static ACTIVE_HOTKEY_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0); // 0 = hold, 1 = toggle
 pub static ACTIVE_PILL_BG_COLOR: AtomicU32 = AtomicU32::new(0x27221F);
 pub static ACTIVE_PILL_WAVE_COLOR: AtomicU32 = AtomicU32::new(0x57BF7C);
@@ -69,28 +80,9 @@ pub fn sync_active_config_atomics(config: &AppConfig) {
     ACTIVE_PILL_WAVE_COLOR.store(config.pill_wave_color, Ordering::SeqCst);
     ACTIVE_SOUND_FEEDBACK.store(config.sound_feedback, Ordering::SeqCst);
     ACTIVE_HAS_SESSION_TOKEN.store(config.session_token.is_some(), Ordering::SeqCst);
+    shortcuts::settings_changed();
     #[cfg(target_os = "linux")]
     linux_desktop::sync_overlay_theme();
-}
-
-pub struct RecordingState {
-    pub is_key_held: bool,
-    pub press_time: Option<std::time::Instant>,
-    pub stop_tx: Option<std::sync::mpsc::Sender<bool>>,
-    pub is_command_mode: bool,
-    pub selected_text: Option<String>,
-}
-
-pub fn get_state() -> &'static Mutex<RecordingState> {
-    STATE.get_or_init(|| {
-        Mutex::new(RecordingState {
-            is_key_held: false,
-            press_time: None,
-            stop_tx: None,
-            is_command_mode: false,
-            selected_text: None,
-        })
-    })
 }
 
 pub fn get_active_config() -> &'static Mutex<AppConfig> {
@@ -119,12 +111,33 @@ fn get_linux_capabilities() -> serde_json::Value {
 }
 
 #[tauri::command]
+async fn validate_hotkey(value: String) -> Result<String, String> {
+    let report = hotkey_conflicts::check(&value).await?;
+    report.ensure_allowed()?;
+    Ok(report.canonical)
+}
+
+#[tauri::command]
+async fn check_hotkey_conflicts(value: String) -> Result<hotkey_conflicts::Report, String> {
+    hotkey_conflicts::check(&value).await
+}
+
+#[tauri::command]
+fn set_shortcut_capture(active: bool) {
+    shortcuts::set_selecting(active);
+}
+
+#[tauri::command]
 fn get_audio_level() -> u32 {
     audio::CURRENT_VOLUME.load(Ordering::Relaxed)
 }
 
 #[tauri::command]
-fn save_config(app: tauri::AppHandle, mut config: AppConfig) {
+async fn save_config(app: tauri::AppHandle, mut config: AppConfig) -> Result<(), String> {
+    // Reject before touching memory, disk, autostart or existing portal grants.
+    let report = hotkey_conflicts::check(&config.hotkey).await?;
+    report.ensure_allowed()?;
+    config.hotkey = report.canonical;
     #[cfg(target_os = "linux")]
     let _ = &app;
     #[cfg(target_os = "linux")]
@@ -140,6 +153,7 @@ fn save_config(app: tauri::AppHandle, mut config: AppConfig) {
         *active = config.clone();
         config::save_config(&active);
     }
+    HOTKEY_ALLOWED.store(true, Ordering::SeqCst);
     sync_active_config_atomics(&config);
     #[cfg(target_os = "linux")]
     if old_hotkey != config.hotkey || old_hotkey_mode != config.hotkey_mode || !linux_portal::capabilities().shortcut || !linux_portal::capabilities().insertion {
@@ -154,6 +168,7 @@ fn save_config(app: tauri::AppHandle, mut config: AppConfig) {
             crate::win32::set_window_icon_for_theme(hwnd, &config.theme);
         }
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -379,7 +394,7 @@ pub fn speaking_language_options() -> Vec<(String, String)> {
     let spoken = get_active_config().lock().unwrap_or_else(|e| e.into_inner())
         .languages.clone().unwrap_or_else(|| vec!["en".into()]);
     let catalog = lang::get_language_manager().get_languages();
-    let mut choices = vec![("auto".into(), "Automatic".into())];
+    let mut choices = Vec::new();
     for code in spoken {
         if code == "auto" || choices.iter().any(|(c, _)| c == &code) { continue; }
         let name = catalog.iter().find(|l| l.code == code).map(|l| l.name.clone()).unwrap_or_else(|| code.clone());
@@ -401,8 +416,8 @@ fn notify_language_changed() {
 fn set_active_language(language: String) -> Result<String, String> {
     {
         let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-        if language != "auto" && !active.languages.as_deref().unwrap_or(&[]).contains(&language) {
-            return Err("Choose a language from Languages I speak, or Automatic".into());
+        if language == "auto" || !active.languages.as_deref().unwrap_or(&[]).contains(&language) {
+            return Err("Star a saved language in Languages I Speak".into());
         }
         active.active_language = language.clone();
         config::save_config(&active);
@@ -486,6 +501,8 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
 
 use serde::{Serialize, Deserialize};
 mod meeting_upload;
+mod meeting_session;
+mod account_errors;
 static MEETING_INDEX_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -589,7 +606,7 @@ fn cleanup_old_recordings() {
 // uploads or network calls. It uses the actual production pill/preview renderer.
 #[cfg(target_os = "linux")]
 fn run_native_overlay_diagnostic() {
-    let app = tauri::Builder::default().setup(|app| {
+    let app = tauri::Builder::default().setup(move |app| {
         let handle = app.handle().clone();
         let _ = TAURI_APP.set(handle.clone());
         linux_desktop::setup(&handle)?;
@@ -621,6 +638,17 @@ fn main() {
         AttachConsole(ATTACH_PARENT_PROCESS);
     }
 
+    // Read-only policy diagnostic: no preferences, microphone or app instance.
+    if std::env::args().nth(1).as_deref() == Some("--check-shortcut") {
+        let value = std::env::args().nth(2).unwrap_or_default();
+        let result = tauri::async_runtime::block_on(hotkey_conflicts::check(&value));
+        match result {
+            Ok(report) => { let error = report.ensure_allowed().err(); println!("{}", serde_json::json!({"report":report,"error":error})); }
+            Err(error) => println!("{}", serde_json::json!({"error":error})),
+        }
+        return;
+    }
+
     println!("[STARTUP 1] Starting SpeekTo.Me Windows Client...");
 
     // Install process-level default CryptoProvider for rustls / tokio-tungstenite TLS
@@ -640,6 +668,12 @@ fn main() {
     // 1. Initialize global loaded config
     let _ = get_active_config();
     println!("[STARTUP 4] Active config initialized.");
+    let startup_hotkey = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).hotkey.clone();
+    let hotkey_result = tauri::async_runtime::block_on(hotkey_conflicts::check(&startup_hotkey))
+        .and_then(|report| report.ensure_allowed());
+    HOTKEY_ALLOWED.store(hotkey_result.is_ok(), Ordering::SeqCst);
+    if let Err(error) = &hotkey_result { eprintln!("[SHORTCUT] Saved shortcut disabled: {error}"); }
+
 
     #[cfg(target_os = "linux")]
     if std::env::args().any(|arg| arg == "--diagnose-native-overlay") {
@@ -664,7 +698,7 @@ fn main() {
     // 4. Launch Tauri app
     println!("[STARTUP 6] Building Tauri application...");
     let app = tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             println!("[STARTUP 7a] Setting TAURI_APP handle...");
             let handle = app.handle().clone();
             let _ = TAURI_APP.set(handle.clone());
@@ -673,6 +707,7 @@ fn main() {
                 linux_desktop::setup(&handle)?;
                 linux_portal::start();
             }
+            shortcuts::start();
             println!("[STARTUP 7b] TAURI_APP set.");
 
             let token_opt = {
@@ -693,6 +728,10 @@ fn main() {
                 });
             });
 
+            if let Err(error) = &hotkey_result {
+                win32::show_tray_notification("Choose another shortcut", error, win32::NotificationLevel::Warning);
+                show_or_create_settings_window(&handle);
+            }
             if token_opt.is_none() {
                 println!("[STARTUP] No session token found. Displaying onboarding settings window...");
                 show_or_create_settings_window(&handle);
@@ -727,6 +766,9 @@ fn main() {
             get_linux_capabilities,
             get_audio_level,
             save_config,
+            validate_hotkey,
+            check_hotkey_conflicts,
+            set_shortcut_capture,
             hide_window,
             start_login,
             logout,
@@ -814,6 +856,7 @@ fn get_active_meeting() -> Option<ActiveMeetingInfo> {
 
 #[tauri::command]
 async fn start_meeting(title: String) -> Result<String, String> {
+    let _starting = crate::meeting_session::begin()?;
     println!("[MEETING LOG] >>> start_meeting command called with title: '{}'", title);
     
     let temp_dir = crate::config::get_config_path()
@@ -841,7 +884,9 @@ async fn start_meeting(title: String) -> Result<String, String> {
     let owner_email=tokio::time::timeout(std::time::Duration::from_secs(3),get_user_info()).await.ok().flatten().map(|user|user.email).or_else(||recording_token.as_deref().and_then(meeting_upload::cached_account));
     let stream_tx = None;
     println!("[MEETING LOG] Starting CPAL audio capture streams...");
+    let permit = crate::meeting_session::acquire().await?;
     if let Err(e) = crate::audio::start_meeting_recording(path.clone(), stream_tx) {
+        crate::meeting_session::abandon(permit);
         eprintln!("[MEETING LOG ERROR] start_meeting_recording failed: {}", e);
         return Err(format!("Failed to start recording: {}", e));
     }
@@ -881,6 +926,7 @@ async fn start_meeting(title: String) -> Result<String, String> {
         token_fingerprint,
     });
     save_meeting_index(&records);
+    crate::meeting_session::install(permit);
     println!("[MEETING LOG] Meeting record indexed locally. Returning path: {}", path_str);
 
     Ok(path_str)
@@ -893,6 +939,7 @@ async fn stop_meeting(title: Option<String>) -> Result<String, String> {
     *ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
     let finalize_error=crate::audio::stop_meeting_recording();
+    crate::meeting_session::finish();
     if let Err(e)=finalize_error {
         if let Some(path)=CURRENT_MEETING_PATH.lock().unwrap_or_else(|error|error.into_inner()).take() {
             update_meeting_status(&path.to_string_lossy(), "failed", Some(e.clone()));
@@ -1039,7 +1086,9 @@ async fn cancel_meeting() -> Result<(), String> {
     crate::win32::hide_meeting_overlay();
     *ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
-    crate::audio::stop_meeting_recording()?;
+    let stopped=crate::audio::stop_meeting_recording();
+    crate::meeting_session::finish();
+    stopped?;
     
     {
         let mut stream_lock = CURRENT_MEETING_STREAM.lock().unwrap_or_else(|e| e.into_inner());
