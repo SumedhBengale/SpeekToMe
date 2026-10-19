@@ -234,7 +234,7 @@ fn hide_window(window: tauri::WebviewWindow) {
 
 #[tauri::command]
 fn minimize_window(window: tauri::WebviewWindow) {
-    settings_lifecycle::dismiss(window.app_handle());
+    let _ = window.minimize();
 }
 
 static LAST_MAXIMIZE_TOGGLE: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();

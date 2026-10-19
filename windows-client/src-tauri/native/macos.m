@@ -41,17 +41,14 @@ static void mainAsync(dispatch_block_t block) {
 // Weak tracking proves the WKWebView/configuration is deallocated, rather than
 // merely removed from Tauri's window map. It never keeps browser objects alive.
 static NSHashTable *settingsViews, *settingsStores, *settingsPools;
-static id miniaturizeObserver, hideObserver;
-void s2m_settings_observers(void (*background)(bool)) {
+static id hideObserver;
+void s2m_settings_observers(void (*background)(void)) {
     mainAsync(^{
-        if (!miniaturizeObserver) miniaturizeObserver = [NSNotificationCenter.defaultCenter
-            addObserverForName:NSWindowDidMiniaturizeNotification object:nil queue:NSOperationQueue.mainQueue
-            usingBlock:^(NSNotification *note) { dispatch_async(dispatch_get_main_queue(), ^{ background(true); }); }];
         if (!hideObserver) hideObserver = [NSNotificationCenter.defaultCenter
             addObserverForName:NSApplicationDidHideNotification object:nil queue:NSOperationQueue.mainQueue
             usingBlock:^(NSNotification *note) { dispatch_async(dispatch_get_main_queue(), ^{
                 if (!NSApp.isHidden) return;
-                background(false);
+                background();
                 // AppKit keeps hidden windows for a later unhide. Flush that
                 // retention after closing Settings; the accessory app stays
                 // in the tray with no Settings window and takes no focus.

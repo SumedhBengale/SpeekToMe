@@ -51,21 +51,6 @@ pub fn watch(window: &tauri::WebviewWindow) {
         let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         if let Ok(native) = window.gtk_window() {
             let app = window.app_handle().clone();
-            native.connect_window_state_event(move |_, event| {
-                if event
-                    .new_window_state()
-                    .contains(gtk::gdk::WindowState::ICONIFIED)
-                {
-                    let app = app.clone();
-                    gtk::glib::idle_add_local_once(move || {
-                        if GENERATION.load(Ordering::SeqCst) == generation {
-                            dismiss(&app);
-                        }
-                    });
-                }
-                gtk::glib::Propagation::Proceed
-            });
-            let app = window.app_handle().clone();
             native.connect_hide(move |_| {
                 let app = app.clone();
                 gtk::glib::idle_add_local_once(move || {
@@ -90,13 +75,8 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             dismiss(window.app_handle());
         }
         tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(false) => {
-            if window.is_minimized().unwrap_or(false) {
-                dismiss(window.app_handle());
-            } else {
-                // Preserve the last normal geometry before the OS miniaturizes
-                // the window. Merely switching focus does not discard a form.
-                remember_geometry(window);
-            }
+            // Switching applications and minimizing both retain Settings.
+            remember_geometry(window);
         }
         tauri::WindowEvent::Moved(_) => remember_geometry(window),
         tauri::WindowEvent::Destroyed => {
@@ -149,9 +129,8 @@ pub fn run_diagnostic() {
                     actions.insert(4, "app-hide");
                     actions
                 };
-                // Wayland does not expose compositor minimization as a GTK
-                // iconified state. Test our Minimize-to-tray command there;
-                // native iconify observation is exercised on macOS/X11.
+                // Wayland does not reliably expose compositor minimization.
+                // The app minimize command is still exercised on every platform.
                 let actions = actions.into_iter().filter(|action| !wayland || *action != "native-minimize");
                 for action in actions {
                     let show = handle.clone();
@@ -178,6 +157,12 @@ pub fn run_diagnostic() {
                             }
                         }
                     });
+                    if matches!(action, "minimize" | "native-minimize") {
+                        std::thread::sleep(std::time::Duration::from_millis(900));
+                        samples.push(snapshot(&handle, action, "minimized-retained"));
+                        let close = handle.clone();
+                        let _ = handle.run_on_main_thread(move || dismiss(&close));
+                    }
                     if action == "rapid-reopen" {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         let show = handle.clone();

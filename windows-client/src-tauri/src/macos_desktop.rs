@@ -13,7 +13,7 @@ use tauri::{
 static STATE: AtomicU8 = AtomicU8::new(0);
 unsafe extern "C" {
     fn s2m_permissions() -> u32;
-    fn s2m_settings_observers(background: extern "C" fn(bool));
+    fn s2m_settings_observers(background: extern "C" fn());
     fn s2m_track_settings(view: *mut std::ffi::c_void);
     fn s2m_prepare_settings_close(view: *mut std::ffi::c_void);
     fn s2m_settings_snapshot() -> *mut c_char;
@@ -39,14 +39,10 @@ fn cstring(s: &str) -> CString {
     CString::new(s.replace('\0', "")).unwrap()
 }
 
-extern "C" fn settings_backgrounded(minimized_only: bool) {
+extern "C" fn settings_backgrounded() {
     let _ = std::panic::catch_unwind(|| {
         if let Some(app) = crate::TAURI_APP.get() {
-            if let Some(window) = app.get_webview_window("main") {
-                if !minimized_only || window.is_minimized().unwrap_or(false) {
-                    crate::settings_lifecycle::dismiss(app);
-                }
-            }
+            crate::settings_lifecycle::dismiss(app);
         }
     });
 }
