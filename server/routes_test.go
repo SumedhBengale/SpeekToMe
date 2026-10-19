@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,7 +17,7 @@ import (
 )
 
 func setupTestServer(t *testing.T) (*httptest.Server, func()) {
-	dbFile := "test_routes.db"
+	dbFile := filepath.Join(t.TempDir(), "test_routes.db")
 	_ = os.Remove(dbFile)
 
 	database, err := db.NewDatabase(dbFile)
@@ -28,47 +30,14 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 		VocabCache: vocab.NewVocabCache(),
 	}
 
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /auth/login", app.HandleAuthLogin)
-	mux.HandleFunc("GET /auth/callback", app.HandleAuthCallback)
-	mux.HandleFunc("POST /auth/signup", app.HandleAuthSignup)
-	mux.HandleFunc("POST /auth/login", app.HandleAuthLoginCredentials)
-	mux.HandleFunc("POST /auth/2fa/verify", app.HandleAuth2FAVerify)
-	mux.HandleFunc("GET /auth/verify", app.HandleAuthVerify)
-	mux.HandleFunc("GET /auth/me", app.HandleAuthMe)
-	mux.HandleFunc("GET /usage/history", app.HandleGetUserHistory)
-	mux.HandleFunc("POST /auth/logout", app.HandleAuthLogout)
-	mux.HandleFunc("POST /generate", app.HandleGenerate)
-	mux.HandleFunc("GET /v1/stream", app.HandleStreamTranscribe)
-	mux.HandleFunc("POST /v1/transcribe/ack", app.HandleTranscribeAck)
-	mux.HandleFunc("POST /validate-prompt", app.HandleValidatePrompt)
-	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("GET /auth/vocabulary", app.HandleGetVocabulary)
-	mux.HandleFunc("POST /auth/vocabulary", app.HandleAddVocabulary)
-	mux.HandleFunc("DELETE /auth/vocabulary", app.HandleDeleteVocabulary)
-	mux.HandleFunc("POST /meetings", app.HandleUploadMeeting)
-	mux.HandleFunc("GET /meetings", app.HandleGetMeetings)
-	mux.HandleFunc("GET /meetings/{id}", app.HandleGetMeetingDetail)
-	mux.HandleFunc("DELETE /meetings/{id}", app.HandleDeleteMeeting)
-	mux.HandleFunc("GET /meetings/{id}/audio", app.HandleGetMeetingAudio)
-	mux.HandleFunc("POST /v1/transform", app.HandleTransform)
-	mux.HandleFunc("POST /transform", app.HandleTransform)
-	mux.HandleFunc("GET /v1/config", handlers.HandleGetClientConfig)
-	mux.HandleFunc("GET /config", handlers.HandleGetClientConfig)
-	mux.HandleFunc("POST /billing/create-subscription", app.HandleCreateSubscription)
-	mux.HandleFunc("POST /billing/verify-subscription", app.HandleVerifySubscription)
-	mux.HandleFunc("POST /billing/cancel-subscription", app.HandleCancelSubscription)
-	mux.HandleFunc("POST /webhooks/razorpay", app.HandleRazorpayWebhook)
-
-	mux.HandleFunc("GET /admin/users", app.HandleAdminGetUsers)
-	mux.HandleFunc("POST /admin/users/{id}/plan", app.HandleAdminUpdatePlan)
-	mux.HandleFunc("POST /admin/users/{id}/rate-limit", app.HandleAdminUpdateRateLimit)
-	mux.HandleFunc("GET /admin/config", app.HandleAdminGetConfig)
-	mux.HandleFunc("POST /admin/config", app.HandleAdminUpdateConfig)
-	mux.HandleFunc("GET /admin/webhook-logs", app.HandleAdminGetWebhookLogs)
-	mux.HandleFunc("GET /admin/cache/rate-limits", app.HandleAdminGetRateLimits)
-	mux.HandleFunc("DELETE /admin/cache/rate-limits", app.HandleAdminDeleteRateLimits)
+	t.Setenv("MEETING_AUDIO_DIR", t.TempDir())
+	t.Setenv("SPEEKTOME_WORKER_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Route checks do not run background inference or contact workers.
+	mux, err := newAPIMux(ctx, app)
+	if err != nil {
+		t.Fatalf("Initialize production API routes: %v", err)
+	}
 
 	handler := corsMiddleware(mux)
 	ts := httptest.NewServer(handler)
@@ -87,6 +56,7 @@ func TestAllRouteRegistrations(t *testing.T) {
 	defer cleanup()
 
 	client := ts.Client()
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }
 
 	routes := []struct {
 		method string
@@ -94,7 +64,7 @@ func TestAllRouteRegistrations(t *testing.T) {
 	}{
 		{"GET", "/health"},
 		{"GET", "/auth/login?port=8080"},
-		{"GET", "/auth/callback?state=8080_nonce"},
+		{"GET", "/auth/callback?state=invalid"},
 		{"POST", "/auth/signup"},
 		{"POST", "/auth/login"},
 		{"POST", "/auth/2fa/verify"},
@@ -109,6 +79,8 @@ func TestAllRouteRegistrations(t *testing.T) {
 		{"GET", "/auth/vocabulary"},
 		{"POST", "/auth/vocabulary"},
 		{"DELETE", "/auth/vocabulary"},
+		{"POST", "/v1/meetings/session"},
+		{"DELETE", "/v1/meetings/session/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		{"POST", "/meetings"},
 		{"GET", "/meetings"},
 		{"GET", "/meetings/1"},

@@ -30,6 +30,10 @@ func TestHandleTransformValidation(t *testing.T) {
 		t.Fatalf("CreateEmailUser: %v", err)
 	}
 
+	if _, err := database.GetDB().Exec("UPDATE users SET plan_tier='pro',plan_active=1 WHERE id=?", userID); err != nil {
+		t.Fatal(err)
+	}
+
 	sessionToken := auth.GenerateSessionToken()
 	if err := database.CreateSession(sessionToken, userID, 30); err != nil {
 		t.Fatalf("CreateSession: %v", err)

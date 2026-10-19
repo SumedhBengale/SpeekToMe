@@ -16,6 +16,10 @@ input gestures, account-limit feedback, meeting session handling, and the
 existing native overlay. It also includes the client-related reference docs.
 Uncommitted website and server changes in that worktree were left there.
 
+The matching server dependencies were subsequently integrated with the shared
+client. See [desktop-backend-contracts.md](desktop-backend-contracts.md) for
+recording-permit, usage, gateway and build compatibility checks and rollout order.
+
 The original executable's SHA-256 was
 `060f25cc7ca88ed2785a77494c734fd8826aba9c47b8a3f90ef43ff7f38ec995`.
 The imported source files predated the executable and were unchanged when

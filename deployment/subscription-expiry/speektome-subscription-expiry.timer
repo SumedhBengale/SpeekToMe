@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily SpeekToMe subscription expiry sweep
+
+[Timer]
+OnCalendar=*-*-* 00:15:00 UTC
+OnBootSec=2min
+Persistent=true
+Unit=speektome-subscription-expiry.service
+
+[Install]
+WantedBy=timers.target

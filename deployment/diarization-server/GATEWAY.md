@@ -30,6 +30,8 @@ All routes require `Authorization: Bearer <key>`. The existing fleet authenticat
 | GET `/v1/diarizations/{job_id}/result?format=rttm` | Saved RTTM |
 | DELETE `/v1/diarizations/{job_id}` | Acknowledge and remove a finished job; 409 if active |
 
+The optional `X-SpeekToMe-Job-ID` header supplies a 32-character lowercase hexadecimal coordinator identity. It is persisted as the job ID. Repeating the same identity returns 202 for the existing uploading/processing/terminal job without consuming the new body or rerunning inference. Poll its status to distinguish completion/failure. After a terminal failure, use a new identity for an explicit retry. Requests without the header retain random server-generated IDs.
+
 No gateway queue. The single slot is reserved during upload as well as processing. A second POST returns 429, `Retry-After: 15`, and `queue_on_coordinator: true`. The coordinator should retain the request and retry later. Do not keep retrying a failed job without inspecting its error.
 
 Submit from the coordinator:
@@ -41,7 +43,7 @@ curl --config /etc/speektome-diarization/client.curl \
   http://DIARIZATION_PRIVATE_IP:8081/v1/diarizations
 ```
 
-The response supplies `job_id`, `status_url` and `result_url`. Poll metadata or job status, then fetch results, save them in the main server database, and DELETE the completed job after saving. Main-server application integration is not installed by this worker setup.
+The response supplies `job_id`, `status_url` and `result_url`. Poll metadata or job status, then fetch results, save them in the main server database, and DELETE the completed job after saving. The main durable-meeting integration owns a persistent FIFO and saves results before acknowledgment; see `server/orchestrator/DIARIZATION.md`.
 
 ## Runtime and long files
 

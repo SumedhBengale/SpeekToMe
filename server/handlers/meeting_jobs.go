@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"speektome-server/accountlimits"
 	"speektome-server/auth"
 )
 
@@ -44,7 +45,7 @@ type MeetingJobs struct {
 	app                *App
 	db                 *sql.DB
 	root, fleet, token string
-	uploads            sync.Mutex
+	uploads            [64]sync.Mutex
 	client             *http.Client
 	diarization        *MeetingDiarization
 }
@@ -110,6 +111,17 @@ func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
 			return err
 		}
 	}
+	// Existing jobs start unadmitted; the dispatcher admits one parent job per account.
+	var admittedColumn int
+	_ = jobs.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('meeting_jobs') WHERE name='admitted'").Scan(&admittedColumn)
+	if admittedColumn == 0 {
+		if _, e = jobs.db.Exec("ALTER TABLE meeting_jobs ADD COLUMN admitted INTEGER NOT NULL DEFAULT 0"); e != nil {
+			return e
+		}
+	}
+	if _, e = jobs.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_one_account_job ON meeting_jobs(user_id) WHERE admitted=1"); e != nil {
+		return e
+	}
 	jobs.diarization, e = newMeetingDiarization(jobs)
 	if e != nil {
 		return e
@@ -126,6 +138,14 @@ func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
 	go jobs.loop(ctx)
 	return nil
 }
+func (j *MeetingJobs) lock(key string) func() {
+	index := 0
+	for _, b := range []byte(key) {
+		index = (index*31 + int(b)) % len(j.uploads)
+	}
+	j.uploads[index].Lock()
+	return j.uploads[index].Unlock
+}
 func jobKey(user int64, id string) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%d/%s", user, id)))
 	return hex.EncodeToString(sum[:])
@@ -141,6 +161,16 @@ func (j *MeetingJobs) identity(w http.ResponseWriter, r *http.Request) (int64, s
 		http.Error(w, "invalid meeting id", 400)
 		return 0, "", false
 	}
+	operation, rpm := "meeting_status", 120
+	if r.Method == "PUT" {
+		operation, rpm = "meeting_upload", 600
+	}
+	if r.Method == "POST" {
+		operation, rpm = "meeting_update", 10
+	}
+	if !j.app.accountRate(w, r, u.ID, operation, rpm) {
+		return 0, "", false
+	}
 	return u.ID, jobKey(u.ID, id), true
 }
 func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +179,12 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", 401)
 		return
 	}
+	if !j.app.accountRate(w, r, user.ID, "meeting_manifest", 30) {
+		return
+	}
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(15 * time.Second))
+	defer controller.SetReadDeadline(time.Time{})
 	var req MeetingUpload
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req) != nil || !clientMeetingID.MatchString(req.ID) || len(req.Title) > 512 {
 		http.Error(w, "invalid meeting manifest", 400)
@@ -176,8 +212,26 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 	}
 	key := jobKey(user.ID, req.ID)
 	data, _ := json.Marshal(req.Files)
-	j.uploads.Lock()
-	defer j.uploads.Unlock()
+	var existingManifest string
+	existingErr := j.db.QueryRowContext(r.Context(), "SELECT files_json FROM meeting_jobs WHERE job_key=?", key).Scan(&existingManifest)
+	if existingErr == nil {
+		if existingManifest != string(data) {
+			http.Error(w, "meeting id already has different audio", 409)
+			return
+		}
+		j.respond(w, key)
+		return
+	}
+	if !errors.Is(existingErr, sql.ErrNoRows) {
+		accountlimits.Write(w, accountlimits.Unavailable())
+		return
+	}
+	if !j.app.accountRate(w, r, user.ID, "meeting_create", 2) {
+		return
+	}
+
+	unlock := j.lock(key)
+	defer unlock()
 	if e = os.MkdirAll(filepath.Join(j.root, key), 0700); e != nil {
 		http.Error(w, "storage unavailable", 503)
 		return
@@ -186,14 +240,19 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage durability unavailable", 503)
 		return
 	}
-	_, e = j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,created_at,language) VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id,client_id) DO NOTHING`, key, user.ID, req.ID, req.Title, string(data), time.Now().Unix(), language)
+	_, e = j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,created_at,language) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM meeting_jobs WHERE user_id=? AND admitted=0 AND status IN ('uploading','queued'))<3 ON CONFLICT(user_id,client_id) DO NOTHING`, key, user.ID, req.ID, req.Title, string(data), time.Now().Unix(), language, user.ID)
 	if e != nil {
 		http.Error(w, "database unavailable", 503)
 		return
 	}
 	var existing string
-	if j.db.QueryRow(`SELECT files_json FROM meeting_jobs WHERE job_key=?`, key).Scan(&existing) != nil {
-		http.Error(w, "database unavailable", 503)
+	if err := j.db.QueryRow(`SELECT files_json FROM meeting_jobs WHERE job_key=?`, key).Scan(&existing); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			os.Remove(filepath.Join(j.root, key))
+			accountlimits.Write(w, accountlimits.Denied("meeting_queue_full", "Your account already has three meetings waiting to be processed. Your recording is saved locally; upload it after a queued meeting finishes.", 30))
+		} else {
+			accountlimits.Write(w, accountlimits.Unavailable())
+		}
 		return
 	}
 	if existing != string(data) {
@@ -235,8 +294,8 @@ func (j *MeetingJobs) respond(w http.ResponseWriter, key string) {
 func (j *MeetingJobs) status(w http.ResponseWriter, r *http.Request) {
 	_, key, ok := j.identity(w, r)
 	if ok {
-		j.uploads.Lock()
-		defer j.uploads.Unlock()
+		unlock := j.lock(key)
+		defer unlock()
 		j.respond(w, key)
 	}
 }
@@ -250,13 +309,20 @@ func (j *MeetingJobs) upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid channel", 400)
 		return
 	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(30 * time.Second))
+	defer http.NewResponseController(w).SetReadDeadline(time.Time{})
+	data, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	if readErr != nil || len(data) == 0 {
+		http.Error(w, "invalid upload chunk", 413)
+		return
+	}
 	offset, e := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
 	if e != nil || offset < 0 {
 		http.Error(w, "invalid offset", 400)
 		return
 	}
-	j.uploads.Lock()
-	defer j.uploads.Unlock()
+	unlock := j.lock(key)
+	defer unlock()
 	var status, files string
 	if j.db.QueryRow(`SELECT status,files_json FROM meeting_jobs WHERE job_key=?`, key).Scan(&status, &files) != nil {
 		http.Error(w, "meeting not found", 404)
@@ -286,8 +352,7 @@ func (j *MeetingJobs) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	// Read a bounded chunk before appending so interrupted requests cannot leave
 	// ambiguous partial writes. Fsync before acknowledging its new offset.
-	data, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
-	if e != nil || len(data) == 0 || offset+int64(len(data)) > manifest[channel].Size {
+	if offset+int64(len(data)) > manifest[channel].Size {
 		http.Error(w, "invalid upload chunk", 413)
 		return
 	}
@@ -314,8 +379,8 @@ func (j *MeetingJobs) commit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	j.uploads.Lock()
-	defer j.uploads.Unlock()
+	unlock := j.lock(key)
+	defer unlock()
 	var status, files, title string
 	if j.db.QueryRow(`SELECT status,files_json,title FROM meeting_jobs WHERE job_key=?`, key).Scan(&status, &files, &title) != nil {
 		http.Error(w, "meeting not found", 404)
@@ -438,6 +503,7 @@ func (j *MeetingJobs) loop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
+		j.expireUploads(ctx)
 		j.dispatch(ctx)
 		select {
 		case <-ctx.Done():
@@ -446,11 +512,77 @@ func (j *MeetingJobs) loop(ctx context.Context) {
 		}
 	}
 }
+
+// Incomplete uploads never consume monthly audio quota. Expire abandoned ones
+// so they cannot retain disk space or all three pending slots indefinitely.
+func (j *MeetingJobs) expireUploads(ctx context.Context) {
+	cutoff := time.Now().Add(-24 * time.Hour).Unix()
+	rows, err := j.db.QueryContext(ctx, "SELECT job_key FROM meeting_jobs WHERE status='uploading' AND created_at<? LIMIT 16", cutoff)
+	if err != nil {
+		return
+	}
+	var keys []string
+	for rows.Next() {
+		var key string
+		if rows.Scan(&key) == nil {
+			keys = append(keys, key)
+		}
+	}
+	rows.Close()
+	for _, key := range keys {
+		unlock := j.lock(key)
+		result, err := j.db.ExecContext(ctx, "DELETE FROM meeting_jobs WHERE job_key=? AND status='uploading' AND created_at<?", key, cutoff)
+		if err == nil {
+			if n, _ := result.RowsAffected(); n == 1 {
+				_ = os.RemoveAll(filepath.Join(j.root, key))
+			}
+		}
+		unlock()
+	}
+}
 func (j *MeetingJobs) dispatch(ctx context.Context) {
 	if len(j.token) < 32 || os.Getenv("MEETING_PROCESSING_ENABLED") == "false" {
 		return
 	}
-	rows, e := j.db.QueryContext(ctx, `SELECT job_key FROM meeting_jobs WHERE ((status='queued' AND next_attempt<=?) OR (status='processing' AND lease_until<?)) AND (mic_result='' OR system_result='' OR diar_result<>'') ORDER BY created_at LIMIT 16`, time.Now().Unix(), time.Now().Unix())
+	// Recover a release interrupted after durable completion, without freeing
+	// a still-admitted job that is cancelling in-flight worker requests.
+	_, _ = j.db.ExecContext(ctx, `DELETE FROM account_leases WHERE operation='meeting processing' AND owner IN (SELECT job_key FROM meeting_jobs WHERE admitted=0 AND status IN ('completed','failed','cancelled'))`)
+	terminal, err := j.db.QueryContext(ctx, "SELECT job_key FROM meeting_jobs WHERE admitted=1 AND status IN ('failed','cancelled') AND lease_until<?", time.Now().Unix())
+	if err == nil {
+		var keys []string
+		for terminal.Next() {
+			var key string
+			if terminal.Scan(&key) == nil {
+				keys = append(keys, key)
+			}
+		}
+		terminal.Close()
+		for _, key := range keys {
+			if _, e := j.db.ExecContext(ctx, "UPDATE meeting_jobs SET admitted=0 WHERE job_key=? AND status IN ('failed','cancelled')", key); e == nil {
+				j.releaseProcessing(key)
+			}
+		}
+	}
+	// Keep account admission through CPU waits, not just while a GPU worker is leased.
+	activeRows, err := j.db.QueryContext(ctx, "SELECT job_key,user_id FROM meeting_jobs WHERE admitted=1")
+	if err == nil {
+		type activeJob struct {
+			key  string
+			user int64
+		}
+		var active []activeJob
+		for activeRows.Next() {
+			var job activeJob
+			if activeRows.Scan(&job.key, &job.user) == nil {
+				active = append(active, job)
+			}
+		}
+		activeRows.Close()
+		for _, job := range active {
+			_, _ = j.app.limits().AcquireOwner(ctx, job.user, "meeting processing", job.key, 6*time.Hour+5*time.Minute)
+		}
+	}
+	rows, e := j.db.QueryContext(ctx, `SELECT job_key FROM meeting_jobs WHERE ((status='queued' AND next_attempt<=?) OR (status IN ('processing','analyzing') AND lease_until<?)) AND (admitted=0 OR mic_result='' OR system_result='' OR diar_result<>'') AND NOT EXISTS (SELECT 1 FROM meeting_jobs other WHERE other.user_id=meeting_jobs.user_id AND other.admitted=1 AND other.job_key<>meeting_jobs.job_key) ORDER BY admitted DESC,created_at LIMIT 16`, time.Now().Unix(), time.Now().Unix())
 	if e != nil {
 		return
 	}
@@ -463,11 +595,18 @@ func (j *MeetingJobs) dispatch(ctx context.Context) {
 	}
 	rows.Close()
 	for _, key := range keys {
+		var userID int64
+		if j.db.QueryRowContext(ctx, "SELECT user_id FROM meeting_jobs WHERE job_key=?", key).Scan(&userID) != nil {
+			continue
+		}
+		if _, err := j.app.limits().AcquireOwner(ctx, userID, "meeting processing", key, 6*time.Hour+5*time.Minute); err != nil {
+			continue
+		}
 		claim := make([]byte, 16)
 		rand.Read(claim)
 		attempt := hex.EncodeToString(claim)
 		now := time.Now().Unix()
-		res, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET status='processing',attempt=?,attempts=attempts+1,lease_until=? WHERE job_key=? AND ((status='queued' AND next_attempt<=?) OR (status='processing' AND lease_until<?))`, attempt, now+90, key, now, now)
+		res, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET admitted=1,status='processing',attempt=?,attempts=attempts+1,lease_until=? WHERE job_key=? AND ((status='queued' AND next_attempt<=?) OR (status IN ('processing','analyzing') AND lease_until<?)) AND NOT EXISTS (SELECT 1 FROM meeting_jobs other WHERE other.user_id=meeting_jobs.user_id AND other.admitted=1 AND other.job_key<>meeting_jobs.job_key)`, attempt, now+90, key, now, now)
 		if e != nil {
 			continue
 		}
@@ -494,6 +633,12 @@ func (j *MeetingJobs) dispatch(ctx context.Context) {
 		go j.process(ctx, key, attempt)
 	}
 }
+func (j *MeetingJobs) releaseProcessing(key string) {
+	var user int64
+	if j.db.QueryRow("SELECT user_id FROM meeting_jobs WHERE job_key=?", key).Scan(&user) == nil {
+		(accountlimits.Store{DB: j.db}).Release(user, "meeting processing", key)
+	}
+}
 func (j *MeetingJobs) retry(key, attempt, message string, permanent bool) {
 	status := "queued"
 	var attempts int
@@ -501,11 +646,26 @@ func (j *MeetingJobs) retry(key, attempt, message string, permanent bool) {
 	if permanent || attempts >= 12 {
 		status = "failed"
 	}
-	j.db.Exec(`UPDATE meeting_jobs SET status=?,error=?,lease_until=0,next_attempt=? WHERE job_key=? AND attempt=? AND status='processing'`, status, message, time.Now().Add(30*time.Second).Unix(), key, attempt)
+	result, err := j.db.Exec(`UPDATE meeting_jobs SET admitted=CASE WHEN ?='failed' THEN 0 ELSE admitted END,status=?,error=?,lease_until=0,next_attempt=? WHERE job_key=? AND attempt=? AND status='processing'`, status, status, message, time.Now().Add(30*time.Second).Unix(), key, attempt)
+	if err == nil && status == "failed" {
+		if n, _ := result.RowsAffected(); n == 1 {
+			j.releaseProcessing(key)
+		}
+	}
+
 }
 func (j *MeetingJobs) process(parent context.Context, key, attempt string) {
 	ctx, cancel := context.WithTimeout(parent, 6*time.Hour)
 	defer cancel()
+	defer func() {
+		result, err := j.db.Exec(`UPDATE meeting_jobs SET admitted=0 WHERE job_key=? AND status IN ('failed','cancelled')`, key)
+		if err == nil {
+			if n, _ := result.RowsAffected(); n > 0 {
+				j.releaseProcessing(key)
+			}
+		}
+	}()
+
 	defer func() {
 		releaseCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stop()
@@ -541,7 +701,7 @@ func (j *MeetingJobs) process(parent context.Context, key, attempt string) {
 						return
 					}
 				}
-				res, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET lease_until=? WHERE job_key=? AND attempt=? AND status='processing'`, time.Now().Add(90*time.Second).Unix(), key, attempt)
+				res, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET lease_until=? WHERE job_key=? AND attempt=? AND status IN ('processing','analyzing')`, time.Now().Add(90*time.Second).Unix(), key, attempt)
 				if e != nil {
 					cancel()
 					return
@@ -736,7 +896,7 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 		return e
 	}
 	defer tx.Rollback()
-	res, e := tx.ExecContext(ctx, `UPDATE meeting_jobs SET status='completed',error='',lease_until=0 WHERE job_key=? AND attempt=? AND status='processing'`, key, attempt)
+	res, e := tx.ExecContext(ctx, `UPDATE meeting_jobs SET status='analyzing',error='' WHERE job_key=? AND attempt=? AND status='processing'`, key, attempt)
 	if e != nil {
 		return e
 	}
@@ -767,6 +927,15 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 			}
 		}
 	}
+	completed, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET status='completed',admitted=0,lease_until=0 WHERE job_key=? AND attempt=? AND status='analyzing'`, key, attempt)
+	if e != nil {
+		return e
+	}
+	n, _ = completed.RowsAffected()
+	if n != 1 {
+		return errors.New("meeting ownership changed before completion")
+	}
+	j.releaseProcessing(key)
 	return nil
 }
 
@@ -807,14 +976,14 @@ func (j *MeetingJobs) retryHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, e := j.db.Exec(`UPDATE meeting_jobs SET status='queued',attempts=0,next_attempt=0,error='' WHERE job_key=? AND status='failed'`, key)
+	res, e := j.db.Exec(`UPDATE meeting_jobs SET status='queued',attempts=0,next_attempt=0,error='' WHERE job_key=? AND status='failed' AND (SELECT COUNT(*) FROM meeting_jobs pending WHERE pending.user_id=meeting_jobs.user_id AND pending.admitted=0 AND pending.status IN ('uploading','queued'))<3`, key)
 	if e != nil {
 		http.Error(w, "database unavailable", 503)
 		return
 	}
 	n, _ := res.RowsAffected()
 	if n != 1 {
-		http.Error(w, "meeting is not failed", 409)
+		accountlimits.Write(w, accountlimits.Denied("meeting_retry_unavailable", "This meeting cannot be retried yet. Your account may already have three queued meetings.", 30))
 		return
 	}
 	// Successful checkpoints are retained. A failed CPU job gets a new remote

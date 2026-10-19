@@ -551,7 +551,36 @@ func (a *App) HandleRazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 		} else if invoiceID != "" {
 			dedupeKey = "invoice:" + invoiceID
 		}
-		_, err = a.DB.ApplySuccessfulSubscriptionPayment(userID, subID, paymentID, invoiceID, dedupeKey, eventID, event.Event, amount, currency, status, event.Payload.Subscription.Entity.CurrentStart, event.Payload.Subscription.Entity.CurrentEnd, rawPayload)
+		periodStart, periodEnd := event.Payload.Subscription.Entity.CurrentStart, event.Payload.Subscription.Entity.CurrentEnd
+		if periodStart <= 0 || periodEnd <= periodStart {
+			// Invoice/payment notifications can omit the subscription entity.
+			// Reconcile boundaries before consuming the payment idempotency key,
+			// so a provider outage leaves the webhook retryable without a reset.
+			var recorded bool
+			err = a.DB.GetDB().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM subscription_payments WHERE user_id=? AND dedupe_key=?)`, userID, dedupeKey).Scan(&recorded)
+			if err == nil && !recorded {
+				keyID, keySecret := os.Getenv("RAZORPAY_KEY_ID"), os.Getenv("RAZORPAY_KEY_SECRET")
+				if keyID == "" || keySecret == "" {
+					err = fmt.Errorf("billing credentials missing for period reconciliation")
+				} else {
+					var data map[string]interface{}
+					data, err = newRazorpayClient(keyID, keySecret).Subscription.Fetch(subID, nil, nil)
+					if err == nil {
+						var subscription razorpaySubscription
+						err = decodeMap(data, &subscription)
+						if err == nil && (subscription.ID != subID || subscription.CurrentStart <= 0 || subscription.CurrentEnd <= subscription.CurrentStart) {
+							err = fmt.Errorf("invalid subscription billing period")
+						}
+						if err == nil {
+							periodStart, periodEnd = subscription.CurrentStart, subscription.CurrentEnd
+						}
+					}
+				}
+			}
+		}
+		if err == nil {
+			_, err = a.DB.ApplySuccessfulSubscriptionPayment(userID, subID, paymentID, invoiceID, dedupeKey, eventID, event.Event, amount, currency, status, periodStart, periodEnd, rawPayload)
+		}
 	case event.Event == "subscription.pending" || event.Event == "payment.failed":
 		log.Printf("[RAZORPAY WEBHOOK] Payment pending/failed for user ID %d (event: %s)", userID, event.Event)
 		err = a.DB.UpdateSubscriptionState(userID, subID, "pending", event.Payload.Subscription.Entity.CurrentStart, event.Payload.Subscription.Entity.CurrentEnd, nil)

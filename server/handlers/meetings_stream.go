@@ -312,6 +312,12 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	owner, admissionErr := a.limits().Acquire(ctx, user.ID, "meeting recording", 4*time.Hour+5*time.Minute)
+	if admissionErr != nil {
+		_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{Type: "error", Error: admissionErr.Error()})
+		return
+	}
+	defer a.limits().Release(user.ID, "meeting recording", owner)
 	limit := config.ConfigManager.Get().DefaultUserRateLimitRPM
 	if user.RateLimitRPM.Valid {
 		userOverride := int(user.RateLimitRPM.Int64)

@@ -1,0 +1,13 @@
+[Unit]
+Description=Expire SpeekToMe subscriptions after the two-day grace period
+Wants=network-online.target
+After=network-online.target valkey.service
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/speektome
+ExecStart=/home/ec2-user/speektome/speektome-server --expire-subscriptions
+TimeoutStartSec=180
+Restart=on-failure
+RestartSec=300

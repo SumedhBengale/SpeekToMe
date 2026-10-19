@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 
+	"speektome-server/accountlimits"
 	"speektome-server/utils"
 	"speektome-server/valkey"
 )
@@ -205,6 +206,11 @@ func NewDatabase(connStr string) (*Database, error) {
 		return nil, err
 	}
 
+	if _, err := dbConn.Exec(accountlimits.Schema); err != nil {
+		dbConn.Close()
+		return nil, err
+	}
+
 	// Dynamic migrations for existing databases
 	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN event_id TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE webhook_logs ADD COLUMN payment_id TEXT DEFAULT ''")
@@ -307,22 +313,26 @@ func NewDatabase(connStr string) (*Database, error) {
 
 	// Set default configurations
 	configs := map[string]string{
-		"models_config_json":               defaultModelsJSON,
-		"languages_config_json":            defaultLanguagesJSON,
-		"meeting_stream_url":               "ws://GPU_HOST_IP:80/v1/stream",
-		"unified_stream_url":               "ws://GPU_HOST_IP:80/v1/stream",
-		"ratelimit_free_rpm":               "3",
-		"ratelimit_paid_rpm":               "15",
-		"quota_free_daily_fup_seconds":     "3600",
-		"quota_paid_daily_fup_seconds":     "86400",
-		"quota_free_monthly_seconds":       "3600",
-		"quota_paid_monthly_seconds":       "2700000",
-		"ratelimit_groq_rpm":               "20",
-		"ratelimit_default_user_rpm":       "10",
-		"notification":                     "",
-		"whisper_base_prompt":              "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
-		"last_free_tier_quota_reset_month": time.Now().Format("2006-01"),
-		"transform_input_tokens":           "10000",
+		"models_config_json":                  defaultModelsJSON,
+		"languages_config_json":               defaultLanguagesJSON,
+		"meeting_stream_url":                  "ws://GPU_HOST_IP:80/v1/stream",
+		"unified_stream_url":                  "ws://GPU_HOST_IP:80/v1/stream",
+		"ratelimit_command_rpm":               "10",
+		"quota_command_input_monthly_tokens":  "5000000",
+		"quota_command_output_monthly_tokens": "1000000",
+		"command_max_output_tokens":           "32768",
+		"ratelimit_free_rpm":                  "3",
+		"ratelimit_paid_rpm":                  "15",
+		"quota_free_daily_fup_seconds":        "3600",
+		"quota_paid_daily_fup_seconds":        "86400",
+		"quota_free_monthly_seconds":          "3600",
+		"quota_paid_monthly_seconds":          "2700000",
+		"ratelimit_groq_rpm":                  "20",
+		"ratelimit_default_user_rpm":          "10",
+		"notification":                        "",
+		"whisper_base_prompt":                 "Transcribe the spoken audio accurately with correct grammar, spelling, and punctuation.",
+		"last_free_tier_quota_reset_month":    time.Now().Format("2006-01"),
+		"transform_input_tokens":              "10000",
 	}
 	for k, v := range configs {
 		_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
@@ -393,6 +403,7 @@ type UserProfile struct {
 	PlanTier               string
 	PlanActive             int
 	PlanActivatedAt        string
+	BillingPeriodEnd       int64
 	RazorpaySubscriptionID string
 	RateLimitRPM           sql.NullInt64
 	IsAdmin                int
@@ -428,7 +439,8 @@ func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		cached, err := valkey.GlobalClient.GetCachedSession(ctx, token)
 		cancel()
-		if err == nil && cached != nil {
+		// Legacy cache entries lack the paid-through date and must be refreshed.
+		if err == nil && cached != nil && cached.BillingPeriodEnd != nil && !subscriptionExpired(cached.PlanTier, *cached.BillingPeriodEnd, time.Now()) {
 			// Mitigation 3: Dynamic Expiration Check
 			if cached.ExpiresAt != "" {
 				if expTime, err := time.Parse(time.RFC3339, cached.ExpiresAt); err == nil && time.Now().After(expTime) {
@@ -454,6 +466,7 @@ func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 				PlanTier:               cached.PlanTier,
 				PlanActive:             cached.PlanActive,
 				PlanActivatedAt:        cached.PlanActivatedAt,
+				BillingPeriodEnd:       *cached.BillingPeriodEnd,
 				RazorpaySubscriptionID: cached.RazorpaySubscriptionID,
 				RateLimitRPM:           rpm,
 				IsAdmin:                cached.IsAdmin,
@@ -471,13 +484,30 @@ func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 	var langsStr sql.NullString
 	var expiresAtStr string
 	err := d.db.QueryRow(`
-		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked, COALESCE(u.languages, '["en"]'), s.expires_at
+		SELECT u.id, u.email, u.name, u.plan_tier, u.plan_active, COALESCE(u.plan_activated_at, u.created_at), COALESCE(u.razorpay_subscription_id, ''), u.rate_limit_rpm, u.is_admin, s.is_temp, COALESCE(u.monthly_usage_seconds, 0.0), u.is_locked, COALESCE(u.languages, '["en"]'), s.expires_at, COALESCE(u.razorpay_current_end,0)
 		FROM sessions s 
 		JOIN users u ON s.user_id = u.id 
 		WHERE s.token = ? AND s.expires_at > ?
-	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked, &langsStr, &expiresAtStr)
+	`, token, now).Scan(&u.ID, &u.Email, &u.Name, &u.PlanTier, &u.PlanActive, &u.PlanActivatedAt, &u.RazorpaySubscriptionID, &u.RateLimitRPM, &u.IsAdmin, &u.IsTempSession, &u.MonthlyUsageSeconds, &u.IsLocked, &langsStr, &expiresAtStr, &u.BillingPeriodEnd)
 	if err != nil {
 		return nil, err
+	}
+	if subscriptionExpired(u.PlanTier, u.BillingPeriodEnd, time.Now()) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		changed, expireErr := d.expireSubscriptions(ctx, time.Now(), u.ID)
+		cancel()
+		if expireErr != nil {
+			return nil, expireErr
+		}
+		if changed == 0 {
+			// A renewal won the race. Reload its new entitlement rather than
+			// downgrading a profile read just before the confirmed payment.
+			invalidateCachedSessionToken(token)
+			return d.GetUserBySession(token)
+		}
+		u.PlanTier = "free"
+		u.PlanActive = 0
+		u.MonthlyUsageSeconds = 0
 	}
 	u.Languages = utils.ParseLanguagesJSON(langsStr.String)
 
@@ -503,6 +533,7 @@ func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 			PlanTier:               u.PlanTier,
 			PlanActive:             u.PlanActive,
 			PlanActivatedAt:        u.PlanActivatedAt,
+			BillingPeriodEnd:       &u.BillingPeriodEnd,
 			RazorpaySubscriptionID: u.RazorpaySubscriptionID,
 			RateLimitRPM:           rpmPtr,
 			IsAdmin:                u.IsAdmin,
@@ -728,21 +759,22 @@ func (d *Database) UpdateUserPlan(userID int64, planTier string, planActive int,
 }
 
 func (d *Database) SetPendingSubscription(userID int64, subID string) error {
-	_, err := d.db.Exec("UPDATE users SET razorpay_subscription_id = ?, razorpay_subscription_status = 'created', razorpay_current_start = 0, razorpay_current_end = 0 WHERE id = ?", subID, userID)
+	_, err := d.db.Exec("UPDATE users SET razorpay_subscription_id = ?, razorpay_subscription_status = 'created' WHERE id = ?", subID, userID)
 	if err == nil {
 		invalidateCachedUserSessions(userID)
 	}
 	return err
 }
 
+// Non-payment events change status/entitlement only. Billing period boundaries
+// are advanced exclusively by a confirmed successful payment.
 func (d *Database) UpdateSubscriptionState(userID int64, subID, status string, periodStart, periodEnd int64, planActive *int) error {
 	if planActive == nil {
 		_, err := d.db.Exec(`
 			UPDATE users
-			SET razorpay_subscription_id = ?, razorpay_subscription_status = ?,
-				razorpay_current_start = ?, razorpay_current_end = ?
+			SET razorpay_subscription_id = ?, razorpay_subscription_status = ?
 			WHERE id = ?
-		`, subID, status, periodStart, periodEnd, userID)
+		`, subID, status, userID)
 		if err == nil {
 			invalidateCachedUserSessions(userID)
 		}
@@ -755,10 +787,9 @@ func (d *Database) UpdateSubscriptionState(userID int64, subID, status string, p
 	_, err := d.db.Exec(`
 		UPDATE users
 		SET razorpay_subscription_id = ?, razorpay_subscription_status = ?,
-			razorpay_current_start = ?, razorpay_current_end = ?, plan_active = ?,
-			plan_tier = ?
+			plan_active = ?, plan_tier = ?
 		WHERE id = ?
-	`, subID, status, periodStart, periodEnd, *planActive, planTier, userID)
+	`, subID, status, *planActive, planTier, userID)
 	if err == nil {
 		invalidateCachedUserSessions(userID)
 	}
@@ -809,7 +840,23 @@ func (d *Database) ApplySuccessfulSubscriptionPayment(userID int64, subID, payme
 		return false, err
 	}
 
-	return true, tx.Commit()
+	// Open the new allowance atomically with the successful payment. Existing
+	// periods are never cleared: duplicate events and late settlements cannot refill
+	// the active allowance or charge a previous attempt to the new month.
+	var anchor string
+	var effectiveStart, effectiveEnd int64
+	if err = tx.QueryRow(`SELECT COALESCE(plan_activated_at,created_at,''),COALESCE(razorpay_current_start,0),COALESCE(razorpay_current_end,0) FROM users WHERE id=?`, userID).Scan(&anchor, &effectiveStart, &effectiveEnd); err != nil {
+		return false, err
+	}
+	period, _ := accountlimits.BillingPeriod(anchor, effectiveStart, effectiveEnd, time.Now())
+	if _, err = tx.Exec(`INSERT INTO command_usage(user_id,period) VALUES(?,?) ON CONFLICT(user_id,period) DO NOTHING`, userID, period); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	invalidateCachedUserSessions(userID)
+	return true, nil
 }
 
 func (d *Database) IsUserPlanActive(userID int64) (bool, error) {

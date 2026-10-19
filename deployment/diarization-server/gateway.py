@@ -270,10 +270,20 @@ async def submit(request: Request):
     global active
     if not ready:
         return JSONResponse({'error': 'runtime_not_ready'}, status_code=503, headers={'Retry-After': '5'})
+    # Coordinator persists this identity before sending audio. Repeating an
+    # upload after a lost 202 response reattaches to the durable job.
+    requested_id = request.headers.get('x-speektome-job-id')
+    if requested_id is not None:
+        job_dir(requested_id)  # Validate before touching paths.
+        with lock:
+            if active and active['job_id'] == requested_id:
+                return JSONResponse({'job_id': requested_id}, status_code=202)
+        if (DATA/requested_id/'job.json').exists():
+            return JSONResponse({'job_id': requested_id}, status_code=202)
     if not slot.acquire(blocking=False):
         return JSONResponse({'error': 'worker_busy', 'active_job': snapshot()['active_job'], 'queue_on_coordinator': True},
                             status_code=429, headers={'Retry-After': '15'})
-    job_id = secrets.token_hex(16)
+    job_id = requested_id or secrets.token_hex(16)
     path = DATA/job_id
     handed_off = False
     job = dict(job_id=job_id, status='uploading', phase='uploading', created_at=time.time(),

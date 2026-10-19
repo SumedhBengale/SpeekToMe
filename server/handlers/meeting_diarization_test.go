@@ -42,7 +42,7 @@ func diarizationFixture(t *testing.T) (*MeetingJobs, *MeetingDiarization) {
 }
 func addDiarizationMeeting(t *testing.T, j *MeetingJobs, key string, created int) {
 	t.Helper()
-	if _, err := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at) VALUES(?,1,?,'test','{}','queued',?)`, key, key, created); err != nil {
+	if _, err := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at,admitted) VALUES(?,?,?,'test','{}','queued',?,1)`, key, created, key, created); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(j.root, key), 0700); err != nil {
@@ -271,7 +271,7 @@ func TestDiarizationFailureRequiresExplicitRetryAndKeepsASR(t *testing.T) {
 	if len(f.submissions) != 1 {
 		t.Fatal("auto retried failed input")
 	}
-	j.db.Exec(`UPDATE meeting_jobs SET status='queued' WHERE job_key='first'`) // Explicit retry handler transition.
+	j.db.Exec(`UPDATE meeting_jobs SET status='queued',admitted=1 WHERE job_key='first'`) // Explicit retry handler transition.
 	queueTick(t, d)
 	f.mu.Lock()
 	defer f.mu.Unlock()

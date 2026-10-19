@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	ChannelConfigReload   = "speektome:config:reload"
+	ChannelConfigReload    = "speektome:config:reload"
 	ChannelVocabInvalidate = "speektome:vocab:invalidate"
-	ChannelUserRPMReset   = "speektome:ratelimit:user:reset"
+	ChannelUserRPMReset    = "speektome:ratelimit:user:reset"
 
 	KeyPrefixUserRPM      = "ratelimit:user:"
 	KeyPrefixAuth         = "ratelimit:auth:"
@@ -358,6 +358,7 @@ type CachedSessionUser struct {
 	IsLocked               int      `json:"is_locked"`
 	Languages              []string `json:"languages"`
 	ExpiresAt              string   `json:"expires_at"`
+	BillingPeriodEnd       *int64   `json:"billing_period_end,omitempty"`
 }
 
 func (c *Client) GetCachedSession(ctx context.Context, token string) (*CachedSessionUser, error) {
@@ -472,4 +473,3 @@ func (c *Client) InvalidateCachedVocabulary(ctx context.Context, userID int64) e
 	}
 	return c.rdb.Del(ctx, fmt.Sprintf("%s%d", KeyPrefixVocab, userID)).Err()
 }
-

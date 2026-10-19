@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"speektome-server/db"
 )
@@ -129,17 +131,17 @@ func TestVerifySubscriptionReconcilesCapturedPlanPayment(t *testing.T) {
 	}
 
 	mockRazorpay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	switch r.URL.Path {
-	case "/v1/subscriptions/sub_verify":
-		_, _ = w.Write([]byte(`{"id":"sub_verify","plan_id":"plan_verify","status":"active","current_start":1700000000,"current_end":1702592000}`))
-	case "/v1/payments/pay_verify":
-		_, _ = w.Write([]byte(`{"id":"pay_verify","subscription_id":"sub_verify","invoice_id":"inv_verify","amount":200,"currency":"USD","status":"captured","captured":true}`))
-	case "/v1/plans/plan_verify":
-		_, _ = w.Write([]byte(`{"id":"plan_verify","item":{"amount":200,"currency":"USD"}}`))
-	default:
-		http.NotFound(w, r)
-	}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/subscriptions/sub_verify":
+			_, _ = w.Write([]byte(`{"id":"sub_verify","plan_id":"plan_verify","status":"active","current_start":1700000000,"current_end":1702592000}`))
+		case "/v1/payments/pay_verify":
+			_, _ = w.Write([]byte(`{"id":"pay_verify","subscription_id":"sub_verify","invoice_id":"inv_verify","amount":200,"currency":"USD","status":"captured","captured":true}`))
+		case "/v1/plans/plan_verify":
+			_, _ = w.Write([]byte(`{"id":"plan_verify","item":{"amount":200,"currency":"USD"}}`))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer mockRazorpay.Close()
 	previousBaseURL := razorpayAPIBaseURL
@@ -249,5 +251,53 @@ func TestCreateSubscriptionStartsImmediatelyWithoutTrial(t *testing.T) {
 	}
 	if savedSubscription != "sub_create" {
 		t.Fatalf("saved subscription = %q, want sub_create", savedSubscription)
+	}
+}
+
+func TestInvoiceRenewalReconcilesMissingPeriodAndPreservesDuplicateUsage(t *testing.T) {
+	a := limitApp(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	oldStart := now.AddDate(0, -1, 0)
+	newEnd := now.AddDate(0, 1, 0)
+	if _, err := a.DB.GetDB().Exec(`UPDATE users SET razorpay_subscription_id='sub_renew',razorpay_current_start=?,razorpay_current_end=?,monthly_usage_seconds=123 WHERE id=1`, oldStart.Unix(), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.DB.GetDB().Exec(`INSERT INTO command_usage(user_id,period,input_tokens,output_tokens) VALUES(1,?,100,200)`, oldStart.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/v1/subscriptions/sub_renew" {
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"id": "sub_renew", "current_start": now.Unix(), "current_end": newEnd.Unix()})
+	}))
+	defer provider.Close()
+	previous := razorpayAPIBaseURL
+	razorpayAPIBaseURL = provider.URL
+	t.Cleanup(func() { razorpayAPIBaseURL = previous })
+	t.Setenv("RAZORPAY_KEY_ID", "key_test")
+	t.Setenv("RAZORPAY_KEY_SECRET", "secret_test")
+	t.Setenv("RAZORPAY_WEBHOOK_SECRET", "webhook-test-secret")
+	payload := `{"event":"invoice.paid","payload":{"invoice":{"entity":{"id":"inv_renew","subscription_id":"sub_renew","payment_id":"pay_renew","amount":200,"currency":"USD","status":"paid"}}}}`
+	if w := signedWebhookRequest(t, a.DB, "evt_renew", "webhook-test-secret", payload); w.Code != 200 {
+		t.Fatalf("renewal: %d %s", w.Code, w.Body.String())
+	}
+	usage, err := a.commandUsage(context.Background(), 1)
+	if err != nil || usage["input_used"] != int64(0) || usage["period_start"] != now.Format(time.RFC3339) {
+		t.Fatalf("renewal usage: %#v %v", usage, err)
+	}
+	if _, err := a.DB.GetDB().Exec(`UPDATE command_usage SET input_tokens=40,output_tokens=50 WHERE user_id=1 AND period=?`, now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	if w := signedWebhookRequest(t, a.DB, "evt_renew_duplicate", "webhook-test-secret", payload); w.Code != 200 {
+		t.Fatalf("duplicate: %d %s", w.Code, w.Body.String())
+	}
+	usage, err = a.commandUsage(context.Background(), 1)
+	if err != nil || usage["input_used"] != int64(40) || calls != 1 {
+		t.Fatalf("duplicate refilled or refetched: %#v calls=%d err=%v", usage, calls, err)
 	}
 }

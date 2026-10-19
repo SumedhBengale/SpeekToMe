@@ -66,6 +66,20 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
+	// Maintenance uses the same binary/config/database as the API service.
+	if len(os.Args) == 2 && os.Args[1] == "--expire-subscriptions" {
+		valkey.InitGlobalClient()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		count, err := database.ExpireSubscriptions(ctx, time.Now())
+		if err != nil {
+			log.Fatalf("[SUBSCRIPTION EXPIRY] Daily sweep failed: %v", err)
+		}
+		log.Printf("[SUBSCRIPTION EXPIRY] Downgraded %d expired subscriptions", count)
+		database.Close()
+		return
+	}
+
 	app := &handlers.App{
 		DB:         database,
 		VocabCache: vocab.NewVocabCache(),
@@ -81,6 +95,14 @@ func main() {
 			app.VocabCache.Invalidate(userID)
 		})
 	}
+
+	expiryCtx, expiryCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	expiredCount, expiryErr := database.ExpireSubscriptions(expiryCtx, time.Now())
+	expiryCancel()
+	if expiryErr != nil {
+		log.Fatalf("[SUBSCRIPTION EXPIRY] Startup sweep failed: %v", expiryErr)
+	}
+	log.Printf("[SUBSCRIPTION EXPIRY] Startup downgraded %d expired subscriptions", expiredCount)
 
 	config.SyncConfigsFromValkeyOrDB(database, ratelimit.GroqRateLimiter.SetLimit)
 	go func() {
@@ -117,57 +139,10 @@ func main() {
 		}
 	}()
 
-	mux := http.NewServeMux()
-	if err := app.StartMeetingJobs(context.Background(), mux); err != nil {
-		log.Fatalf("Failed to initialize durable meeting jobs: %v", err)
+	mux, err := newAPIMux(context.Background(), app)
+	if err != nil {
+		log.Fatalf("Failed to initialize API routes: %v", err)
 	}
-
-	mux.HandleFunc("GET /auth/login", app.HandleAuthLogin)
-	mux.HandleFunc("GET /auth/callback", app.HandleAuthCallback)
-	mux.HandleFunc("POST /auth/signup", app.HandleAuthSignup)
-	mux.HandleFunc("POST /auth/login", app.HandleAuthLoginCredentials)
-	mux.HandleFunc("POST /auth/2fa/verify", app.HandleAuth2FAVerify)
-	mux.HandleFunc("GET /auth/verify", app.HandleAuthVerify)
-	mux.HandleFunc("GET /auth/me", app.HandleAuthMe)
-	mux.HandleFunc("GET /auth/profile/summary", app.HandleGetProfileSummary)
-	mux.HandleFunc("POST /auth/forgot-password", app.HandleForgotPassword)
-	mux.HandleFunc("POST /auth/reset-password", app.HandleResetPassword)
-	mux.HandleFunc("DELETE /auth/account", app.HandleDeleteAccount)
-	mux.HandleFunc("POST /auth/delete-account", app.HandleDeleteAccount)
-	mux.HandleFunc("POST /auth/languages", app.HandleUpdateLanguages)
-	mux.HandleFunc("GET /usage/history", app.HandleGetUserHistory)
-	mux.HandleFunc("POST /auth/logout", app.HandleAuthLogout)
-	mux.HandleFunc("POST /generate", app.HandleGenerate)
-	mux.HandleFunc("POST /v1/transform", app.HandleTransform)
-	mux.HandleFunc("POST /transform", app.HandleTransform)
-	mux.HandleFunc("GET /v1/stream", app.HandleStreamTranscribe)
-	mux.HandleFunc("POST /v1/transcribe/ack", app.HandleTranscribeAck)
-	mux.HandleFunc("GET /v1/languages", handlers.HandleGetLanguages)
-	mux.HandleFunc("GET /languages", handlers.HandleGetLanguages)
-	mux.HandleFunc("GET /config/promo", handlers.HandleGetOnboardingPromo)
-	mux.HandleFunc("GET /promo", handlers.HandleGetOnboardingPromo)
-	mux.HandleFunc("GET /config/video", handlers.HandleGetOnboardingVideo)
-	mux.HandleFunc("GET /video", handlers.HandleGetOnboardingVideo)
-	mux.HandleFunc("GET /v1/config", handlers.HandleGetClientConfig)
-	mux.HandleFunc("GET /config", handlers.HandleGetClientConfig)
-	mux.HandleFunc("POST /validate-prompt", app.HandleValidatePrompt)
-	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("POST /newsletter/subscribe", app.HandleNewsletterSubscribe)
-	mux.HandleFunc("GET /auth/vocabulary", app.HandleGetVocabulary)
-	mux.HandleFunc("POST /auth/vocabulary", app.HandleAddVocabulary)
-	mux.HandleFunc("DELETE /auth/vocabulary", app.HandleDeleteVocabulary)
-	mux.HandleFunc("POST /meetings", app.HandleUploadMeeting)
-	mux.HandleFunc("POST /v1/audio/transcriptions", app.HandleServer2BatchTranscription)
-	mux.HandleFunc("GET /v1/meetings/live", app.HandleMeetingStream)
-	mux.HandleFunc("GET /meetings", app.HandleGetMeetings)
-	mux.HandleFunc("GET /meetings/{id}", app.HandleGetMeetingDetail)
-	mux.HandleFunc("PUT /meetings/{id}/speakers", app.HandleSaveMeetingSpeakers)
-	mux.HandleFunc("DELETE /meetings/{id}", app.HandleDeleteMeeting)
-	mux.HandleFunc("GET /meetings/{id}/audio", app.HandleGetMeetingAudio)
-	mux.HandleFunc("POST /billing/create-subscription", app.HandleCreateSubscription)
-	mux.HandleFunc("POST /billing/verify-subscription", app.HandleVerifySubscription)
-	mux.HandleFunc("POST /billing/cancel-subscription", app.HandleCancelSubscription)
-	mux.HandleFunc("POST /webhooks/razorpay", app.HandleRazorpayWebhook)
 
 	// Initialize and start the EC2 Spot Orchestrator only when explicitly enabled
 	spotAMI := os.Getenv("SPOT_AMI_ID")
@@ -183,15 +158,6 @@ func main() {
 		log.Printf("[ORCHESTRATOR] Spot instance orchestrator is disabled (ENABLE_SPOT_ORCHESTRATOR != true).")
 	}
 
-	mux.HandleFunc("GET /admin/users", app.HandleAdminGetUsers)
-	mux.HandleFunc("POST /admin/users/{id}/plan", app.HandleAdminUpdatePlan)
-	mux.HandleFunc("POST /admin/users/{id}/rate-limit", app.HandleAdminUpdateRateLimit)
-	mux.HandleFunc("GET /admin/config", app.HandleAdminGetConfig)
-	mux.HandleFunc("POST /admin/config", app.HandleAdminUpdateConfig)
-	mux.HandleFunc("GET /admin/webhook-logs", app.HandleAdminGetWebhookLogs)
-	mux.HandleFunc("GET /admin/cache/rate-limits", app.HandleAdminGetRateLimits)
-	mux.HandleFunc("DELETE /admin/cache/rate-limits", app.HandleAdminDeleteRateLimits)
-
 	// EC2 Spot Orchestrator Routes
 	mux.HandleFunc("POST /webhooks/aws-spot-event", spotOrchestrator.HandleSpotEvent)
 	mux.HandleFunc("POST /worker/heartbeat", spotOrchestrator.HandleWorkerHeartbeat)
@@ -200,7 +166,8 @@ func main() {
 	handler := corsMiddleware(mux)
 
 	log.Printf("Starting SpeekTo.Me Go Server on port 8000...")
-	log.Fatal(http.ListenAndServe("127.0.0.1:8000", handler))
+	server := &http.Server{Addr: "127.0.0.1:8000", Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	log.Fatal(server.ListenAndServe())
 }
 
 func isAllowedOrigin(origin string) bool {

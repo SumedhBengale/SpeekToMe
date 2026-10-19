@@ -164,6 +164,9 @@ func (a *App) HandleSaveMeetingSpeakers(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	if !a.accountRate(w, r, user.ID, "meeting_update", 30) {
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "Invalid meeting ID", http.StatusBadRequest)

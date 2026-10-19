@@ -98,9 +98,17 @@ func (a *App) HandleAdminDeleteRateLimits(w http.ResponseWriter, r *http.Request
 			return
 		}
 		ratelimit.GlobalUserRateLimiter.ResetUser(userID)
+		if err := a.limits().ResetRates(r.Context(), userID); err != nil {
+			http.Error(w, "Failed to reset account rate limits", 503)
+			return
+		}
 		log.Printf("[ADMIN ACTION] Reset rate limit cache for user %d", userID)
 	} else {
 		ratelimit.GlobalUserRateLimiter.ResetAll()
+		if err := a.limits().ResetRates(r.Context(), 0); err != nil {
+			http.Error(w, "Failed to reset account rate limits", 503)
+			return
+		}
 		log.Println("[ADMIN ACTION] Reset all rate limit caches")
 	}
 	w.Header().Set("Content-Type", "application/json")

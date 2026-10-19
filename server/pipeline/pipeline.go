@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -125,13 +126,18 @@ func callChatCompletionsAPIUnified(
 	respHeader := resp.Header.Clone()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 404 || resp.StatusCode == 413 || resp.StatusCode == 422 || resp.StatusCode == 429 {
+			reportUsage(ctx, &tokenUsage{})
+		}
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI call failed: %d - %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var result struct {
+		Usage   *tokenUsage `json:"usage"`
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
@@ -140,10 +146,14 @@ func callChatCompletionsAPIUnified(
 		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("failed to decode JSON response: %w", err)
 	}
 
+	reportUsage(ctx, result.Usage)
 	if len(result.Choices) == 0 {
 		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI returned empty choices")
 	}
 
+	if commandBudget(ctx) != nil && result.Choices[0].FinishReason == "length" {
+		return "", routingLoc, resp.StatusCode, respHeader, commandOutputLimit(ctx)
+	}
 	return strings.TrimSpace(result.Choices[0].Message.Content), routingLoc, resp.StatusCode, respHeader, nil
 }
 
@@ -199,12 +209,23 @@ func callChatCompletionsAPIStreamUnified(
 	respHeader := resp.Header.Clone()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 404 || resp.StatusCode == 413 || resp.StatusCode == 422 || resp.StatusCode == 429 {
+			reportUsage(ctx, &tokenUsage{})
+		}
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI stream call failed: %d - %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	reader := bufio.NewReader(resp.Body)
 	var fullText strings.Builder
+	outputLimited := false
+	var finalUsage *tokenUsage
+	complete, seenFinish, confirmedUsage := false, false, false
+	defer func() {
+		if complete || confirmedUsage {
+			reportUsage(ctx, finalUsage)
+		}
+	}()
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -216,12 +237,15 @@ func callChatCompletionsAPIStreamUnified(
 		if strings.HasPrefix(line, "data: ") {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
 			if data == "[DONE]" {
+				complete = true
 				break
 			}
 
 			var chunk struct {
+				Usage   *tokenUsage `json:"usage"`
 				Choices []struct {
-					Delta struct {
+					FinishReason string `json:"finish_reason"`
+					Delta        struct {
 						Content          string `json:"content"`
 						ReasoningContent string `json:"reasoning_content,omitempty"`
 					} `json:"delta"`
@@ -229,7 +253,21 @@ func callChatCompletionsAPIStreamUnified(
 			}
 
 			if err := json.Unmarshal([]byte(data), &chunk); err == nil {
+				if chunk.Usage != nil {
+					finalUsage = chunk.Usage
+					confirmedUsage = seenFinish
+				}
+
 				if len(chunk.Choices) > 0 {
+					if chunk.Choices[0].FinishReason != "" {
+						seenFinish = true
+						if chunk.Usage != nil {
+							confirmedUsage = true
+						}
+					}
+					if chunk.Choices[0].FinishReason == "length" {
+						outputLimited = true
+					}
 					delta := chunk.Choices[0].Delta.Content
 					if delta != "" {
 						fullText.WriteString(delta)
@@ -248,6 +286,9 @@ func callChatCompletionsAPIStreamUnified(
 		}
 	}
 
+	if commandBudget(ctx) != nil && outputLimited {
+		return fullText.String(), routingLoc, resp.StatusCode, respHeader, commandOutputLimit(ctx)
+	}
 	return fullText.String(), routingLoc, resp.StatusCode, respHeader, nil
 }
 
@@ -387,6 +428,17 @@ func executeModelAttempt(
 			done(false, 0, err, nil)
 		}
 		return "", "", fmt.Errorf("failed to format payload for %s/%s: %w", spec.Provider, spec.Model, err)
+	}
+
+	if budget := commandBudget(ctx); budget != nil {
+		maxOutput, reserveErr := budget.Reserve(ctx, effectiveSystemPrompt, userPrompt, spec.Provider, spec.Model)
+		if reserveErr != nil {
+			return "", "", reserveErr
+		}
+		payload["max_tokens"] = maxOutput
+		if spec.Stream {
+			payload["stream_options"] = map[string]bool{"include_usage": true}
+		}
 	}
 
 	timeout := time.Duration(spec.TimeoutMs) * time.Millisecond
@@ -539,6 +591,14 @@ func RunCommandTransformationStream(
 				pctx.LLMRouting = routing
 			}
 			return res, nil
+		}
+
+		var admission interface{ NoFallback() bool }
+		if errors.As(err, &admission) && admission.NoFallback() {
+			return "", err
+		}
+		if strings.Contains(err.Error(), "Command Mode output limit reached") {
+			return "", err
 		}
 
 		log.Printf("[COMMAND LLM FALLBACK] Candidate %s/%s failed: %v. Trying next candidate.",

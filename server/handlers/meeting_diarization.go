@@ -103,7 +103,7 @@ func (d *MeetingDiarization) tick(parent context.Context) error {
 
 	// Reconcile committed jobs, including uploads committed before this deployment.
 	_, err = d.jobs.db.ExecContext(ctx, `INSERT OR IGNORE INTO meeting_diarization_queue(job_key,created_at)
- SELECT job_key,created_at FROM meeting_jobs WHERE status IN ('queued','processing') AND diar_result='' ORDER BY created_at,job_key`)
+ SELECT job_key,created_at FROM meeting_jobs WHERE admitted=1 AND status IN ('queued','processing') AND diar_result='' ORDER BY created_at,job_key`)
 	if err != nil {
 		return err
 	}
@@ -147,7 +147,7 @@ func (d *MeetingDiarization) tick(parent context.Context) error {
 	err = d.jobs.db.QueryRowContext(ctx, `SELECT job_key,remote_id,next_attempt FROM meeting_diarization_queue WHERE status='running' ORDER BY position LIMIT 1`).Scan(&key, &remote, &next)
 	if err == sql.ErrNoRows {
 		var generation int
-		err = d.jobs.db.QueryRowContext(ctx, `SELECT job_key,generation FROM meeting_diarization_queue WHERE status='queued' ORDER BY position LIMIT 1`).Scan(&key, &generation)
+		err = d.jobs.db.QueryRowContext(ctx, `SELECT job_key,generation FROM meeting_diarization_queue WHERE status='queued' AND job_key IN (SELECT job_key FROM meeting_jobs WHERE admitted=1) ORDER BY position LIMIT 1`).Scan(&key, &generation)
 		if err == sql.ErrNoRows {
 			return nil
 		}
@@ -310,11 +310,17 @@ func (d *MeetingDiarization) fail(ctx context.Context, key, message string) erro
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE meeting_jobs SET status='failed',error=?,lease_until=0 WHERE job_key=? AND status IN ('queued','processing')`, message, key)
+	_, err = tx.ExecContext(ctx, `UPDATE meeting_jobs SET admitted=CASE WHEN status='processing' THEN admitted ELSE 0 END,status='failed',error=? WHERE job_key=? AND status IN ('queued','processing')`, message, key)
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err == nil {
+		var admitted int
+		if d.jobs.db.QueryRow("SELECT admitted FROM meeting_jobs WHERE job_key=?", key).Scan(&admitted) == nil && admitted == 0 {
+			d.jobs.releaseProcessing(key)
+		}
+	}
+	return err
 }
 
 var cpuSpeakerPattern = regexp.MustCompile(`^(?:speaker[_ -]?)?(\d+)$`)

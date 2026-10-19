@@ -349,18 +349,24 @@ func (a *App) HandleAuthMe(w http.ResponseWriter, r *http.Request) {
 		notificationStr = val
 	}
 
+	commandUsage, usageErr := a.commandUsage(r.Context(), user.ID)
+	if usageErr != nil {
+		log.Printf("[COMMAND USAGE] Account %d: %v", user.ID, usageErr)
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"email":                 user.Email,
-		"name":                  user.Name,
-		"plan_tier":             user.PlanTier,
-		"plan_active":           user.PlanActive == 1,
-		"plan_activated_at":     user.PlanActivatedAt,
-		"duration_seconds":      user.MonthlyUsageSeconds,
-		"monthly_limit_seconds": monthlyLimitSeconds,
-		"is_admin":              user.IsAdmin == 1,
-		"languages":             user.Languages,
-		"notification":          notificationStr,
+		"command_usage":          commandUsage,
+		"email":                  user.Email,
+		"name":                   user.Name,
+		"plan_tier":              user.PlanTier,
+		"plan_active":            user.PlanActive == 1,
+		"plan_activated_at":      user.PlanActivatedAt,
+		"duration_seconds":       user.MonthlyUsageSeconds,
+		"monthly_limit_seconds":  monthlyLimitSeconds,
+		"is_admin":               user.IsAdmin == 1,
+		"languages":              user.Languages,
+		"notification":           notificationStr,
 		"transform_input_tokens": config.ConfigManager.GetTransformInputWordLimit(),
 	})
 }
@@ -1008,4 +1014,3 @@ func (a *App) HandleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		"message": "Account and all associated data have been permanently deleted.",
 	})
 }
-

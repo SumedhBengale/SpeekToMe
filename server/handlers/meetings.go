@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"speektome-server/accountlimits"
 	"speektome-server/auth"
 	"speektome-server/config"
 	"speektome-server/pipeline"
@@ -35,6 +36,25 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	owner, admissionErr := a.limits().Acquire(r.Context(), user.ID, "meeting processing", 6*time.Hour+5*time.Minute)
+	if admissionErr != nil {
+		accountlimits.Write(w, admissionErr)
+		return
+	}
+	defer a.limits().Release(user.ID, "meeting processing", owner)
+	var activeJobs int
+	if err := a.DB.GetDB().QueryRowContext(r.Context(), "SELECT COUNT(*) FROM meeting_jobs WHERE user_id=? AND admitted=1", user.ID).Scan(&activeJobs); err != nil {
+		accountlimits.Write(w, accountlimits.Unavailable())
+		return
+	}
+	if activeJobs > 0 {
+		accountlimits.Write(w, accountlimits.Denied("meeting_processing_busy", "Your account already has a meeting being processed. Wait for it to finish.", 30))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Hour)
+	defer cancel()
+	r = r.WithContext(ctx)
 	limit := config.ConfigManager.Get().DefaultUserRateLimitRPM
 	if user.RateLimitRPM.Valid {
 		userOverride := int(user.RateLimitRPM.Int64)
@@ -216,6 +236,9 @@ func (a *App) HandleGetMeetings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	if !a.accountRate(w, r, user.ID, "meeting_read", 120) {
+		return
+	}
 
 	meetings, err := a.DB.GetUserMeetings(user.ID)
 	if err != nil {
@@ -236,6 +259,9 @@ func (a *App) HandleGetMeetingDetail(w http.ResponseWriter, r *http.Request) {
 	user, err := auth.Authenticate(r, a.DB)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if !a.accountRate(w, r, user.ID, "meeting_read", 120) {
 		return
 	}
 
@@ -267,6 +293,9 @@ func (a *App) HandleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	if !a.accountRate(w, r, user.ID, "meeting_update", 30) {
+		return
+	}
 
 	idStr := r.PathValue("id")
 	meetingID, err := strconv.ParseInt(idStr, 10, 64)
@@ -286,6 +315,12 @@ func (a *App) HandleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var admitted int
+	if a.DB.GetDB().QueryRow("SELECT admitted FROM meeting_jobs WHERE meeting_id=? AND user_id=?", meetingID, user.ID).Scan(&admitted) == nil && admitted == 1 {
+		http.Error(w, "This meeting is still being processed. Wait for processing to finish before deleting it.", http.StatusConflict)
+		return
+	}
+
 	cleanedPath := filepath.Clean(meeting.AudioPath)
 	normalizedPath := filepath.ToSlash(cleanedPath)
 	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") && !validMeetingAudioPath(cleanedPath) {
@@ -293,7 +328,11 @@ func (a *App) HandleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = a.DB.GetDB().Exec(`UPDATE meeting_jobs SET status='cancelled',attempt='',lease_until=0 WHERE meeting_id=? AND user_id=?`, meetingID, user.ID)
+	var job string
+	if a.DB.GetDB().QueryRow("SELECT job_key FROM meeting_jobs WHERE meeting_id=? AND user_id=?", meetingID, user.ID).Scan(&job) == nil {
+		a.limits().Release(user.ID, "meeting processing", job)
+	}
+	_, _ = a.DB.GetDB().Exec(`UPDATE meeting_jobs SET admitted=0,status='cancelled',attempt='',lease_until=0 WHERE meeting_id=? AND user_id=?`, meetingID, user.ID)
 	_ = os.Remove(meeting.AudioPath)
 
 	err = a.DB.DeleteMeeting(meetingID)
@@ -311,6 +350,9 @@ func (a *App) HandleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 	user, err := auth.Authenticate(r, a.DB)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if !a.accountRate(w, r, user.ID, "meeting_read", 120) {
 		return
 	}
 
