@@ -129,8 +129,8 @@ func callChatCompletionsAPIUnified(
 		if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 404 || resp.StatusCode == 413 || resp.StatusCode == 422 || resp.StatusCode == 429 {
 			reportUsage(ctx, &tokenUsage{})
 		}
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI call failed: %d - %s", resp.StatusCode, string(bodyBytes))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
+		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI call failed: status %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -212,8 +212,8 @@ func callChatCompletionsAPIStreamUnified(
 		if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 404 || resp.StatusCode == 413 || resp.StatusCode == 422 || resp.StatusCode == 429 {
 			reportUsage(ctx, &tokenUsage{})
 		}
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI stream call failed: %d - %s", resp.StatusCode, string(bodyBytes))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
+		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI stream call failed: status %d", resp.StatusCode)
 	}
 
 	reader := bufio.NewReader(resp.Body)
@@ -673,8 +673,8 @@ func (t *AIEnhancementTransform) Transform(ctx context.Context, text string, pct
 	inputWords := len(strings.Fields(text))
 	outputWords := len(strings.Fields(res))
 	if inputWords >= 6 && outputWords < (inputWords*6)/10 {
-		log.Printf("[AI ENHANCEMENT TRUNCATION REJECTED] LLM output words (%d) < 60%% of input words (%d). Discarding truncated output:\n%q\nFalling back to raw text:\n%q",
-			outputWords, inputWords, res, text)
+		log.Printf("[AI ENHANCEMENT TRUNCATION REJECTED] LLM output words (%d) < 60%% of input words (%d). Falling back to raw text",
+			outputWords, inputWords)
 		return text, nil
 	}
 

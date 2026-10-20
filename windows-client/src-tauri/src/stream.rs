@@ -248,12 +248,12 @@ pub fn start_streaming_session(
                                         0
                                     };
                                     let current_chunk = chunk_count_reader.load(std::sync::atomic::Ordering::Relaxed);
-                                    println!("[STREAM E2E LATENCY] Chunk #{} -> Interim Return: {} ms | Text: {:?}", current_chunk, rtt_ms, event.text);
+                                    println!("[STREAM E2E LATENCY] Chunk #{} -> Interim Return: {} ms", current_chunk, rtt_ms);
                                     crate::win32::set_preview_text(&event.text);
                                     *interim_reader.lock().unwrap_or_else(|e| e.into_inner()) = event.text;
                                 }
                             } else if event.event_type == "final" {
-                                println!("[STREAM FINAL RECEIVED] Final text: {:?}", event.text);
+                                println!("[STREAM FINAL RECEIVED] Final result received");
                                 crate::win32::set_preview_text(&event.text);
 
                                 final_res = Some(StreamFinalResult {

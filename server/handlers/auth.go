@@ -356,6 +356,7 @@ func (a *App) HandleAuthMe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":                     user.ID,
 		"command_usage":          commandUsage,
 		"email":                  user.Email,
 		"name":                   user.Name,
@@ -427,6 +428,7 @@ func (a *App) HandleGetUserHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(logs)
 }

@@ -150,8 +150,8 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	requestUser.Languages = []string{language}
 	user = &requestUser
 
-	log.Printf("[STREAM START] Session initialized | User ID: %d | Lang: %v | Enhance: %v | Prompt: %q | Capabilities: %v | Vocab: %d terms",
-		user.ID, user.Languages, startPayload.Enhance, startPayload.Prompt, startPayload.Capabilities, len(vocabTerms))
+	log.Printf("[STREAM START] Session initialized | User ID: %d | Lang: %v | Enhance: %v | Capabilities: %v | Vocab: %d terms",
+		user.ID, user.Languages, startPayload.Enhance, startPayload.Capabilities, len(vocabTerms))
 
 	// 3. Resolve best available streaming provider
 	activeConfig := config.ConfigManager.Get()
@@ -464,8 +464,8 @@ func (a *App) handlePseudoStreamingSession(
 				continue
 			}
 
-			log.Printf("[STREAM ASR REQUEST] Chunk: %d | User ID: %d | Audio: %d bytes (%.2fs) | Prompt: %q",
-				currentChunk, user.ID, len(data), audioDurationSec, effectivePrompt)
+			log.Printf("[STREAM ASR REQUEST] Chunk: %d | User ID: %d | Audio: %d bytes (%.2fs)",
+				currentChunk, user.ID, len(data), audioDurationSec)
 
 			startASR := time.Now()
 			rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, effectivePrompt)
@@ -544,14 +544,14 @@ func (a *App) handlePseudoStreamingSession(
 
 	if enhance && finalRawTranscript != "" {
 		tstart := time.Now()
-		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Raw Input: %q | Protected Vocab: %d terms", user.ID, finalRawTranscript, len(audit.Decisions))
+		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Protected Vocab: %d terms", user.ID, len(audit.Decisions))
 		enhancer := pipeline.NewGrammarEnhancementTransform(config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
 			log.Printf("[STREAM AI ENHANCE ERROR] User ID: %d | Error: %v | Latency: %.2fs", user.ID, terr, dsLatency)
 		} else if enhancedText != "" {
-			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Enhanced: %q | Latency: %.2fs (model: %s, provider: %s)", user.ID, enhancedText, dsLatency, pctx.LLMModel, pctx.LLMProvider)
+			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Latency: %.2fs (model: %s, provider: %s)", user.ID, dsLatency, pctx.LLMModel, pctx.LLMProvider)
 			currentText = restoreGrammar(enhancedText)
 		}
 	}

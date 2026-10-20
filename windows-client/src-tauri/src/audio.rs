@@ -189,9 +189,9 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::sho
             let (is_stream_mode, api_url, token, enhance, custom_prompt) = {
                 let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                 (
-                    cfg.transcription_mode == "stream" && cfg.session_token.is_some(),
-                    cfg.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
-                    cfg.session_token.clone().unwrap_or_default(),
+                    cfg.transcription_mode == "stream" && context.history_identity().1.is_some(),
+                    context.history_identity().2.to_string(),
+                    context.history_identity().1.unwrap_or_default().to_string(),
                     if is_cmd { false } else { cfg.enhance },
                     cfg.custom_prompt.clone(),
                 )
@@ -525,7 +525,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::sho
 
                         let final_text_to_inject = match handle.rx_final.recv_timeout(std::time::Duration::from_secs(15)) {
                             Ok(Ok(final_result)) => {
-                                println!("[STREAM SUCCESS] Live streaming completed. Final text: {}", final_result.text);
+                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                                 let trimmed = final_result.text.trim().to_string();
                                 let interim = handle.interim_text();
                                 let interim_trimmed = interim.trim().to_string();
@@ -584,9 +584,9 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::sho
                             if is_command_mode {
                                 println!("\n=======================================================");
                                 println!("✨ [COMMAND MODE COMPLETED — EXECUTING LLM TRANSFORMATION]");
-                                println!("Target Selected Text:\n{}", selected_text.as_deref().unwrap_or("(none)"));
+                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                                 println!("-------------------------------------------------------");
-                                println!("Spoken User Command: \"{}\"", normalized);
+                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                                 println!("=======================================================\n");
 
                                 // Dynamic word limit check
@@ -689,7 +689,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::sho
                                             println!("✨ [COMMAND MODE — LLM TRANSFORMATION COMPLETED]");
                                             println!("Transformed Output ({} characters):", transformed.len());
                                             println!("-------------------------------------------------------");
-                                            println!("{}", transformed);
+                                            println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                                             println!("=======================================================\n");
 
                                             crate::win32::set_preview_text("✨ Done!");
@@ -721,6 +721,7 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::sho
                                                 crate::win32::NotificationLevel::Info,
                                             );
 
+                                            crate::api::record_delivered_final(&_context, &transformed);
                                             if let Some(app) = crate::TAURI_APP.get() {
                                                 use tauri::Emitter;
                                                 let _ = app.emit("command-transformed", transformed);
@@ -750,13 +751,14 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::sho
                                     cfg.typing_mode
                                 };
 
-                                println!("[STREAM INJECTION] Single-shot inject (typing_mode: {}): {}", typing_mode, normalized);
+                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                                 if typing_mode {
                                     crate::keyboard::simulate_typing(&normalized);
                                 } else {
                                     crate::keyboard::paste_text(&normalized);
                                 }
 
+                                crate::api::record_delivered_final(&context, &normalized);
                                 if let Some(app) = crate::TAURI_APP.get() {
                                     use tauri::Emitter;
                                     let _ = app.emit("dictation-transcribed", normalized.clone());

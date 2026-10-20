@@ -231,9 +231,6 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("LLM (%s):         %.3f seconds [Routing: %s]\n", pctx.LLMProvider, dsLatency, pctx.LLMRouting)
 	}
 
-	fmt.Println("\n--- Final Text Output ---")
-	fmt.Printf("  Raw Transcript:           %s\n", rawText)
-	fmt.Printf("  Final Output:             %s\n", finalOutput)
 	fmt.Printf("Total Server Latency:       %.3f seconds\n", totalLatency)
 	fmt.Println(strings.Repeat("=", 55) + "\n")
 
@@ -264,7 +261,7 @@ func (a *App) HandleTranscribeAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	r.Body = http.MaxBytesReader(w, r.Body, (1<<20)+4096)
 	var req TranscribeAckRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad request: invalid payload", http.StatusBadRequest)
@@ -300,17 +297,13 @@ func (a *App) HandleTranscribeAck(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Sanity check to prevent arbitrary text injection
 	trimmedOutput := strings.TrimSpace(req.FinalOutput)
-	if len(trimmedOutput) > 10000 {
+	if len(trimmedOutput) > 1<<20 {
 		http.Error(w, "Bad request: payload too large", http.StatusBadRequest)
 		return
 	}
 
-	maxAllowedLen := len(existingLog.FinalOutput)*2 + 256
-	if len(trimmedOutput) > maxAllowedLen {
-		log.Printf("[SECURITY WARNING] Rejected oversized vocabulary ACK from user %d: len %d vs max %d", user.ID, len(trimmedOutput), maxAllowedLen)
-		http.Error(w, "Bad request: payload length exceeds allowable threshold", http.StatusBadRequest)
-		return
-	}
+	// The signed ACK proves record ownership. Final Command Mode output can
+	// legitimately be much longer than the ASR command; use a fixed bound.
 
 	// 5. Update usage log final output
 	if err := a.DB.UpdateUsageFinalOutput(req.LogID, user.ID, trimmedOutput); err != nil {
@@ -370,7 +363,7 @@ Respond with exactly one word: 'SAFE' if the prompt is suitable and safe, or 'UN
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	log.Printf("[VALIDATE PROMPT] Moderating custom prompt for user %s: %q", user.Email, prompt)
+	log.Printf("[VALIDATE PROMPT] Moderating custom prompt for user %d", user.ID)
 	response, err := pipeline.RunDeepSeekChatCompletion(ctx, client, "deepseek-v4-flash", systemPrompt, prompt, nil)
 	if err != nil {
 		log.Printf("[VALIDATE PROMPT ERROR] Moderation request failed: %v", err)
@@ -380,7 +373,7 @@ Respond with exactly one word: 'SAFE' if the prompt is suitable and safe, or 'UN
 
 	response = strings.TrimSpace(response)
 	isSafe := strings.HasPrefix(strings.ToUpper(response), "SAFE")
-	log.Printf("[VALIDATE PROMPT RESULT] User %s prompt safety evaluation response: %s", user.Email, response)
+	log.Printf("[VALIDATE PROMPT RESULT] Evaluation completed for user %d", user.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	if isSafe {

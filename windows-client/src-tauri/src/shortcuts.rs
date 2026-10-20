@@ -7,6 +7,12 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 static TIMER: OnceLock<std::thread::Thread> = OnceLock::new();
+// Settings publishes this before taking the coordinator lock. Capture must never
+// lock AppConfig while holding Controller (Settings takes them in reverse order).
+static RECORDING_ACCOUNT: Mutex<(Option<String>,Option<String>)> = Mutex::new((None,None));
+pub fn publish_account(config:&crate::AppConfig) {
+    *RECORDING_ACCOUNT.lock().unwrap_or_else(|e|e.into_inner())=(config.session_token.clone(),config.api_url.clone());
+}
 const PORTAL_GRACE: Duration = Duration::from_millis(20);
 
 // Expire selection mode even if the settings webview closes unexpectedly.
@@ -66,6 +72,9 @@ fn controller() -> &'static Mutex<Controller> {
 // overlay before that work finishes. No OS hook waits for audio/network/clipboard.
 struct SessionLife {
     id: u64,
+    history_id: String,
+    origin_token: Option<String>,
+    origin_url: String,
     cancelled: Arc<AtomicBool>,
 }
 impl Drop for SessionLife {
@@ -130,6 +139,7 @@ impl RecordingSession {
 }
 
 impl RecordingContext {
+    pub fn history_identity(&self) -> (&str, Option<&str>, &str) { (&self.life.history_id, self.life.origin_token.as_deref(), &self.life.origin_url) }
     pub fn capture_finished(&self) {
         let mut c = controller().lock().unwrap_or_else(|e| e.into_inner());
         if c.active == Some(self.life.id) {
@@ -152,10 +162,17 @@ impl Controller {
                     self.route = Some(route);
                     let cancelled = Arc::new(AtomicBool::new(false));
                     self.cancelled = Some(cancelled.clone());
+                    let (origin_token,origin_url)={
+                        let account=RECORDING_ACCOUNT.lock().unwrap_or_else(|e|e.into_inner());
+                        (account.0.clone(),account.1.clone().unwrap_or_else(||"https://api.speekto.me".into()))
+                    };
                     let session = RecordingSession {
                         route: route_rx,
                         life: Arc::new(SessionLife {
                             id: self.generation,
+                            history_id: uuid::Uuid::new_v4().to_string(),
+                            origin_token,
+                            origin_url,
                             cancelled,
                         }),
                     };
@@ -305,6 +322,9 @@ mod tests {
                 route: rx,
                 life: Arc::new(SessionLife {
                     id: u64::MAX,
+                    history_id: uuid::Uuid::new_v4().to_string(),
+                    origin_token: None,
+                    origin_url: "https://api.speekto.me".into(),
                     cancelled: Arc::new(AtomicBool::new(false)),
                 }),
             },

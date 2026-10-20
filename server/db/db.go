@@ -20,12 +20,14 @@ import (
 	_ "modernc.org/sqlite"
 
 	"speektome-server/accountlimits"
+	"speektome-server/privatevault"
 	"speektome-server/utils"
 	"speektome-server/valkey"
 )
 
 type Database struct {
-	db *sql.DB
+	db      *sql.DB
+	Privacy *privatevault.Vault
 }
 
 func (d *Database) Close() error {
@@ -579,6 +581,11 @@ type UsageLogRecord struct {
 }
 
 func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int, transcriptionProvider, llmProvider string, vocabularyAudit ...string) (int64, error) {
+	if d.Privacy != nil {
+		input = ""
+		output = ""
+		vocabularyAudit = nil
+	}
 	audit := ""
 	if len(vocabularyAudit) > 0 {
 		audit = vocabularyAudit[0]
@@ -623,6 +630,14 @@ func (d *Database) LogUsageAndUpdateQuota(userID int64, duration, whisperTime, l
 }
 
 func (d *Database) UpdateUsageFinalOutput(logID int64, userID int64, finalOutput string) error {
+	if d.Privacy != nil {
+		sealed, err := d.Privacy.EncryptText(context.Background(), userID, "legacy-final-v1", fmt.Sprint(logID), finalOutput)
+		if err != nil {
+			return err
+		}
+		_, err = d.db.Exec(`INSERT INTO encrypted_legacy_results(user_id,usage_id,ciphertext) VALUES(?,?,?) ON CONFLICT(user_id,usage_id) DO UPDATE SET ciphertext=excluded.ciphertext`, userID, logID, sealed)
+		return err
+	}
 	_, err := d.db.Exec(`
 		UPDATE usage_logs 
 		SET final_output = ? 
@@ -712,6 +727,10 @@ func (d *Database) DeleteSession(token string) error {
 
 // Usage logging
 func (d *Database) LogUsage(userID int64, duration, whisperTime, llmTime, totalTime float64, enhanceEnabled bool, model, input, output, status string, audioSizeBytes int, transcriptionProvider, llmProvider string) error {
+	if d.Privacy != nil {
+		input = ""
+		output = ""
+	}
 	enhanceVal := 0
 	if enhanceEnabled {
 		enhanceVal = 1
@@ -1180,6 +1199,7 @@ type Meeting struct {
 	SegmentsJSON     string            `json:"segments_json"`
 	ProcessingStatus string            `json:"processing_status,omitempty"`
 	ClientID         string            `json:"client_id,omitempty"`
+	CloudAudioStatus string            `json:"cloud_audio_status,omitempty"`
 	VocabularyAudit  json.RawMessage   `json:"vocabulary,omitempty"`
 }
 
@@ -1226,6 +1246,9 @@ func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 		var names string
 		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names)
 		if err == nil {
+			if d.Privacy != nil {
+				m.CloudAudioStatus = d.Privacy.CloudState(context.Background(), m.UserID, m.ID)
+			}
 			_ = json.Unmarshal([]byte(names), &m.SpeakerNames)
 			_ = d.db.QueryRow(`SELECT status,client_id FROM meeting_jobs WHERE meeting_id=?`, m.ID).Scan(&m.ProcessingStatus, &m.ClientID)
 			if json.Valid([]byte(audit)) {
@@ -1251,6 +1274,9 @@ func (d *Database) GetMeeting(meetingID int64) (*Meeting, error) {
 	`, meetingID).Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names)
 	if err != nil {
 		return nil, err
+	}
+	if d.Privacy != nil {
+		m.CloudAudioStatus = d.Privacy.CloudState(context.Background(), m.UserID, m.ID)
 	}
 	_ = json.Unmarshal([]byte(names), &m.SpeakerNames)
 	_ = d.db.QueryRow(`SELECT status,client_id FROM meeting_jobs WHERE meeting_id=?`, m.ID).Scan(&m.ProcessingStatus, &m.ClientID)
@@ -1740,6 +1766,15 @@ func (d *Database) ResetPasswordWithToken(token, newPasswordHash string) error {
 }
 
 func (d *Database) DeleteUserAccount(userID int64) error {
+	if d.Privacy != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := d.Privacy.BeginAccountDeletion(ctx, userID)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("encrypted account deletion pending")
+		}
+	}
+
 	// Clean up any local meeting audio files
 	rows, err := d.db.Query("SELECT audio_path FROM meetings WHERE user_id = ?", userID)
 	if err == nil {
@@ -1758,6 +1793,14 @@ func (d *Database) DeleteUserAccount(userID int64) error {
 	}
 	defer tx.Rollback()
 
+	if d.Privacy != nil {
+		for _, table := range []string{"transcription_history", "transcription_history_tombstones", "meeting_archive_status", "user_encryption_keys", "user_cloud_storage", "meeting_audio_tombstones", "encrypted_legacy_results"} {
+			// The legacy table is created by migration, even on a new empty database.
+			if _, err = tx.Exec("DELETE FROM "+table+" WHERE user_id=?", userID); err != nil {
+				return fmt.Errorf("encrypted account deletion pending")
+			}
+		}
+	}
 	_, _ = tx.Exec("DELETE FROM sessions WHERE user_id = ?", userID)
 	_, _ = tx.Exec("DELETE FROM meetings WHERE user_id = ?", userID)
 	_, _ = tx.Exec("DELETE FROM usage_logs WHERE user_id = ?", userID)

@@ -95,6 +95,7 @@ pub fn sync_active_config_atomics(config: &AppConfig) {
     ACTIVE_PILL_WAVE_COLOR.store(config.pill_wave_color, Ordering::SeqCst);
     ACTIVE_SOUND_FEEDBACK.store(config.sound_feedback, Ordering::SeqCst);
     ACTIVE_HAS_SESSION_TOKEN.store(config.session_token.is_some(), Ordering::SeqCst);
+    shortcuts::publish_account(config);
     shortcuts::settings_changed();
     #[cfg(target_os = "macos")]
     macos_desktop::sync_settings(config);
@@ -535,6 +536,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
 
 use serde::{Serialize, Deserialize};
 mod meeting_upload;
+mod recording_identity;
 mod meeting_session;
 mod account_errors;
 static MEETING_INDEX_LOCK: Mutex<()> = Mutex::new(());
@@ -549,6 +551,7 @@ pub struct LocalMeetingRecord {
     pub status: String, // "recording" | "recorded" | "uploaded" | "failed"
     pub error: Option<String>,
     #[serde(default)] pub owner_email: Option<String>,
+    #[serde(default)] pub owner_user_id: Option<i64>,
     #[serde(default)] pub token_fingerprint: Option<String>,
 }
 
@@ -687,6 +690,10 @@ fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
             get_meeting_levels,
             upload_meeting,
             list_local_meetings,
+            transcription_history,
+            cloud_storage_usage,
+            download_meeting_audio,
+            delete_transcription_history,
             get_local_meeting_audio,
             retry_upload_meeting,
             delete_local_meeting,
@@ -911,7 +918,11 @@ async fn start_meeting(title: String) -> Result<String, String> {
     let recording_language = speaking_language();
     let recording_token={get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone()};
     let token_fingerprint=recording_token.as_ref().map(|token|{use sha2::Digest;format!("{:x}",sha2::Sha256::digest(token.as_bytes()))});
-    let owner_email=tokio::time::timeout(std::time::Duration::from_secs(3),get_user_info()).await.ok().flatten().map(|user|user.email).or_else(||recording_token.as_deref().and_then(meeting_upload::cached_account));
+    let owner = if let Some(ref token)=recording_token {
+ tokio::time::timeout(std::time::Duration::from_secs(3),api::fetch_user_info(&api::get_api_url(),token)).await.ok().and_then(Result::ok)
+ } else {None};
+ let owner_user_id=owner.as_ref().filter(|u|u.id>0).map(|u|u.id);
+ let owner_email=owner.map(|u|u.email).or_else(||recording_token.as_deref().and_then(meeting_upload::cached_account));
     let stream_tx = None;
     println!("[MEETING LOG] Starting CPAL audio capture streams...");
     let permit = crate::meeting_session::acquire().await?;
@@ -953,6 +964,7 @@ async fn start_meeting(title: String) -> Result<String, String> {
         status: "recording".to_string(),
         error: None,
         owner_email,
+        owner_user_id,
         token_fingerprint,
     });
     save_meeting_index(&records);
@@ -1163,15 +1175,10 @@ async fn upload_meeting(title: String, filepath: String) -> Result<String, Strin
 
 #[tauri::command]
 fn list_local_meetings() -> Result<Vec<LocalMeetingRecord>, String> {
-    use sha2::{Digest, Sha256};
-    let token = get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone();
-    let Some(token) = token else { return Ok(Vec::new()); };
-    let email = meeting_upload::cached_account(&token);
-    let fingerprint = format!("{:x}", Sha256::digest(token.as_bytes()));
-    Ok(load_meeting_index().into_iter().filter(|record| {
-        if let Some(owner) = &record.owner_email { email.as_ref() == Some(owner) }
-        else { record.token_fingerprint.as_ref() == Some(&fingerprint) }
-    }).collect())
+    let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone();
+    let Some(token)=token else{return Ok(Vec::new());};
+    let Some(user)=meeting_upload::cached_account_id(&token) else{return Ok(Vec::new());};
+    Ok(load_meeting_index().into_iter().filter(|r|recording_identity::owns(r,user,&token)).collect())
 }
 
 #[tauri::command]
@@ -1203,41 +1210,86 @@ fn delete_local_meeting(filepath: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_local_meeting_audio(_meeting_id: Option<i64>, timestamp: Option<u64>) -> Result<String, String> {
+async fn get_local_meeting_audio(meeting_id: i64) -> Result<String, String> {
     use base64::Engine;
+    let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to play recordings")?;
+    let base=api::get_api_url();
+    let user=api::fetch_user_info(&base,&token).await.map_err(|_|"Recording owner could not be verified")?;
+    let response=reqwest::Client::new().get(format!("{}/meetings/{}",base,meeting_id)).bearer_auth(&token).send().await.map_err(|_|"Meeting identity could not be verified")?;
+    if !response.status().is_success(){return Err("Meeting unavailable for this account".into());}
+    let meeting:serde_json::Value=response.json().await.map_err(|_|"Meeting identity unavailable")?;
+    let client_id=meeting["client_id"].as_str().filter(|s|!s.is_empty()).ok_or("This meeting has no verified local recording identity")?;
+    let root=get_meeting_index_path().and_then(|p|p.parent().map(std::path::Path::to_path_buf)).ok_or("Recording folder unavailable")?;
+    let records=load_meeting_index();
+    let path=recording_identity::resolve(&records,client_id,user.id,&token,&root)?;
+    // Recheck after network awaits so switching accounts cannot reveal the old result.
+    if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
+    let result=tauri::async_runtime::spawn_blocking(move||->Result<String,String>{
+        let wav_bytes=crate::audio::decode_ogg_to_wav(&path)?;
+        let b64=base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
+        Ok(format!("data:audio/wav;base64,{}",b64))
+    }).await.map_err(|_|"Local recording playback unavailable".to_string())??;
+    if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
+    Ok(result)
+}
 
-    let records = load_meeting_index();
-    if records.is_empty() {
-        return Err("No local meeting records found on disk".to_string());
-    }
+#[tauri::command]
+async fn download_meeting_audio(app:tauri::AppHandle,meeting_id:i64)->Result<String,String>{
+ use tauri::Manager;
+ if meeting_id<=0{return Err("Invalid meeting identity".into());}
+ let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to download recordings")?;
+ let base=api::get_api_url();
+ let root=app.path().download_dir().map_err(|_|"Downloads folder unavailable")?;
+ tauri::async_runtime::spawn_blocking(move||{
+  use std::io::{Read,Write};
+  let destination=root.join(format!("SpeekToMe-recording-{}.ogg",uuid::Uuid::new_v4()));
+  let temporary=destination.with_extension("ogg.partial");
+  let result=(||->Result<String,String>{
+   let response=reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(20*60)).build().map_err(|_|"Download unavailable")?.get(format!("{}/meetings/{}/audio",base,meeting_id)).bearer_auth(&token).send().map_err(|_|"Recording download failed")?;
+   if !response.status().is_success()||!response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v|v.to_str().ok()).is_some_and(|v|v.starts_with("audio/ogg")){return Err("Encrypted cloud audio is not available for this account and meeting".into());}
+   let expected=response.content_length();if expected.is_some_and(|n|n>2_000_000_000){return Err("Recording exceeds the download limit".into());}
+   let mut options=std::fs::OpenOptions::new();options.write(true).create_new(true);
+   #[cfg(unix)]{use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
+   let mut file=options.open(&temporary).map_err(|_|"Could not create the audio download")?;
+   let size=std::io::copy(&mut response.take(2_000_000_001),&mut file).map_err(|_|"Recording download was interrupted")?;
+   if size>2_000_000_000||expected.is_some_and(|n|n!=size){return Err("Recording download was incomplete".into());}
+   file.flush().map_err(|_|"Could not save the audio download")?;file.sync_all().map_err(|_|"Could not save the audio download")?;drop(file);
+   if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed; download cancelled".into());}
+   std::fs::rename(&temporary,&destination).map_err(|_|"Could not finish the audio download")?;
+   Ok(destination.to_string_lossy().into_owned())
+  })();
+  if result.is_err(){let _=std::fs::remove_file(temporary);}
+  result
+ }).await.map_err(|_|"Recording download unavailable".to_string())?
+}
 
-    // Try finding matching record by timestamp or take the most recent record
-    let record = if let Some(ts) = timestamp {
-        records.iter().min_by_key(|r| (r.created_at as i64 - ts as i64).abs())
-    } else {
-        records.last()
-    }.ok_or_else(|| "No matching local meeting record found".to_string())?;
+#[tauri::command]
+async fn cloud_storage_usage()->Result<serde_json::Value,String>{
+ let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to see storage usage")?;
+ let response=reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).build().map_err(|_|"Storage unavailable")?.get(format!("{}/v1/storage",api::get_api_url())).bearer_auth(&token).send().await.map_err(|_|"Storage unavailable")?;
+ if !response.status().is_success(){return Err("Storage unavailable".into());}
+ let data=response.json().await.map_err(|_|"Storage unavailable")?;
+ if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
+ Ok(data)
+}
 
-    let ogg_path = std::path::PathBuf::from(&record.filepath);
-    let wav_path = ogg_path.with_extension("wav");
-
-    // 1. If WAV file already exists on disk, read and return base64 data URI
-    if wav_path.exists() {
-        if let Ok(wav_bytes) = std::fs::read(&wav_path) {
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
-            return Ok(format!("data:audio/wav;base64,{}", b64));
-        }
-    }
-
-    // 2. If only OGG file exists, decode it to WAV and save WAV on disk for instant future loading
-    if ogg_path.exists() {
-        let wav_bytes = crate::audio::decode_ogg_to_wav(&ogg_path)?;
-        let _ = std::fs::write(&wav_path, &wav_bytes);
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
-        return Ok(format!("data:audio/wav;base64,{}", b64));
-    }
-
-    Err(format!("Local recording file not found at: {}", record.filepath))
+#[tauri::command]
+async fn transcription_history(before:Option<i64>, before_id:Option<String>) -> Result<serde_json::Value,String> {
+    let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to see your history")?;
+    let mut url=reqwest::Url::parse(&format!("{}/v1/transcriptions/history",api::get_api_url())).map_err(|_|"Invalid server address")?;
+    if let Some(before)=before {url.query_pairs_mut().append_pair("before",&before.to_string()).append_pair("before_id",before_id.as_deref().unwrap_or_default());}
+    let response=reqwest::Client::new().get(url).bearer_auth(&token).send().await.map_err(|_|"History could not be loaded")?;
+    if !response.status().is_success(){return Err("History could not be loaded. Check your connection and sign-in.".into());}
+    let value=response.json().await.map_err(|_|"History response unavailable")?;
+    if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
+    Ok(value)
+}
+#[tauri::command]
+async fn delete_transcription_history(id:String)->Result<(),String>{
+    if uuid::Uuid::parse_str(&id).is_err(){return Err("Invalid history identity".into());}
+    let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to manage history")?;
+    let response=reqwest::Client::new().delete(format!("{}/v1/transcriptions/history/{}",api::get_api_url(),id)).bearer_auth(&token).send().await.map_err(|_|"History could not be deleted")?;
+    if !response.status().is_success(){return Err("History could not be deleted".into());}Ok(())
 }
 
 #[tauri::command]

@@ -20,6 +20,10 @@ func (a *App) HandleStartMeetingSession(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Sign in before starting a meeting.", 401)
 		return
 	}
+	if a.DB.Privacy != nil && (user.PlanTier != "pro" || user.PlanActive != 1) {
+		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
+		return
+	}
 	if !a.accountRate(w, r, user.ID, "meeting_start", 10) {
 		return
 	}

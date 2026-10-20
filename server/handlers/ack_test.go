@@ -116,7 +116,7 @@ func TestHandleTranscribeAck_OversizedPayloadRejected(t *testing.T) {
 	app, database, sessionToken, _, logID, ackToken := setupTestAppForAck(t)
 	defer database.Close()
 
-	hugeText := string(make([]byte, 8000))
+	hugeText := string(make([]byte, (1<<20)+1))
 	ackReq := TranscribeAckRequest{
 		LogID:       logID,
 		AckToken:    ackToken,

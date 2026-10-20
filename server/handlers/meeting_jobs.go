@@ -156,6 +156,10 @@ func (j *MeetingJobs) identity(w http.ResponseWriter, r *http.Request) (int64, s
 		http.Error(w, "unauthorized", 401)
 		return 0, "", false
 	}
+	if r.Method != "GET" && j.app.DB.Privacy != nil && (u.PlanTier != "pro" || u.PlanActive != 1) {
+		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
+		return 0, "", false
+	}
 	id := r.PathValue("clientID")
 	if !clientMeetingID.MatchString(id) {
 		http.Error(w, "invalid meeting id", 400)
@@ -177,6 +181,10 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 	user, e := auth.Authenticate(r, j.app.DB)
 	if e != nil {
 		http.Error(w, "unauthorized", 401)
+		return
+	}
+	if j.app.DB.Privacy != nil && (user.PlanTier != "pro" || user.PlanActive != 1) {
+		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
 		return
 	}
 	if !j.app.accountRate(w, r, user.ID, "meeting_manifest", 30) {
@@ -431,6 +439,10 @@ func (j *MeetingJobs) commit(w http.ResponseWriter, r *http.Request) {
 	var active int
 	if e = tx.QueryRow(`SELECT COALESCE(plan_tier,'free'),COALESCE(plan_active,0) FROM users WHERE id=?`, userID).Scan(&tier, &active); e != nil {
 		http.Error(w, "account unavailable", 503)
+		return
+	}
+	if j.app.DB.Privacy != nil && (tier != "pro" || active != 1) {
+		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
 		return
 	}
 	limit := 3600.0

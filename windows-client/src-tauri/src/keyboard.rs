@@ -614,7 +614,7 @@ pub fn simulate_key_up(_vk: u32) {
 
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn simulate_typing(text: &str) {
-    println!("[KEYBOARD] simulate_typing: {}", text);
+    println!("[PRIVATE DATA] Result processed; content omitted from logs.");
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]

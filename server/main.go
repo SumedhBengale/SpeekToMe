@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"golang.org/x/sys/unix"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"speektome-server/privatevault"
 	"strings"
 	"time"
 
@@ -80,6 +83,65 @@ func main() {
 		return
 	}
 
+	// Disable core dumps before retrieving a key. Only its Secrets Manager
+	// identifier is configured on disk; the value stays in process memory.
+	if err := unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0}); err != nil {
+		log.Fatal("Cannot disable personal-storage core dumps")
+	}
+	keyCtx, keyCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	secrets, keyErr := privatevault.LoadSecrets(keyCtx)
+	keyCancel()
+	if keyErr != nil {
+		log.Fatal("Cannot initialize encrypted personal storage")
+	}
+	master, keyErr := base64.StdEncoding.DecodeString(secrets.MasterKey)
+	secrets.MasterKey = ""
+	if keyErr != nil {
+		log.Fatal("Invalid personal-storage key")
+	}
+	privacy, keyErr := privatevault.New(context.Background(), database.GetDB(), master)
+	clear(master)
+	if keyErr != nil {
+		log.Fatal("Cannot unlock encrypted personal storage")
+	}
+	database.Privacy = privacy
+	if os.Getenv("R2_ACCESS_KEY_ID") != "" && os.Getenv("R2_SECRET_ACCESS_KEY") != "" {
+		objectStore, err := privatevault.NewR2(os.Getenv("R2_ACCOUNT_ID"), os.Getenv("R2_BUCKET"), os.Getenv("R2_ACCESS_KEY_ID"), os.Getenv("R2_SECRET_ACCESS_KEY"))
+		if err != nil {
+			log.Fatal("Cannot initialize encrypted cloud audio")
+		}
+		privacy.Objects = objectStore
+	} else if os.Getenv("R2_BUCKET") != "" {
+		log.Fatal("R2 credentials unavailable")
+	}
+	if len(os.Args) == 2 && os.Args[1] == "--audit-private-data" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := privacy.Audit(ctx, os.Stdout); err != nil {
+			log.Fatal("Private storage audit unavailable")
+		}
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "--check-private-storage" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := privacy.CheckObjects(ctx); err != nil {
+			log.Fatal("Encrypted object storage check failed")
+		}
+		log.Print("Encrypted object storage PUT/range GET/DELETE verified")
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "--migrate-private-data" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		count, err := privacy.MigrateUsage(ctx)
+		if err != nil {
+			log.Fatal("Encrypted usage migration did not finish")
+		}
+		log.Printf("Encrypted legacy final results migrated: %d", count)
+		return
+	}
+
 	app := &handlers.App{
 		DB:         database,
 		VocabCache: vocab.NewVocabCache(),
@@ -143,6 +205,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize API routes: %v", err)
 	}
+
+	privacy.Run(context.Background(), func(message string) { log.Print(message) })
 
 	// Initialize and start the EC2 Spot Orchestrator only when explicitly enabled
 	spotAMI := os.Getenv("SPOT_AMI_ID")

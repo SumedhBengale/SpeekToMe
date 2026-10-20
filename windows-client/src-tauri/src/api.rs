@@ -2,6 +2,7 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UserInfo {
+    #[serde(default)] pub id: i64,
     pub name: String,
     pub email: String,
     pub plan_tier: String,
@@ -165,12 +166,12 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
     let (token_opt, model, enhance, custom_prompt, transcription_mode, api_url) = {
         let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         (
-            config.session_token.clone(),
+            context.history_identity().1.map(str::to_owned),
             config.model.clone(),
             if is_cmd { false } else { config.enhance },
             config.custom_prompt.clone(),
             config.transcription_mode.clone(),
-            config.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
+            context.history_identity().2.to_string(),
         )
     };
 
@@ -233,9 +234,9 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
                     if is_command_mode {
                         println!("\n=======================================================");
                         println!("✨ [COMMAND MODE COMPLETED — EXECUTING LLM TRANSFORMATION]");
-                        println!("Target Selected Text:\n{}", selected_text.as_deref().unwrap_or("(none)"));
+                        println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                         println!("-------------------------------------------------------");
-                        println!("Spoken User Command: \"{}\"", text);
+                        println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                         println!("=======================================================\n");
 
                         // Check dynamic word limit
@@ -310,7 +311,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
                                 println!("✨ [COMMAND MODE — LLM TRANSFORMATION COMPLETED]");
                                 println!("Transformed Output ({} characters):", transformed.len());
                                 println!("-------------------------------------------------------");
-                                println!("{}", transformed);
+                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                                 println!("=======================================================\n");
 
                                 crate::win32::set_preview_text("✨ Done!");
@@ -342,6 +343,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
                                     crate::win32::NotificationLevel::Info,
                                 );
 
+                                record_delivered_final(&context, &transformed);
                                 if let Some(app) = crate::TAURI_APP.get() {
                                     use tauri::Emitter;
                                     let _ = app.emit("command-transformed", transformed);
@@ -361,7 +363,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
                             }
                         }
                     } else {
-                        println!("Transcribed Text: {}", text);
+                        println!("[PRIVATE DATA] Result processed; content omitted from logs.");
                         let typing_mode = {
                             let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                             config.typing_mode
@@ -373,6 +375,7 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
                             crate::keyboard::paste_text(text);
                         }
 
+                        record_delivered_final(&context, text);
                         if let Some(app) = crate::TAURI_APP.get() {
                             use tauri::Emitter;
                             let _ = app.emit("dictation-transcribed", text.to_string());
@@ -516,7 +519,7 @@ pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, Str
     let status = res.status();
     if status.is_success() {
         let info = res.json::<UserInfo>().await.map_err(|e| format!("Failed to parse user info: {}", e))?;
- crate::meeting_upload::cache_account(token,&info.email);
+ crate::meeting_upload::cache_account(token,&info.email,info.id);
         if let Some(limit) = info.transform_input_tokens {
             crate::set_transform_word_limit(limit);
             println!("[CONFIG SYNC] Dynamic transform input word limit updated from user info: {}", limit);
@@ -1022,4 +1025,28 @@ pub async fn update_user_languages(api_url: &str, token: &str, languages: Vec<St
         let err_text = res.text().await.unwrap_or_default();
         Err(format!("Server error: {}", err_text))
     }
+}
+
+// Persist only the actual delivered result. Bind retries to the recording's
+// original account and backend; never use a subsequently switched session.
+pub fn record_delivered_final(context: &crate::shortcuts::RecordingContext, text: &str) {
+    if text.trim().is_empty() { return; }
+    let (id, token, base) = context.history_identity();
+    let Some(token) = token else { return; };
+    let (id, token, base, text) = (id.to_string(),token.to_string(),base.to_string(),text.to_string());
+    let mode = if context.is_command_mode { "command" } else { "dictation" };
+    tauri::async_runtime::spawn(async move {
+        let client=reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).build().unwrap_or_default();
+        for attempt in 0..3 {
+            if attempt>0 {tokio::time::sleep(std::time::Duration::from_secs(2*attempt)).await;}
+            let result=client.post(format!("{}/v1/transcriptions/final",base)).bearer_auth(&token)
+                .json(&serde_json::json!({"request_id":id,"text":text,"mode":mode})).send().await;
+            match result {
+                Ok(response) if response.status().is_success()=>return,
+                Ok(response) if response.status().is_client_error() && response.status().as_u16()!=429=>break,
+                _=>{}
+            }
+        }
+        crate::win32::show_tray_notification("SpeekTo.Me — History not saved", "Your text was delivered, but its encrypted history could not be saved. Check your connection.",crate::win32::NotificationLevel::Warning);
+    });
 }

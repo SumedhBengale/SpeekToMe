@@ -5141,3 +5141,9 @@ body[data-theme="classic_dark"] .fluent-checkbox-container input:checked ~ .chec
 
 /* macOS uses its native window controls and title bar. */
 html[data-platform="macos"] .window-titlebar { display: none; }
+
+.history-result { padding:20px; margin:16px 0; border:1px solid var(--border-color,#ddd); border-radius:12px; }
+.history-result-meta { font-size:12px; opacity:.65; margin:0 0 12px; }
+.history-result-text { white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; line-height:1.6; }
+.history-result-actions { display:flex; gap:10px; margin-top:14px; }
+.history-result-actions button,#transcription-history-refresh,#transcription-history-more { border:1px solid var(--border-color,#ddd); border-radius:8px; padding:8px 14px; background:transparent; color:inherit; cursor:pointer; }

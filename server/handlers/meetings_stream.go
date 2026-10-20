@@ -311,6 +311,10 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "Unauthorized")
 		return
 	}
+	if a.DB.Privacy != nil && (user.PlanTier != "pro" || user.PlanActive != 1) {
+		_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{Type: "error", Error: "Meeting recording requires an active Pro subscription"})
+		return
+	}
 
 	owner, admissionErr := a.limits().Acquire(ctx, user.ID, "meeting recording", 4*time.Hour+5*time.Minute)
 	if admissionErr != nil {
@@ -507,8 +511,8 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 						if err := json.Unmarshal(data, &completedEvt); err != nil {
 							continue
 						}
-						log.Printf("[SERVER LOOPBACK COMPLETED] words=%d audio_processed=%.2f transcript=%q",
-							len(completedEvt.Words), completedEvt.AudioProcessed, completedEvt.Transcript)
+						log.Printf("[SERVER LOOPBACK COMPLETED] words=%d audio_processed=%.2f",
+							len(completedEvt.Words), completedEvt.AudioProcessed)
 
 						lbWordsMu.Lock()
 						var newWords []WordItem
@@ -852,7 +856,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	rawTranscriptText := rawTranscriptBuilder.String()
 
 	log.Printf("[SERVER FINAL REVIEW] Total Active Turns: %d | Final Segments: %d", len(activeTurns), len(finalSegments))
-	log.Printf("[SERVER FINAL RAW DIARIZED TRANSCRIPT]\n%s", rawTranscriptText)
+	log.Print("[MEETING] Diarized transcript ready")
 	log.Printf("[SERVER FINAL SEGMENTS JSON]\n%s", segmentsJSON)
 
 	// -------------------------------------------------------------------
@@ -878,8 +882,8 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[SERVER FINAL POLISHED TRANSCRIPT]\n%s", polishedTranscript)
-	log.Printf("[SERVER FINAL SUMMARY]\n%s", summaryText)
-	log.Printf("[SERVER FINAL ACTION ITEMS]\n%s", actionItemsText)
+	log.Print("[MEETING] Summary ready")
+	log.Print("[MEETING] Action items ready")
 
 	// -------------------------------------------------------------------
 	// 10. Persist Meeting to Database

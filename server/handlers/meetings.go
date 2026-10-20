@@ -36,6 +36,10 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if a.DB.Privacy != nil && (user.PlanTier != "pro" || user.PlanActive != 1) {
+		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
+		return
+	}
 	owner, admissionErr := a.limits().Acquire(r.Context(), user.ID, "meeting processing", 6*time.Hour+5*time.Minute)
 	if admissionErr != nil {
 		accountlimits.Write(w, admissionErr)
@@ -321,6 +325,16 @@ func (a *App) HandleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if a.DB.Privacy != nil && a.DB.Privacy.Objects != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		err := a.DB.Privacy.DeleteAudio(ctx, user.ID, meetingID, false)
+		cancel()
+		if err != nil {
+			http.Error(w, "Cloud audio deletion is pending; retry shortly", 503)
+			return
+		}
+	}
+
 	cleanedPath := filepath.Clean(meeting.AudioPath)
 	normalizedPath := filepath.ToSlash(cleanedPath)
 	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") && !validMeetingAudioPath(cleanedPath) {
@@ -374,6 +388,22 @@ func (a *App) HandleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if a.DB.Privacy != nil {
+		if r.Header.Get("Range") != "" && (len(r.Header.Get("Range")) > 128 || strings.Contains(r.Header.Get("Range"), ",")) {
+			http.Error(w, "invalid audio range", 416)
+			return
+		}
+		reader, _, err := a.DB.Privacy.Audio(r.Context(), user.ID, meetingID)
+		if err != nil {
+			http.Error(w, "Encrypted cloud audio is not available yet", 404)
+			return
+		}
+		w.Header().Set("Cache-Control", "private, no-store")
+		w.Header().Set("Content-Type", "audio/ogg")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, "recording.ogg", time.Time{}, reader)
+		return
+	}
 	cleanedPath := filepath.Clean(meeting.AudioPath)
 	normalizedPath := filepath.ToSlash(cleanedPath)
 	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") && !validMeetingAudioPath(cleanedPath) {

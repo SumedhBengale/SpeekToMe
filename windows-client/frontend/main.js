@@ -843,6 +843,8 @@ async function init() {
         invoke('get_user_info').then(info => {
           updateAuthUI(info);
         }).catch(err => console.warn("Failed to refresh user info on account tab:", err));
+      } else if (tabId === 'history') {
+        loadTranscriptionHistory();
       } else if (tabId === 'vocabulary') {
         loadVocabulary();
       } else if (tabId === 'meetings') {
@@ -2169,6 +2171,13 @@ function updateCommandUsage(userInfo) {
 }
 
 function updateAuthUI(userInfo) {
+  const owner=userInfo?.id||null;
+  if (owner!==displayedHistoryOwner) {
+    displayedHistoryOwner=owner;historyGeneration++;meetingDetailGeneration++;resetMeetingAudio();
+    document.getElementById('transcription-history-list')?.replaceChildren();
+    historyCursor=null;
+  }
+
   updateCommandUsage(userInfo);
   const accountDesc = document.getElementById('account-desc');
   
@@ -2645,6 +2654,11 @@ let timerInterval = null;
 let meetingSeconds = 0;
 let currentMeetingFile = null;
 let activeMeetingId = null;
+let meetingDetailGeneration=0;
+function resetMeetingAudio(){
+ const player=document.getElementById("meeting-audio-player");if(!player)return;
+ player.pause();if(player.src?.startsWith("blob:"))URL.revokeObjectURL(player.src);player.removeAttribute("src");player.load();
+}
 let liveMeetingTurnsMap = new Map();
 
 function setupMeetingsUI() {
@@ -2750,6 +2764,7 @@ function setupMeetingsUI() {
 }
 
 function showDashboardView() {
+  meetingDetailGeneration++;resetMeetingAudio();
   const mainHdr = document.getElementById('meetings-main-header');
   if (mainHdr) mainHdr.classList.remove('hidden');
   document.getElementById('meetings-dashboard-view').classList.remove('hidden');
@@ -2842,6 +2857,12 @@ async function loadMeetings(quiet = false) {
   if (!listGrid) return;
 
   const reqId = ++currentMeetingsReqId;
+  invoke('cloud_storage_usage').then(usage=>{
+    if(reqId!==currentMeetingsReqId)return;
+    const el=document.getElementById('meeting-cloud-storage');if(!el)return;
+    el.textContent=usage.enabled?`Encrypted cloud audio: ${((usage.used_bytes+usage.reserved_bytes)/1e9).toFixed(2)} GB of ${(usage.limit_bytes/1e9).toFixed(0)} GB used. Local recordings are kept on this device.`:'Cloud audio backup is currently unavailable. Local recordings are kept on this device.';
+    if(usage.purge_after)el.textContent+=` Cloud audio is scheduled for deletion on ${new Date(usage.purge_after*1000).toLocaleDateString()} unless your paid plan is renewed.`;
+  }).catch(()=>{const el=document.getElementById('meeting-cloud-storage');if(el&&reqId===currentMeetingsReqId)el.textContent='Cloud storage usage could not be loaded.';});
   const token = currentConfig ? currentConfig.session_token : null;
 
   if (!token) {
@@ -2942,6 +2963,7 @@ async function deleteMeetingById(id) {
   if (!confirmed) return;
 
   const token = currentConfig ? currentConfig.session_token : null;
+  const isCurrent=()=>detailGeneration===meetingDetailGeneration&&currentConfig?.session_token===token;
   try {
     const res = await fetch(`${API_URL}/meetings/${id}`, {
       method: 'DELETE',
@@ -3152,6 +3174,7 @@ function renderMeetingsList(meetings) {
 }
 
 async function viewMeeting(id) {
+  const detailGeneration=++meetingDetailGeneration;resetMeetingAudio();
   showProcessingView();
   const token = currentConfig ? currentConfig.session_token : null;
   try {
@@ -3162,6 +3185,7 @@ async function viewMeeting(id) {
     });
     if (!res.ok) throw new Error("Failed to load meeting details");
     const m = await res.json();
+    if(!isCurrent())return;
     activeMeetingId = id;
 
     showDetailView();
@@ -3236,22 +3260,24 @@ async function viewMeeting(id) {
 
     const durEl = document.getElementById('meeting-detail-duration');
     if (durEl) durEl.textContent = formatMeetingDurationDetailed(totalDuration);
+    const cloudStatus=document.getElementById('meeting-cloud-status');
+    const downloadButton=document.getElementById('meeting-cloud-download');
+    if(downloadButton){downloadButton.disabled=m.cloud_audio_status!=='ready';downloadButton.onclick=async()=>{downloadButton.disabled=true;try{const path=await invoke('download_meeting_audio',{meetingId:id});if(isCurrent()&&cloudStatus)cloudStatus.textContent=`Audio saved to ${path}`;}catch{if(isCurrent()&&cloudStatus)cloudStatus.textContent='Audio could not be downloaded. Your local recordings are preserved.';}finally{if(isCurrent())downloadButton.disabled=false;}};}
+
+    if(cloudStatus)cloudStatus.textContent=({ready:'Encrypted cloud backup available.',storage_full:'Cloud storage is full. This recording is kept locally but has not been backed up.',local_file_unavailable:'The server could not find audio to back up. The local recording may still be available.',deleted:'The cloud audio copy was deleted.',unavailable:'Cloud audio backup is unavailable.',pending:'Encrypted cloud backup is pending.'})[m.cloud_audio_status]||'';
+
 
     const uniqueSpeakers = new Set((segments || []).map(s => getMeetingSpeakerIdentity(s, domUserName).id));
     const spkCount = Math.max(1, uniqueSpeakers.size);
     const speakersEl = document.getElementById('meeting-detail-speakers');
     if (speakersEl) speakersEl.textContent = `${spkCount} speaker${spkCount === 1 ? '' : 's'}`;
 
-    // Set Audio source using local disk audio (fast seeking, accurate duration, 100% private)
+    // Resolve the exact local meeting and account before trying its encrypted cloud copy.
     const player = document.getElementById('meeting-audio-player');
     let audioLoaded = false;
     try {
-      const ts = m.timestamp ? Math.floor(new Date(m.timestamp).getTime() / 1000) : null;
-      console.log(`[MEETING PLAYER] Requesting local audio for meeting ${id} (ts: ${ts})...`);
-      const audioDataUri = await invoke('get_local_meeting_audio', { 
-        meetingId: id,
-        timestamp: ts
-      });
+      const audioDataUri = await invoke('get_local_meeting_audio', { meetingId: id });
+      if(!isCurrent())return;
       if (audioDataUri) {
         player.src = audioDataUri;
         audioLoaded = true;
@@ -3261,6 +3287,7 @@ async function viewMeeting(id) {
       console.warn("[MEETING PLAYER] Local audio loading failed, falling back to server audio:", localErr);
     }
 
+    if(!isCurrent())return;
     if (!audioLoaded) {
       try {
         const audioRes = await fetch(`${API_URL}/meetings/${id}/audio`, {
@@ -3268,6 +3295,7 @@ async function viewMeeting(id) {
         });
         if (audioRes.ok) {
           const blob = await audioRes.blob();
+          if(!isCurrent())return;
           player.src = URL.createObjectURL(blob);
           console.log("[MEETING PLAYER] Loaded audio from server fallback.");
         }
@@ -3276,6 +3304,7 @@ async function viewMeeting(id) {
       }
     }
 
+    if(!isCurrent())return;
     // Custom Audio Player Controls Elements
     const audioPlayBtn = document.getElementById('audio-play-btn');
     const audioPlayIcon = document.getElementById('audio-play-icon');
@@ -4481,3 +4510,33 @@ async function appendPendingLocalMeetings() {
     }
   } catch(error) {console.warn('Cannot list pending local meeting audio',error);}
 }
+
+let displayedHistoryOwner=null;
+let historyCursor=null;
+let historyGeneration=0;
+async function loadTranscriptionHistory(more=false){
+ const generation=++historyGeneration;
+ const list=document.getElementById('transcription-history-list');
+ const status=document.getElementById('transcription-history-status');
+ const next=document.getElementById('transcription-history-more');
+ if(!list||!status)return;
+ if(!more){list.replaceChildren();historyCursor=null;}
+ status.textContent='Loading history…';next.disabled=true;
+ try{
+  const rows=await invoke('transcription_history',{before:more?historyCursor?.created_at:null,beforeId:more?historyCursor?.id:null});
+  if(generation!==historyGeneration)return;
+  for(const row of rows){
+   const card=document.createElement('article');card.className='history-result';
+   const meta=document.createElement('p');meta.className='history-result-meta';meta.textContent=`${row.mode==='command'?'Command Mode':'Dictation'} · ${new Date(row.created_at*1000).toLocaleString()}`;
+   const text=document.createElement('p');text.className='history-result-text';text.textContent=row.text;
+   const actions=document.createElement('div');actions.className='history-result-actions';
+   const copy=document.createElement('button');copy.textContent='Copy';copy.type='button';copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(row.text);status.textContent='Copied to clipboard.';}catch{status.textContent='Copy unavailable. Select the text to copy it.';}});
+   const remove=document.createElement('button');remove.textContent='Delete';remove.type='button';remove.addEventListener('click',async()=>{remove.disabled=true;try{await invoke('delete_transcription_history',{id:row.id});card.remove();status.textContent='History entry deleted.';}catch{status.textContent='History entry could not be deleted.';remove.disabled=false;}});
+   actions.append(copy,remove);card.append(meta,text,actions);list.append(card);
+  }
+  historyCursor=rows.at(-1)||historyCursor;next.hidden=rows.length<50;next.disabled=false;
+  status.textContent=list.children.length?'Only final delivered results are saved.':'No transcription history yet. New final results will appear here.';
+ }catch(err){if(generation===historyGeneration)status.textContent=String(err);}
+}
+document.getElementById('transcription-history-refresh')?.addEventListener('click',()=>loadTranscriptionHistory());
+document.getElementById('transcription-history-more')?.addEventListener('click',()=>loadTranscriptionHistory(true));

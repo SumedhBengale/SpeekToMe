@@ -282,8 +282,8 @@ func RunCloudflareTranscribe(ctx context.Context, audioBytes []byte, model strin
 	routingLoc := GetHTTPResponseRouting(resp, remoteIP)
 
 	if resp.StatusCode != http.StatusOK {
-		bodyB, _ := io.ReadAll(resp.Body)
-		return "", nil, "", fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
+		return "", nil, "", fmt.Errorf("provider status %d", resp.StatusCode)
 	}
 
 	var response struct {
@@ -391,8 +391,8 @@ func RunDeepInfraTranscribe(ctx context.Context, audioBytes []byte, urlStr strin
 	routingLoc := GetHTTPResponseRouting(resp, remoteIP)
 
 	if resp.StatusCode != http.StatusOK {
-		bodyB, _ := io.ReadAll(resp.Body)
-		return "", nil, "", fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
+		return "", nil, "", fmt.Errorf("provider status %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -472,8 +472,8 @@ func RunGroqTranscribe(ctx context.Context, audioBytes []byte, model string, lan
 	routingLoc := GetHTTPResponseRouting(resp, remoteIP)
 
 	if resp.StatusCode != http.StatusOK {
-		bodyB, _ := io.ReadAll(resp.Body)
-		return "", nil, "", fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyB))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
+		return "", nil, "", fmt.Errorf("provider status %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -561,8 +561,8 @@ func RunCustomBatchTranscribe(ctx context.Context, audioBytes []byte, baseURL, a
 	routingLoc := GetHTTPResponseRouting(resp, remoteIP)
 
 	if resp.StatusCode != http.StatusOK {
-		bodyB, _ := io.ReadAll(resp.Body)
-		return "", nil, "", fmt.Errorf("custom batch provider failed (%d): %s", resp.StatusCode, string(bodyB))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
+		return "", nil, "", fmt.Errorf("custom batch provider failed (%d)", resp.StatusCode)
 	}
 
 	var result struct {
@@ -690,8 +690,8 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 	routingLoc := GetHTTPResponseRouting(resp, remoteIP)
 
 	if resp.StatusCode != http.StatusOK {
-		bodyB, _ := io.ReadAll(resp.Body)
-		return "", nil, "", fmt.Errorf("bedrock voxtral failed (%d): %s", resp.StatusCode, string(bodyB))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
+		return "", nil, "", fmt.Errorf("bedrock voxtral failed (%d)", resp.StatusCode)
 	}
 
 	var result struct {
