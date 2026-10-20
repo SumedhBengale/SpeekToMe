@@ -15,23 +15,27 @@ pub fn quit(app: &tauri::AppHandle) {
     if QUITTING.swap(true, Ordering::SeqCst) {
         return;
     }
-    // Do not wait for network requests, a suspended audio device, or GTK to
-    // cooperate. Normal Tauri cleanup gets a short head start; OS teardown is
-    // the fallback and releases all native handles/threads and capture devices.
+    // Keep the event loop alive while the disk writer finishes. No network wait
+    // is required: the durable manifest resumes upload on the next launch.
     std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        force_exit();
+        std::thread::sleep(std::time::Duration::from_secs(15));
+        force_exit(); // A blocked audio driver cannot prevent eventual shutdown.
     });
-    // Best-effort audio finalization runs off the UI thread and cannot extend
-    // the hard deadline. Existing local recording recovery handles interruptions.
-    std::thread::spawn(|| {
+    let app=app.clone();
+    std::thread::spawn(move || {
         crate::shortcuts::cancel();
         if crate::audio::MEETING_STATE.get().is_some() {
-            let _ = crate::audio::stop_meeting_recording();
-            crate::meeting_session::finish();
+            let result=crate::audio::stop_meeting_recording();
+            if let Some(path)=crate::CURRENT_MEETING_PATH.lock().unwrap_or_else(|e|e.into_inner()).take() {
+                match result {
+                    Ok(())=>crate::update_meeting_status(&path.to_string_lossy(),"recorded",None),
+                    Err(_)=>crate::update_meeting_status(&path.to_string_lossy(),"recording",Some("Interrupted recording will be recovered on restart".into())),
+                }
+            }
         }
+        crate::playback::clear();
+        app.exit(0);
     });
-    app.exit(0);
 }
 
 pub fn force_exit() -> ! {

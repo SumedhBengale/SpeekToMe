@@ -164,3 +164,47 @@ pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) 
 
     Ok(buffer)
 }
+
+/// Stateful fractional resampling. Keep the boundary sample and phase so
+/// callback sizes and non-integral rates (44.1 kHz) cannot shorten recordings.
+pub struct CaptureResampler {
+    rate: u64,
+    channels: usize,
+    interleaved: Vec<i16>,
+    mono: Vec<i16>,
+    position: u64,
+}
+impl CaptureResampler {
+    pub fn new(rate:u32,channels:u16)->Self{Self{rate:rate.max(1) as u64,channels:channels.max(1) as usize,interleaved:Vec::new(),mono:Vec::new(),position:0}}
+    pub fn push(&mut self,input:&[i16])->Vec<i16>{
+        self.interleaved.extend_from_slice(input);
+        let complete=self.interleaved.len()/self.channels*self.channels;
+        self.mono.extend(self.interleaved[..complete].chunks_exact(self.channels).map(|frame|(frame.iter().map(|&s|s as i64).sum::<i64>()/self.channels as i64) as i16));
+        self.interleaved.drain(..complete);
+        let mut output=Vec::new();
+        while self.position/16000+1<self.mono.len() as u64 {
+            let index=(self.position/16000) as usize;let fraction=(self.position%16000) as f64/16000.0;
+            output.push((self.mono[index] as f64+(self.mono[index+1] as f64-self.mono[index] as f64)*fraction).round() as i16);
+            self.position+=self.rate;
+        }
+        let consumed=(self.position/16000).min(self.mono.len().saturating_sub(1) as u64) as usize;
+        self.mono.drain(..consumed);self.position-=consumed as u64*16000;
+        output
+    }
+    pub fn finish(&mut self)->Vec<i16>{
+        let mut output=Vec::new();
+        while self.position<self.mono.len() as u64*16000 {
+            output.push(self.mono[(self.position/16000) as usize]);self.position+=self.rate;
+        }
+        self.mono.clear();self.interleaved.clear();self.position=0;output
+    }
+}
+#[cfg(test)]mod capture_resampler_tests{
+ use super::*;
+ #[test]fn arbitrary_callback_boundaries_preserve_long_audio_clock(){
+  for rate in [16000,44100,48000]{let frames=rate as usize*130;let input=vec![1000i16;frames*2];let mut resampler=CaptureResampler::new(rate,2);let mut count=0;
+   for chunk in input.chunks(1001){count+=resampler.push(chunk).len();assert!(resampler.mono.len()<6);assert!(resampler.interleaved.len()<2);}
+   count+=resampler.finish().len();assert_eq!(count,16000*130);
+  }
+ }
+}

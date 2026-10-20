@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	log "speektome-server/privacylog"
 	"math"
 	"net/http"
 	"net/url"

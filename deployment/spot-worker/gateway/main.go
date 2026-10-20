@@ -359,7 +359,7 @@ func (g *gateway) stream(w http.ResponseWriter, r *http.Request, stat *streamSta
 			}
 			g.stats.stage("opus_message_to_backend", time.Since(chunkStart), len(data))
 			if err != nil {
-				log.Printf("opus stream rejected: %v", err)
+				log.Print("opus stream rejected; private details omitted")
 				front.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(1003, "unsupported Opus stream"), time.Now().Add(time.Second))
 				break
 			}
@@ -481,7 +481,7 @@ func main() {
 	flag.Parse()
 	if *smoke != "" {
 		if err := smokeTest(*upstream, *smoke, *smokeDiarization); err != nil {
-			log.Fatal(err)
+			log.Fatal("Worker operation failed; private details omitted")
 		}
 		return
 	}
@@ -499,7 +499,7 @@ func main() {
 	g := &gateway{tokenHash: sha256.Sum256([]byte(strings.TrimSpace(string(token)))), upstream: u, slots: make(chan struct{}, *limit), readyFile: *ready, proxy: httputil.NewSingleHostReverseProxy(u), diarSlots: make(chan struct{}, *diarLimit), drainFile: *drainFile, spotFile: *spotFile, meetingExclusive: *exclusive}
 	g.proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) { http.Error(w, "inference unavailable", 502) }
 	server := http.Server{Addr: *listen, Handler: g, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32 << 10}
-	log.Printf("authenticated worker gateway listening on %s", *listen)
+	log.Print("Authenticated worker gateway listening")
 	log.Fatal(server.ListenAndServe())
 }
 
@@ -512,4 +512,12 @@ func (g *gateway) isDraining() bool {
 		return err == nil
 	}
 	return false
+}
+
+// HTTP panic/error values can contain private upstream responses.
+type privateLogWriter struct{}
+
+func (privateLogWriter) Write(value []byte) (int, error) {
+	log.Print("Worker HTTP operation failed; private details omitted")
+	return len(value), nil
 }

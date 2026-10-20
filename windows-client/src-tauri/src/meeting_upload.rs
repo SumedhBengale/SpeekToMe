@@ -251,7 +251,9 @@ pub fn start_recovery() {
                     .unwrap_or_else(|e| e.into_inner())
                     .clone()
             };
+            if crate::meeting_session::is_starting(){continue;}
             for record in crate::load_meeting_index() {
+                if crate::meeting_session::is_starting(){break;}
                 if RETRY_AT
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -266,6 +268,7 @@ pub fn start_recovery() {
                     || record.status == "uploaded"
                     || record.status == "processing_failed"
                     || record.status == "cancelled"
+                    || record.status == "capture_failed"
                 {
                     continue;
                 }
@@ -277,7 +280,13 @@ pub fn start_recovery() {
                     {
                         continue;
                     };
+                    if let Err(message)=crate::recording_recovery::repair_meeting(Path::new(&record.filepath)) {
+                        crate::update_meeting_status(&record.filepath,"capture_failed",Some(message));
+                        crate::account_errors::notify("Meetings", "An interrupted recording could not be recovered automatically. Local audio files have been retained.");
+                        continue;
+                    }
                     crate::update_meeting_status(&record.filepath, "recorded", None);
+                    crate::account_errors::notify("Meetings", "An interrupted meeting was recovered. Upload and processing will resume for its recording account.");
                 }
                 // All retries query server state via the idempotent manifest; an interrupted
                 // upload resumes at its acknowledged channel offsets.

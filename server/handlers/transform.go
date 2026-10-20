@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"speektome-server/accountlimits"
 	"strings"

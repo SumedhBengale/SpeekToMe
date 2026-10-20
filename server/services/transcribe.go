@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	log "speektome-server/privacylog"
 	"math"
 	"mime/multipart"
 	"net"

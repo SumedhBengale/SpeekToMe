@@ -80,6 +80,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         }
         tauri::WindowEvent::Moved(_) => remember_geometry(window),
         tauri::WindowEvent::Destroyed => {
+            crate::playback::clear();
             crate::shortcuts::set_selecting(false);
             #[cfg(target_os = "linux")]
             crate::linux_desktop::release_idle_webkit(window.app_handle());

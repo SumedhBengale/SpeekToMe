@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"net/url"
 	"os"
@@ -856,7 +856,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	rawTranscriptText := rawTranscriptBuilder.String()
 
 	log.Printf("[SERVER FINAL REVIEW] Total Active Turns: %d | Final Segments: %d", len(activeTurns), len(finalSegments))
-	log.Print("[MEETING] Diarized transcript ready")
+	log.Printf("[MEETING] Diarized transcript ready")
 	log.Printf("[SERVER FINAL SEGMENTS JSON]\n%s", segmentsJSON)
 
 	// -------------------------------------------------------------------
@@ -882,8 +882,8 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[SERVER FINAL POLISHED TRANSCRIPT]\n%s", polishedTranscript)
-	log.Print("[MEETING] Summary ready")
-	log.Print("[MEETING] Action items ready")
+	log.Printf("[MEETING] Summary ready")
+	log.Printf("[MEETING] Action items ready")
 
 	// -------------------------------------------------------------------
 	// 10. Persist Meeting to Database

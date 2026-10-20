@@ -2,7 +2,7 @@ package vocab
 
 import (
 	"context"
-	"log"
+	log "speektome-server/privacylog"
 	"sort"
 	"strings"
 	"sync"

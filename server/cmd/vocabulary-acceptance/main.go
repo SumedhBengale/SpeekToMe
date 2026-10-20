@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"github.com/joho/godotenv"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"os"
 	"os/signal"

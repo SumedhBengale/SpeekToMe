@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
+	log "speektome-server/privacylog"
 	"math"
 	"net/http"
 	"strconv"

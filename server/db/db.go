@@ -10,7 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	log "speektome-server/privacylog"
 	"os"
 	"strings"
 	"time"

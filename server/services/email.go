@@ -3,7 +3,7 @@ package services
 import (
 	"fmt"
 	"html"
-	"log"
+	log "speektome-server/privacylog"
 	"os"
 
 	"github.com/aws/aws-sdk-go/aws"

@@ -6,6 +6,7 @@ static BUFFER: OnceLock<Mutex<Option<Buffer>>> = OnceLock::new();
 unsafe extern "C" {
     fn s2m_audio_start(samples: extern "C" fn(*const f32, usize)) -> i32;
     fn s2m_audio_stop();
+    fn s2m_audio_failed() -> bool;
 }
 extern "C" fn samples(data: *const f32, count: usize) {
     if data.is_null() || count == 0 || count > 96_000 {
@@ -24,17 +25,20 @@ extern "C" fn samples(data: *const f32, count: usize) {
                 // Bound native delivery when a suspended consumer falls behind.
                 const MAX_SAMPLES: usize = 48_000 * 2 * 30;
                 if buffer.len() + count > MAX_SAMPLES {
-                    let excess = (buffer.len() + count - MAX_SAMPLES).min(buffer.len());
-                    buffer.drain(..excess);
+                    OVERFLOW.store(true,Ordering::Relaxed);
+                    return;
                 }
                 buffer.extend(data.iter().map(|x| (x.clamp(-1.0, 1.0) * 32767.0) as i16));
             }
         }
     });
 }
+pub fn failed()->bool { (unsafe{s2m_audio_failed()}) || OVERFLOW.load(Ordering::Relaxed) }
+static OVERFLOW: std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
 pub struct Capture;
 impl Capture {
     pub fn start(buffer: Buffer) -> Result<Self, String> {
+        OVERFLOW.store(false,Ordering::Relaxed);
         *BUFFER
             .get_or_init(|| Mutex::new(None))
             .lock()

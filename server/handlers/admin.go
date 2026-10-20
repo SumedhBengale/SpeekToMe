@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -109,7 +109,7 @@ func (a *App) HandleAdminDeleteRateLimits(w http.ResponseWriter, r *http.Request
 			http.Error(w, "Failed to reset account rate limits", 503)
 			return
 		}
-		log.Println("[ADMIN ACTION] Reset all rate limit caches")
+		log.Printf("[ADMIN ACTION] Reset all rate limit caches")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})

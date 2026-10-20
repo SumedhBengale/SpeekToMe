@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	log "speektome-server/privacylog"
 	"os"
 	"path/filepath"
 	"sort"

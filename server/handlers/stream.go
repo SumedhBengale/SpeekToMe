@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"strconv"
 	"strings"

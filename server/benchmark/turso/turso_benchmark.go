@@ -3,7 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"log"
+	log "speektome-server/privacylog"
 	"math/rand"
 	"time"
 
@@ -29,10 +29,10 @@ func main() {
 	if err := db.Ping(); err != nil {
 		log.Fatalf("Failed to ping database: %v", err)
 	}
-	log.Println("Successfully connected and pinged Turso database!")
+	log.Printf("Successfully connected and pinged Turso database!")
 
 	// Create tables if they do not exist
-	log.Println("Initializing tables if empty...")
+	log.Printf("Initializing tables if empty...")
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +71,7 @@ func main() {
 	}
 
 	// Insert test data
-	log.Println("Seeding test data...")
+	log.Printf("Seeding test data...")
 	email := fmt.Sprintf("bench_%d@example.com", rand.Intn(100000))
 	token := fmt.Sprintf("session_token_%d", rand.Intn(100000))
 
@@ -103,7 +103,7 @@ func main() {
 			userID, 15.5, 2.3, "success")
 	}
 
-	log.Println("Seeding complete. Beginning latency tests...")
+	log.Printf("Seeding complete. Beginning latency tests...")
 	fmt.Println("\n=======================================================")
 	fmt.Println("             TURSO DATABASE LATENCY BENCHMARK          ")
 	fmt.Println("=======================================================")

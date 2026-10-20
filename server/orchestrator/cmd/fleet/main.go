@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"golang.org/x/sys/unix"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"os"
 	"os/signal"

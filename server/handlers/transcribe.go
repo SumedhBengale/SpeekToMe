@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"os"
 	"strconv"
@@ -219,20 +219,20 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	ackToken := auth.GenerateLogAckToken(user.ID, logID)
 
-	fmt.Println("\n" + strings.Repeat("=", 55))
-	fmt.Println("                SPEEKTOME ANALYTICS (GO)")
-	fmt.Println(strings.Repeat("=", 55))
-	fmt.Printf("User:             %s (ID: %d)\n", user.Email, user.ID)
-	fmt.Printf("Audio Duration:   %.2f seconds\n", audioDuration)
-	fmt.Printf("Bandwidth / Size: %s (%d bytes)\n", utils.FormatSize(audioSizeBytes), audioSizeBytes)
-	fmt.Printf("Ogg Header Parse: %v\n", oggParseDuration)
-	fmt.Printf("Whisper (%s):     %.3f seconds [Routing: %s]\n", whisperProvider, groqLatency, whisperRouting)
+	log.Println("\n" + strings.Repeat("=", 55))
+	log.Println("                SPEEKTOME ANALYTICS (GO)")
+	log.Println(strings.Repeat("=", 55))
+	log.Printf("User:             %s (ID: %d)\n", user.Email, user.ID)
+	log.Printf("Audio Duration:   %.2f seconds\n", audioDuration)
+	log.Printf("Bandwidth / Size: %s (%d bytes)\n", utils.FormatSize(audioSizeBytes), audioSizeBytes)
+	log.Printf("Ogg Header Parse: %v\n", oggParseDuration)
+	log.Printf("Whisper (%s):     %.3f seconds [Routing: %s]\n", whisperProvider, groqLatency, whisperRouting)
 	if enhance && pctx.LLMProvider != "" {
-		fmt.Printf("LLM (%s):         %.3f seconds [Routing: %s]\n", pctx.LLMProvider, dsLatency, pctx.LLMRouting)
+		log.Printf("LLM (%s):         %.3f seconds [Routing: %s]\n", pctx.LLMProvider, dsLatency, pctx.LLMRouting)
 	}
 
-	fmt.Printf("Total Server Latency:       %.3f seconds\n", totalLatency)
-	fmt.Println(strings.Repeat("=", 55) + "\n")
+	log.Printf("Total Server Latency:       %.3f seconds\n", totalLatency)
+	log.Println(strings.Repeat("=", 55) + "\n")
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{

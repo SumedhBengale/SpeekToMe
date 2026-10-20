@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	log "speektome-server/privacylog"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -383,20 +383,11 @@ func main() {
 	cfSuccess, diSuccess, groqSuccess := 0, 0, 0
 
 	fmt.Println("\n" + strings.Repeat("=", 85))
-	fmt.Printf("%-5s | %-10s | %-10s | %-32s | %s\n", "Index", "Provider", "Latency", "Routing Location", "Status / Text Snippet")
+	fmt.Printf("%-5s | %-10s | %-10s | %-32s | %s\n", "Index", "Provider", "Latency", "Routing Location", "Success")
 	fmt.Println(strings.Repeat("=", 85))
 
 	for r := range results {
-		statusStr := ""
-		if r.Error != nil {
-			statusStr = "ERROR: " + r.Error.Error()
-		} else {
-			statusStr = "SUCCESS: "
-			if len(r.Text) > 25 {
-				statusStr += "\"" + r.Text[:25] + "...\""
-			} else {
-				statusStr += "\"" + r.Text + "\""
-			}
+		if r.Error == nil {
 			if r.Provider == "Cloudflare" {
 				cfLatencies = append(cfLatencies, r.Latency)
 				cfSuccess++
@@ -408,7 +399,7 @@ func main() {
 				groqSuccess++
 			}
 		}
-		fmt.Printf("#%-4d | %-10s | %-10s | %-32s | %s\n", r.Index, r.Provider, r.Latency.Round(time.Millisecond), r.Routing, statusStr)
+		fmt.Printf("#%-4d | %-10s | %-10s | %-32s | %t\n", r.Index, r.Provider, r.Latency.Round(time.Millisecond), r.Routing, r.Error == nil)
 	}
 	fmt.Println(strings.Repeat("=", 85))
 

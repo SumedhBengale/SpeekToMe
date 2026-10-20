@@ -192,7 +192,7 @@ def run_job(job):
         # Avoid sending decoder stderr, audio content, or stack traces to logs.
         message = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
         update(job, persist=True, status='failed', phase='failed', error=message, finished_at=time.time())
-        log.warning('job=%s failed reason=%s', job['job_id'], message)
+        log.warning('job=%s failed; private details omitted', job['job_id'])
     finally:
         model.run_chunk = original_chunk
         model.log_mel = original_mel
@@ -238,7 +238,7 @@ def initialize():
             ready = True
             log.info('runtime ready CPU INT8 threads=2')
     except Exception:
-        log.exception('Runtime initialization failed')
+        log.error('Runtime initialization failed; private details omitted')
         os._exit(1)
 
 @contextlib.asynccontextmanager

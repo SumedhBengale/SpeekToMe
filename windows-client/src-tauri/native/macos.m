@@ -392,11 +392,16 @@ bool s2m_login_item(bool enabled) {
 
 // System audio is delivered into the same Rust buffers used by Windows/Linux.
 // No screen frames are requested or retained.
+static _Atomic(uint64_t) audioGeneration;
 @interface S2MAudio : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic) void (*samples)(const float *, size_t);
+@property(nonatomic) uint64_t generation;
 @end
+static _Atomic(bool) systemAudioFailed;
+bool s2m_audio_failed(void) { return atomic_load(&systemAudioFailed); }
 @implementation S2MAudio
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type {
+    if (self.generation != atomic_load(&audioGeneration)) return;
     if (type != SCStreamOutputTypeAudio || !CMSampleBufferDataIsReady(sample) || !self.samples) return;
     const AudioStreamBasicDescription *format = CMAudioFormatDescriptionGetStreamBasicDescription(CMSampleBufferGetFormatDescription(sample));
     if (!format || format->mFormatID != kAudioFormatLinearPCM || !(format->mFormatFlags & kAudioFormatFlagIsFloat) || format->mBitsPerChannel != 32) return;
@@ -432,12 +437,12 @@ bool s2m_login_item(bool enabled) {
     free(list);
 }
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
-    NSLog(@"[SpeekTo.Me] System audio capture stopped: %@", error.localizedDescription);
+    if (self.generation == atomic_load(&audioGeneration)) atomic_store(&systemAudioFailed, true);
+    NSLog(@"[SpeekTo.Me] System audio capture stopped unexpectedly");
 }
 @end
 static SCStream *audioStream;
 static S2MAudio *audioOutput;
-static _Atomic(uint64_t) audioGeneration;
 void s2m_audio_stop(void) {
     atomic_fetch_add(&audioGeneration, 1);
     @synchronized([S2MAudio class]) {
@@ -447,6 +452,7 @@ void s2m_audio_stop(void) {
     }
 }
 int s2m_audio_start(void (*samples)(const float *, size_t)) {
+    atomic_store(&systemAudioFailed, false);
     @autoreleasepool {
         if ([NSThread isMainThread]) return -1;
         if (!CGPreflightScreenCaptureAccess()) { CGRequestScreenCaptureAccess(); return 0; }
@@ -460,7 +466,7 @@ int s2m_audio_start(void (*samples)(const float *, size_t)) {
             config.width = 2; config.height = 2; config.minimumFrameInterval = CMTimeMake(1, 1);
             config.capturesAudio = YES; config.sampleRate = 48000; config.channelCount = 2;
             config.excludesCurrentProcessAudio = YES;
-            S2MAudio *output = [S2MAudio new]; output.samples = samples;
+            S2MAudio *output = [S2MAudio new]; output.samples = samples; output.generation = generation;
             SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:output];
             NSError *addError = nil;
             if (![stream addStreamOutput:output type:SCStreamOutputTypeAudio sampleHandlerQueue:dispatch_queue_create("me.speekto.system-audio", DISPATCH_QUEUE_SERIAL) error:&addError]) { dispatch_semaphore_signal(done); return; }

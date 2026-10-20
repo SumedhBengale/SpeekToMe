@@ -1,7 +1,7 @@
 package pipeline
 
 import (
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"strconv"
 	"strings"

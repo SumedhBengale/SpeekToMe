@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"strings"
 

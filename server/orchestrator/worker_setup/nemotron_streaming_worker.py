@@ -83,12 +83,12 @@ async def transcribe_audio_chunk(audio_bytes):
             if best_hyp and len(best_hyp[0]) > 0:
                 return best_hyp[0][0].text
     except Exception as e:
-        print(f"[TRANSCRIPTION ERROR] {e}")
+        print("[TRANSCRIPTION ERROR] Provider failure; private details omitted")
     return ""
 
 async def handle_websocket_client(websocket, path):
     client_ip = websocket.remote_address[0]
-    print(f"[SESSION START] Client connected from {client_ip}")
+    print("[SESSION START] Client connected")
     
     audio_buffer = bytearray()
     last_text = ""
@@ -111,7 +111,7 @@ async def handle_websocket_client(websocket, path):
                                 await websocket.send(json.dumps({"type": "final", "text": final_text}))
                         break
                 except Exception as e:
-                    print(f"[CONTROL MSG ERROR] {e}")
+                    print("[CONTROL MSG ERROR] Invalid control message")
             elif isinstance(message, bytes):
                 audio_buffer.extend(message)
                 # If we have accumulated roughly 560ms of audio, transcribe
@@ -124,7 +124,7 @@ async def handle_websocket_client(websocket, path):
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
-        print(f"[SESSION END] Closed connection with {client_ip}")
+        print("[SESSION END] Connection closed")
 
 async def main():
     print(f"[SERVER] Starting Nemotron Streaming WebSocket Server on 0.0.0.0:{PORT}...")

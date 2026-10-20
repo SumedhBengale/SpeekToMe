@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	log "speektome-server/privacylog"
 	"net"
 	"net/http"
 	"net/http/httptrace"

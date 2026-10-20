@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"golang.org/x/sys/unix"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
+	log "speektome-server/privacylog"
 	"speektome-server/privatevault"
 	"strings"
 	"time"
@@ -128,7 +128,7 @@ func main() {
 		if err := privacy.CheckObjects(ctx); err != nil {
 			log.Fatal("Encrypted object storage check failed")
 		}
-		log.Print("Encrypted object storage PUT/range GET/DELETE verified")
+		log.Printf("Encrypted object storage PUT/range GET/DELETE verified")
 		return
 	}
 	if len(os.Args) == 2 && os.Args[1] == "--migrate-private-data" {
@@ -230,7 +230,8 @@ func main() {
 	handler := corsMiddleware(mux)
 
 	log.Printf("Starting SpeekTo.Me Go Server on port 8000...")
-	server := &http.Server{Addr: "127.0.0.1:8000", Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{
+		ErrorLog: log.HTTPLogger(), Addr: "127.0.0.1:8000", Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Fatal(server.ListenAndServe())
 }
 

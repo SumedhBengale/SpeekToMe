@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"net/mail"
 	"net/url"

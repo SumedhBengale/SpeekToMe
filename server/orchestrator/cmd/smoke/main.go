@@ -8,7 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/coder/websocket"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"os"
 	"strings"

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"os"
 	"strconv"

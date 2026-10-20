@@ -102,7 +102,7 @@ async function loadLinuxCapabilityStatus() {
       }
     }
   } catch (error) {
-    console.warn('[LINUX] Capability status is unavailable:', error);
+    console.warn('[LINUX] Capability status is unavailable:');
     if (!status.dataset.state) {
       status.hidden = false;
       status.textContent = 'Permission status is unavailable.';
@@ -765,7 +765,7 @@ async function init() {
         winMaxBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>`;
       }
     } catch (e) {
-      console.error('Failed to update maximize icon:', e);
+      console.error('Failed to update maximize icon:');
     }
   }
 
@@ -777,7 +777,7 @@ async function init() {
         await invoke('toggle_maximize_window');
         setTimeout(updateMaximizeIcon, 60);
       } catch (err) {
-        console.error('Toggle maximize failed:', err);
+        console.error('Toggle maximize failed:');
       }
     });
   }
@@ -791,7 +791,7 @@ async function init() {
         await invoke('toggle_maximize_window');
         setTimeout(updateMaximizeIcon, 60);
       } catch (err) {
-        console.error('Toggle maximize failed:', err);
+        console.error('Toggle maximize failed:');
       }
     });
   }
@@ -842,7 +842,7 @@ async function init() {
       if (tabId === 'account') {
         invoke('get_user_info').then(info => {
           updateAuthUI(info);
-        }).catch(err => console.warn("Failed to refresh user info on account tab:", err));
+        }).catch(err => console.warn("Failed to refresh user info on account tab:"));
       } else if (tabId === 'history') {
         loadTranscriptionHistory();
       } else if (tabId === 'vocabulary') {
@@ -887,19 +887,19 @@ async function init() {
   try {
     try {
       API_URL = await invoke('get_api_url');
-      console.log("[INIT] API_URL loaded:", API_URL);
+      console.log("[INIT] API_URL loaded:");
     } catch (err) {
-      console.error("[INIT] Failed to load API URL from backend:", err);
+      console.error("[INIT] Failed to load API URL from backend:");
     }
 
     try {
       const dynamicLangs = await invoke('get_supported_languages');
       if (dynamicLangs && dynamicLangs.length > 0) {
         SUPPORTED_LANGUAGES = dynamicLangs;
-        console.log(`[LANGUAGES] Loaded ${dynamicLangs.length} dynamic languages from backend.`);
+        console.log("[diagnostic event: private values omitted]");
       }
     } catch (err) {
-      console.warn("[INIT] Could not load dynamic languages list from backend, using defaults:", err);
+      console.warn("[INIT] Could not load dynamic languages list from backend, using defaults:");
     }
 
     setupLanguageCombobox('client-lang-search-input', 'client-lang-dropdown-list', 'client-add-lang-btn');
@@ -907,14 +907,14 @@ async function init() {
 
     // 2. Fetch and apply configuration
     currentConfig = await invoke('get_config');
-    console.log("[INIT] Config loaded:", currentConfig);
+    console.log("[INIT] Config loaded:");
     applyConfigToUI(currentConfig);
     loadLinuxCapabilityStatus();
     if (IS_LINUX_CLIENT || IS_MAC_CLIENT) setInterval(loadLinuxCapabilityStatus, 3000);
 
     // 3. Fetch user information status & update dashboard UI
     const userInfo = await invoke('get_user_info');
-    console.log("[INIT] UserInfo loaded:", userInfo);
+    console.log("[INIT] UserInfo loaded:");
     currentUserInfo = userInfo;
     updateAuthUI(userInfo);
     updateOnboardAuthUI(userInfo);
@@ -942,7 +942,7 @@ async function init() {
         showToast("Your session has expired. Please sign in again.", "Session Expired", "warning");
       });
     } catch (err) {
-      console.error("Failed to bind auth-session-expired listener:", err);
+      console.error("Failed to bind auth-session-expired listener:");
     }
 
     // 3.6. Bind Open Web Dashboard Sidebar Button & Manage Account Button
@@ -953,7 +953,7 @@ async function init() {
         try {
           await invoke('open_external_url', { url: "https://speekto.me/dashboard" });
         } catch (err) {
-          console.error("Failed to open web dashboard:", err);
+          console.error("Failed to open web dashboard:");
           window.open("https://speekto.me/dashboard", "_blank");
         }
       });
@@ -966,7 +966,7 @@ async function init() {
         try {
           await invoke('open_external_url', { url: "https://speekto.me/dashboard" });
         } catch (err) {
-          console.error("Failed to open web dashboard:", err);
+          console.error("Failed to open web dashboard:");
           window.open("https://speekto.me/dashboard", "_blank");
         }
       });
@@ -975,7 +975,7 @@ async function init() {
     // 3.8. Theme preview listeners
     if (themeSelect) {
       themeSelect.addEventListener('change', (e) => {
-        console.log("[THEME] themeSelect changed to:", e.target.value);
+        console.log("[THEME] themeSelect changed to:");
         applyAppTheme(e.target.value);
       });
     }
@@ -993,7 +993,7 @@ async function init() {
     }
     if (onboardThemeSelect) {
       onboardThemeSelect.addEventListener('change', (e) => {
-        console.log("[THEME] onboardThemeSelect changed to:", e.target.value);
+        console.log("[THEME] onboardThemeSelect changed to:");
         applyAppTheme(e.target.value);
       });
     }
@@ -1095,7 +1095,7 @@ async function init() {
         await invoke('save_config', { config: updated });
         currentConfig = updated;
       } catch (e) {
-        console.warn("Auto-syncing onboarding config:", e);
+        console.warn("Auto-syncing onboarding config:");
       }
     };
 
@@ -1155,7 +1155,7 @@ async function init() {
           vocabInput.value = '';
           await loadVocabulary();
         } catch (err) {
-          console.error("Failed to add vocabulary term:", err);
+          console.error("Failed to add vocabulary term:");
           showToast(err, "Failed to add term", "error");
         } finally {
           vocabAddBtn.disabled = false;
@@ -1176,18 +1176,18 @@ async function init() {
     try {
       const activeMeeting = await invoke('get_active_meeting');
       if (activeMeeting && activeMeeting.is_recording) {
-        console.log("[MEETING RESTORE] Active meeting found during init:", activeMeeting);
+        console.log("[MEETING RESTORE] Active meeting found during init:");
         rehydrateActiveMeeting(activeMeeting);
       }
     } catch (meetingErr) {
-      console.warn("[MEETING RESTORE] Failed to check for active meeting during init:", meetingErr);
+      console.warn("[MEETING RESTORE] Failed to check for active meeting during init:");
     }
 
     // Initialize Custom Themed Dropdowns
     initCustomSelects();
     console.log("[INIT] SpeekTo.Me Frontend initialization complete!");
   } catch (err) {
-    console.error("Failed to initialize SpeekTo.Me UI:", err);
+    console.error("Failed to initialize SpeekTo.Me UI:");
   }
 }
 
@@ -1787,7 +1787,7 @@ async function saveAndApply(e) {
       }
     }, 1200);
   } catch (err) {
-    console.error("Failed to save config:", err);
+    console.error("Failed to save config:");
     if (activeSaveBtn) {
       activeSaveBtn.disabled = false;
       activeSaveBtn.innerHTML = defaultContent;
@@ -1821,7 +1821,7 @@ async function refreshUserData(e) {
     applyConfigToUI(currentConfig);
     showToast("Account status and settings synchronized.", "Refreshed Successfully", "success");
   } catch (err) {
-    console.error("Failed to refresh user data:", err);
+    console.error("Failed to refresh user data:");
     showToast(formatAuthError(err), "Refresh Error", "error");
   } finally {
     if (refreshBtn) {
@@ -1837,7 +1837,7 @@ async function hideWindow(e) {
   try {
     await invoke('hide_window');
   } catch (err) {
-    console.error("Failed to hide window:", err);
+    console.error("Failed to hide window:");
   }
 }
 
@@ -1916,7 +1916,7 @@ async function renderOnboardingPromoUI() {
       }
     }
   } catch (err) {
-    console.warn("[PROMO] Could not fetch remote promo config, using default:", err);
+    console.warn("[PROMO] Could not fetch remote promo config, using default:");
   }
 }
 
@@ -1949,7 +1949,7 @@ async function initDemoVideoStep() {
     await invoke('save_config', { config: updated });
     currentConfig = updated;
   } catch (err) {
-    console.error("Failed to sync config before demo video step:", err);
+    console.error("Failed to sync config before demo video step:");
   }
 
   // Fetch demo video URL from backend /config/video or cached
@@ -1963,7 +1963,7 @@ async function initDemoVideoStep() {
       }
     }
   } catch (e) {
-    console.warn("Could not fetch demo video URL from server, using cached:", e);
+    console.warn("Could not fetch demo video URL from server, using cached:");
   }
 
   if (onboardDemoVideo && onboardDemoVideo.src !== cachedDemoVideoUrl) {
@@ -1977,7 +1977,7 @@ function setupDemoVideoPlayer() {
 
   const togglePlay = () => {
     if (onboardDemoVideo.paused || onboardDemoVideo.ended) {
-      onboardDemoVideo.play().catch(e => console.warn("Auto-play error:", e));
+      onboardDemoVideo.play().catch(e => console.warn("Auto-play error:"));
     } else {
       onboardDemoVideo.pause();
     }
@@ -2053,10 +2053,10 @@ function setupDemoVideoPlayer() {
     videoFullscreenBtn.addEventListener('click', () => {
       if (!document.fullscreenElement) {
         videoPlayerContainer.requestFullscreen().catch(err => {
-          console.warn("Fullscreen request failed:", err);
+          console.warn("Fullscreen request failed:");
         });
       } else {
-        document.exitFullscreen().catch(err => console.warn(err));
+        document.exitFullscreen().catch(err => console.warn("[diagnostic event: private values omitted]"));
       }
     });
   }
@@ -2077,7 +2077,7 @@ async function finishOnboarding() {
     // 4. Hide onboarding overlay to reveal regular settings dashboard
     onboardingWrapper.classList.add('hidden');
   } catch (err) {
-    console.error("Failed to complete onboarding:", err);
+    console.error("Failed to complete onboarding:");
   }
 }
 
@@ -2339,7 +2339,7 @@ async function triggerLogout() {
     updateAuthUI(null);
     updateOnboardAuthUI(null);
   } catch (err) {
-    console.error("Failed to logout:", err);
+    console.error("Failed to logout:");
   }
 }
 
@@ -2360,7 +2360,7 @@ async function setupOAuthListeners() {
 
   // Listen for login-failed emitted by Rust thread
   unlistenLoginFailed = await listen('login-failed', (event) => {
-    console.error("Login failed:", event.payload);
+    console.error("Login failed:");
     triggerCancelLogin(true);
     triggerCancelLogin(false);
     showToast(event.payload, "Authentication Notice", "error");
@@ -2617,7 +2617,7 @@ async function loadVocabulary() {
           showToast(`Removed "${term.canonical_term}"`, "Vocabulary", "info");
           await loadVocabulary();
         } catch (err) {
-          console.error("Failed to delete term:", err);
+          console.error("Failed to delete term:");
           showToast(err, "Failed to delete term", "error");
           deleteBtn.disabled = false;
         }
@@ -2629,7 +2629,7 @@ async function loadVocabulary() {
     });
   } catch (err) {
     hideVocabLoading();
-    console.error("Failed to load vocabulary:", err);
+    console.error("Failed to load vocabulary:");
     if (vocabEmpty) {
       const emptyText = vocabEmpty.querySelector('.vocab-empty-text');
       if (emptyText) {
@@ -2714,7 +2714,7 @@ function setupMeetingsUI() {
       }
     });
     listen('meeting-completed', (event) => {
-      console.log("[MEETING EVENT] meeting-completed received from backend:", event.payload);
+      console.log("[MEETING EVENT] meeting-completed received from backend:");
       try {
         const m = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
         if (m && m.id) {
@@ -2723,7 +2723,7 @@ function setupMeetingsUI() {
           viewMeeting(m.id);
         }
       } catch (e) {
-        console.error("[MEETING EVENT ERROR] Failed to parse meeting-completed payload:", e);
+        console.error("[MEETING EVENT ERROR] Failed to parse meeting-completed payload:");
       }
     });
     listen('meeting-recording-stopped', async () => {
@@ -2757,7 +2757,7 @@ function setupMeetingsUI() {
           loadMeetings();
         }
       } catch (err) {
-        console.warn("[MEETING EVENT] open-meeting-view handling failed:", err);
+        console.warn("[MEETING EVENT] open-meeting-view handling failed:");
       }
     });
   }
@@ -2892,7 +2892,7 @@ async function loadMeetings(quiet = false) {
     await appendPendingLocalMeetings();
   } catch (err) {
     if (reqId !== currentMeetingsReqId) return;
-    console.error("Failed to load meetings:", err);
+    console.error("Failed to load meetings:");
     if (!quiet) showMeetingsEmpty('Error connecting to SpeekTo.Me server. Please check your connection.');
     await appendPendingLocalMeetings();
   }
@@ -2963,7 +2963,6 @@ async function deleteMeetingById(id) {
   if (!confirmed) return;
 
   const token = currentConfig ? currentConfig.session_token : null;
-  const isCurrent=()=>detailGeneration===meetingDetailGeneration&&currentConfig?.session_token===token;
   try {
     const res = await fetch(`${API_URL}/meetings/${id}`, {
       method: 'DELETE',
@@ -2978,7 +2977,7 @@ async function deleteMeetingById(id) {
     showToast("Meeting note deleted successfully.", "SpeekTo.Me", "info");
     loadMeetings();
   } catch (err) {
-    console.error(err);
+    console.error("[diagnostic event: private values omitted]");
     await showAlertDialog({
       title: "Failed to Delete",
       message: "Failed to delete meeting note: " + err,
@@ -3177,6 +3176,7 @@ async function viewMeeting(id) {
   const detailGeneration=++meetingDetailGeneration;resetMeetingAudio();
   showProcessingView();
   const token = currentConfig ? currentConfig.session_token : null;
+  const isCurrent=()=>detailGeneration===meetingDetailGeneration&&currentConfig?.session_token===token;
   try {
     const res = await fetch(`${API_URL}/meetings/${id}`, {
       headers: {
@@ -3274,37 +3274,17 @@ async function viewMeeting(id) {
 
     // Resolve the exact local meeting and account before trying its encrypted cloud copy.
     const player = document.getElementById('meeting-audio-player');
-    let audioLoaded = false;
     try {
-      const audioDataUri = await invoke('get_local_meeting_audio', { meetingId: id });
-      if(!isCurrent())return;
-      if (audioDataUri) {
-        player.src = audioDataUri;
-        audioLoaded = true;
-        console.log("[MEETING PLAYER] Successfully loaded local meeting audio from local disk!");
-      }
-    } catch (localErr) {
-      console.warn("[MEETING PLAYER] Local audio loading failed, falling back to server audio:", localErr);
+      const ticket = await invoke('get_local_meeting_audio', { meetingId: id });
+      if (!isCurrent()) return;
+      player.preload = 'metadata';
+      player.onerror = () => { if (isCurrent() && cloudStatus) cloudStatus.textContent = 'Audio playback failed. Download the cloud recording to play it externally.'; };
+      player.src = ticket;
+    } catch (_) {
+      if (!isCurrent()) return;
+      if (cloudStatus) cloudStatus.textContent = 'Recording could not be opened. Check your connection or download the cloud audio to play it externally.';
     }
-
-    if(!isCurrent())return;
-    if (!audioLoaded) {
-      try {
-        const audioRes = await fetch(`${API_URL}/meetings/${id}/audio`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (audioRes.ok) {
-          const blob = await audioRes.blob();
-          if(!isCurrent())return;
-          player.src = URL.createObjectURL(blob);
-          console.log("[MEETING PLAYER] Loaded audio from server fallback.");
-        }
-      } catch (srvErr) {
-        console.error("[MEETING PLAYER ERROR] Failed to fetch server audio:", srvErr);
-      }
-    }
-
-    if(!isCurrent())return;
+    if (!isCurrent()) return;
     // Custom Audio Player Controls Elements
     const audioPlayBtn = document.getElementById('audio-play-btn');
     const audioPlayIcon = document.getElementById('audio-play-icon');
@@ -3336,7 +3316,7 @@ async function viewMeeting(id) {
     if (audioPlayBtn) {
       audioPlayBtn.onclick = () => {
         if (player.paused) {
-          player.play();
+          player.play().catch(() => { if (isCurrent() && cloudStatus) cloudStatus.textContent = 'Audio playback could not start. Try again or download the recording.'; });
         } else {
           player.pause();
         }
@@ -3438,11 +3418,11 @@ async function viewMeeting(id) {
 
     if (player) {
       player.onloadedmetadata = () => {
-        console.log(`[MEETING PLAYER] Audio loadedmetadata: duration = ${player.duration}s`);
+        console.log("[diagnostic event: private values omitted]");
         doRenderTimeline();
       };
       player.ondurationchange = () => {
-        console.log(`[MEETING PLAYER] Audio durationchange: duration = ${player.duration}s`);
+        console.log("[diagnostic event: private values omitted]");
         doRenderTimeline();
       };
     }
@@ -3604,7 +3584,7 @@ async function viewMeeting(id) {
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("[diagnostic event: private values omitted]");
     showToast(err.message, "Failed to load meeting", "error");
     showDashboardView();
   }
@@ -4173,7 +4153,7 @@ function handleLiveMeetingTurn(turn) {
 
 function rehydrateActiveMeeting(activeMeeting) {
   if (!activeMeeting || !activeMeeting.is_recording) return;
-  console.log("[MEETING RESTORE] Rehydrating active meeting session:", activeMeeting);
+  console.log("[MEETING RESTORE] Rehydrating active meeting session:");
   currentMeetingFile = activeMeeting.filepath;
 
   // 1. Switch to Meetings tab
@@ -4254,7 +4234,7 @@ function rehydrateActiveMeeting(activeMeeting) {
       if (micFill) micFill.style.width = `${micPercent}%`;
       if (loopbackFill) loopbackFill.style.width = `${loopbackPercent}%`;
     } catch (e) {
-      console.error("[MEETING FRONTEND ERROR] get_meeting_levels failed:", e);
+      console.error("[MEETING FRONTEND ERROR] get_meeting_levels failed:");
     }
   }, 80);
 }
@@ -4294,9 +4274,9 @@ async function startMeetingRecording() {
     console.log("[MEETING FRONTEND] Invoking start_meeting command on Tauri backend...");
     currentMeetingFile = await invoke('start_meeting', { title: "Recording..." });
     if (badge) { badge.textContent="Recording locally"; badge.style.color="#4ec9b0"; }
-    console.log("[MEETING FRONTEND] start_meeting returned successfully. Filepath:", currentMeetingFile);
+    console.log("[MEETING FRONTEND] start_meeting returned successfully. Filepath:");
   } catch (err) {
-    console.error("[MEETING FRONTEND ERROR] Failed to start meeting recording:", err);
+    console.error("[MEETING FRONTEND ERROR] Failed to start meeting recording:");
     showToast(String(err), "Meeting Start Error", "error");
     cancelMeetingRecording();
     return;
@@ -4321,7 +4301,7 @@ async function startMeetingRecording() {
       if (micFill) micFill.style.width = `${micPercent}%`;
       if (loopbackFill) loopbackFill.style.width = `${loopbackPercent}%`;
     } catch (e) {
-      console.error("[MEETING FRONTEND ERROR] get_meeting_levels failed:", e);
+      console.error("[MEETING FRONTEND ERROR] get_meeting_levels failed:");
     }
   }, 80);
 }
@@ -4338,7 +4318,7 @@ async function stopMeetingRecording() {
   if (!title) {
     title = `Meeting on ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
   }
-  console.log("[MEETING FRONTEND] Stopping meeting with title:", title);
+  console.log("[MEETING FRONTEND] Stopping meeting with title:");
 
   let recordingSaved = false;
   try {
@@ -4346,15 +4326,15 @@ async function stopMeetingRecording() {
     const res = await invoke('stop_meeting', {title});
     recordingSaved = true;
     currentMeetingFile = null;
-    console.log("[MEETING FRONTEND] stop_meeting returned:", res);
+    console.log("[MEETING FRONTEND] stop_meeting returned:");
     let m = null;
     try {
       m = JSON.parse(res);
-      console.log("[MEETING FRONTEND] Parsed meeting object from stop_meeting:", m);
+      console.log("[MEETING FRONTEND] Parsed meeting object from stop_meeting:");
     } catch (_) {
-      console.log("[MEETING FRONTEND] stop_meeting returned audio filepath. Uploading audio to server via upload_meeting...", res);
+      console.log("[MEETING FRONTEND] stop_meeting returned audio filepath. Uploading audio to server via upload_meeting...");
       const resultJson = await invoke('upload_meeting', { title, filepath: res });
-      console.log("[MEETING FRONTEND] upload_meeting returned:", resultJson);
+      console.log("[MEETING FRONTEND] upload_meeting returned:");
       m = JSON.parse(resultJson);
     }
 
@@ -4363,7 +4343,7 @@ async function stopMeetingRecording() {
       loadMeetings();
       await showAlertDialog({title:"Meeting uploaded",message:"Your meeting is queued for transcription and speaker identification. You can close the app; results will be saved to your meeting history.",type:"info"});
     } else if (m && m.id) {
-      console.log("[MEETING FRONTEND] Successfully finalized meeting note! ID:", m.id);
+      console.log("[MEETING FRONTEND] Successfully finalized meeting note! ID:");
       showDashboardView();
       loadMeetings();
       viewMeeting(m.id);
@@ -4371,7 +4351,7 @@ async function stopMeetingRecording() {
       throw new Error("Invalid meeting response from server");
     }
   } catch (err) {
-    console.error("[MEETING FRONTEND ERROR] Failed to finalize meeting note:", err);
+    console.error("[MEETING FRONTEND ERROR] Failed to finalize meeting note:");
     currentMeetingFile = null;
     if (recordingSaved) {
     showToast("Your recording is saved on this device and will upload automatically when available. " + String(err), "Recording saved; upload pending", "warning");
@@ -4419,7 +4399,7 @@ async function confirmDeleteMeeting() {
     showDashboardView();
     loadMeetings();
   } catch (err) {
-    console.error(err);
+    console.error("[diagnostic event: private values omitted]");
     await showAlertDialog({
       title: "Failed to Delete",
       message: "Failed to delete meeting note: " + err,
@@ -4508,7 +4488,7 @@ async function appendPendingLocalMeetings() {
       retry.addEventListener('click',async()=>{retry.disabled=true;try{await invoke('retry_upload_meeting',{filepath:meeting.filepath});await loadMeetings(true);}catch(error){showToast(String(error),'Upload pending','error');retry.disabled=false;}});
       card.appendChild(retry); grid.appendChild(card);
     }
-  } catch(error) {console.warn('Cannot list pending local meeting audio',error);}
+  } catch(error) {console.warn('Cannot list pending local meeting audio');}
 }
 
 let displayedHistoryOwner=null;

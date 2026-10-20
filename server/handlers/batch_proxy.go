@@ -3,7 +3,7 @@ package handlers
 import (
 	"fmt"
 	"io"
-	"log"
+	log "speektome-server/privacylog"
 	"net/http"
 	"time"
 

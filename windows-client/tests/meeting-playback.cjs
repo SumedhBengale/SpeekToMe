@@ -1,0 +1,10 @@
+const {JSDOM}=require('jsdom');const fs=require('node:fs');const path=require('node:path');const assert=require('node:assert/strict');
+const frontend=path.join(__dirname,'../frontend');
+const dom=new JSDOM(fs.readFileSync(path.join(frontend,'index.html'),'utf8'),{url:'https://test.invalid',runScripts:'outside-only'});const w=dom.window;
+w.setInterval=()=>0;w.HTMLMediaElement.prototype.pause=function(){};w.HTMLMediaElement.prototype.load=function(){};
+const add=w.document.addEventListener.bind(w.document);w.document.addEventListener=(type,...args)=>{if(type!=='DOMContentLoaded')add(type,...args)};Object.defineProperty(w.document,'readyState',{value:'loading'});
+const calls=[];let release;
+w.__TAURI__={core:{invoke:async(command,args)=>{calls.push([command,args]);if(args.meetingId===1)await new Promise(r=>release=r);return `http://127.0.0.1:12345/ticket-${args.meetingId}`},convertFileSrc:(ticket,scheme)=>`${scheme}://localhost/${ticket}`},event:{listen:async()=>()=>{}}};
+w.fetch=async url=>({ok:true,json:async()=>({id:Number(url.split('/').pop()),title:'Private meeting',timestamp:'2026-10-20',duration:60,segments_json:'[]',summary:'',action_items:'',cloud_audio_status:'ready'})});
+w.eval(fs.readFileSync(path.join(frontend,'main.js'),'utf8')+`;window.configureTest=()=>{currentConfig={session_token:'owner-token'};};`);
+(async()=>{w.configureTest();const first=w.viewMeeting(1);while(!release)await new Promise(r=>setImmediate(r));await w.viewMeeting(2);release();await first;const player=w.document.getElementById('meeting-audio-player');assert.equal(player.getAttribute('src'),'http://127.0.0.1:12345/ticket-2');assert.equal(calls.length,2);assert.ok(calls.every(([command])=>command==='get_local_meeting_audio'));assert.ok(!player.src.startsWith('data:'));dom.window.close();console.log('PASS: exact meeting identity, native playback tickets and stale-response protection');})().catch(error=>{console.error(error);process.exitCode=1;dom.window.close()});

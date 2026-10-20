@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
-	"log"
+	log "speektome-server/privacylog"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"

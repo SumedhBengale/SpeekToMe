@@ -1,5 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod privacy_log;
+mod playback;
+mod recording_recovery;
 pub mod config;
 #[cfg(any(target_os = "windows", test))]
 mod windows_autostart;
@@ -308,6 +312,7 @@ fn open_external_url(url: String) {
 
 #[tauri::command]
 fn logout() {
+    playback::clear();
     let token_opt = {
         let active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         active.session_token.clone()
@@ -588,29 +593,15 @@ fn load_meeting_index_unlocked() -> Vec<LocalMeetingRecord> {
     records
 }
 
-fn save_meeting_index(records: &[LocalMeetingRecord]) {
+fn save_meeting_index(records: &[LocalMeetingRecord]) -> Result<(), String> {
     for record in records {
         let path = std::path::Path::new(&record.filepath).with_extension("meeting.json");
-        let temporary = path.with_extension("json.tmp");
-        if let Ok(data) = serde_json::to_vec(record) {
-            if let Ok(mut file) = std::fs::File::create(&temporary) {
-                use std::io::Write;
-                if file.write_all(&data).is_ok() && file.sync_all().is_ok() { drop(file); let _ = meeting_upload::replace_file(&temporary, &path); }
-            }
-        }
+        let data=serde_json::to_vec(record).map_err(|_|"Cannot serialize recording manifest")?;
+        recording_recovery::atomic_write(&path,&data).map_err(|_|"Cannot save recording manifest. Check available disk space and folder permissions.")?;
     }
-    if let Some(path) = get_meeting_index_path() {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(data) = serde_json::to_string_pretty(records) {
-            let temporary=path.with_extension("tmp");
- if let Ok(mut file)=std::fs::File::create(&temporary) {
- use std::io::Write;
- if file.write_all(data.as_bytes()).is_ok() && file.sync_all().is_ok() {drop(file);let _=meeting_upload::replace_file(&temporary,&path);}
- }
-        }
-    }
+    let path=get_meeting_index_path().ok_or("Recording index location unavailable")?;
+    let data=serde_json::to_vec(records).map_err(|_|"Cannot serialize recording index")?;
+    recording_recovery::atomic_write(&path,&data).map_err(|_|"Cannot save recording index".into())
 }
 
 fn update_meeting_status(filepath: &str, status: &str, err: Option<String>) {
@@ -623,7 +614,9 @@ fn update_meeting_status(filepath: &str, status: &str, err: Option<String>) {
             break;
         }
     }
-    save_meeting_index(&records);
+    if save_meeting_index(&records).is_err() {
+        account_errors::notify("Meetings", "Recording metadata could not be saved. Check available disk space. Local audio files have been retained.");
+    }
 }
 
 fn set_meeting_title(filepath: &str, title: &str) {
@@ -631,7 +624,9 @@ fn set_meeting_title(filepath: &str, title: &str) {
     let _guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut records=load_meeting_index_unlocked();
     for record in &mut records { if record.filepath==filepath { record.title=title.trim().to_string(); break; } }
-    save_meeting_index(&records);
+    if save_meeting_index(&records).is_err() {
+        account_errors::notify("Meetings", "Recording metadata could not be saved. Check available disk space. Local audio files have been retained.");
+    }
 }
 
 fn cleanup_old_recordings() {
@@ -709,6 +704,7 @@ fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
 }
 
 fn main() {
+    std::panic::set_hook(Box::new(|_| { std::eprintln!("[FATAL] Desktop operation panicked; private details omitted."); }));
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         // Fedora's WebKitGTK/Mesa combination can send an explicit-sync
@@ -723,6 +719,8 @@ fn main() {
         use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
         AttachConsole(ATTACH_PARENT_PROCESS);
     }
+
+    if std::env::args().nth(1).as_deref()==Some("--diagnose-playback"){playback::run_diagnostic();return;}
 
     // Read-only policy diagnostic: no preferences, microphone or app instance.
     if std::env::args().nth(1).as_deref() == Some("--check-shortcut") {
@@ -800,6 +798,7 @@ fn main() {
             }
             #[cfg(target_os = "macos")]
             macos_desktop::setup(&handle)?;
+            playback::cleanup_startup();
             shortcuts::start();
             println!("[STARTUP 7b] TAURI_APP set.");
 
@@ -926,11 +925,29 @@ async fn start_meeting(title: String) -> Result<String, String> {
     let stream_tx = None;
     println!("[MEETING LOG] Starting CPAL audio capture streams...");
     let permit = crate::meeting_session::acquire().await?;
+    let _index_guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let mut records = load_meeting_index_unlocked();
+    records.push(LocalMeetingRecord {
+        language: Some(recording_language),
+        id: uuid::Uuid::new_v4().to_string(),
+        title: title.clone(),
+        created_at: start_unix,
+        filepath: path_str.clone(),
+        status: "recording".to_string(),
+        error: None,
+        owner_email,
+        owner_user_id,
+        token_fingerprint,
+    });
+    if let Err(error)=save_meeting_index(&records) { crate::meeting_session::abandon(permit); return Err(error); }
+    drop(_index_guard);
     if let Err(e) = crate::audio::start_meeting_recording(path.clone(), stream_tx) {
         crate::meeting_session::abandon(permit);
-        eprintln!("[MEETING LOG ERROR] start_meeting_recording failed: {}", e);
+        update_meeting_status(&path_str,"capture_failed",Some("Recording could not start. Check microphone and system audio access.".into()));
+        account_errors::notify("Meetings", "Recording could not start. Check microphone and system audio permissions.");
         return Err(format!("Failed to start recording: {}", e));
     }
+    crate::meeting_session::install(permit);
     println!("[MEETING LOG] Audio capture successfully started!");
     
     {
@@ -953,22 +970,6 @@ async fn start_meeting(title: String) -> Result<String, String> {
     // Show native floating meeting overlay pill on desktop
     crate::win32::show_meeting_overlay();
     
-    let _index_guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let mut records = load_meeting_index_unlocked();
-    records.push(LocalMeetingRecord {
-        language: Some(recording_language),
-        id: uuid::Uuid::new_v4().to_string(),
-        title: title.clone(),
-        created_at: start_unix,
-        filepath: path_str.clone(),
-        status: "recording".to_string(),
-        error: None,
-        owner_email,
-        owner_user_id,
-        token_fingerprint,
-    });
-    save_meeting_index(&records);
-    crate::meeting_session::install(permit);
     println!("[MEETING LOG] Meeting record indexed locally. Returning path: {}", path_str);
 
     Ok(path_str)
@@ -984,7 +985,7 @@ async fn stop_meeting(title: Option<String>) -> Result<String, String> {
     crate::meeting_session::finish();
     if let Err(e)=finalize_error {
         if let Some(path)=CURRENT_MEETING_PATH.lock().unwrap_or_else(|error|error.into_inner()).take() {
-            update_meeting_status(&path.to_string_lossy(), "failed", Some(e.clone()));
+            update_meeting_status(&path.to_string_lossy(), "recording", Some("Recording interrupted; recovery will run after restart".into()));
         }
         return Err(e);
     }
@@ -1035,91 +1036,8 @@ async fn stop_meeting(title: Option<String>) -> Result<String, String> {
     Ok(path_str)
 }
 
-pub fn print_meeting_review(json_str: &str) {
-    println!("\n================================================================================");
-    println!("🎯 COMPLETE MEETING DIARIZATION & TRANSCRIPTION DATA REVIEW");
-    println!("================================================================================");
-
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-        let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("Untitled Meeting");
-        let id = v.get("id").map(|i| i.to_string()).unwrap_or_else(|| "N/A".to_string());
-        let duration = v.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
-        let created_at = v.get("created_at").map(|c| c.to_string()).unwrap_or_else(|| "".to_string());
-        let audio_url = v.get("audio_url").and_then(|u| u.as_str()).unwrap_or("N/A");
-
-        println!("📋 Title:        {}", title);
-        println!("🆔 Meeting ID:   {}", id);
-        println!("⏱️  Duration:     {:.2} seconds", duration);
-        println!("📅 Created At:   {}", created_at);
-        println!("🎵 Audio URL:    {}", audio_url);
-        println!("--------------------------------------------------------------------------------");
-
-        // Diarized Segments / Turns
-        println!("\n👥 DIARIZED TRANSCRIPTION (SPEAKER SEPARATED):");
-        println!("--------------------------------------------------------------------------------");
-        
-        let mut segments_found = false;
-        if let Some(t_json) = v.get("transcript_json") {
-            let segs_val: Option<serde_json::Value> = if let Some(s) = t_json.as_str() {
-                serde_json::from_str(s).ok()
-            } else {
-                Some(t_json.clone())
-            };
-
-            if let Some(serde_json::Value::Array(segs)) = segs_val {
-                if !segs.is_empty() {
-                    segments_found = true;
-                    for (idx, seg) in segs.iter().enumerate() {
-                        let start = seg.get("start").and_then(|s| s.as_f64()).unwrap_or(0.0);
-                        let end = seg.get("end").and_then(|e| e.as_f64()).unwrap_or(0.0);
-                        let spk = seg.get("speaker").and_then(|s| s.as_str()).unwrap_or("Unknown");
-                        let text = seg.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                        
-                        let start_min = (start / 60.0) as u32;
-                        let start_sec = (start % 60.0) as u32;
-                        let end_min = (end / 60.0) as u32;
-                        let end_sec = (end % 60.0) as u32;
-
-                        println!("{:3}. [{:02}:{:02} - {:02}:{:02}] {:<18} : \"{}\"", 
-                            idx + 1, start_min, start_sec, end_min, end_sec, spk, text);
-                    }
-                }
-            }
-        }
-
-        if !segments_found {
-            if let Some(raw) = v.get("raw_transcript").and_then(|r| r.as_str()) {
-                println!("{}", raw);
-            } else if let Some(tr) = v.get("transcript").and_then(|t| t.as_str()) {
-                println!("{}", tr);
-            } else {
-                println!("(No dialogue segments available)");
-            }
-        }
-
-        println!("\n--------------------------------------------------------------------------------");
-        println!("📝 AI SUMMARY & ACTION ITEMS:");
-        println!("--------------------------------------------------------------------------------");
-        if let Some(summary) = v.get("summary").and_then(|s| s.as_str()) {
-            println!("\n📌 Summary:\n{}", summary);
-        }
-        if let Some(actions) = v.get("action_items").and_then(|a| a.as_str()) {
-            println!("\n✅ Action Items:\n{}", actions);
-        }
-
-        println!("\n--------------------------------------------------------------------------------");
-        println!("📦 FULL RAW JSON PAYLOAD:");
-        println!("--------------------------------------------------------------------------------");
-        if let Ok(pretty) = serde_json::to_string_pretty(&v) {
-            println!("{}", pretty);
-        } else {
-            println!("{}", json_str);
-        }
-    } else {
-        println!("{}", json_str);
-    }
-
-    println!("================================================================================\n");
+pub fn print_meeting_review(_json_str: &str) {
+    println!("[MEETING] Processing completed; private content omitted.");
 }
 
 #[tauri::command]
@@ -1144,7 +1062,9 @@ async fn cancel_meeting() -> Result<(), String> {
         let _index_guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
         let mut records = load_meeting_index_unlocked();
         records.retain(|r| r.filepath != path_str);
-        save_meeting_index(&records);
+        if save_meeting_index(&records).is_err() {
+        account_errors::notify("Meetings", "Recording metadata could not be saved. Check available disk space. Local audio files have been retained.");
+    }
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("mic.ogg"));
@@ -1197,7 +1117,9 @@ fn delete_local_meeting(filepath: String) -> Result<(), String> {
     let _index_guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
     let mut records = load_meeting_index_unlocked();
     records.retain(|r| r.filepath != filepath);
-    save_meeting_index(&records);
+    if save_meeting_index(&records).is_err() {
+        account_errors::notify("Meetings", "Recording metadata could not be saved. Check available disk space. Local audio files have been retained.");
+    }
 
     let path = std::path::PathBuf::from(&filepath);
     let _ = std::fs::remove_file(&path);
@@ -1211,26 +1133,22 @@ fn delete_local_meeting(filepath: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_local_meeting_audio(meeting_id: i64) -> Result<String, String> {
-    use base64::Engine;
+    playback::clear();
+    let generation=playback::generation();
     let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to play recordings")?;
     let base=api::get_api_url();
     let user=api::fetch_user_info(&base,&token).await.map_err(|_|"Recording owner could not be verified")?;
     let response=reqwest::Client::new().get(format!("{}/meetings/{}",base,meeting_id)).bearer_auth(&token).send().await.map_err(|_|"Meeting identity could not be verified")?;
     if !response.status().is_success(){return Err("Meeting unavailable for this account".into());}
     let meeting:serde_json::Value=response.json().await.map_err(|_|"Meeting identity unavailable")?;
-    let client_id=meeting["client_id"].as_str().filter(|s|!s.is_empty()).ok_or("This meeting has no verified local recording identity")?;
+    let client_id=meeting["client_id"].as_str().filter(|s|!s.is_empty());
     let root=get_meeting_index_path().and_then(|p|p.parent().map(std::path::Path::to_path_buf)).ok_or("Recording folder unavailable")?;
     let records=load_meeting_index();
-    let path=recording_identity::resolve(&records,client_id,user.id,&token,&root)?;
+    let path=client_id.and_then(|id|recording_identity::resolve(&records,id,user.id,&token,&root).ok());
     // Recheck after network awaits so switching accounts cannot reveal the old result.
     if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
-    let result=tauri::async_runtime::spawn_blocking(move||->Result<String,String>{
-        let wav_bytes=crate::audio::decode_ogg_to_wav(&path)?;
-        let b64=base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
-        Ok(format!("data:audio/wav;base64,{}",b64))
-    }).await.map_err(|_|"Local recording playback unavailable".to_string())??;
-    if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
-    Ok(result)
+    tauri::async_runtime::spawn_blocking(move||playback::prepare(path,&base,meeting_id,token,generation)).await.map_err(|_|"Recording playback unavailable".to_string())?
+
 }
 
 #[tauri::command]

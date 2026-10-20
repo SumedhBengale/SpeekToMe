@@ -3,7 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"log"
+	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"sync"
