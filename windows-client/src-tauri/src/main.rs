@@ -541,6 +541,15 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         let _ = window.set_focus();
         let _ = window.emit("open-meeting-view", ());
     } else {
+        // Fit a generous first-open size inside the monitor's logical work area.
+        // Saved geometry remains authoritative after the user manually resizes.
+        let monitor = app.primary_monitor().ok().flatten();
+        let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(1.0);
+        let (default_width, default_height) = monitor.as_ref().map(|m| {
+            let area = m.work_area();
+            ((area.size.width as f64 / scale - 48.0).max(1.0).min(1280.0),
+             (area.size.height as f64 / scale - 48.0).max(1.0).min(960.0))
+        }).unwrap_or((1280.0, 960.0));
         let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
             .title("SpeekTo.Me Settings")
             // All durable preferences/auth live in Rust. Give each macOS
@@ -549,7 +558,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
             .resizable(true)
             .decorations(cfg!(target_os = "macos"))
             .skip_taskbar(false)
-            .min_inner_size(840.0, 650.0);
+            .min_inner_size(default_width.min(760.0), default_height.min(560.0));
 
         let pos_opt = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
         let size_opt = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -560,7 +569,7 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         if let Some(size) = size_opt {
             builder = builder.inner_size(size.width as f64, size.height as f64);
         } else {
-            builder = builder.inner_size(1200.0, 840.0);
+            builder = builder.inner_size(default_width, default_height);
         }
 
         match builder.build() {
