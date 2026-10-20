@@ -152,8 +152,9 @@ func TestRazorpayWebhookPayloadParsing(t *testing.T) {
 }
 
 func TestIsValidRedirectSecurity(t *testing.T) {
+	t.Setenv("FRONTEND_URL", "https://speekto.me")
 	// Must reject dangerous pseudo-schemes
-	dangerousURLs := []string{
+	dangerousURLs := []string{"https://unrelated.pages.dev/callback", "https://2fa2faa0.speekto-me.pages.dev/dashboard", "http://speekto.me/dashboard",
 		"javascript:alert(1)",
 		"JAVASCRIPT:alert(document.cookie)",
 		"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
@@ -178,12 +179,9 @@ func TestIsValidRedirectSecurity(t *testing.T) {
 		"http://localhost:8080/dashboard",
 		"http://localhost:5173/auth/callback",
 		"http://127.0.0.1:8000/auth/callback",
-		"https://speekto-me.pages.dev/dashboard",
-		"https://2fa2faa0.speekto-me.pages.dev/dashboard",
 		"https://speekto.me/dashboard",
+		"https://speekto-me.pages.dev/dashboard",
 		"https://api.speekto.me/health",
-		"tauri://localhost/callback",
-		"speektome://auth/callback",
 	}
 
 	for _, u := range safeURLs {

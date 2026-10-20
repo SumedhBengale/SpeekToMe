@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"golang.org/x/sys/unix"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"speektome-server/auth"
 	"speektome-server/config"
 	"speektome-server/db"
 	"speektome-server/handlers"
@@ -100,11 +103,17 @@ func main() {
 		log.Fatal("Invalid personal-storage key")
 	}
 	privacy, keyErr := privatevault.New(context.Background(), database.GetDB(), master)
+	ackMAC := hmac.New(sha256.New, master)
+	ackMAC.Write([]byte("speektome-ack-signing-v1"))
+	auth.SetAckSecret(ackMAC.Sum(nil))
 	clear(master)
 	if keyErr != nil {
 		log.Fatal("Cannot unlock encrypted personal storage")
 	}
 	database.Privacy = privacy
+	if err := privacy.MigrateMeetingText(context.Background()); err != nil {
+		log.Fatal("Cannot migrate encrypted meeting data")
+	}
 	if os.Getenv("R2_ACCESS_KEY_ID") != "" && os.Getenv("R2_SECRET_ACCESS_KEY") != "" {
 		objectStore, err := privatevault.NewR2(os.Getenv("R2_ACCOUNT_ID"), os.Getenv("R2_BUCKET"), os.Getenv("R2_ACCESS_KEY_ID"), os.Getenv("R2_SECRET_ACCESS_KEY"))
 		if err != nil {

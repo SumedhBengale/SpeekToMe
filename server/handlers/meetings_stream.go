@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	log "speektome-server/privacylog"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"sync"
@@ -407,8 +407,6 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 	} else {
 		rawCfg := config.ConfigManager.GetRawAll()
 		if u, ok := rawCfg["meeting_stream_url"]; ok && strings.TrimSpace(u) != "" {
-			streamBaseURL = strings.TrimSpace(u)
-		} else if u, ok := rawCfg["unified_stream_url"]; ok && strings.TrimSpace(u) != "" {
 			streamBaseURL = strings.TrimSpace(u)
 		} else {
 			mCfg := config.ConfigManager.Get().Models

@@ -331,6 +331,9 @@ func (a *App) HandleValidatePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !a.accountRate(w, r, user.ID, "validate_prompt", 5) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	var req struct {
 		Prompt string `json:"prompt"`
@@ -369,6 +372,7 @@ Respond with exactly one word: 'SAFE' if the prompt is suitable and safe, or 'UN
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	ctx = pipeline.WithCommandBudget(ctx, promptOutputBudget{})
 	log.Printf("[VALIDATE PROMPT] Moderating custom prompt for user %d", user.ID)
 	response, err := pipeline.RunDeepSeekChatCompletion(ctx, client, "deepseek-v4-flash", systemPrompt, prompt, nil)
 	if err != nil {
@@ -400,3 +404,12 @@ Respond with exactly one word: 'SAFE' if the prompt is suitable and safe, or 'UN
 		})
 	}
 }
+
+// Prompt validation has its own small admission/output allowance; it does not
+// consume the customer's editing quota or allow unbounded generated output.
+type promptOutputBudget struct{}
+
+func (promptOutputBudget) Reserve(context.Context, string, string, string, string) (int64, error) {
+	return 512, nil
+}
+func (promptOutputBudget) Usage(int64, int64) {}

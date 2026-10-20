@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 )
 
 // Audit emits counts only, never identifiers, ciphertexts, keys or user content.
@@ -24,6 +25,21 @@ func (v *Vault) Audit(ctx context.Context, w io.Writer) error {
 			return ErrUnavailable
 		}
 		counts[q[0]] = n
+	}
+	for _, table := range []string{"meetings", "meeting_jobs"} {
+		cols := MeetingTextColumns
+		if table == "meeting_jobs" {
+			cols = []string{"mic_result", "system_result", "diar_result"}
+		}
+		var predicates []string
+		for _, col := range cols {
+			predicates = append(predicates, "(COALESCE("+col+",'')<>'' AND "+col+" NOT LIKE 'vault:v1:%')")
+		}
+		var n int64
+		if e := v.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE "+strings.Join(predicates, " OR ")).Scan(&n); e != nil {
+			return ErrUnavailable
+		}
+		counts["plaintext_"+table+"_rows"] = n
 	}
 	return json.NewEncoder(w).Encode(counts)
 }

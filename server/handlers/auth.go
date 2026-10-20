@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"html"
 	"io"
-	log "speektome-server/privacylog"
 	"net/http"
 	"net/mail"
 	"net/url"
 	"os"
+	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"time"
@@ -40,7 +40,7 @@ func (a *App) HandleAuthLogin(w http.ResponseWriter, r *http.Request) {
 
 	if portStr != "" {
 		port, err := strconv.Atoi(portStr)
-		if err != nil || port <= 0 {
+		if err != nil || port <= 0 || port > 65535 {
 			http.Error(w, "Bad request: invalid local redirect port", http.StatusBadRequest)
 			return
 		}
@@ -64,6 +64,13 @@ func (a *App) HandleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if portStr == "" || r.URL.Query().Get("exchange") == "1" {
+		state = "exchange_" + state
+	}
+	if err := a.issueOAuthState(w, r, state); err != nil {
+		http.Error(w, "Cannot start sign in", 503)
+		return
+	}
 	redirectURI := fmt.Sprintf("%s/auth/callback", config.BackendURL)
 
 	oauthURL := fmt.Sprintf(
@@ -77,6 +84,14 @@ func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
 
+	if !a.consumeOAuthState(w, r, state) {
+		http.Error(w, "Invalid or expired sign-in state; please sign in again", 400)
+		return
+	}
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "no-store")
+	exchange := strings.HasPrefix(state, "exchange_")
+	state = strings.TrimPrefix(state, "exchange_")
 	parts := strings.Split(state, "_")
 	if len(parts) < 2 {
 		http.Error(w, "Bad request: invalid state parameter", http.StatusBadRequest)
@@ -100,13 +115,13 @@ func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad request: invalid redirect_to parameter", http.StatusBadRequest)
 			return
 		}
-		if len(parts) >= 3 {
-			clientState = parts[2]
+		if len(parts) >= 4 {
+			clientState = parts[3]
 		}
 	} else {
 		var err error
 		port, err = strconv.Atoi(parts[0])
-		if err != nil || port <= 0 {
+		if err != nil || port <= 0 || port > 65535 {
 			http.Error(w, "Bad request: invalid state port value", http.StatusBadRequest)
 			return
 		}
@@ -161,15 +176,20 @@ func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	defer userResp.Body.Close()
 
 	var profile struct {
-		Sub   string `json:"sub"`
-		Email string `json:"email"`
-		Name  string `json:"name"`
+		Sub      string `json:"sub"`
+		Email    string `json:"email"`
+		Verified bool   `json:"email_verified"`
+		Name     string `json:"name"`
 	}
 	if err := json.NewDecoder(userResp.Body).Decode(&profile); err != nil {
 		http.Error(w, "Failed to parse profile response", http.StatusInternalServerError)
 		return
 	}
 
+	if userResp.StatusCode != 200 || !profile.Verified || profile.Sub == "" || profile.Email == "" {
+		http.Error(w, "A verified Google account is required", 403)
+		return
+	}
 	googleID = profile.Sub
 	email = profile.Email
 	name = profile.Name
@@ -235,6 +255,30 @@ func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		isTemp = 1
 	}
 
+	if exchange {
+		code := auth.GenerateSessionToken()
+		if e := a.issueAuthCode(code, userID, isTemp); e != nil {
+			http.Error(w, "Sign in unavailable", 503)
+			return
+		}
+		target := redirectTo
+		if !isWeb {
+			target = fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+		}
+		u, e := url.Parse(target)
+		if e != nil {
+			http.Error(w, "Invalid return URL", 400)
+			return
+		}
+		q := u.Query()
+		q.Set("code", code)
+		if clientState != "" {
+			q.Set("client_state", clientState)
+		}
+		u.RawQuery = q.Encode()
+		http.Redirect(w, r, u.String(), 302)
+		return
+	}
 	err = a.DB.CreateSession(token, userID, isTemp)
 	if err != nil {
 		log.Printf("[DB ERROR] CreateSession failed: %v", err)
@@ -242,68 +286,11 @@ func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	planActive, _ := a.DB.IsUserPlanActive(userID)
-
-	var finalURL string
+	// Compatibility for installed desktop clients: credentials return only over
+	// the caller's nonce-bound loopback callback. New clients use a one-time code.
+	finalURL := fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&client_state=%s", port, token, url.QueryEscape(clientState))
 	if isTemp == 1 {
-		if isWeb {
-			u, err := url.Parse(redirectTo)
-			if err != nil {
-				finalURL = fmt.Sprintf("%s?temp_token=%s&require_2fa=true", redirectTo, token)
-			} else {
-				q := u.Query()
-				q.Set("temp_token", token)
-				q.Set("require_2fa", "true")
-				u.RawQuery = q.Encode()
-				finalURL = u.String()
-			}
-		} else {
-			finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?temp_token=%s&require_2fa=true", port, token)
-		}
-	} else {
-		if isWeb {
-			if !planActive {
-				frontendURL := os.Getenv("FRONTEND_URL")
-				if frontendURL == "" {
-					frontendURL = "http://localhost:8080"
-				}
-				paymentURL := fmt.Sprintf("%s/dashboard/?token=%s", frontendURL, token)
-				u, err := url.Parse(redirectTo)
-				if err != nil {
-					finalURL = fmt.Sprintf("%s?token=%s&payment_url=%s", redirectTo, token, url.QueryEscape(paymentURL))
-				} else {
-					q := u.Query()
-					q.Set("token", token)
-					q.Set("payment_url", paymentURL)
-					u.RawQuery = q.Encode()
-					finalURL = u.String()
-				}
-			} else {
-				u, err := url.Parse(redirectTo)
-				if err != nil {
-					finalURL = fmt.Sprintf("%s?token=%s", redirectTo, token)
-				} else {
-					q := u.Query()
-					q.Set("token", token)
-					u.RawQuery = q.Encode()
-					finalURL = u.String()
-				}
-			}
-		} else {
-			if !planActive {
-				frontendURL := os.Getenv("FRONTEND_URL")
-				if frontendURL == "" {
-					frontendURL = "http://localhost:8080"
-				}
-				paymentURL := fmt.Sprintf("%s/dashboard/?token=%s", frontendURL, token)
-				finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&payment_url=%s", port, token, url.QueryEscape(paymentURL))
-			} else {
-				finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s", port, token)
-			}
-			if clientState != "" {
-				finalURL = fmt.Sprintf("%s&client_state=%s", finalURL, url.QueryEscape(clientState))
-			}
-		}
+		finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?temp_token=%s&require_2fa=true&client_state=%s", port, token, url.QueryEscape(clientState))
 	}
 
 	http.Redirect(w, r, finalURL, http.StatusFound)
@@ -1004,6 +991,20 @@ func (a *App) HandleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, lockErr := a.lockBilling(user.ID)
+	if lockErr != nil {
+		http.Error(w, "Billing operation in progress; please retry", 409)
+		return
+	}
+	defer release()
+	if e := a.DB.GetDB().QueryRow("SELECT COALESCE(razorpay_subscription_id,'') FROM users WHERE id=?", user.ID).Scan(&user.RazorpaySubscriptionID); e != nil {
+		http.Error(w, "Account unavailable", 503)
+		return
+	}
+	if err := a.cancelProviderSubscription(user.RazorpaySubscriptionID); err != nil {
+		http.Error(w, "Cannot confirm billing cancellation. Your account has been retained; please retry.", 502)
+		return
+	}
 	if err := a.DB.DeleteUserAccount(user.ID); err != nil {
 		log.Printf("[DB ERROR] DeleteUserAccount failed for user %d: %v", user.ID, err)
 		http.Error(w, "Failed to delete account. Please contact support.", http.StatusInternalServerError)

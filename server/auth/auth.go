@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"speektome-server/db"
@@ -47,13 +48,26 @@ func HashSecurityToken(token string) string {
 	return fmt.Sprintf("%x", h)
 }
 
+var ackSecretMu sync.RWMutex
+var processAckSecret []byte
+
+func SetAckSecret(secret []byte) {
+	ackSecretMu.Lock()
+	defer ackSecretMu.Unlock()
+	processAckSecret = append([]byte(nil), secret...)
+}
 func getAckSecret() []byte {
+	ackSecretMu.RLock()
+	defer ackSecretMu.RUnlock()
+	if len(processAckSecret) > 0 {
+		return processAckSecret
+	}
 	secret := os.Getenv("SPEEKTOME_ACK_SECRET")
 	if secret == "" {
 		secret = os.Getenv("SESSION_SECRET")
 	}
 	if secret == "" {
-		secret = "speektome-secure-transcription-ack-secret-key"
+		panic("transcription ACK signing secret unavailable")
 	}
 	return []byte(secret)
 }
@@ -115,15 +129,15 @@ func AuthenticateAdmin(r *http.Request, database *db.Database) (*db.UserProfile,
 }
 
 func GetClientIP(r *http.Request) string {
-	if ip := r.Header.Get("CF-Connecting-IP"); ip != "" {
-		return ip
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			return strings.TrimSpace(parts[0])
+	// Only the loopback reverse proxy may assert a client address. Nginx must
+	// replace forwarding headers using its trusted Cloudflare peer configuration.
+	peer, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if parsed := net.ParseIP(peer); parsed != nil && parsed.IsLoopback() {
+		if ip := net.ParseIP(r.Header.Get("X-Real-IP")); ip != nil {
+			return ip.String()
 		}
 	}
+
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -151,33 +165,23 @@ func IsValidRedirect(redirectURL string) bool {
 		return strings.HasPrefix(redirectURL, "/") && !strings.HasPrefix(redirectURL, "//") && !strings.Contains(redirectURL, "\\")
 	}
 
-	// Known allowed desktop client custom schemes
-	if schemeLower == "tauri" || schemeLower == "speektome" {
-		return true
-	}
-
 	if schemeLower != "http" && schemeLower != "https" {
 		return false
 	}
-
-	frontend := os.Getenv("FRONTEND_URL")
-	backend := os.Getenv("BACKEND_URL")
-
-	var allowedHosts = []string{"localhost", "127.0.0.1", "speekto.me", "api.speekto.me", "dashboard.speekto.me"}
-	if frontend != "" {
-		if fu, err := url.Parse(frontend); err == nil && fu.Hostname() != "" {
-			allowedHosts = append(allowedHosts, fu.Hostname())
-		}
+	if u.User != nil || u.Fragment != "" {
+		return false
 	}
-	if backend != "" {
-		if bu, err := url.Parse(backend); err == nil && bu.Hostname() != "" {
-			allowedHosts = append(allowedHosts, bu.Hostname())
-		}
+	if u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" {
+		return true
 	}
-
-	redirectHost := strings.ToLower(u.Hostname())
-	for _, allowed := range allowedHosts {
-		if redirectHost == strings.ToLower(allowed) || strings.HasSuffix(redirectHost, ".pages.dev") || strings.HasSuffix(redirectHost, ".speekto.me") {
+	if schemeLower != "https" {
+		return false
+	}
+	allowed := []string{"https://speekto.me", "https://api.speekto.me", "https://dashboard.speekto.me", "https://speekto-me.pages.dev"}
+	allowed = append(allowed, os.Getenv("FRONTEND_URL"), os.Getenv("BACKEND_URL"))
+	for _, origin := range allowed {
+		v, err := url.Parse(origin)
+		if err == nil && v.Host != "" && strings.EqualFold(v.Scheme, u.Scheme) && strings.EqualFold(v.Host, u.Host) {
 			return true
 		}
 	}

@@ -3,8 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	log "speektome-server/privacylog"
 	"net/http"
+	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 
@@ -46,12 +46,30 @@ func (a *App) HandleAdminUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	current, e := a.DB.GetSaasConfig()
+	if e != nil {
+		http.Error(w, "Config unavailable", 503)
+		return
+	}
+	if e = validateConfigUpdate(current, req); e != nil {
+		http.Error(w, e.Error(), 400)
+		return
+	}
+	tx, e := a.DB.GetDB().BeginTx(r.Context(), nil)
+	if e != nil {
+		http.Error(w, "Config unavailable", 503)
+		return
+	}
+	defer tx.Rollback()
 	for k, v := range req {
-		if err := a.DB.UpdateSaasConfig(k, v); err != nil {
-			log.Printf("[ADMIN CONFIG ERROR] Failed to update key %s: %v", k, err)
-			http.Error(w, "Failed to update configuration key", http.StatusInternalServerError)
+		if _, e = tx.ExecContext(r.Context(), "UPDATE saas_config SET value=? WHERE key=?", v, k); e != nil {
+			http.Error(w, "Configuration update failed", 503)
 			return
 		}
+	}
+	if e = tx.Commit(); e != nil {
+		http.Error(w, "Configuration update failed", 503)
+		return
 	}
 	config.SyncConfigsFromDB(a.DB, ratelimit.GroqRateLimiter.SetLimit)
 	if valkey.GlobalClient != nil && valkey.GlobalClient.IsConnected() {

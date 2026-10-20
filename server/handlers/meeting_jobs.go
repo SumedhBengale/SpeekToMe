@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	log "speektome-server/privacylog"
 	"math"
 	"net/http"
 	"net/url"
@@ -21,6 +20,7 @@ import (
 	"sort"
 	"speektome-server/config"
 	"speektome-server/pipeline"
+	log "speektome-server/privacylog"
 	"speektome-server/utils"
 	"strconv"
 	"strings"
@@ -160,6 +160,10 @@ func (j *MeetingJobs) identity(w http.ResponseWriter, r *http.Request) (int64, s
 		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
 		return 0, "", false
 	}
+	if j.accountDeleting(r.Context(), u.ID) {
+		http.Error(w, "Account deletion is pending", 409)
+		return 0, "", false
+	}
 	id := r.PathValue("clientID")
 	if !clientMeetingID.MatchString(id) {
 		http.Error(w, "invalid meeting id", 400)
@@ -185,6 +189,10 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if j.app.DB.Privacy != nil && (user.PlanTier != "pro" || user.PlanActive != 1) {
 		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
+		return
+	}
+	if j.accountDeleting(r.Context(), user.ID) {
+		http.Error(w, "Account deletion is pending", 409)
 		return
 	}
 	if !j.app.accountRate(w, r, user.ID, "meeting_manifest", 30) {
@@ -740,7 +748,14 @@ func (j *MeetingJobs) process(parent context.Context, key, attempt string) {
 			data, isPermanent, e := j.stage(ctx, key, attempt, stage)
 			if e == nil {
 				column := stage + "_result"
-				res, saveErr := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET `+column+`=? WHERE job_key=? AND attempt=? AND status='processing'`, string(data), key, attempt)
+				sealed, sealErr := j.sealStage(ctx, key, column, string(data))
+				if sealErr != nil {
+					resultMu.Lock()
+					failure = sealErr
+					resultMu.Unlock()
+					return
+				}
+				res, saveErr := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET `+column+`=? WHERE job_key=? AND attempt=? AND status='processing'`, sealed, key, attempt)
 				e = saveErr
 				if e == nil {
 					n, _ := res.RowsAffected()
@@ -803,7 +818,7 @@ func (j *MeetingJobs) stage(ctx context.Context, key, attempt, stage string) ([]
 		return nil, false, e
 	}
 	if response.StatusCode != 200 {
-		return nil, response.StatusCode == 400 || response.StatusCode == 401 || response.StatusCode == 403 || response.StatusCode == 413 || response.StatusCode == 422, fmt.Errorf("%s stage returned %d: %.256s", stage, response.StatusCode, data)
+		return nil, response.StatusCode == 400 || response.StatusCode == 401 || response.StatusCode == 403 || response.StatusCode == 413 || response.StatusCode == 422, fmt.Errorf("%s stage returned HTTP %d", stage, response.StatusCode)
 	}
 	if !json.Valid(data) {
 		return nil, false, errors.New("invalid worker output")
@@ -870,6 +885,15 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 	if e := j.db.QueryRowContext(ctx, `SELECT j.mic_result,j.system_result,j.diar_result,j.meeting_id,j.user_id,COALESCE(u.name,'') FROM meeting_jobs j JOIN users u ON u.id=j.user_id WHERE j.job_key=? AND j.attempt=? AND j.status='processing'`, key, attempt).Scan(&micData, &systemData, &diarData, &meeting, &userID, &name); e != nil {
 		return e
 	}
+	if j.app.DB.Privacy != nil {
+		for col, p := range map[string]*string{"mic_result": &micData, "system_result": &systemData, "diar_result": &diarData} {
+			value, e := j.app.DB.Privacy.OpenStored(ctx, userID, "job-"+col, key, *p)
+			if e != nil {
+				return e
+			}
+			*p = value
+		}
+	}
 	var mic, system jobTranscript
 	var diar struct {
 		Segments []jobSpeaker `json:"segments"`
@@ -903,6 +927,12 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 	}
 	grammarInput, restore := audit.Protect()
 	data, _ := json.Marshal(segments)
+	fields := map[string]string{"transcript": transcript, "segments_json": string(data), "vocabulary_audit": auditJSON(audit)}
+	if j.app.DB.Privacy != nil {
+		if e := j.app.DB.Privacy.MeetingFields(ctx, userID, meeting, fields, true); e != nil {
+			return e
+		}
+	}
 	tx, e := j.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -916,7 +946,7 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 	if n != 1 {
 		return errors.New("job ownership changed")
 	}
-	_, e = tx.ExecContext(ctx, `UPDATE meetings SET transcript=?,segments_json=?,summary=?,action_items=?,vocabulary_audit=? WHERE id=? AND user_id=?`, transcript, string(data), "", "", auditJSON(audit), meeting, userID)
+	_, e = tx.ExecContext(ctx, `UPDATE meetings SET transcript=?,segments_json=?,summary=?,action_items=?,vocabulary_audit=? WHERE id=? AND user_id=?`, fields["transcript"], fields["segments_json"], "", "", fields["vocabulary_audit"], meeting, userID)
 	if e != nil {
 		return e
 	}
@@ -933,13 +963,13 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 		defer stop()
 		polished, summary, actions, analysisErr := generateMeetingAIAnalysis(analysisCtx, grammarInput, pipeline.NewPipelineContext(userID))
 		if analysisErr == nil {
-			_, e = j.db.ExecContext(ctx, `UPDATE meetings SET transcript=?,summary=?,action_items=?,vocabulary_audit=? WHERE id=? AND user_id=?`, restore(polished), audit.RestoreMentions(summary), audit.RestoreMentions(actions), auditJSON(audit), meeting, userID)
+			e = j.app.DB.UpdateMeetingResult(meeting, restore(polished), audit.RestoreMentions(summary), audit.RestoreMentions(actions), fieldsPlainSegments(data), auditJSON(audit))
 			if e != nil {
 				log.Printf("[MEETINGS] summary persistence failed for %d: %v", meeting, e)
 			}
 		}
 	}
-	completed, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET status='completed',admitted=0,lease_until=0 WHERE job_key=? AND attempt=? AND status='analyzing'`, key, attempt)
+	completed, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET status='completed',admitted=0,lease_until=0,mic_result='',system_result='',diar_result='' WHERE job_key=? AND attempt=? AND status='analyzing'`, key, attempt)
 	if e != nil {
 		return e
 	}
@@ -1013,4 +1043,25 @@ func syncMeetingDirectory(path string) error {
 	}
 	defer dir.Close()
 	return dir.Sync()
+}
+
+func fieldsPlainSegments(data []byte) string { return string(data) }
+func (j *MeetingJobs) sealStage(ctx context.Context, key, col, text string) (string, error) {
+	if j.app.DB.Privacy == nil {
+		return text, nil
+	}
+	var user int64
+	if e := j.db.QueryRowContext(ctx, "SELECT user_id FROM meeting_jobs WHERE job_key=?", key).Scan(&user); e != nil {
+		return "", e
+	}
+	return j.app.DB.Privacy.SealStored(ctx, user, "job-"+col, key, text)
+}
+
+func (j *MeetingJobs) accountDeleting(ctx context.Context, user int64) bool {
+	if j.app.DB.Privacy == nil {
+		return false
+	}
+	var n int
+	e := j.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM private_account_deletions WHERE user_id=?", user).Scan(&n)
+	return e != nil || n > 0
 }

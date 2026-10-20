@@ -99,11 +99,13 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 	}
 
 	raw := ConfigManager.GetRawAll()
-	if raw["meeting_stream_url"] != "ws://GPU_HOST_IP:80/v1/stream" {
-		t.Errorf("Expected meeting_stream_url to be ws://GPU_HOST_IP:80/v1/stream; got %s", raw["meeting_stream_url"])
+	if raw["meeting_stream_url"] != "" {
+		t.Errorf("unexpected hardcoded meeting override")
 	}
-	if raw["unified_stream_url"] != "ws://GPU_HOST_IP:80/v1/stream" {
-		t.Errorf("Expected unified_stream_url to be ws://GPU_HOST_IP:80/v1/stream; got %s", raw["unified_stream_url"])
+	for _, key := range []string{"unified_stream_url", "quota_free_daily_fup_seconds", "quota_paid_daily_fup_seconds", "inference_instance_enabled"} {
+		if _, ok := raw[key]; ok {
+			t.Errorf("retired config %s exists", key)
+		}
 	}
 	if active.Models.StreamingProviders["self_hosted_nemotron_3_5"].BaseURL != "ws://GPU_HOST_IP:80/v1/stream" {
 		t.Errorf("Expected self_hosted_nemotron_3_5 BaseURL to be ws://GPU_HOST_IP:80/v1/stream; got %s", active.Models.StreamingProviders["self_hosted_nemotron_3_5"].BaseURL)

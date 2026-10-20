@@ -10,12 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	log "speektome-server/privacylog"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"time"
@@ -200,12 +200,16 @@ func (d *MeetingDiarization) tick(parent context.Context) error {
 		if err != nil {
 			return d.fail(ctx, key, "invalid CPU diarization result: "+err.Error())
 		}
+		sealed, err := d.jobs.sealStage(ctx, key, "diar_result", string(normalized))
+		if err != nil {
+			return err
+		}
 		tx, err := d.jobs.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback()
-		saved, err := tx.ExecContext(ctx, `UPDATE meeting_jobs SET diar_result=?,error='',next_attempt=0 WHERE job_key=? AND status IN ('queued','processing')`, string(normalized), key)
+		saved, err := tx.ExecContext(ctx, `UPDATE meeting_jobs SET diar_result=?,error='',next_attempt=0 WHERE job_key=? AND status IN ('queued','processing')`, sealed, key)
 		if err != nil {
 			return err
 		}

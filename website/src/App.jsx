@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
@@ -22,6 +22,7 @@ const API_BASE = import.meta.env.VITE_API_URL || (window.location.hostname === '
 
 export default function App() {
   const location = useLocation();
+  const exchangeStarted = useRef(false);
 
   const [token, setToken] = useState(localStorage.getItem('speektome_token') || '');
   const [user, setUser] = useState(null);
@@ -82,6 +83,21 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const queryToken = params.get('token');
+    const exchangeCode = params.get('code');
+    if (exchangeCode) {
+      if (exchangeStarted.current) return;
+      exchangeStarted.current = true;
+      // Remove the one-time code before loading third-party assets or navigating.
+      window.history.replaceState({}, document.title, window.location.pathname);
+      fetch(`${API_BASE}/auth/exchange`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: exchangeCode }) })
+        .then(async res => { if (!res.ok) throw new Error('Sign-in expired. Please try again.'); return res.json(); })
+        .then(data => {
+          if (data.require_2fa) { setTempToken(data.token); setRoute('2fa'); }
+          else { localStorage.setItem('speektome_token', data.token); setToken(data.token); }
+        })
+        .catch(() => { setRoute('login'); setAuthError('Sign-in expired. Please try again.'); });
+      return;
+    }
     const isVerified = params.get('verified');
     const verifiedEmail = params.get('email');
     const queryTempToken = params.get('temp_token');

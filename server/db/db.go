@@ -10,8 +10,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	log "speektome-server/privacylog"
 	"os"
+	log "speektome-server/privacylog"
 	"strings"
 	"time"
 
@@ -313,20 +313,19 @@ func NewDatabase(connStr string) (*Database, error) {
 	defaultLanguagesBytes, _ := json.MarshalIndent(utils.SupportedLanguages, "", "  ")
 	defaultLanguagesJSON := string(defaultLanguagesBytes)
 
+	// Preserve the legacy fallback only when there is no explicit meeting override.
+	_, _ = dbConn.Exec(`INSERT INTO saas_config(key,value) SELECT 'meeting_stream_url',value FROM saas_config WHERE key='unified_stream_url' ON CONFLICT(key) DO NOTHING`)
 	// Set default configurations
 	configs := map[string]string{
 		"models_config_json":                  defaultModelsJSON,
 		"languages_config_json":               defaultLanguagesJSON,
-		"meeting_stream_url":                  "ws://GPU_HOST_IP:80/v1/stream",
-		"unified_stream_url":                  "ws://GPU_HOST_IP:80/v1/stream",
+		"meeting_stream_url":                  "",
 		"ratelimit_command_rpm":               "10",
 		"quota_command_input_monthly_tokens":  "5000000",
 		"quota_command_output_monthly_tokens": "1000000",
 		"command_max_output_tokens":           "32768",
 		"ratelimit_free_rpm":                  "3",
 		"ratelimit_paid_rpm":                  "15",
-		"quota_free_daily_fup_seconds":        "3600",
-		"quota_paid_daily_fup_seconds":        "86400",
 		"quota_free_monthly_seconds":          "3600",
 		"quota_paid_monthly_seconds":          "2700000",
 		"ratelimit_groq_rpm":                  "20",
@@ -340,14 +339,23 @@ func NewDatabase(connStr string) (*Database, error) {
 		_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES (?, ?)", k, v)
 	}
 
-	// Automatic migrations for unified streaming endpoint in saas_config
-	_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES ('meeting_stream_url', 'ws://GPU_HOST_IP:80/v1/stream')")
-	_, _ = dbConn.Exec("INSERT OR IGNORE INTO saas_config (\"key\", value) VALUES ('unified_stream_url', 'ws://GPU_HOST_IP:80/v1/stream')")
-	_, _ = dbConn.Exec("UPDATE saas_config SET value = 'ws://GPU_HOST_IP:80/v1/stream' WHERE \"key\" IN ('meeting_stream_url', 'unified_stream_url') AND (value LIKE '%:8080%' OR value LIKE '%:8002%')")
-	_, _ = dbConn.Exec("UPDATE saas_config SET value = REPLACE(value, 'ws://GPU_HOST_IP:8080/v1/realtime/opus', 'ws://GPU_HOST_IP:80/v1/stream') WHERE \"key\" = 'models_config_json' AND value LIKE '%ws://GPU_HOST_IP:8080/v1/realtime/opus%'")
-	_, _ = dbConn.Exec("UPDATE saas_config SET value = REPLACE(value, 'ws://GPU_HOST_IP:8080/v1/realtime', 'ws://GPU_HOST_IP:80/v1/stream') WHERE \"key\" = 'models_config_json' AND value LIKE '%ws://GPU_HOST_IP:8080/v1/realtime%'")
-	_, _ = dbConn.Exec("UPDATE saas_config SET value = REPLACE(value, 'ws://GPU_HOST_IP:8080/v1/audio/diarize', 'ws://GPU_HOST_IP:80/v1/stream') WHERE \"key\" = 'models_config_json' AND value LIKE '%ws://GPU_HOST_IP:8080/v1/audio/diarize%'")
-	_, _ = dbConn.Exec("UPDATE saas_config SET value = REPLACE(value, 'ws://BATCH_ASR_HOST_IP:8080/v1/realtime/opus', 'ws://GPU_HOST_IP:80/v1/stream') WHERE \"key\" = 'models_config_json' AND value LIKE '%BATCH_ASR_HOST_IP%'")
+	// Preserve configured endpoints; retire unused aliases once, without rewriting models.
+	_, err = dbConn.Exec(`DELETE FROM saas_config WHERE key IN ('unified_stream_url','quota_free_daily_fup_seconds','quota_paid_daily_fup_seconds','inference_instance_enabled')`)
+	if err != nil {
+		dbConn.Close()
+		return nil, err
+	}
+	if _, err = dbConn.Exec(`CREATE TABLE IF NOT EXISTS billing_subscriptions(subscription_id TEXT PRIMARY KEY,user_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'created');
+ CREATE TABLE IF NOT EXISTS billing_operations(user_id INTEGER PRIMARY KEY,owner TEXT NOT NULL,expires INTEGER NOT NULL);
+ INSERT OR IGNORE INTO billing_subscriptions SELECT razorpay_subscription_id,id,COALESCE(razorpay_subscription_status,'') FROM users WHERE COALESCE(razorpay_subscription_id,'')<>'';`); err != nil {
+		dbConn.Close()
+		return nil, err
+	}
+	_, _ = dbConn.Exec(`UPDATE webhook_logs SET raw_payload='' WHERE COALESCE(raw_payload,'')<>''; UPDATE subscription_payments SET raw_payload='' WHERE COALESCE(raw_payload,'')<>''; DELETE FROM webhook_logs WHERE received_at<datetime('now','-90 days');`)
+	if err = migrateSessionHashes(dbConn); err != nil {
+		dbConn.Close()
+		return nil, err
+	}
 
 	return &Database{db: dbConn}, nil
 }
@@ -394,7 +402,10 @@ func (d *Database) UserExists(userID int64) bool {
 // Session operations
 func (d *Database) CreateSession(token string, userID int64, isTemp int) error {
 	expiresAt := time.Now().AddDate(0, 0, 30).Format(time.RFC3339)
-	_, err := d.db.Exec("INSERT INTO sessions (token, user_id, expires_at, is_temp) VALUES (?, ?, ?, ?)", token, userID, expiresAt, isTemp)
+	if isTemp == 1 {
+		expiresAt = time.Now().Add(10 * time.Minute).Format(time.RFC3339)
+	}
+	_, err := d.db.Exec("INSERT INTO sessions (token, user_id, expires_at, is_temp) VALUES (?, ?, ?, ?)", sessionHash(token), userID, expiresAt, isTemp)
 	return err
 }
 
@@ -432,6 +443,10 @@ func invalidateCachedSessionToken(token string) {
 }
 
 func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
+	return d.getUserBySessionHash(sessionHash(token))
+}
+
+func (d *Database) getUserBySessionHash(token string) (*UserProfile, error) {
 	if token == "" {
 		return nil, fmt.Errorf("invalid or expired session token")
 	}
@@ -505,7 +520,7 @@ func (d *Database) GetUserBySession(token string) (*UserProfile, error) {
 			// A renewal won the race. Reload its new entitlement rather than
 			// downgrading a profile read just before the confirmed payment.
 			invalidateCachedSessionToken(token)
-			return d.GetUserBySession(token)
+			return d.getUserBySessionHash(token)
 		}
 		u.PlanTier = "free"
 		u.PlanActive = 0
@@ -669,6 +684,7 @@ func (d *Database) UpdateUserLanguages(userID int64, languages []string) error {
 }
 
 func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, error) {
+	token = sessionHash(token)
 	now := time.Now().Format(time.RFC3339)
 	var u UserProfile
 	var totpSecret sql.NullString
@@ -692,7 +708,8 @@ func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, err
 }
 
 func (d *Database) PromoteSession(token string) error {
-	_, err := d.db.Exec("UPDATE sessions SET is_temp = 0 WHERE token = ?", token)
+	token = sessionHash(token)
+	_, err := d.db.Exec("UPDATE sessions SET is_temp = 0, expires_at = ? WHERE token = ?", time.Now().AddDate(0, 0, 30).Format(time.RFC3339), token)
 	if err == nil {
 		invalidateCachedSessionToken(token)
 	}
@@ -718,6 +735,7 @@ func (d *Database) SetUserTOTPSecret(userID int64, encryptedSecret string) error
 }
 
 func (d *Database) DeleteSession(token string) error {
+	token = sessionHash(token)
 	_, err := d.db.Exec("DELETE FROM sessions WHERE token = ?", token)
 	if err == nil {
 		invalidateCachedSessionToken(token)
@@ -778,8 +796,22 @@ func (d *Database) UpdateUserPlan(userID int64, planTier string, planActive int,
 }
 
 func (d *Database) SetPendingSubscription(userID int64, subID string) error {
-	_, err := d.db.Exec("UPDATE users SET razorpay_subscription_id = ?, razorpay_subscription_status = 'created' WHERE id = ?", subID, userID)
-	if err == nil {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`INSERT INTO billing_subscriptions(subscription_id,user_id) VALUES(?,?) ON CONFLICT(subscription_id) DO NOTHING`, subID, userID); err != nil {
+		return err
+	}
+	var owner int64
+	if err = tx.QueryRow("SELECT user_id FROM billing_subscriptions WHERE subscription_id=?", subID).Scan(&owner); err != nil || owner != userID {
+		return fmt.Errorf("subscription owner mismatch")
+	}
+	if _, err = tx.Exec("UPDATE users SET razorpay_subscription_id=?,razorpay_subscription_status='created' WHERE id=?", subID, userID); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err == nil {
 		invalidateCachedUserSessions(userID)
 	}
 	return err
@@ -788,12 +820,18 @@ func (d *Database) SetPendingSubscription(userID int64, subID string) error {
 // Non-payment events change status/entitlement only. Billing period boundaries
 // are advanced exclusively by a confirmed successful payment.
 func (d *Database) UpdateSubscriptionState(userID int64, subID, status string, periodStart, periodEnd int64, planActive *int) error {
+	if subID == "" {
+		return fmt.Errorf("subscription identity required")
+	}
+	if _, err := d.db.Exec("UPDATE billing_subscriptions SET status=? WHERE subscription_id=? AND user_id=?", status, subID, userID); err != nil {
+		return err
+	}
 	if planActive == nil {
 		_, err := d.db.Exec(`
 			UPDATE users
 			SET razorpay_subscription_id = ?, razorpay_subscription_status = ?
-			WHERE id = ?
-		`, subID, status, userID)
+			WHERE id = ? AND razorpay_subscription_id = ?
+		`, subID, status, userID, subID)
 		if err == nil {
 			invalidateCachedUserSessions(userID)
 		}
@@ -807,8 +845,8 @@ func (d *Database) UpdateSubscriptionState(userID int64, subID, status string, p
 		UPDATE users
 		SET razorpay_subscription_id = ?, razorpay_subscription_status = ?,
 			plan_active = ?, plan_tier = ?
-		WHERE id = ?
-	`, subID, status, *planActive, planTier, userID)
+		WHERE id = ? AND razorpay_subscription_id = ?
+	`, subID, status, *planActive, planTier, userID, subID)
 	if err == nil {
 		invalidateCachedUserSessions(userID)
 	}
@@ -823,12 +861,22 @@ func (d *Database) ResetMonthlyUsage(userID int64) error {
 // ApplySuccessfulSubscriptionPayment records a successful billing event and activates
 // the plan/reset usage exactly once for the payment or invoice represented by dedupeKey.
 func (d *Database) ApplySuccessfulSubscriptionPayment(userID int64, subID, paymentID, invoiceID, dedupeKey, eventID, eventType string, amount int64, currency, status string, periodStart, periodEnd int64, rawPayload string) (bool, error) {
+	rawPayload = ""
+	if periodStart <= 0 || periodEnd <= periodStart {
+		return false, fmt.Errorf("invalid billing period")
+	}
 	tx, err := d.db.Begin()
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
-
+	if _, err = tx.Exec(`INSERT OR IGNORE INTO billing_subscriptions(subscription_id,user_id) SELECT razorpay_subscription_id,id FROM users WHERE id=? AND razorpay_subscription_id=?`, userID, subID); err != nil {
+		return false, err
+	}
+	var owner int64
+	if err = tx.QueryRow("SELECT user_id FROM billing_subscriptions WHERE subscription_id=?", subID).Scan(&owner); err != nil || owner != userID {
+		return false, fmt.Errorf("subscription owner mismatch")
+	}
 	result, err := tx.Exec(`
 		INSERT OR IGNORE INTO subscription_payments
 			(user_id, subscription_id, payment_id, invoice_id, dedupe_key, event_id, event_type, amount, currency, status, period_start, period_end, raw_payload)
@@ -853,8 +901,8 @@ func (d *Database) ApplySuccessfulSubscriptionPayment(userID int64, subID, payme
 			razorpay_current_start = CASE WHEN ? > 0 THEN ? ELSE razorpay_current_start END,
 			razorpay_current_end = CASE WHEN ? > 0 THEN ? ELSE razorpay_current_end END,
 			monthly_usage_seconds = 0.0
-		WHERE id = ?
-	`, subID, periodStart, periodStart, periodEnd, periodEnd, userID)
+		WHERE id = ? AND razorpay_subscription_id = ? AND COALESCE(razorpay_current_end,0) < ?
+	`, subID, periodStart, periodStart, periodEnd, periodEnd, userID, subID, periodEnd)
 	if err != nil {
 		return false, err
 	}
@@ -1215,16 +1263,29 @@ func (d *Database) CreateMeeting(userID int64, title string, duration float64, a
 }
 
 func (d *Database) UpdateMeetingResult(meetingID int64, transcript string, summary string, actionItems string, segmentsJSON string, vocabularyAudit ...string) error {
+	fields := map[string]string{"transcript": transcript, "summary": summary, "action_items": actionItems, "segments_json": segmentsJSON}
 	if len(vocabularyAudit) > 0 {
-		_, err := d.db.Exec(`UPDATE meetings SET transcript=?,summary=?,action_items=?,segments_json=?,vocabulary_audit=? WHERE id=?`, transcript, summary, actionItems, segmentsJSON, vocabularyAudit[0], meetingID)
-		return err
+		fields["vocabulary_audit"] = vocabularyAudit[0]
 	}
-	_, err := d.db.Exec(`
-		UPDATE meetings
-		SET transcript = ?, summary = ?, action_items = ?, segments_json = ?
-		WHERE id = ?
-	`, transcript, summary, actionItems, segmentsJSON, meetingID)
-	return err
+	var user int64
+	if e := d.db.QueryRow("SELECT user_id FROM meetings WHERE id=?", meetingID).Scan(&user); e != nil {
+		return e
+	}
+	if d.Privacy != nil {
+		if e := d.Privacy.MeetingFields(context.Background(), user, meetingID, fields, true); e != nil {
+			return e
+		}
+	}
+	query := "UPDATE meetings SET transcript=?,summary=?,action_items=?,segments_json=?"
+	args := []any{fields["transcript"], fields["summary"], fields["action_items"], fields["segments_json"]}
+	if len(vocabularyAudit) > 0 {
+		query += ",vocabulary_audit=?"
+		args = append(args, fields["vocabulary_audit"])
+	}
+	query += " WHERE id=? AND user_id=?"
+	args = append(args, meetingID, user)
+	_, e := d.db.Exec(query, args...)
+	return e
 }
 
 func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
@@ -1246,6 +1307,9 @@ func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 		var names string
 		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names)
 		if err == nil {
+			if err = d.openMeeting(&m, &audit, &names); err != nil {
+				return nil, err
+			}
 			if d.Privacy != nil {
 				m.CloudAudioStatus = d.Privacy.CloudState(context.Background(), m.UserID, m.ID)
 			}
@@ -1275,6 +1339,9 @@ func (d *Database) GetMeeting(meetingID int64) (*Meeting, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = d.openMeeting(&m, &audit, &names); err != nil {
+		return nil, err
+	}
 	if d.Privacy != nil {
 		m.CloudAudioStatus = d.Privacy.CloudState(context.Background(), m.UserID, m.ID)
 	}
@@ -1287,6 +1354,24 @@ func (d *Database) GetMeeting(meetingID int64) (*Meeting, error) {
 }
 
 func (d *Database) SaveMeetingSpeakerNames(meetingID, userID int64, names, previous string) (bool, error) {
+	if d.Privacy != nil {
+		var raw string
+		if e := d.db.QueryRow("SELECT COALESCE(speaker_names,'{}') FROM meetings WHERE id=? AND user_id=?", meetingID, userID).Scan(&raw); e != nil {
+			return false, e
+		}
+		decoded, e := d.Privacy.OpenStored(context.Background(), userID, "meeting-speaker_names", fmt.Sprint(meetingID), raw)
+		if e != nil {
+			return false, e
+		}
+		if decoded != previous {
+			return false, nil
+		}
+		names, e = d.Privacy.SealStored(context.Background(), userID, "meeting-speaker_names", fmt.Sprint(meetingID), names)
+		if e != nil {
+			return false, e
+		}
+		previous = raw
+	}
 	res, err := d.db.Exec(`UPDATE meetings SET speaker_names=? WHERE id=? AND user_id=? AND COALESCE(speaker_names,'{}')=?`, names, meetingID, userID, previous)
 	if err != nil {
 		return false, err
@@ -1408,6 +1493,7 @@ func (d *Database) InsertWebhookLog(eventID, eventType, subscriptionID string, u
 }
 
 func (d *Database) InsertWebhookLogDetailed(eventID, eventType, subscriptionID, paymentID, invoiceID string, userID *int64, status, result, rawPayload string) error {
+	rawPayload = "" // Billing metadata is sufficient; never retain the provider envelope.
 	_, err := d.db.Exec(`
 		INSERT INTO webhook_logs (event_id, event_type, subscription_id, payment_id, invoice_id, user_id, status, result, raw_payload)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1658,7 +1744,7 @@ func (d *Database) GetUserProfileSummary(userID int64) (*UserProfileSummary, err
 
 	// Add meeting transcript word counts
 	mRows, err := d.db.Query(`
-		SELECT COALESCE(transcript, '')
+		SELECT id, COALESCE(transcript, '')
 		FROM meetings
 		WHERE user_id = ?
 	`, userID)
@@ -1666,7 +1752,11 @@ func (d *Database) GetUserProfileSummary(userID int64) (*UserProfileSummary, err
 		meetingWords := 0
 		for mRows.Next() {
 			var mTxt string
-			if err := mRows.Scan(&mTxt); err == nil && mTxt != "" {
+			var meetingID int64
+			if err := mRows.Scan(&meetingID, &mTxt); err == nil && mTxt != "" {
+				if d.Privacy != nil {
+					mTxt, _ = d.Privacy.OpenStored(context.Background(), userID, "meeting-transcript", fmt.Sprint(meetingID), mTxt)
+				}
 				meetingWords += len(strings.Fields(mTxt))
 			}
 		}
@@ -1781,7 +1871,10 @@ func (d *Database) DeleteUserAccount(userID int64) error {
 		for rows.Next() {
 			var audioPath string
 			if err := rows.Scan(&audioPath); err == nil && audioPath != "" {
-				_ = os.Remove(audioPath)
+				if e := os.Remove(audioPath); e != nil && !os.IsNotExist(e) {
+					rows.Close()
+					return fmt.Errorf("local audio deletion pending")
+				}
 			}
 		}
 		rows.Close()
@@ -1801,12 +1894,23 @@ func (d *Database) DeleteUserAccount(userID int64) error {
 			}
 		}
 	}
-	_, _ = tx.Exec("DELETE FROM sessions WHERE user_id = ?", userID)
-	_, _ = tx.Exec("DELETE FROM meetings WHERE user_id = ?", userID)
-	_, _ = tx.Exec("DELETE FROM usage_logs WHERE user_id = ?", userID)
-	_, _ = tx.Exec("DELETE FROM vocabulary WHERE user_id = ?", userID)
-	_, _ = tx.Exec("DELETE FROM subscription_payments WHERE user_id = ?", userID)
-	_, _ = tx.Exec("DELETE FROM webhook_logs WHERE user_id = ?", userID)
+	for _, table := range []string{"meeting_diarization_queue", "meeting_jobs", "account_rate_windows", "account_leases", "command_usage", "command_attempts", "billing_subscriptions", "auth_codes", "sessions", "meetings", "usage_logs", "vocabulary", "subscription_payments", "webhook_logs"} {
+		var exists int
+		if err = tx.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			continue
+		}
+		query := "DELETE FROM " + table + " WHERE user_id=?"
+		if table == "meeting_diarization_queue" {
+			query = "DELETE FROM meeting_diarization_queue WHERE job_key IN (SELECT job_key FROM meeting_jobs WHERE user_id=?)"
+		}
+		if _, err = tx.Exec(query, userID); err != nil {
+			return err
+		}
+	}
+
 	_, err = tx.Exec("DELETE FROM users WHERE id = ?", userID)
 	if err != nil {
 		return err
@@ -1844,4 +1948,21 @@ func (d *Database) GetAllGeoIP() (map[string]string, error) {
 		}
 	}
 	return result, nil
+}
+
+func (d *Database) openMeeting(m *Meeting, audit, names *string) error {
+	if d.Privacy == nil {
+		return nil
+	}
+	fields := map[string]string{"transcript": m.Transcript, "summary": m.Summary, "action_items": m.ActionItems, "segments_json": m.SegmentsJSON, "vocabulary_audit": *audit, "speaker_names": *names}
+	if e := d.Privacy.MeetingFields(context.Background(), m.UserID, m.ID, fields, false); e != nil {
+		return e
+	}
+	m.Transcript = fields["transcript"]
+	m.Summary = fields["summary"]
+	m.ActionItems = fields["action_items"]
+	m.SegmentsJSON = fields["segments_json"]
+	*audit = fields["vocabulary_audit"]
+	*names = fields["speaker_names"]
+	return nil
 }

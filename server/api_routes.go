@@ -16,6 +16,7 @@ func newAPIMux(ctx context.Context, app *handlers.App) (*http.ServeMux, error) {
 
 	mux.HandleFunc("GET /auth/login", app.HandleAuthLogin)
 	mux.HandleFunc("GET /auth/callback", app.HandleAuthCallback)
+	mux.HandleFunc("POST /auth/exchange", app.HandleAuthExchange)
 	mux.HandleFunc("POST /auth/signup", app.HandleAuthSignup)
 	mux.HandleFunc("POST /auth/login", app.HandleAuthLoginCredentials)
 	mux.HandleFunc("POST /auth/2fa/verify", app.HandleAuth2FAVerify)
@@ -55,7 +56,6 @@ func newAPIMux(ctx context.Context, app *handlers.App) (*http.ServeMux, error) {
 	mux.HandleFunc("POST /v1/meetings/session", app.HandleStartMeetingSession)
 	mux.HandleFunc("DELETE /v1/meetings/session/{id}", app.HandleEndMeetingSession)
 	mux.HandleFunc("POST /meetings", app.HandleUploadMeeting)
-	mux.HandleFunc("POST /v1/audio/transcriptions", app.HandleServer2BatchTranscription)
 	mux.HandleFunc("GET /v1/meetings/live", app.HandleMeetingStream)
 	mux.HandleFunc("GET /meetings", app.HandleGetMeetings)
 	mux.HandleFunc("GET /meetings/{id}", app.HandleGetMeetingDetail)

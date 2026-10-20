@@ -8,6 +8,38 @@ func (v *Vault) BeginAccountDeletion(ctx context.Context, user int64) error {
 	if _, e := v.db.ExecContext(ctx, `INSERT INTO private_account_deletions(user_id) VALUES(?) ON CONFLICT DO NOTHING`, user); e != nil {
 		return ErrUnavailable
 	}
+	var exists int
+	if e := v.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='meeting_jobs'").Scan(&exists); e != nil {
+		return ErrUnavailable
+	}
+	if exists > 0 {
+		if _, e := v.db.ExecContext(ctx, "UPDATE meeting_jobs SET status='cancelled',admitted=0 WHERE user_id=?", user); e != nil {
+			return ErrUnavailable
+		}
+		jobs, e := v.db.QueryContext(ctx, "SELECT job_key FROM meeting_jobs WHERE user_id=?", user)
+		if e != nil {
+			return ErrUnavailable
+		}
+		var keys []string
+		for jobs.Next() {
+			var key string
+			if e = jobs.Scan(&key); e != nil {
+				jobs.Close()
+				return ErrUnavailable
+			}
+			keys = append(keys, key)
+		}
+		e = jobs.Err()
+		jobs.Close()
+		if e != nil {
+			return ErrUnavailable
+		}
+		for _, key := range keys {
+			if e = v.purgeProcessing(key); e != nil {
+				return e
+			}
+		}
+	}
 	rows, e := v.db.QueryContext(ctx, `SELECT meeting_id FROM meeting_audio_assets WHERE user_id=?`, user)
 	if e != nil {
 		return ErrUnavailable

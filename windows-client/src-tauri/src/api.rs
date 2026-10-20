@@ -117,7 +117,7 @@ pub fn listen_for_token() -> Option<String> {
     let port = listener.local_addr().ok()?.port();
     
     let client_state: String = (0..16).map(|_| format!("{:02x}", rand::random::<u8>())).collect();
-    let auth_url = format!("{}/auth/login?port={}&client_state={}", get_api_url(), port, client_state);
+    let auth_url = format!("{}/auth/login?port={}&client_state={}&exchange=1", get_api_url(), port, client_state);
     open_browser(&auth_url);
     
     listener.set_nonblocking(false).ok();
@@ -127,6 +127,7 @@ pub fn listen_for_token() -> Option<String> {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
             
             let mut captured_token = None;
+            let mut exchange_code = None;
             let mut captured_state = None;
             if let Some(path_start) = request.find("GET /callback?") {
                 let query_slice = &request[path_start + 14..];
@@ -137,6 +138,8 @@ pub fn listen_for_token() -> Option<String> {
                         if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
                             if k == "token" {
                                 captured_token = Some(v.to_string());
+                            } else if k == "code" {
+                                exchange_code = Some(v.to_string());
                             } else if k == "client_state" {
                                 captured_state = Some(v.to_string());
                             }
@@ -145,6 +148,13 @@ pub fn listen_for_token() -> Option<String> {
                 }
             }
 
+            if let Some(code) = exchange_code {
+                if captured_state.as_deref() == Some(client_state.as_str()) {
+                    if let Ok(response) = reqwest::blocking::Client::new().post(format!("{}/auth/exchange",get_api_url())).json(&serde_json::json!({"code":code})).send() {
+                        if response.status().is_success() { if let Ok(body) = response.json::<serde_json::Value>() { captured_token = body.get("token").and_then(|v|v.as_str()).map(str::to_owned); } }
+                    }
+                }
+            }
             if let (Some(token), Some(state)) = (captured_token, captured_state) {
                 if state == client_state {
                     let body = "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>You can close this window now and return to SpeekTo.Me.</p></body></html>";

@@ -363,6 +363,9 @@ func TestDelayedBillingWebhookCannotOpenAnotherTokenAllowance(t *testing.T) {
 
 func TestCommandUsageRenewalAndLateSettlement(t *testing.T) {
 	a := limitApp(t)
+	if e := a.DB.SetPendingSubscription(1, "sub_test"); e != nil {
+		t.Fatal(e)
+	}
 	now := time.Now().UTC().Truncate(time.Second)
 	oldStart, oldEnd := now.AddDate(0, -1, 0), now.Add(time.Hour)
 	if _, err := a.DB.GetDB().Exec(`UPDATE users SET razorpay_current_start=?,razorpay_current_end=?,monthly_usage_seconds=42 WHERE id=1`, oldStart.Unix(), oldEnd.Unix()); err != nil {

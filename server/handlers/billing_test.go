@@ -49,6 +49,21 @@ func TestRazorpayWebhookPaymentIsIdempotentAndAuthenticationDoesNotActivate(t *t
 		t.Fatalf("seed usage: %v", err)
 	}
 
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/plans/") {
+			w.Write([]byte(`{"id":"plan_test","item":{"amount":200,"currency":"USD"}}`))
+		} else {
+			w.Write([]byte(`{"id":"sub_test","plan_id":"plan_test","current_start":1700000000,"current_end":1702592000}`))
+		}
+	}))
+	defer provider.Close()
+	previous := razorpayAPIBaseURL
+	razorpayAPIBaseURL = provider.URL
+	defer func() { razorpayAPIBaseURL = previous }()
+	t.Setenv("RAZORPAY_KEY_ID", "key_test")
+	t.Setenv("RAZORPAY_KEY_SECRET", "secret_test")
+	t.Setenv("RAZORPAY_PLAN_ID", "plan_test")
 	secret := "webhook-test-secret"
 	authenticated := `{"id":"evt_auth","event":"subscription.authenticated","payload":{"subscription":{"entity":{"id":"sub_test","status":"authenticated","notes":{"user_id":"1"}}}}}`
 	if rec := signedWebhookRequest(t, database, "evt_auth", secret, authenticated); rec.Code != http.StatusOK {
@@ -268,17 +283,22 @@ func TestInvoiceRenewalReconcilesMissingPeriodAndPreservesDuplicateUsage(t *test
 	var calls int
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		if r.URL.Path == "/v1/plans/plan_test" {
+			w.Write([]byte(`{"id":"plan_test","item":{"amount":200,"currency":"USD"}}`))
+			return
+		}
 		if r.URL.Path != "/v1/subscriptions/sub_renew" {
 			t.Errorf("unexpected request %s", r.URL.Path)
 			http.NotFound(w, r)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": "sub_renew", "current_start": now.Unix(), "current_end": newEnd.Unix()})
+		json.NewEncoder(w).Encode(map[string]interface{}{"id": "sub_renew", "plan_id": "plan_test", "current_start": now.Unix(), "current_end": newEnd.Unix()})
 	}))
 	defer provider.Close()
 	previous := razorpayAPIBaseURL
 	razorpayAPIBaseURL = provider.URL
 	t.Cleanup(func() { razorpayAPIBaseURL = previous })
+	t.Setenv("RAZORPAY_PLAN_ID", "plan_test")
 	t.Setenv("RAZORPAY_KEY_ID", "key_test")
 	t.Setenv("RAZORPAY_KEY_SECRET", "secret_test")
 	t.Setenv("RAZORPAY_WEBHOOK_SECRET", "webhook-test-secret")
@@ -297,7 +317,7 @@ func TestInvoiceRenewalReconcilesMissingPeriodAndPreservesDuplicateUsage(t *test
 		t.Fatalf("duplicate: %d %s", w.Code, w.Body.String())
 	}
 	usage, err = a.commandUsage(context.Background(), 1)
-	if err != nil || usage["input_used"] != int64(40) || calls != 1 {
+	if err != nil || usage["input_used"] != int64(40) || calls != 3 {
 		t.Fatalf("duplicate refilled or refetched: %#v calls=%d err=%v", usage, calls, err)
 	}
 }
