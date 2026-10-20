@@ -609,7 +609,7 @@
         <!-- Trigger & Activation Card -->
         <div class="settings-card">
           <!-- Trigger Hotkey -->
-          <div class="setting-row">
+          <div class="setting-row shortcut-setting">
             <div class="setting-left">
               <div class="setting-icon-badge">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -628,10 +628,9 @@
               <div class="setting-info">
                 <label for="hotkey-select" class="setting-title">Trigger Hotkey</label>
                 <span class="setting-desc">Choose the keyboard shortcut to activate SpeekTo.Me.</span>
-                <div id="linux-capability-status" class="shortcut-status" role="status" aria-live="polite" hidden></div>
               </div>
             </div>
-            <div class="setting-control">
+            <div class="setting-control shortcut-controls">
               <div class="hotkey-picker"><select id="hotkey-select" class="fluent-select">
                 <option value="Ctrl + Win">Ctrl + Windows (Recommended)</option>
                 <option value="Ctrl + Space">Ctrl + Space</option>
@@ -642,10 +641,15 @@
                 <option value="Shift + Space">Shift + Space</option>
               </select>
 <button type="button" class="hotkey-record-btn" id="hotkey-record">Record shortcut</button>
-<span class="hotkey-record-hint" id="hotkey-record-hint" aria-live="polite">Use modifiers with a letter, number or navigation key, or a function key alone. Reserved shortcuts cannot be used. Some other apps may have bindings that cannot be detected.</span>
+<span class="hotkey-record-hint" id="hotkey-record-hint" aria-live="polite"></span>
 <div class="hotkey-conflict-warning" id="hotkey-conflict-warning" role="status" aria-live="polite" hidden></div>
 </div>
             </div>
+            <div id="linux-capability-status" class="shortcut-status" role="status" aria-live="polite" hidden></div>
+            <details class="shortcut-help">
+              <summary>Shortcut guidelines</summary>
+              <p>Choose a preset or record your own. Use modifiers with a letter, number or navigation key, or a function key alone. Reserved shortcuts cannot be used. Some other apps may have bindings that cannot be detected.</p>
+            </details>
           </div>
 
           <!-- Trigger Mode -->
@@ -1005,11 +1009,14 @@
 
       <!-- Account Tab -->
       <div class="tab-pane" id="tab-history">
-        <div class="tab-header"><h1>Transcription history</h1><p>Your final dictations and Command Mode results, encrypted in your account.</p></div>
-        <button type="button" id="transcription-history-refresh">Refresh</button>
-        <p id="transcription-history-status" role="status"></p>
-        <div id="transcription-history-list"></div>
-        <button type="button" id="transcription-history-more" hidden>Load older results</button>
+        <div class="tab-header history-header">
+          <div><h2>History</h2><p class="section-desc">Your final dictations and Command Mode results, all in one place.</p></div>
+          <button type="button" class="history-button" id="transcription-history-refresh"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/></svg>Refresh</button>
+        </div>
+        <div class="history-privacy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Encrypted in your account. Only final delivered results are saved.</div>
+        <p id="transcription-history-status" class="history-status" role="status" aria-live="polite"></p>
+        <div id="transcription-history-list" aria-busy="false"></div>
+        <div class="history-pagination"><button type="button" class="history-button" id="transcription-history-more" hidden>Load older results</button></div>
       </div>
       <div class="tab-pane" id="tab-account">
         <div class="tab-header">
