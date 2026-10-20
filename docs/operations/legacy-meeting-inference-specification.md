@@ -1,3 +1,5 @@
+> Historical architecture reference. For current deployment and account isolation, see [deployment](../../deployment/security/README.md) and [desktop/backend contracts](../desktop-backend-contracts.md).
+
 # SpeekToMe Real-Time Meeting Architecture & Unified Inference Specification
 
 **Version**: 3.0.0 (Production Single-Instance Unified Deployment)  

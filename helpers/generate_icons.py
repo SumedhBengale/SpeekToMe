@@ -1,4 +1,6 @@
-import os
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 from PIL import Image, ImageDraw
 
 def main():
@@ -22,18 +24,14 @@ def main():
 """
 
     svg_destinations = [
-        r"e:\Projects\SpeekToMe\assets\icons\logo.svg",
-        r"e:\Projects\SpeekToMe\website\logo.svg",
-        r"e:\Projects\SpeekToMe\website\favicon.svg",
-        r"e:\Projects\SpeekToMe\website\assets\logo.svg",
-        r"e:\Projects\SpeekToMe\website\public\logo.svg",
-        r"e:\Projects\SpeekToMe\website\public\favicon.svg",
-        r"e:\Projects\SpeekToMe\website\public\assets\logo.svg",
-        r"e:\Projects\SpeekToMe\windows-client\frontend\assets\icons\logo.svg",
+        ROOT / "website/public/logo.svg",
+        ROOT / "website/public/favicon.svg",
+        ROOT / "website/public/assets/logo.svg",
+        ROOT / "windows-client/frontend/assets/icons/logo.svg",
     ]
 
     for p in svg_destinations:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
+        p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             f.write(svg_content)
         print("Updated SVG:", p)
@@ -59,37 +57,37 @@ def main():
 
     # Generate master 1024x1024
     master_1024 = master.resize((1024, 1024), Image.Resampling.LANCZOS)
-    master_1024_path = r"e:\Projects\SpeekToMe\master_icon.png"
+    master_1024_path = ROOT / "windows-client/artifacts/icons/master_icon.png"
+    master_1024_path.parent.mkdir(parents=True, exist_ok=True)
     master_1024.save(master_1024_path, "PNG", optimize=True)
     print("Updated master 1024x1024:", master_1024_path)
 
     # Generate 512x512 PNGs
     png_512 = master.resize((512, 512), Image.Resampling.LANCZOS)
     for p in [
-        r"e:\Projects\SpeekToMe\assets\icons\logo.png",
-        r"e:\Projects\SpeekToMe\windows-client\frontend\assets\icons\logo.png",
-        r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\icon.png",
+        ROOT / "windows-client/frontend/assets/icons/logo.png",
+        ROOT / "windows-client/src-tauri/icons/icon.png",
     ]:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
+        p.parent.mkdir(parents=True, exist_ok=True)
         png_512.save(p, "PNG", optimize=True)
         print("Updated 512x512 PNG:", p)
 
     # Generate specific Tauri PNG sizes
     sizes_map = {
-        (32, 32): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\32x32.png",
-        (64, 64): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\64x64.png",
-        (128, 128): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\128x128.png",
-        (256, 256): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\128x128@2x.png",
-        (30, 30): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square30x30Logo.png",
-        (44, 44): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square44x44Logo.png",
-        (71, 71): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square71x71Logo.png",
-        (89, 89): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square89x89Logo.png",
-        (107, 107): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square107x107Logo.png",
-        (142, 142): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square142x142Logo.png",
-        (150, 150): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square150x150Logo.png",
-        (284, 284): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square284x284Logo.png",
-        (310, 310): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\Square310x310Logo.png",
-        (50, 50): r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\StoreLogo.png",
+        (32, 32): ROOT / "windows-client/src-tauri/icons/32x32.png",
+        (64, 64): ROOT / "windows-client/src-tauri/icons/64x64.png",
+        (128, 128): ROOT / "windows-client/src-tauri/icons/128x128.png",
+        (256, 256): ROOT / "windows-client/src-tauri/icons/128x128@2x.png",
+        (30, 30): ROOT / "windows-client/src-tauri/icons/Square30x30Logo.png",
+        (44, 44): ROOT / "windows-client/src-tauri/icons/Square44x44Logo.png",
+        (71, 71): ROOT / "windows-client/src-tauri/icons/Square71x71Logo.png",
+        (89, 89): ROOT / "windows-client/src-tauri/icons/Square89x89Logo.png",
+        (107, 107): ROOT / "windows-client/src-tauri/icons/Square107x107Logo.png",
+        (142, 142): ROOT / "windows-client/src-tauri/icons/Square142x142Logo.png",
+        (150, 150): ROOT / "windows-client/src-tauri/icons/Square150x150Logo.png",
+        (284, 284): ROOT / "windows-client/src-tauri/icons/Square284x284Logo.png",
+        (310, 310): ROOT / "windows-client/src-tauri/icons/Square310x310Logo.png",
+        (50, 50): ROOT / "windows-client/src-tauri/icons/StoreLogo.png",
     }
 
     for (w, h), p in sizes_map.items():
@@ -98,7 +96,7 @@ def main():
         print(f"Updated {w}x{h} PNG: {p}")
 
     # Generate multi-resolution ICO file
-    ico_path = r"e:\Projects\SpeekToMe\windows-client\src-tauri\icons\icon.ico"
+    ico_path = ROOT / "windows-client/src-tauri/icons/icon.ico"
     ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     master_1024.save(ico_path, format="ICO", sizes=ico_sizes)
     print("Updated multi-resolution ICO:", ico_path)

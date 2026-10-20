@@ -1,5 +1,4 @@
 # Rust target directory
-client/src-tauri/target/
 target/
 
 # Go build outputs
@@ -52,11 +51,17 @@ __pycache__/
 venv/
 languages_cache.json
 windows-client/artifacts/
-server1_gateway/speektome-server1-gateway
-worker_gateway/speektome-worker-gateway
 server/benchmark/turso/turso_benchmark_linux_*
 # Deployment secrets and downloaded model weights
 **/token
 **/client.curl
 *.onnx
 *.gguf
+
+# Tauri regenerates platform-specific permission/schema files during builds
+/windows-client/src-tauri/gen/
+
+# Local audio, debug captures and database sidecars are never source fixtures
+/server/uploads/
+*.db-wal
+*.db-shm

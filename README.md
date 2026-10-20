@@ -1,0 +1,34 @@
+# SpeekTo.Me
+
+Desktop dictation and meeting transcription for Windows, Linux, and macOS,
+with a shared Rust/Tauri client and Go backend.
+
+| Folder | Purpose |
+| --- | --- |
+| `windows-client/` | Shared desktop app; the directory retains its historical name. See [Linux](windows-client/LINUX.md) and [macOS](windows-client/MACOS.md) setup. |
+| `server/` | Main API, authentication, billing, encrypted storage, fleet controller and tests. |
+| `website/` | React/Vite website and account dashboard. Public static assets belong in `public/`; imported assets stay in `src/assets/`. |
+| `deployment/` | Current GPU gateway, CPU diarization deployment, expiry timer and security operations. |
+| `shared/` | Shared vocabulary package used by the server and GPU gateway. |
+| `benchmark/` | Maintained evaluation tools and recorded research results. |
+| `helpers/` | Development utilities for icons and administrator setup. |
+| `docs/` | Current architecture/behaviour docs and clearly separated historical operations/research notes. |
+
+## Local checks
+
+```sh
+(cd server && go test ./...)
+(cd windows-client && cargo check --locked)
+(cd website && npm ci && npm run build)
+```
+
+The production server runs on ARM64; follow the
+[deployment instructions](deployment/security/README.md) rather than uploading a
+local desktop build. See [desktop/backend contracts](docs/desktop-backend-contracts.md)
+and [encrypted personal storage](docs/encrypted-personal-storage.md) for application behaviour.
+
+Generated Rust/Go binaries, dependency/build caches, Tauri schemas, credentials,
+local databases and recordings are ignored. Keep intentional synthetic fixtures
+under a component's `testdata/` directory. The standalone provider benchmark
+requires `SPEEKTOME_BENCHMARK_AUDIO=/path/to/selected-audio`; it never selects a
+user meeting implicitly.

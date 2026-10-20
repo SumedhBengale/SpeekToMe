@@ -311,22 +311,13 @@ func main() {
 		log.Fatalf("No transcription provider credentials configured in environment!")
 	}
 
-	audioPaths := []string{
-		"../uploads/meetings/meeting_5_1783327344745226200.ogg",
-		"uploads/meetings/meeting_5_1783327344745226200.ogg",
-		"server/uploads/meetings/meeting_5_1783327344745226200.ogg",
+	audioPath := os.Getenv("SPEEKTOME_BENCHMARK_AUDIO")
+	if audioPath == "" {
+		log.Fatal("Set SPEEKTOME_BENCHMARK_AUDIO to an explicitly selected local audio file")
 	}
-	var audioBytes []byte
-	var err error
-	for _, p := range audioPaths {
-		audioBytes, err = os.ReadFile(p)
-		if err == nil {
-			log.Printf("Loaded audio file: %s", p)
-			break
-		}
-	}
-	if len(audioBytes) == 0 {
-		log.Fatalf("Could not load test audio file. Error: %v", err)
+	audioBytes, err := os.ReadFile(audioPath)
+	if err != nil || len(audioBytes) == 0 {
+		log.Fatal("Benchmark audio is unavailable or empty")
 	}
 
 	totalRequests := 1
