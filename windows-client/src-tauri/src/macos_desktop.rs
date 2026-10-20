@@ -69,17 +69,36 @@ pub fn release_idle_browser(app: &tauri::AppHandle) {
     unsafe { s2m_finish_settings_close(); }
     let app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(350));
-        let services = crate::macos_browser::cached_services();
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let snapshot = settings_snapshot();
-            if handle.webview_windows().is_empty() && snapshot["live_webviews"] == 0 {
-                let stopped = crate::macos_browser::terminate_cached(&services);
-                unsafe { s2m_browser_idle_cleanup(); }
-                eprintln!("[WINDOW] macOS Settings released; stopped {stopped} cached browser helpers: {}", settings_snapshot());
+        // Destroyed is emitted before the runtime has necessarily dropped its
+        // last native handles. Flush late autoreleases on subsequent AppKit
+        // turns too, rather than depending on the user producing another event.
+        for attempt in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(350));
+            let services = crate::macos_browser::cached_services();
+            let handle = app.clone();
+            let (done, result) = std::sync::mpsc::channel();
+            if app.run_on_main_thread(move || {
+                if !handle.webview_windows().is_empty() {
+                    let _ = done.send(true);
+                    return;
+                }
+                let snapshot = settings_snapshot();
+                if snapshot["live_webviews"] == 0 {
+                    let stopped = crate::macos_browser::terminate_cached(&services);
+                    unsafe { s2m_browser_idle_cleanup(); }
+                    eprintln!("[WINDOW] macOS Settings released; stopped {stopped} cached browser helpers: {}", settings_snapshot());
+                    let _ = done.send(true);
+                } else {
+                    unsafe { s2m_finish_settings_close(); }
+                    if attempt == 19 {
+                        eprintln!("[WINDOW] Settings native release still pending after idle retries: {snapshot}");
+                    }
+                    let _ = done.send(false);
+                }
+            }).is_err() || result.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or(true) {
+                break;
             }
-        });
+        }
     });
 }
 
