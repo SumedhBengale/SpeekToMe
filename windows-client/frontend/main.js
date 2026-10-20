@@ -408,24 +408,6 @@ const onboardPromoCtaText = document.getElementById('onboard-promo-cta-text');
 const onboardPromoSkipText = document.getElementById('onboard-promo-skip-text');
 let promoUpgradeUrl = "https://speekto.me/dashboard";
 
-// Step 5 Demo Video UI Elements
-const onboardDemoVideo = document.getElementById('onboard-demo-video');
-const videoPlayerContainer = document.getElementById('video-player-container');
-const videoCenterPlayBtn = document.getElementById('video-center-play-btn');
-const videoPlayPauseBtn = document.getElementById('video-play-pause-btn');
-const videoPlayIcon = document.getElementById('video-play-icon');
-const videoPauseIcon = document.getElementById('video-pause-icon');
-const videoCurrentTime = document.getElementById('video-current-time');
-const videoDuration = document.getElementById('video-duration');
-const videoScrubber = document.getElementById('video-scrubber');
-const videoProgressFill = document.getElementById('video-progress-fill');
-const videoMuteBtn = document.getElementById('video-mute-btn');
-const videoVolHighIcon = document.getElementById('video-vol-high-icon');
-const videoVolMutedIcon = document.getElementById('video-vol-muted-icon');
-const videoVolumeSlider = document.getElementById('video-volume-slider');
-const videoFullscreenBtn = document.getElementById('video-fullscreen-btn');
-let cachedDemoVideoUrl = "https://vjs.zencdn.net/v/oceans.mp4";
-
 // Onboarding Inputs
 const onboardHotkeySelect = document.getElementById('onboard-hotkey-select');
 const onboardHotkeyModeSelect = document.getElementById('onboard-hotkey-mode-select');
@@ -1038,15 +1020,11 @@ async function init() {
       commandModeCheck.addEventListener('change', () => handleCommandModeToggleChange(commandModeCheck));
     }
 
-    // 4. Setup Onboarding flow state
-    if (currentConfig && !currentConfig.session_token) {
-      // User is logged out / first run: Show Onboarding Flow
-      onboardingWrapper.classList.remove('hidden');
-      goToStep(1);
-    } else {
-      // User is logged in: Go straight to settings dashboard
-      onboardingWrapper.classList.add('hidden');
-    }
+    await initializeWizard();
+    window.addEventListener('focus', async () => {
+      if(onboardingWrapper.classList.contains('hidden')) return;
+      try {const user=await invoke('get_user_info');if(user){currentUserInfo=user;currentConfig=await invoke('get_config');updateAuthUI(user);updateOnboardAuthUI(user);await applyWizardProDefaults();}if(currentStep===3)await refreshWizardAccess();updateWizardNavigation();}catch{wizardStatus('Account status could not refresh. Your choices are saved.');}
+    });
 
     // 5. Button listeners (Auth & Onboarding)
     if (loginBtn) loginBtn.addEventListener('click', () => triggerLogin(false));
@@ -1084,22 +1062,14 @@ async function init() {
     }
     if (onboardNextStepBtn) {
       onboardNextStepBtn.addEventListener('click', () => {
-        if (currentStep < 5) {
+        if (currentStep < WIZARD_STEPS) {
           goToStep(currentStep + 1);
         }
       });
     }
 
     // Auto-sync onboarding preferences to Rust immediately on change
-    const syncOnboardingConfig = async () => {
-      try {
-        const updated = gatherConfigFromUI(true);
-        await invoke('save_config', { config: updated });
-        currentConfig = updated;
-      } catch (e) {
-        console.warn("Auto-syncing onboarding config:");
-      }
-    };
+    const syncOnboardingConfig = () => saveWizardConfig().catch(() => wizardStatus('Could not save this choice. Please retry.'));
 
     if (onboardHotkeySelect) onboardHotkeySelect.addEventListener('change', syncOnboardingConfig);
     if (onboardHotkeyModeSelect) onboardHotkeyModeSelect.addEventListener('change', syncOnboardingConfig);
@@ -1111,8 +1081,7 @@ async function init() {
     if (onboardTypingModeCheck) onboardTypingModeCheck.addEventListener('change', syncOnboardingConfig);
     if (onboardSoundFeedbackCheck) onboardSoundFeedbackCheck.addEventListener('change', syncOnboardingConfig);
 
-    // Demo Video Player setup
-    setupDemoVideoPlayer();
+
 
     // 7. Setup OAuth event listeners
     setupOAuthListeners();
@@ -1461,6 +1430,7 @@ function applyConfigToUI(config) {
   setHotkeyOption(onboardHotkeySelect, normalizeConfiguredHotkey(config.hotkey));
   if (onboardHotkeyModeSelect) onboardHotkeyModeSelect.value = config.hotkey_mode || 'hold';
   if (onboardAutostartCheck) onboardAutostartCheck.checked = Boolean(config.autostart);
+  const commandSetup=document.getElementById('onboard-command-mode-check');if(commandSetup)commandSetup.checked=config.command_mode!==false;
   if (onboardStreamingModeCheck) {
     onboardStreamingModeCheck.checked = (config.transcription_mode === 'stream');
   }
@@ -1725,9 +1695,9 @@ function gatherConfigFromUI(isOnboarding) {
   const prefix = isOnboarding ? 'onboard-' : '';
   const value = (id, fallback) => document.getElementById(prefix + id)?.value ?? fallback;
   const checked = (id, fallback) => document.getElementById(prefix + id)?.checked ?? fallback;
-  const themeName = value('theme-select', 'forest');
-  const colors = getPillColorsForTheme(themeName);
   const saved = currentConfig || {};
+  const themeName = value('theme-select', saved.theme ?? 'forest');
+  const colors = isOnboarding ? {bg: saved.pill_bg_color, wave: saved.pill_wave_color} : getPillColorsForTheme(themeName);
   // Both screens edit the same schema. Retain fields without a control here,
   // including server/session state and existing overlay settings in onboarding.
   const config = {
@@ -1740,7 +1710,7 @@ function gatherConfigFromUI(isOnboarding) {
     hotkey_mode: value('hotkey-mode-select', 'hold'),
     autostart: checked('autostart-check', false),
     typing_mode: checked('typing-mode-check', false),
-    sound_feedback: checked('sound-feedback-check', true),
+    sound_feedback: checked('sound-feedback-check', saved.sound_feedback ?? true),
     model: value('model-select', 'whisper-large-v3-turbo'),
     enhance: saved.enhance ?? true,
     transcription_mode: checked('streaming-mode-check', false) ? 'stream' : 'batch',
@@ -1865,37 +1835,167 @@ window.markDirty = markDirty;
 // Onboarding Wizard Progression
 // ==========================================
 
-async function goToStep(step) {
-  currentStep = step;
-  onboardSteps.forEach(el => el.classList.remove('active'));
-  stepDots.forEach(el => el.classList.remove('active'));
-
-  const stepEl = document.getElementById(`onboard-step-${step}`);
-  if (stepEl) stepEl.classList.add('active');
-  const dotEl = document.querySelector(`.step-dot[data-step="${step}"]`);
-  if (dotEl) dotEl.classList.add('active');
-
-  // Update navigation arrow states
-  if (onboardPrevStepBtn) onboardPrevStepBtn.disabled = (step <= 1);
-  if (onboardNextStepBtn) onboardNextStepBtn.disabled = (step >= 5);
-
-  // Pause demo video if user navigates away from Step 5
-  if (step !== 5 && onboardDemoVideo) {
-    onboardDemoVideo.pause();
+let wizardSaveQueue = Promise.resolve();
+let wizardCapabilities = null;
+let wizardMicrophoneReady = false;
+let wizardPracticeSkipped = false;
+let wizardCapabilityTimer = null;
+const WIZARD_STEPS = 11;
+function wizardStatus(message) {
+  const el = document.getElementById('onboard-save-status');
+  el.textContent = message;
+  el.closest('.setup-footer').hidden = !message && document.getElementById('onboard-continue-btn').hidden;
+}
+function wizardIsSignedIn() { return Boolean(currentUserInfo && currentConfig?.session_token); }
+function wizardAccessReady() { return Boolean(wizardCapabilities?.shortcut && wizardCapabilities?.insertion && wizardCapabilities?.microphone !== false && wizardMicrophoneReady); }
+function saveWizardConfig(extra = {}) {
+  const save = wizardSaveQueue.then(async () => {
+    const latest = await invoke('get_config');
+    currentConfig = { ...currentConfig, ...latest };
+    const updated = { ...gatherConfigFromUI(true), ...extra };
+    await invoke('save_config', { config: updated });
+    currentConfig = updated;
+    wizardStatus('');
+    return updated;
+  });
+  wizardSaveQueue = save.catch(() => {});
+  return save;
+}
+function wizardCanAdvance() {
+  if (!wizardIsSignedIn()) return false;
+  if (currentStep === 3) return wizardAccessReady();
+  if (currentStep === 10) return wizardPracticeSkipped || Boolean(document.getElementById('onboard-practice-text')?.value.trim());
+  return true;
+}
+function updateWizardNavigation() {
+  const next=document.getElementById('onboard-continue-btn');
+  next.hidden = currentStep <= 2 || currentStep === 11;
+  next.closest('.setup-footer').hidden=next.hidden&&!document.getElementById('onboard-save-status').textContent;
+  next.disabled = !wizardCanAdvance();
+  if(onboardNextStepBtn) { onboardNextStepBtn.hidden=currentStep<=2||currentStep===11; onboardNextStepBtn.disabled=!wizardCanAdvance(); }
+  if(onboardPrevStepBtn) onboardPrevStepBtn.disabled=currentStep<=1;
+  document.getElementById('onboard-step-label').textContent=`Step ${currentStep} of ${WIZARD_STEPS}`;
+  document.getElementById('onboard-progress').value=currentStep;
+}
+async function refreshWizardAccess() {
+  try {
+    wizardCapabilities=await invoke('get_setup_capabilities');
+    const list=document.getElementById('onboard-access-status'); list.replaceChildren();
+    const items=[['shortcut','Global shortcut'],['insertion','Text insertion']];
+    if(IS_MAC_CLIENT) items.push(['microphone','Microphone permission']);
+    for(const [key,label] of items) {
+      const row=document.createElement('div');row.className='setup-check'+(wizardCapabilities?.[key]?' is-ready':'');
+      const name=document.createElement('span');name.textContent=label;
+      const value=document.createElement('strong');value.textContent=wizardCapabilities?.[key]?'Ready':'Needs attention';row.append(name,value);list.append(row);
+    }
+    const request=document.getElementById('onboard-access-request'); request.hidden=!IS_MAC_CLIENT&&!IS_LINUX_CLIENT;
+    document.getElementById('onboard-access-repair').hidden=!IS_MAC_CLIENT;
+    request.textContent=IS_MAC_CLIENT?'Open permission settings':'Reconnect desktop access';
+    document.getElementById('onboard-access-help').textContent=IS_MAC_CLIENT
+      ? 'Allow Microphone and Accessibility in System Settings. Input Monitoring is only needed if shortcut listening still requires it. Return here after approval. If a saved grant is stale, use Repair saved permissions below.'
+      : IS_LINUX_CLIENT ? 'Approve the desktop shortcut and keyboard-control dialogs. Portal support depends on your desktop. Reconnect to retry; the selected shortcut may also need the packaged keyboard helper.'
+      : 'We use your default microphone and native keyboard hooks. If microphone access is blocked, enable desktop-app microphone access in Windows Settings.';
+    if(!wizardCapabilities?.microphone_device) { wizardMicrophoneReady=false; document.getElementById('onboard-mic-result').textContent='No default microphone is available. Connect one and check again.'; }
+    updateWizardNavigation();
+  } catch { wizardCapabilities=null;wizardStatus('Could not check desktop access. Please try again.');updateWizardNavigation(); }
+}
+function renderWizardEntitlements() {
+  const pro=isUserPro(currentUserInfo);
+  for(const id of ['onboard-command-mode-check','onboard-streaming-mode-check']) {
+    const el=document.getElementById(id);el.disabled=!pro;if(!pro) el.checked=false;
   }
-
-  if (step === 2) {
-    await renderOnboardingPromoUI();
-  } else if (step === 5) {
-    await initDemoVideoStep();
+  document.getElementById('onboard-command-help').textContent=pro
+    ? 'Optional. In Push to Talk, tap once, then hold to speak a command. In Hands-Free mode, double-tap to start a command, then tap to finish.'
+    : 'Command Mode is available with Pro. Your Free account can still dictate text. Continue to keep it off.';
+  document.getElementById('onboard-stream-help').textContent=pro
+    ? 'Selected by default for Pro during setup. Turn it off if you prefer to receive the completed transcription after recording.'
+    : 'Your Free account receives the completed transcription after you stop. This still uses the transcription service and an internet connection.';
+}
+function updateWizardGesture() {
+  const gesture = document.getElementById('onboard-hotkey-mode-select').value === 'hold'
+    ? 'Hold your shortcut while speaking. Release it to submit.' : 'Tap your shortcut to start. Tap again to submit.';
+  document.getElementById('onboard-gesture-help').textContent = gesture;
+  document.getElementById('onboard-practice-gesture').textContent = `${displayHotkey(document.getElementById('onboard-hotkey-select').value)} — ${gesture}`;
+}
+async function initializeWizard() {
+  document.getElementById('onboard-hotkey-mode-select').addEventListener('change', updateWizardGesture);
+  document.getElementById('onboard-hotkey-select').addEventListener('change', updateWizardGesture);
+  document.getElementById('onboard-continue-btn').addEventListener('click',()=>goToStep(currentStep+1));
+  document.getElementById('onboard-access-recheck').addEventListener('click',refreshWizardAccess);
+  document.getElementById('onboard-access-request').addEventListener('click',async()=>{
+    try { await invoke('request_desktop_permissions'); await refreshWizardAccess(); } catch { wizardStatus('Desktop access could not be requested. Check your system settings, then retry.'); }
+  });
+  document.getElementById('onboard-access-repair').addEventListener('click', async event => {
+    event.target.disabled = true;
+    try {
+      await invoke('repair_desktop_permissions');
+      wizardStatus('Old keyboard grants cleared. Enable SpeekTo.Me in System Settings, then return here. Microphone approval is preserved.');
+      await refreshWizardAccess();
+    } catch { wizardStatus('Permission repair failed. Check System Settings and retry.'); }
+    finally { event.target.disabled = false; }
+  });
+  document.getElementById('onboard-mic-test').addEventListener('click',async event=>{
+    event.target.disabled=true;wizardMicrophoneReady=false;updateWizardNavigation();
+    const result=document.getElementById('onboard-mic-result');result.textContent='Listening locally for three seconds. Say a few words…';
+    try { const probe=await invoke('check_setup_microphone');wizardMicrophoneReady=Boolean(probe.ready);result.textContent=probe.ready?`${probe.device}: ${probe.level>2?'sound detected.':'microphone opened, but little sound was detected. Check the input volume.'}`:probe.error||'Microphone check failed.'; }
+    catch { result.textContent='Microphone could not be opened. Check device and privacy settings, then retry.'; }
+    finally { event.target.disabled=false;await refreshWizardAccess(); }
+  });
+  document.getElementById('onboard-practice-text').addEventListener('input',()=>{
+    const hasText=Boolean(document.getElementById('onboard-practice-text').value.trim());
+    document.getElementById('onboard-practice-status').textContent=hasText?'Text is in the practice box. If you dictated it, your first transcription is ready. You can also try dictation in another app.':'Click here and use your shortcut. If insertion fails, check Settings; your text may be on the clipboard.';
+    updateWizardNavigation();
+  });
+  document.getElementById('onboard-practice-skip').addEventListener('click',()=>{wizardPracticeSkipped=true;goToStep(11);});
+  for(const id of ['onboard-command-mode-check','onboard-streaming-mode-check']) document.getElementById(id).addEventListener('change',()=>saveWizardConfig().catch(()=>wizardStatus('Could not save this choice. Please retry.')));
+  renderWizardEntitlements();
+  const incomplete=(currentConfig?.onboarding_version??0)<1;
+  if(wizardIsSignedIn()&&!incomplete) { onboardingWrapper.classList.add('hidden');document.getElementById('app').inert=false;return; }
+  onboardingWrapper.classList.remove('hidden');document.getElementById('app').inert=true;
+  const saved=Math.max(1,Math.min(WIZARD_STEPS,currentConfig?.onboarding_step||1));
+  wizardMicrophoneReady=saved>3;
+  await goToStep(wizardIsSignedIn()?Math.max(2,saved):1,true);
+}
+async function applyWizardProDefaults() {
+  if(isUserPro(currentUserInfo) && !currentConfig.onboarding_pro_defaults_applied && (currentConfig.onboarding_version??0)<1) {
+    document.getElementById('onboard-streaming-mode-check').checked=true;
+    await saveWizardConfig({onboarding_pro_defaults_applied:true});
   }
+  renderWizardEntitlements();
+}
+async function goToStep(step, restoring=false) {
+  step=Math.max(1,Math.min(WIZARD_STEPS,step));
+  if(step>1&&!wizardIsSignedIn()) {wizardStatus('Sign in before continuing setup.');return;}
+  if(!restoring&&step>currentStep&&!wizardCanAdvance()){wizardStatus(currentStep===3?'Complete the access and microphone checks first.':'Complete this step before continuing.');return;}
+  try {
+    if(step>1) await applyWizardProDefaults();
+    if (!restoring) await saveWizardConfig({onboarding_step:step});
+  } catch {wizardStatus('Could not save setup. Please try again.');return;}
+  currentStep=step;
+  onboardSteps.forEach(el=>el.classList.toggle('active',el.id===`onboard-step-${step}`));
+  if(wizardCapabilityTimer) {clearInterval(wizardCapabilityTimer);wizardCapabilityTimer=null;}
+  if(step===2) await renderOnboardingPromoUI();
+  if(step===3) {await refreshWizardAccess();wizardCapabilityTimer=setInterval(refreshWizardAccess,3000);}
+  updateWizardGesture();
+  document.getElementById('onboard-tray-help').textContent=IS_MAC_CLIENT?'Look for SpeekTo.Me in the menu bar at the top of your screen.':'Look for SpeekTo.Me in the system tray. It may be inside the hidden-icons menu.';
+  document.getElementById('onboard-ready-summary').textContent=wizardPracticeSkipped?'Your preferences are saved. Try your first dictation whenever you’re ready.':'Use your shortcut in a text field to dictate. Your microphone and desktop access have been checked.';
+  updateWizardNavigation();
+  const heading=document.querySelector(`#onboard-step-${step} h2`);heading?.setAttribute('tabindex','-1');heading?.focus({preventScroll:true});
+  document.querySelector('#onboarding .onboarding-content').scrollTop=0;
+}
+async function finishOnboarding() {
+  if(!wizardIsSignedIn()){await goToStep(1,true);return;}
+  await refreshWizardAccess();
+  if(!wizardAccessReady()){await goToStep(3,true);wizardStatus('Desktop access has changed. Check it before finishing.');return;}
+  try {await saveWizardConfig({onboarding_version:1,onboarding_step:11});applyConfigToUI(currentConfig);onboardingWrapper.classList.add('hidden');document.getElementById('app').inert=false;if(wizardCapabilityTimer)clearInterval(wizardCapabilityTimer);}
+  catch {wizardStatus('Setup could not be saved. Your choices are still here; please retry.');}
 }
 
 async function renderOnboardingPromoUI() {
   if (isUserPro(currentUserInfo)) {
     if (onboardPromoBadge) onboardPromoBadge.textContent = "✨ PRO PLAN ACTIVE";
     if (onboardPromoTitle) onboardPromoTitle.textContent = "You're on SpeekTo.Me Pro";
-    if (onboardPromoSubtitle) onboardPromoSubtitle.textContent = "All Pro capabilities and unlimited AI voice dictation are active on your account.";
+    if (onboardPromoSubtitle) onboardPromoSubtitle.textContent = "Your Pro transcription, Command Mode, and meeting features are active.";
     if (onboardPromoCtaText) onboardPromoCtaText.textContent = "Continue Setup ➔";
     if (onboardSkipProBtn) onboardSkipProBtn.style.display = "none";
     return;
@@ -1916,8 +2016,6 @@ async function renderOnboardingPromoUI() {
       if (promo.primary_cta && onboardPromoCtaText) onboardPromoCtaText.textContent = promo.primary_cta;
       if (promo.secondary_cta && onboardPromoSkipText) onboardPromoSkipText.textContent = promo.secondary_cta;
       if (promo.upgrade_url) promoUpgradeUrl = promo.upgrade_url;
-      if (promo.video_url) cachedDemoVideoUrl = promo.video_url;
-      if (promo.demo_video_url) cachedDemoVideoUrl = promo.demo_video_url;
       if (promo.features && Array.isArray(promo.features) && promo.features.length > 0) {
         const featGrid = document.getElementById('onboard-promo-features');
         if (featGrid) {
@@ -1944,156 +2042,6 @@ async function handleUpgradeProFromOnboarding() {
   await invoke('open_external_url', { url: targetUrl });
   showToast("Opening billing dashboard in default browser...", "SpeekTo.Me Pro", "info");
   goToStep(3);
-}
-
-// ==========================================
-// Demo Video Player (Step 5)
-// ==========================================
-
-function formatVideoTime(seconds) {
-  if (isNaN(seconds) || seconds < 0) return "0:00";
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-}
-
-async function initDemoVideoStep() {
-  // Sync the latest UI configuration to Rust backend immediately
-  try {
-    const updated = gatherConfigFromUI(true);
-    await invoke('save_config', { config: updated });
-    currentConfig = updated;
-  } catch (err) {
-    console.error("Failed to sync config before demo video step:");
-  }
-
-  // Fetch demo video URL from backend /config/video or cached
-  try {
-    const apiUrl = getApiUrl();
-    const res = await fetch(`${apiUrl}/config/video`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.video_url && data.video_url.trim() !== '') {
-        cachedDemoVideoUrl = data.video_url.trim();
-      }
-    }
-  } catch (e) {
-    console.warn("Could not fetch demo video URL from server, using cached:");
-  }
-
-  if (onboardDemoVideo && onboardDemoVideo.src !== cachedDemoVideoUrl) {
-    onboardDemoVideo.src = cachedDemoVideoUrl;
-    onboardDemoVideo.load();
-  }
-}
-
-function setupDemoVideoPlayer() {
-  if (!onboardDemoVideo) return;
-
-  const togglePlay = () => {
-    if (onboardDemoVideo.paused || onboardDemoVideo.ended) {
-      onboardDemoVideo.play().catch(e => console.warn("Auto-play error:"));
-    } else {
-      onboardDemoVideo.pause();
-    }
-  };
-
-  if (videoCenterPlayBtn) videoCenterPlayBtn.addEventListener('click', togglePlay);
-  if (videoPlayPauseBtn) videoPlayPauseBtn.addEventListener('click', togglePlay);
-  onboardDemoVideo.addEventListener('click', togglePlay);
-
-  onboardDemoVideo.addEventListener('play', () => {
-    if (videoPlayIcon) videoPlayIcon.classList.add('hidden');
-    if (videoPauseIcon) videoPauseIcon.classList.remove('hidden');
-    if (videoCenterPlayBtn) videoCenterPlayBtn.classList.add('hidden');
-  });
-
-  onboardDemoVideo.addEventListener('pause', () => {
-    if (videoPlayIcon) videoPlayIcon.classList.remove('hidden');
-    if (videoPauseIcon) videoPauseIcon.classList.add('hidden');
-    if (videoCenterPlayBtn) videoCenterPlayBtn.classList.remove('hidden');
-  });
-
-  onboardDemoVideo.addEventListener('timeupdate', () => {
-    const curr = onboardDemoVideo.currentTime;
-    const dur = onboardDemoVideo.duration || 0;
-    if (videoCurrentTime) videoCurrentTime.textContent = formatVideoTime(curr);
-    if (videoDuration && dur > 0) videoDuration.textContent = formatVideoTime(dur);
-    if (videoScrubber && dur > 0) {
-      videoScrubber.value = (curr / dur) * 100;
-    }
-  });
-
-  onboardDemoVideo.addEventListener('loadedmetadata', () => {
-    const dur = onboardDemoVideo.duration || 0;
-    if (videoDuration && dur > 0) videoDuration.textContent = formatVideoTime(dur);
-  });
-
-  if (videoScrubber) {
-    videoScrubber.addEventListener('input', () => {
-      const dur = onboardDemoVideo.duration || 0;
-      if (dur > 0) {
-        onboardDemoVideo.currentTime = (videoScrubber.value / 100) * dur;
-      }
-    });
-  }
-
-  // Volume & Mute Controls
-  if (videoMuteBtn) {
-    videoMuteBtn.addEventListener('click', () => {
-      onboardDemoVideo.muted = !onboardDemoVideo.muted;
-      updateVolumeUI();
-    });
-  }
-
-  if (videoVolumeSlider) {
-    videoVolumeSlider.addEventListener('input', () => {
-      onboardDemoVideo.volume = parseFloat(videoVolumeSlider.value);
-      onboardDemoVideo.muted = onboardDemoVideo.volume === 0;
-      updateVolumeUI();
-    });
-  }
-
-  function updateVolumeUI() {
-    const isMuted = onboardDemoVideo.muted || onboardDemoVideo.volume === 0;
-    if (videoVolHighIcon) videoVolHighIcon.classList.toggle('hidden', isMuted);
-    if (videoVolMutedIcon) videoVolMutedIcon.classList.toggle('hidden', !isMuted);
-    if (videoVolumeSlider) {
-      videoVolumeSlider.value = isMuted ? 0 : onboardDemoVideo.volume;
-    }
-  }
-
-  // Fullscreen Control
-  if (videoFullscreenBtn && videoPlayerContainer) {
-    videoFullscreenBtn.addEventListener('click', () => {
-      if (!document.fullscreenElement) {
-        videoPlayerContainer.requestFullscreen().catch(err => {
-          console.warn("Fullscreen request failed:");
-        });
-      } else {
-        document.exitFullscreen().catch(err => console.warn("[diagnostic event: private values omitted]"));
-      }
-    });
-  }
-}
-
-async function finishOnboarding() {
-  try {
-    // 1. Gather all configuration inputs from Onboarding
-    const updated = gatherConfigFromUI(true);
-    
-    // 2. Save configurations to backend
-    await invoke('save_config', { config: updated });
-    currentConfig = updated;
-    
-    // 3. Synchronize dashboard UI inputs
-    applyConfigToUI(updated);
-    
-    // 4. Hide onboarding overlay to reveal regular settings dashboard
-    onboardingWrapper.classList.add('hidden');
-  } catch (err) {
-    console.error("Failed to complete onboarding:");
-  }
 }
 
 // ==========================================
@@ -2317,6 +2265,7 @@ function updateOnboardAuthUI(userInfo) {
     onboardAuthLoggedOut.classList.add('hidden');
     onboardAuthLoggingIn.classList.add('hidden');
     onboardAuthLoggedIn.classList.remove('hidden');
+    updateWizardNavigation();
   } else {
     onboardAuthLoggedIn.classList.add('hidden');
     onboardAuthLoggingIn.classList.add('hidden');
@@ -2332,10 +2281,11 @@ async function triggerLogin(isOnboarding) {
     authLoggedOut.classList.add('hidden');
     authLoggingIn.classList.remove('hidden');
   }
-  await invoke('start_login');
+  try { await invoke('start_login'); } catch { triggerCancelLogin(isOnboarding);showToast('Could not open sign in. Please try again.', 'Sign in', 'error'); }
 }
 
 function triggerCancelLogin(isOnboarding) {
+  invoke('cancel_login').catch(()=>{});
   if (isOnboarding) {
     onboardAuthLoggingIn.classList.add('hidden');
     onboardAuthLoggedOut.classList.remove('hidden');
@@ -2365,10 +2315,8 @@ async function setupOAuthListeners() {
     const userInfo = event.payload;
     currentUserInfo = userInfo;
     
-    // Automatically retrieve session token locally
-    invoke('get_config').then(cfg => {
-      currentConfig = cfg;
-    });
+    // Reload the session before enabling progression.
+    invoke('get_config').then(async cfg => { currentConfig=cfg;updateWizardNavigation(); if((cfg.onboarding_version??0)>=1) {onboardingWrapper.classList.add('hidden');document.getElementById('app').inert=false;} });
 
     updateAuthUI(userInfo);
     updateOnboardAuthUI(userInfo);
@@ -2478,6 +2426,8 @@ function setupCredentialForm(formId, nameInputId, emailInputId, passwordInputId,
         
         updateAuthUI(userInfo);
         updateOnboardAuthUI(userInfo);
+        updateWizardNavigation();
+        if((currentConfig.onboarding_version??0)>=1) {onboardingWrapper.classList.add('hidden');document.getElementById('app').inert=false;}
 
         // Clear input fields
         emailInput.value = '';

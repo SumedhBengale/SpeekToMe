@@ -99,14 +99,17 @@ async function settingsFor(platform) {
   // Every shared control must affect the same field on either screen.
   for (const prefix of ['', 'onboard-']) {
     d.getElementById(prefix + 'hotkey-mode-select').value = 'hold';
-    d.getElementById(prefix + 'theme-select').value = 'classic_dark';
+    if (!prefix) d.getElementById('theme-select').value = 'classic_dark';
     for (const id of ['autostart-check', 'typing-mode-check', 'streaming-mode-check']) {
       d.getElementById(prefix + id).checked = false;
     }
-    d.getElementById(prefix + 'sound-feedback-check').checked = true;
+    if (!prefix) d.getElementById('sound-feedback-check').checked = true;
   }
   const changed = plain(w.settingsTest.gatherConfigFromUI(false));
-  assert.deepEqual(changed, plain(w.settingsTest.gatherConfigFromUI(true)));
+  const setupChanged=plain(w.settingsTest.gatherConfigFromUI(true));
+  assert.equal(setupChanged.theme,config.theme,'Setup preserves the theme it does not edit');
+  assert.equal(setupChanged.sound_feedback,config.sound_feedback);
+  assert.deepEqual({...setupChanged,theme:changed.theme,sound_feedback:changed.sound_feedback,pill_bg_color:changed.pill_bg_color,pill_wave_color:changed.pill_wave_color},changed);
   assert.equal(changed.hotkey_mode, 'hold');
   assert.equal(changed.autostart, false);
   assert.equal(changed.typing_mode, false);

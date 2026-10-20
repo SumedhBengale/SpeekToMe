@@ -110,22 +110,61 @@ pub fn open_browser(url: &str) {
     }
 }
 
-pub fn listen_for_token() -> Option<String> {
+static LOGIN_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub fn begin_login() -> u64 {
+    LOGIN_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+pub fn cancel_login() {
+    LOGIN_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+pub fn login_is_current(attempt: u64) -> bool {
+    LOGIN_ATTEMPT.load(std::sync::atomic::Ordering::SeqCst) == attempt
+}
+pub fn listen_for_token(attempt: u64) -> Option<String> {
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    if !login_is_current(attempt) {
+        return None;
+    }
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();
-    
-    let client_state: String = (0..16).map(|_| format!("{:02x}", rand::random::<u8>())).collect();
-    let auth_url = format!("{}/auth/login?port={}&client_state={}&exchange=1", get_api_url(), port, client_state);
+
+    let client_state: String = (0..16)
+        .map(|_| format!("{:02x}", rand::random::<u8>()))
+        .collect();
+    let auth_url = format!(
+        "{}/auth/login?port={}&client_state={}&exchange=1",
+        get_api_url(),
+        port,
+        client_state
+    );
     open_browser(&auth_url);
-    
-    listener.set_nonblocking(false).ok();
-    if let Ok((mut stream, _)) = listener.accept() {
+
+    listener.set_nonblocking(true).ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    let (mut stream, _) = loop {
+        if !login_is_current(attempt) || std::time::Instant::now() >= deadline {
+            return None;
+        }
+        match listener.accept() {
+            Ok(connection) => break connection,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
+            Err(_) => return None,
+        }
+    };
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok()?;
+    {
         let mut buffer = [0; 2048];
         if let Ok(bytes_read) = stream.read(&mut buffer) {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-            
+
             let mut captured_token = None;
             let mut exchange_code = None;
             let mut captured_state = None;
@@ -150,13 +189,27 @@ pub fn listen_for_token() -> Option<String> {
 
             if let Some(code) = exchange_code {
                 if captured_state.as_deref() == Some(client_state.as_str()) {
-                    if let Ok(response) = reqwest::blocking::Client::new().post(format!("{}/auth/exchange",get_api_url())).json(&serde_json::json!({"code":code})).send() {
-                        if response.status().is_success() { if let Ok(body) = response.json::<serde_json::Value>() { captured_token = body.get("token").and_then(|v|v.as_str()).map(str::to_owned); } }
+                    if let Ok(response) = reqwest::blocking::Client::builder()
+                        .timeout(std::time::Duration::from_secs(15))
+                        .build()
+                        .ok()?
+                        .post(format!("{}/auth/exchange", get_api_url()))
+                        .json(&serde_json::json!({"code":code}))
+                        .send()
+                    {
+                        if response.status().is_success() {
+                            if let Ok(body) = response.json::<serde_json::Value>() {
+                                captured_token = body
+                                    .get("token")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_owned);
+                            }
+                        }
                     }
                 }
             }
             if let (Some(token), Some(state)) = (captured_token, captured_state) {
-                if state == client_state {
+                if state == client_state && login_is_current(attempt) {
                     let body = "<html><body style='font-family:sans-serif;text-align:center;margin-top:50px;'><h2>Authentication Successful</h2><p>You can close this window now and return to SpeekTo.Me.</p></body></html>";
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{}",
@@ -172,7 +225,6 @@ pub fn listen_for_token() -> Option<String> {
     }
     None
 }
-
 pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, language: String, context: crate::shortcuts::RecordingContext) {
     let is_cmd = context.is_command_mode;
     let (token_opt, model, enhance, custom_prompt, transcription_mode, api_url) = {
@@ -1095,5 +1147,19 @@ mod command_stream_tests {
         let (url,worker)=response(body);let mut delivered=Vec::new();
         let result=transform_text_stream(&url,"test","selected text","translate",|delta,_|delivered.push(delta.to_owned())).await.unwrap();
         worker.join().unwrap();assert_eq!(result,expected);assert_eq!(delivered,vec![expected]);
+    }
+}
+
+#[cfg(test)]
+mod login_attempt_tests {
+    #[test]
+    fn cancellation_and_retry_invalidate_previous_login_attempts() {
+        let first = super::begin_login();
+        assert!(super::login_is_current(first));
+        super::cancel_login();
+        assert!(!super::login_is_current(first));
+        let second = super::begin_login();
+        assert!(super::login_is_current(second));
+        assert!(!super::login_is_current(first));
     }
 }

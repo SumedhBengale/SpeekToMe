@@ -142,10 +142,36 @@ fn get_linux_capabilities() -> serde_json::Value {
 
 #[tauri::command]
 fn request_desktop_permissions() {
+    #[cfg(target_os = "linux")]
+    linux_portal::rebind();
     #[cfg(target_os = "macos")]
     macos_desktop::request_permissions();
 }
 
+#[tauri::command]
+fn cancel_login() {
+    api::cancel_login();
+}
+
+#[tauri::command]
+fn get_setup_capabilities() -> serde_json::Value {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let mut value = get_linux_capabilities();
+    let device = cpal::default_host().default_input_device();
+    value["microphone_device"] = serde_json::json!(device.as_ref().and_then(|d| d.name().ok()));
+    #[cfg(not(target_os = "macos"))]
+    {
+        value["microphone"] = serde_json::json!(device.is_some());
+    }
+    value
+}
+
+#[tauri::command]
+async fn check_setup_microphone() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(audio::check_setup_microphone)
+        .await
+        .map_err(|_| "Microphone check could not finish".to_string())
+}
 #[tauri::command]
 async fn repair_desktop_permissions() -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -195,8 +221,8 @@ async fn save_config(app: tauri::AppHandle, mut config: AppConfig) -> Result<(),
         // Preserve tray changes and persist the whole config under the same lock.
         config.languages = active.languages.clone();
         config.active_language = active.speaking_language();
+        config::try_save_config(&config)?;
         *active = config.clone();
-        config::save_config(&active);
     }
     HOTKEY_ALLOWED.store(true, Ordering::SeqCst);
     sync_active_config_atomics(&config);
@@ -280,22 +306,40 @@ fn close_window(window: tauri::WebviewWindow) {
 
 #[tauri::command]
 fn start_login(window: tauri::WebviewWindow) {
+    let attempt = api::begin_login();
     thread::spawn(move || {
-        if let Some(token) = api::listen_for_token() {
+        if let Some(token) = api::listen_for_token(attempt) {
+            if !api::login_is_current(attempt) {
+                return;
+            }
+            if let Ok(user_info) =
+                tauri::async_runtime::block_on(api::fetch_user_info(&api::get_api_url(), &token))
             {
-                let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                active.session_token = Some(token.clone());
-                sync_active_config_atomics(&active);
-                config::save_config(&active);
+                {
+                    let mut active = get_active_config()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if !api::login_is_current(attempt) {
+                        return;
+                    }
+                    active.session_token = Some(token);
+                    sync_active_config_atomics(&active);
+                    config::save_config(&active);
+                }
+                if api::login_is_current(attempt) {
+                    let _ = window.emit("login-success", user_info);
+                }
+            } else if api::login_is_current(attempt) {
+                let _ = window.emit(
+                    "login-failed",
+                    "Could not verify sign in. Please try again.",
+                );
             }
-            
-            if let Ok(user_info) = tauri::async_runtime::block_on(api::fetch_user_info(&api::get_api_url(), &token)) {
-                let _ = window.emit("login-success", user_info);
-            } else {
-                let _ = window.emit("login-failed", "Failed to retrieve user info.");
-            }
-        } else {
-            let _ = window.emit("login-failed", "Authentication listener closed.");
+        } else if api::login_is_current(attempt) {
+            let _ = window.emit(
+                "login-failed",
+                "Sign in timed out or the browser callback failed. Please try again.",
+            );
         }
     });
 }
@@ -668,6 +712,9 @@ fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
             set_shortcut_capture,
             hide_window,
             start_login,
+            cancel_login,
+            get_setup_capabilities,
+            check_setup_microphone,
             logout,
             get_user_info,
             login_with_credentials,
@@ -824,8 +871,8 @@ fn main() {
                 win32::show_tray_notification("Choose another shortcut", error, win32::NotificationLevel::Warning);
                 show_or_create_settings_window(&handle);
             }
-            if token_opt.is_none() {
-                println!("[STARTUP] No session token found. Displaying onboarding settings window...");
+            if token_opt.is_none() || get_active_config().lock().unwrap_or_else(|e|e.into_inner()).onboarding_version<1 {
+                println!("[STARTUP] Sign-in or setup incomplete. Displaying settings window...");
                 show_or_create_settings_window(&handle);
             }
 

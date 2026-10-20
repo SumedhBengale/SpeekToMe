@@ -56,6 +56,12 @@ pub struct AppConfig {
     pub sound_feedback: bool, // true/false
     pub custom_prompt: String,// String prompt instructions
     pub session_token: Option<String>,
+    #[serde(default)]
+    pub onboarding_version: u32,
+    #[serde(default)]
+    pub onboarding_step: u8,
+    #[serde(default)]
+    pub onboarding_pro_defaults_applied: bool,
     pub autostart: bool,      // true/false
     pub theme: String,        // "forest", "lavender", "mint", "classic_dark"
     
@@ -117,6 +123,9 @@ impl Default for AppConfig {
             sound_feedback: true,
             custom_prompt: "".to_string(),
             session_token: None,
+            onboarding_version: 0,
+            onboarding_step: 1,
+            onboarding_pro_defaults_applied: false,
             autostart: false,
             theme: "forest".to_string(),
             transcription_mode: default_transcription_mode(),
@@ -204,20 +213,35 @@ pub fn get_config_path() -> std::path::PathBuf {
     }
 }
 
-pub fn load_config() -> AppConfig {
-    let path = get_config_path();
-    if let Ok(data) = std::fs::read_to_string(&path) {
-        if let Ok(mut config) = serde_json::from_str::<AppConfig>(&data) {
-            config.normalize_speaking_language();
-            return config;
-        }
+fn decode_config(data: &str) -> Option<AppConfig> {
+    let mut config = serde_json::from_str::<AppConfig>(data).ok()?;
+    if serde_json::from_str::<serde_json::Value>(data)
+        .ok()?
+        .get("onboarding_version")
+        .is_none()
+        && config.session_token.is_some()
+    {
+        config.onboarding_version = 1;
     }
-    AppConfig::default()
+    config.normalize_speaking_language();
+    Some(config)
+}
+pub fn load_config() -> AppConfig {
+    std::fs::read_to_string(get_config_path())
+        .ok()
+        .and_then(|data| decode_config(&data))
+        .unwrap_or_default()
+}
+pub fn save_config(config: &AppConfig) {
+    if let Err(error) = try_save_config(config) {
+        eprintln!("[CONFIG] {}", error);
+    }
 }
 
-pub fn save_config(config: &AppConfig) {
+pub fn try_save_config(config: &AppConfig) -> Result<(), String> {
     let path = get_config_path();
-    if let Ok(data) = serde_json::to_string_pretty(config) {
+    let data = serde_json::to_string_pretty(config).map_err(|_| "Settings could not be encoded".to_string())?;
+    {
         use std::io::Write;
         let temporary = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
         let result = (|| -> std::io::Result<()> {
@@ -231,9 +255,9 @@ pub fn save_config(config: &AppConfig) {
             drop(file);
             crate::meeting_upload::replace_file(&temporary, &path)
         })();
-        if let Err(error) = result {
+        if result.is_err() {
             let _ = std::fs::remove_file(&temporary);
-            eprintln!("[CONFIG] Could not save settings: {}", error);
+            return Err("Settings could not be saved. Check available disk space and profile permissions.".into());
         }
     }
     #[cfg(target_os = "linux")]
@@ -244,6 +268,7 @@ pub fn save_config(config: &AppConfig) {
     if let Err(error) = crate::windows_autostart::sync(config.autostart) {
         eprintln!("[CONFIG] Could not update launch at sign-in: {}", error);
     }
+    Ok(())
 }
 
 pub fn parse_hotkey_combo(name: &str) -> u32 {
@@ -297,5 +322,31 @@ mod speaking_language_tests {
         assert_eq!(config.speaking_language(), "en");
         let restored: AppConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
         assert_eq!(restored.speaking_language(), "en");
+    }
+}
+
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+    #[test]
+    fn existing_accounts_do_not_repeat_setup() {
+        let mut legacy = serde_json::to_value(AppConfig::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("onboarding_version");
+        legacy["session_token"] = serde_json::json!("test-session");
+        assert_eq!(
+            decode_config(&legacy.to_string())
+                .unwrap()
+                .onboarding_version,
+            1
+        );
+    }
+    #[test]
+    fn new_accounts_resume_without_implicitly_finishing() {
+        let mut cfg = AppConfig::default();
+        cfg.session_token = Some("test-session".into());
+        cfg.onboarding_step = 7;
+        let restored = decode_config(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(restored.onboarding_version, 0);
+        assert_eq!(restored.onboarding_step, 7);
     }
 }

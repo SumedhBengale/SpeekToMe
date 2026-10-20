@@ -1590,3 +1590,59 @@ pub fn stop_meeting_recording() -> Result<(),String> {
         assert_eq!(batch.len(),16000*150);
     }
 }
+
+/// User-initiated, bounded local check. Samples are reduced to a peak value;
+/// no audio buffer, file, upload, or transcription history is created.
+pub fn check_setup_microphone() -> serde_json::Value {
+    let host = cpal::default_host();
+    let Some(device) = host.default_input_device() else {
+        return serde_json::json!({"ready":false,"error":"No default microphone was found."});
+    };
+    let name = device
+        .name()
+        .unwrap_or_else(|_| "Default microphone".into());
+    let Ok(config) = device.default_input_config() else {
+        return serde_json::json!({"ready":false,"error":"The default microphone could not be configured."});
+    };
+    let peak = Arc::new(AtomicU32::new(0));
+    let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let received = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    macro_rules! probe {
+        ($kind:ty,$amplitude:expr) => {{
+            let volume = peak.clone();
+            let errors = failed.clone();
+            let samples = received.clone();
+            device.build_input_stream(
+                &config.clone().into(),
+                move |data: &[$kind], _: &cpal::InputCallbackInfo| {
+                    if !data.is_empty() {
+                        samples.store(true, Ordering::Relaxed);
+                    }
+                    let level = data.iter().map($amplitude).fold(0.0_f32, f32::max);
+                    volume.fetch_max((level.min(1.0) * 100.0) as u32, Ordering::Relaxed);
+                },
+                move |_| {
+                    errors.store(true, Ordering::Relaxed);
+                },
+                None,
+            )
+        }};
+    }
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => probe!(f32, |s: &f32| s.abs()),
+        cpal::SampleFormat::I16 => probe!(i16, |s: &i16| (*s as f32 / 32768.0).abs()),
+        cpal::SampleFormat::U16 => probe!(u16, |s: &u16| ((*s as f32 - 32768.0) / 32768.0).abs()),
+        _ => {
+            return serde_json::json!({"ready":false,"error":"This microphone format is not supported. Choose another default input in system settings."})
+        }
+    };
+    let Ok(stream) = stream else {
+        return serde_json::json!({"ready":false,"error":"Microphone access was denied or the device is busy. Check system audio and privacy settings."});
+    };
+    if stream.play().is_err() {
+        return serde_json::json!({"ready":false,"error":"The microphone could not start."});
+    }
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    drop(stream);
+    serde_json::json!({"ready":!failed.load(Ordering::Relaxed)&&received.load(Ordering::Relaxed),"device":name,"level":peak.load(Ordering::Relaxed)})
+}

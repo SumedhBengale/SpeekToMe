@@ -11,7 +11,7 @@
 
 <body>
   <!-- Onboarding Wizard Overlay -->
-  <div id="onboarding" class="hidden">
+  <div id="onboarding" class="hidden" role="dialog" aria-modal="true" aria-label="SpeekTo.Me setup">
     <!-- Top Drag & Window Controls for Onboarding -->
     <div class="window-titlebar" data-tauri-drag-region>
       <div class="window-titlebar-drag" data-tauri-drag-region></div>
@@ -37,13 +37,7 @@
               <polyline points="15 18 9 12 15 6"></polyline>
             </svg>
           </button>
-          <div class="step-tracker">
-            <div class="step-dot active" data-step="1" title="Step 1: Sign In"></div>
-            <div class="step-dot" data-step="2" title="Step 2: Pro Plan"></div>
-            <div class="step-dot" data-step="3" title="Step 3: Preferences"></div>
-            <div class="step-dot" data-step="4" title="Step 4: AI & Languages"></div>
-            <div class="step-dot" data-step="5" title="Step 5: Quick Demo"></div>
-          </div>
+          <div class="step-tracker setup-progress"><span id="onboard-step-label">Step 1 of 11</span><progress id="onboard-progress" max="11" value="1" aria-label="Setup progress"></progress></div>
           <button type="button" id="onboard-next-step-btn" class="step-nav-arrow" title="Next Step" aria-label="Next Step">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="9 18 15 12 9 6"></polyline>
@@ -202,9 +196,9 @@
 
         <!-- Step 2: Pro Plan Promotion Screen -->
         <div class="onboarding-step" id="onboard-step-2">
-          <div class="promo-badge" id="onboard-promo-badge">⚡ SPEEKTO.ME PRO UNLIMITED</div>
+          <div class="promo-badge" id="onboard-promo-badge">⚡ SPEEKTO.ME PRO</div>
           <h2 id="onboard-promo-title" style="margin-top: 4px;">Transform the way you write.</h2>
-          <p class="step-desc" id="onboard-promo-subtitle">Unlock unlimited high-speed AI voice dictation across all your apps.</p>
+          <p class="step-desc" id="onboard-promo-subtitle">Get streaming transcription, Command Mode, and meeting recordings.</p>
 
           <div class="promo-pricing-card">
             <div class="promo-header-row">
@@ -221,11 +215,11 @@
             <div class="promo-features-grid" id="onboard-promo-features">
               <div class="promo-feat-item">
                 <span class="promo-check">✓</span>
-                <span><strong>Unlimited AI Voice Dictation</strong> (no 1-hour cap)</span>
+                <span><strong>More AI Voice Dictation</strong> with your Pro allowance</span>
               </div>
               <div class="promo-feat-item">
                 <span class="promo-check">✓</span>
-                <span><strong>Ultra-low latency priority queue</strong></span>
+                <span><strong>Meeting recording and transcription</strong></span>
               </div>
               <div class="promo-feat-item">
                 <span class="promo-check">✓</span>
@@ -241,7 +235,7 @@
               </div>
               <div class="promo-feat-item">
                 <span class="promo-check">✓</span>
-                <span><strong>Priority 24/7 Email & Chat Support</strong></span>
+                <span><strong>Priority Support</strong></span>
               </div>
             </div>
           </div>
@@ -256,227 +250,102 @@
           </div>
         </div>
 
-        <!-- Step 3: Core Preferences (Clean Non-Scrolling Layout) -->
-        <div class="onboarding-step" id="onboard-step-3">
-          <h2>Core Preferences</h2>
-          <p class="step-desc">Configure your trigger hotkey and system behavior.</p>
-
-          <div class="settings-card compact-card">
-            <div class="setting-row compact-row">
-              <div class="setting-left">
-                <div class="setting-icon-badge small-badge">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
-                    <line x1="6" y1="8" x2="6.01" y2="8"></line>
-                    <line x1="10" y1="8" x2="10.01" y2="8"></line>
-                    <line x1="14" y1="8" x2="14.01" y2="8"></line>
-                    <line x1="18" y1="8" x2="18.01" y2="8"></line>
-                  </svg>
-                </div>
-                <div class="setting-info">
-                  <label for="onboard-hotkey-select" class="setting-title">Trigger Hotkey</label>
-                  <span class="setting-desc">Activation shortcut</span>
-                </div>
-              </div>
-              <div class="setting-control">
-                <div class="hotkey-picker"><select id="onboard-hotkey-select" class="fluent-select">
-                  <option value="Ctrl + Win">Ctrl + Windows (Recommended)</option>
-                  <option value="Ctrl + Space">Ctrl + Space</option>
-                  <option value="Right Alt">Right Alt (Single Key)</option>
-                  <option value="F8">F8 (Single Key)</option>
-                  <option value="Ctrl + Shift">Ctrl + Shift</option>
-                  <option value="Ctrl + Alt">Ctrl + Alt</option>
-                  <option value="Shift + Space">Shift + Space</option>
-                </select>
-<button type="button" class="hotkey-record-btn" id="onboard-hotkey-record">Record shortcut</button>
-<span class="hotkey-record-hint" id="onboard-hotkey-record-hint" aria-live="polite">Use modifiers with a letter, number or navigation key, or a function key alone. Reserved shortcuts cannot be used. Some other apps may have bindings that cannot be detected.</span>
-<div class="hotkey-conflict-warning" id="onboard-hotkey-conflict-warning" role="status" aria-live="polite" hidden></div>
+<section class="onboarding-step" id="onboard-step-3"><h2 tabindex="-1">Let’s connect your desktop</h2><p class="step-desc">We’ll check the access needed for dictation. You stay in control of every permission.</p><div id="onboard-access-status" class="setup-checks" aria-live="polite"></div><p id="onboard-access-help" class="setting-hint"></p><div class="setup-actions"><button type="button" id="onboard-access-request" class="fluent-button primary">Set up access</button><button type="button" id="onboard-access-repair" class="fluent-button secondary" hidden>Repair saved permissions</button><button type="button" id="onboard-access-recheck" class="fluent-button secondary">Check again</button></div><div class="setup-microphone"><h3>Check your microphone</h3><p>A three-second check listens locally. Nothing is saved or uploaded.</p><button type="button" id="onboard-mic-test" class="fluent-button">Test microphone</button><p id="onboard-mic-result" role="status">Your system’s default microphone will be used.</p></div><p class="setting-hint">Meeting audio permissions are requested when you start a meeting, not during dictation setup.</p></section><section class="onboarding-step" id="onboard-step-4"><h2 tabindex="-1">Choose your shortcut</h2><p class="step-desc">Choose a comfortable shortcut, then decide whether to hold or tap it.</p><div class="settings-card compact-card"><div class="setting-row compact-row">
+<div class="setting-left">
+<div class="setting-icon-badge small-badge">
+<svg fill="none" height="15" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="15">
+<rect height="16" rx="2" ry="2" width="20" x="2" y="4"></rect>
+<line x1="6" x2="6.01" y1="8" y2="8"></line>
+<line x1="10" x2="10.01" y1="8" y2="8"></line>
+<line x1="14" x2="14.01" y1="8" y2="8"></line>
+<line x1="18" x2="18.01" y1="8" y2="8"></line>
+</svg>
 </div>
-              </div>
-            </div>
+<div class="setting-info">
+<label class="setting-title" for="onboard-hotkey-select">Trigger Hotkey</label>
+<span class="setting-desc">Activation shortcut</span>
+</div>
+</div>
+<div class="setting-control">
+<div class="hotkey-picker"><select class="fluent-select" id="onboard-hotkey-select">
+<option value="Ctrl + Win">Ctrl + Windows (Recommended)</option>
+<option value="Ctrl + Space">Ctrl + Space</option>
+<option value="Right Alt">Right Alt (Single Key)</option>
+<option value="F8">F8 (Single Key)</option>
+<option value="Ctrl + Shift">Ctrl + Shift</option>
+<option value="Ctrl + Alt">Ctrl + Alt</option>
+<option value="Shift + Space">Shift + Space</option>
+</select>
+<button class="hotkey-record-btn" id="onboard-hotkey-record" type="button">Record shortcut</button>
+<span aria-live="polite" class="hotkey-record-hint" id="onboard-hotkey-record-hint">Use modifiers with a letter, number or navigation key, or a function key alone. Reserved shortcuts cannot be used. Some other apps may have bindings that cannot be detected.</span>
+<div aria-live="polite" class="hotkey-conflict-warning" hidden="" id="onboard-hotkey-conflict-warning" role="status"></div>
+</div>
+</div>
+</div><div class="setting-row compact-row">
+<div class="setting-left">
+<div class="setting-icon-badge small-badge">
+<svg fill="none" height="15" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="15">
+<path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path>
+<path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path>
+<path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path>
+<path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path>
+</svg>
+</div>
+<div class="setting-info">
+<label class="setting-title" for="onboard-hotkey-mode-select">Trigger Mode</label>
+<span class="setting-desc">Hold vs Toggle</span>
+</div>
+</div>
+<div class="setting-control">
+<select class="fluent-select" id="onboard-hotkey-mode-select">
+<option value="hold">Push to Talk</option>
+<option value="toggle">Hands-Free Toggle</option>
+</select>
+</div>
+</div></div><p id="onboard-gesture-help" class="setup-tip"></p></section><section class="onboarding-step" id="onboard-step-5"><h2 tabindex="-1">How should text appear?</h2><p class="step-desc">Choose how completed text is inserted into the app you’re using.</p><div class="setup-choice"><label class="fluent-checkbox-container">
+<input id="onboard-typing-mode-check" type="checkbox"/>
+<span class="checkmark"></span>
+<div class="checkbox-label-block">
+<span class="checkbox-title">Type text with simulated keystrokes</span>
+<span class="setting-hint" data-typing-hint="">Off: paste the completed text. On: insert text using simulated keystrokes.</span>
+</div>
+</label></div><p class="setup-tip">Leave this off to paste text in one go. Turn it on to simulate typing. Some characters may still use paste to keep your text accurate.</p></section><section class="onboarding-step" id="onboard-step-6"><h2 tabindex="-1">Edit with a voice command</h2><p class="step-desc">Select text in another app, then speak an instruction such as “Make this shorter.”</p><div class="setup-choice"><label class="fluent-checkbox-container"><input type="checkbox" id="onboard-command-mode-check"><span class="checkmark"></span><span class="checkbox-label-block"><span class="checkbox-title">Enable Command Mode <span class="pro-mini-tag">PRO</span></span><span class="setting-hint">Rewrite or translate selected text with your voice.</span></span></label></div><p id="onboard-command-help" class="setup-tip"></p></section><section class="onboarding-step" id="onboard-step-7"><h2 tabindex="-1">See words as you speak</h2><p class="step-desc">Pro can transcribe while you’re speaking. You can change this at any time.</p><div class="setup-choice"><label class="fluent-checkbox-container">
+<input id="onboard-streaming-mode-check" type="checkbox"/>
+<span class="checkmark"></span>
+<div class="checkbox-label-block">
+<span class="checkbox-title">Real-Time Streaming <span class="pro-mini-tag">PRO</span></span>
+<span class="setting-hint">Word-by-word interim typing</span>
+</div>
+</label></div><p id="onboard-stream-help" class="setup-tip"></p></section><section class="onboarding-step" id="onboard-step-8"><h2 tabindex="-1">Ready when you sign in</h2><p class="step-desc">Choose whether SpeekTo.Me starts automatically when you sign in to your computer.</p><div class="setup-choice"><label class="fluent-checkbox-container">
+<input id="onboard-autostart-check" type="checkbox"/>
+<span class="checkmark"></span>
+<div class="checkbox-label-block">
+<span class="checkbox-title">Start on Boot</span>
+<span class="setting-hint autostart-hint">Auto-launch in system tray</span>
+</div>
+</label></div><p class="setup-tip">The app waits in your system tray or menu bar. Closing Settings releases its UI; dictation stays available.</p></section><div class="onboarding-step" id="onboard-step-9">
+<h2>Spoken Languages</h2>
+<p class="step-desc">Add up to 5 languages. Star the language you want to use for transcription.</p>
+<input id="onboard-model-select" type="hidden" value="whisper-large-v3-turbo"/>
+<div class="settings-card compact-card">
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+<label class="setting-title">Languages I Speak</label>
+<span class="lang-count-badge" id="onboard-lang-count">1/5</span>
+</div>
+<p class="setting-hint" style="margin-bottom: 12px;">Your first language is starred automatically. Click another star to change your current language.</p>
+<div aria-label="Saved languages" class="languages-chips-list" id="onboard-lang-chips" style="margin-bottom: 12px;"></div>
+<p aria-live="polite" class="setting-hint" id="onboard-language-status" style="margin-bottom: 12px;">English is your current language. Changes apply to your next recording.</p>
+<div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
+<div style="position: relative; flex: 1;">
+<input autocomplete="off" class="fluent-input" id="onboard-lang-search-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." style="width: 100%; box-sizing: border-box;" type="text"/>
+<div class="lang-dropdown-menu hidden" id="onboard-lang-dropdown-list"></div>
+</div>
+<button class="fluent-button primary" id="onboard-add-lang-btn" style="white-space: nowrap;" type="button">Add</button>
+</div>
+</div>
 
-            <div class="setting-row compact-row">
-              <div class="setting-left">
-                <div class="setting-icon-badge small-badge">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path>
-                    <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path>
-                    <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path>
-                    <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path>
-                  </svg>
-                </div>
-                <div class="setting-info">
-                  <label for="onboard-hotkey-mode-select" class="setting-title">Trigger Mode</label>
-                  <span class="setting-desc">Hold vs Toggle</span>
-                </div>
-              </div>
-              <div class="setting-control">
-                <select id="onboard-hotkey-mode-select" class="fluent-select">
-                  <option value="hold">Push to Talk</option>
-                  <option value="toggle">Hands-Free Toggle</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="setting-row compact-row">
-              <div class="setting-left">
-                <div class="setting-icon-badge small-badge">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <path d="M12 2a10 10 0 0 1 10 10c0 4-3 8-7 8a2 2 0 0 1-2-2c0-.5.2-1 .2-1.5a1.5 1.5 0 0 0-1.5-1.5H10a8 8 0 0 1-8-8z"></path>
-                  </svg>
-                </div>
-                <div class="setting-info">
-                  <label for="onboard-theme-select" class="setting-title">App Theme</label>
-                  <span class="setting-desc">UI color palette</span>
-                </div>
-              </div>
-              <div class="setting-control">
-                <select id="onboard-theme-select" class="fluent-select">
-                  <option value="forest">Pale Cream (Default)</option>
-                  <option value="lavender">Sleek Lavender</option>
-                  <option value="mint">Dark Mint</option>
-                  <option value="classic_dark">Classic Dark</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div class="settings-card compact-card" style="margin-top: 10px;">
-            <div class="toggles-grid">
-              <label class="fluent-checkbox-container">
-                <input type="checkbox" id="onboard-streaming-mode-check">
-                <span class="checkmark"></span>
-                <div class="checkbox-label-block">
-                  <span class="checkbox-title">Real-Time Streaming <span class="pro-mini-tag">PRO</span></span>
-                  <span class="setting-hint">Word-by-word interim typing</span>
-                </div>
-              </label>
-
-              <label class="fluent-checkbox-container">
-                <input type="checkbox" id="onboard-typing-mode-check">
-                <span class="checkmark"></span>
-                <div class="checkbox-label-block">
-                  <span class="checkbox-title">Type text with simulated keystrokes</span>
-                  <span class="setting-hint" data-typing-hint>Off: paste the completed text. On: insert text using simulated keystrokes.</span>
-                </div>
-              </label>
-
-              <label class="fluent-checkbox-container">
-                <input type="checkbox" id="onboard-sound-feedback-check">
-                <span class="checkmark"></span>
-                <div class="checkbox-label-block">
-                  <span class="checkbox-title">Audio Chimes</span>
-                  <span class="setting-hint">Sound on start/stop dictation</span>
-                </div>
-              </label>
-
-              <label class="fluent-checkbox-container">
-                <input type="checkbox" id="onboard-autostart-check">
-                <span class="checkmark"></span>
-                <div class="checkbox-label-block">
-                  <span class="checkbox-title">Start on Boot</span>
-                  <span class="setting-hint autostart-hint">Auto-launch in system tray</span>
-                </div>
-              </label>
-            </div>
-          </div>
-
-          <button id="onboard-next-2-btn" class="onboard-nav-btn">Next Step ➔</button>
-        </div>
-
-        <!-- Step 4: Spoken Languages -->
-        <div class="onboarding-step" id="onboard-step-4">
-          <h2>Spoken Languages</h2>
-          <p class="step-desc">Add up to 5 languages. Star the language you want to use for transcription.</p>
-
-          <input type="hidden" id="onboard-model-select" value="whisper-large-v3-turbo">
-
-          <div class="settings-card compact-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <label class="setting-title">Languages I Speak</label>
-              <span id="onboard-lang-count" class="lang-count-badge">1/5</span>
-            </div>
-            <p class="setting-hint" style="margin-bottom: 12px;">Your first language is starred automatically. Click another star to change your current language.</p>
-            <div id="onboard-lang-chips" class="languages-chips-list" aria-label="Saved languages" style="margin-bottom: 12px;"></div>
-            <p id="onboard-language-status" class="setting-hint" aria-live="polite" style="margin-bottom: 12px;">English is your current language. Changes apply to your next recording.</p>
-            <div class="lang-combobox-container" style="position: relative; display: flex; gap: 8px;">
-              <div style="position: relative; flex: 1;">
-                <input type="text" id="onboard-lang-search-input" class="fluent-input" placeholder="Search language (e.g. Hindi, Spanish, French)..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
-                <div id="onboard-lang-dropdown-list" class="lang-dropdown-menu hidden"></div>
-              </div>
-              <button type="button" id="onboard-add-lang-btn" class="fluent-button primary" style="white-space: nowrap;">Add</button>
-            </div>
-          </div>
-
-          <button id="onboard-next-3-btn" class="onboard-nav-btn" style="margin-top: 16px;">Next: Quick Demo ➔</button>
-        </div>
-
-        <!-- Step 5: Demo Video Walkthrough -->
-        <div class="onboarding-step" id="onboard-step-5">
-          <h2>See SpeekTo.Me in Action</h2>
-          <p class="step-desc">Watch a quick walkthrough to see how voice dictation works across your desktop.</p>
-
-          <!-- Custom Video Player Card -->
-          <div class="video-player-container" id="video-player-container">
-            <video id="onboard-demo-video" class="video-element" preload="metadata" playsinline></video>
-            
-            <!-- Big Center Play Button Overlay -->
-            <button type="button" id="video-center-play-btn" class="video-center-play-btn" title="Play Video">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
-            </button>
-
-            <!-- Video Controls Bar -->
-            <div class="video-controls-bar">
-              <button type="button" id="video-play-pause-btn" class="video-ctrl-btn" title="Play / Pause">
-                <svg id="video-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-                <svg id="video-pause-icon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="6" y="4" width="4" height="16"></rect>
-                  <rect x="14" y="4" width="4" height="16"></rect>
-                </svg>
-              </button>
-
-              <span id="video-current-time" class="video-time-display">0:00</span>
-              
-              <!-- Timeline Scrubber -->
-              <div class="video-scrubber-wrapper">
-                <input type="range" id="video-scrubber" class="video-range-scrubber" min="0" max="100" value="0" step="0.1">
-                <div class="video-progress-fill" id="video-progress-fill"></div>
-              </div>
-
-              <span id="video-duration" class="video-time-display">0:00</span>
-
-              <!-- Volume Control -->
-              <div class="video-volume-group">
-                <button type="button" id="video-mute-btn" class="video-ctrl-btn" title="Mute / Unmute">
-                  <svg id="video-vol-high-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                  </svg>
-                  <svg id="video-vol-muted-icon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <line x1="23" y1="9" x2="17" y2="15"></line>
-                    <line x1="17" y1="9" x2="23" y2="15"></line>
-                  </svg>
-                </button>
-                <input type="range" id="video-volume-slider" class="video-volume-slider" min="0" max="1" step="0.05" value="1">
-              </div>
-
-              <!-- Fullscreen Button -->
-              <button type="button" id="video-fullscreen-btn" class="video-ctrl-btn" title="Fullscreen">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <button id="onboard-finish-btn" class="onboard-nav-btn primary-glow" style="height: 44px; margin-top: 14px;">Finish & Launch SpeekTo.Me 🚀</button>
-        </div>
+</div><section class="onboarding-step" id="onboard-step-10"><h2 tabindex="-1">Try your first dictation</h2><p class="step-desc">Click the practice box, use your shortcut, and say a short sentence.</p><p id="onboard-practice-gesture" class="setup-tip"></p><label for="onboard-practice-text">Practice text</label><textarea id="onboard-practice-text" class="fluent-input setup-practice" placeholder="Try saying: This is my first dictation." rows="4"></textarea><p id="onboard-practice-status" role="status">The native recording pill will appear when your shortcut is detected. Text uses the real transcription service.</p><p class="setting-hint">Audio is sent for transcription. Final results are saved encrypted in your account history. You can delete history in Settings.</p><button type="button" id="onboard-practice-skip" class="onboard-skip-btn">Try dictation later</button></section><section class="onboarding-step" id="onboard-step-11"><h2 tabindex="-1">Your setup is saved</h2><p class="step-desc">SpeekTo.Me keeps running when you close Settings.</p><div class="setup-ready"><p id="onboard-ready-summary"></p><p id="onboard-tray-help"></p><p>Find Settings and Quit in the tray or menu-bar menu. Preferences can be changed whenever you like.</p></div><button type="button" id="onboard-finish-btn" class="onboard-nav-btn primary-glow">Finish setup</button></section>
+<div class="setup-footer"><p id="onboard-save-status" role="status" aria-live="polite"></p><button type="button" id="onboard-continue-btn" class="onboard-nav-btn">Continue</button></div>
       </div>
     </div>
   </div>
