@@ -806,6 +806,8 @@ async function init() {
     invoke('close_window');
   });
 
+  document.getElementById('account-storage-refresh').addEventListener('click', () => loadAccountStorage());
+
   // 1. Tab selection setup (Dashboard)
   tabItems.forEach(item => {
     item.addEventListener('click', (e) => {
@@ -2199,6 +2201,55 @@ function updateCommandUsage(userInfo) {
 
 }
 
+let accountStorageGeneration = 0;
+function formatStorageBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const units = [[1e9, 'GB'], [1e6, 'MB'], [1e3, 'KB'], [1, 'B']];
+  const [size, unit] = units.find(([size]) => bytes >= size) || units[units.length - 1];
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(bytes / size)} ${unit}`;
+}
+async function loadAccountStorage(userInfo = currentUserInfo) {
+  const generation = ++accountStorageGeneration;
+  const owner = userInfo?.id;
+  const remaining = document.getElementById('account-storage-remaining');
+  const detail = document.getElementById('account-storage-detail');
+  const note = document.getElementById('account-storage-note');
+  const meter = document.getElementById('account-storage-meter');
+  const refresh = document.getElementById('account-storage-refresh');
+  remaining.textContent = userInfo ? 'Loading storage…' : 'Sign in to see your storage';
+  detail.textContent = '';
+  note.textContent = 'Local recordings do not count toward your cloud quota.';
+  meter.hidden = true;
+  meter.value = 0;
+  refresh.disabled = true;
+  if (!userInfo) return;
+  try {
+    const usage = await invoke('cloud_storage_usage');
+    if (generation !== accountStorageGeneration || owner !== currentUserInfo?.id) return;
+    const { limit_bytes: limit, used_bytes: used, reserved_bytes: reserved } = usage || {};
+    if (![limit, used, reserved].every(n => Number.isSafeInteger(n) && n >= 0) || limit <= 0) throw new Error('Invalid storage usage');
+    const available = Math.max(0, limit - used - reserved);
+    remaining.textContent = `${formatStorageBytes(available)} of ${formatStorageBytes(limit)} remaining`;
+    detail.textContent = `${formatStorageBytes(used)} stored${reserved ? ` · ${formatStorageBytes(reserved)} reserved for uploads` : ''}`;
+    meter.value = Math.min(100, (used + reserved) / limit * 100);
+    meter.hidden = false;
+    const notes = ['Encrypted meeting audio. Local recordings do not count toward this quota.'];
+    if (!usage.enabled) notes.push('Cloud audio backup is currently unavailable.');
+    else if (!isUserPro(userInfo)) notes.push('An active Pro plan is required for new cloud backups.');
+    if (usage.purge_after) {
+      const date = new Date(usage.purge_after * 1000);
+      if (!Number.isNaN(date.getTime())) notes.push(`Cloud audio will be deleted on ${date.toLocaleDateString()} unless your paid plan is renewed.`);
+    }
+    note.textContent = notes.join(' ');
+  } catch {
+    if (generation !== accountStorageGeneration || owner !== currentUserInfo?.id) return;
+    remaining.textContent = 'Storage usage unavailable';
+    detail.textContent = 'Refresh to try again.';
+  } finally {
+    if (generation === accountStorageGeneration) refresh.disabled = false;
+  }
+}
+
 function updateAuthUI(userInfo) {
   const owner=userInfo?.id||null;
   if (owner!==displayedHistoryOwner) {
@@ -2209,6 +2260,7 @@ function updateAuthUI(userInfo) {
   }
 
   updateCommandUsage(userInfo);
+  loadAccountStorage(userInfo);
   const accountDesc = document.getElementById('account-desc');
   
   if (userInfo) {

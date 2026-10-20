@@ -254,8 +254,20 @@ func TestSecuritySessionHashesAndMeetingEncryption(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = d.UpdateMeetingResult(id, "private transcript", "private summary", "private actions", "[]", `{"private":"audit"}`); e != nil {
+	if e = d.UpdateMeetingResult(id, "private transcript", "private summary", "private actions", `[{"speaker":"s0","text":"private segment"}]`, `{"private":"audit"}`); e != nil {
 		t.Fatal(e)
+	}
+	if ok, err := d.SaveMeetingSpeakerNames(id, 1, `{"s0":"Private speaker"}`, "{}"); err != nil || !ok {
+		t.Fatal("speaker names save", err)
+	}
+	for _, column := range privatevault.MeetingTextColumns {
+		var ciphertext string
+		if err := d.GetDB().QueryRow("SELECT "+column+" FROM meetings WHERE id=?", id).Scan(&ciphertext); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(ciphertext, "vault:v1:") {
+			t.Fatalf("meeting %s not encrypted", column)
+		}
 	}
 	if e = d.GetDB().QueryRow("SELECT transcript FROM meetings WHERE id=?", id).Scan(&stored); e != nil {
 		t.Fatal(e)
@@ -264,7 +276,7 @@ func TestSecuritySessionHashesAndMeetingEncryption(t *testing.T) {
 		t.Fatal("meeting plaintext persisted")
 	}
 	m, e := d.GetMeeting(id)
-	if e != nil || m.Transcript != "private transcript" || m.Summary != "private summary" {
+	if e != nil || m.Transcript != "private transcript" || m.Summary != "private summary" || m.ActionItems != "private actions" || !strings.Contains(m.SegmentsJSON, "private segment") || m.SpeakerNames["s0"] != "Private speaker" || !strings.Contains(string(m.VocabularyAudit), "audit") {
 		t.Fatal("meeting read regression", e)
 	}
 	if _, e = vault.OpenStored(context.Background(), 1, "meeting-summary", fmt.Sprint(id), stored); e == nil {
@@ -275,5 +287,60 @@ func TestSecuritySessionHashesAndMeetingEncryption(t *testing.T) {
 	}
 	if e = vault.MigrateMeetingText(context.Background()); e != nil {
 		t.Fatal("migration not restart safe", e)
+	}
+}
+
+func TestMeetingEncryptionMigratesLegacyContentAndRecoveryCheckpoints(t *testing.T) {
+	d := auditDB(t)
+	id, err := d.CreateMeeting(1, "Synthetic legacy meeting", 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = d.UpdateMeetingResult(id, "legacy transcript", "legacy summary", "legacy actions", "[]", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = d.GetDB().Exec(`CREATE TABLE meeting_jobs(job_key TEXT PRIMARY KEY,user_id INTEGER,status TEXT,mic_result TEXT,system_result TEXT,diar_result TEXT);
+        INSERT INTO meeting_jobs VALUES('pending-synthetic',1,'processing','private microphone','private system','private diarization');
+        INSERT INTO meeting_jobs VALUES('completed-synthetic',1,'completed','old microphone','old system','old diarization')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, err := privatevault.New(context.Background(), d.GetDB(), bytes.Repeat([]byte{3}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Privacy = vault
+	for i := 0; i < 2; i++ {
+		if err = vault.MigrateMeetingText(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, column := range privatevault.MeetingTextColumns {
+		var ciphertext string
+		if err = d.GetDB().QueryRow("SELECT "+column+" FROM meetings WHERE id=?", id).Scan(&ciphertext); err != nil {
+			t.Fatal(err)
+		}
+		if ciphertext != "" && !strings.HasPrefix(ciphertext, "vault:v1:") {
+			t.Fatalf("legacy %s not encrypted", column)
+		}
+	}
+	for column, expected := range map[string]string{"mic_result": "private microphone", "system_result": "private system", "diar_result": "private diarization"} {
+		var ciphertext string
+		if err = d.GetDB().QueryRow("SELECT " + column + " FROM meeting_jobs WHERE job_key='pending-synthetic'").Scan(&ciphertext); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(ciphertext, "vault:v1:") {
+			t.Fatalf("checkpoint %s not encrypted", column)
+		}
+		plain, err := vault.OpenStored(context.Background(), 1, "job-"+column, "pending-synthetic", ciphertext)
+		if err != nil || plain != expected {
+			t.Fatal("checkpoint recovery failed", err)
+		}
+		if _, err = vault.OpenStored(context.Background(), 1, "job-"+column, "different-job", ciphertext); err == nil {
+			t.Fatal("cross-job ciphertext substitution accepted")
+		}
+		if err = d.GetDB().QueryRow("SELECT " + column + " FROM meeting_jobs WHERE job_key='completed-synthetic'").Scan(&ciphertext); err != nil || ciphertext != "" {
+			t.Fatal("completed checkpoint not cleared", err)
+		}
 	}
 }

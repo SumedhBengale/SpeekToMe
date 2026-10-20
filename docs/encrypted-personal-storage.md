@@ -85,9 +85,12 @@ retry from resurrecting a deleted result. History reads have bounded concurrency
 
 Usage logs retain timing/model/quota metadata and no transcript, final text or
 vocabulary payload. Content-bearing client/server diagnostics and provider error
-bodies have been removed from the touched transcription paths. This change does
-not encrypt existing meeting notes/job checkpoints or retrofit providers' own data
-retention policies; it encrypts cloud audio and final dictation/Command Mode history.
+bodies have been removed from the touched transcription paths. Meeting transcripts, summaries, action items, speaker segments/names, and vocabulary
+audits are also encrypted in the database. Recovery checkpoints for microphone ASR,
+system ASR, and diarization use authenticated account/job/field identities. Startup
+migrates retained legacy content; completed checkpoints are removed. This does not
+change providers' own retention policies or encrypt local desktop files. Meeting
+titles, timestamps, durations, file paths, IDs, and job state remain metadata.
 
 ## Rollout
 
@@ -108,3 +111,20 @@ Run `go -C server test ./...`, targeted race tests and desktop recording identit
 shortcut tests. Master-key substitution, cross-account access, corrupted audio,
 concurrent quota reservations, failed deletion/recovery, retention/renewal and
 history deletion/retry behavior have local regression coverage.
+
+## Account quota and verification (20 October 2026)
+
+The desktop Account page shows online meeting storage remaining against the
+server-provided limit, plus stored bytes and upload reservations. Reservations
+reduce available capacity immediately. Refresh failures hide the old meter rather
+than displaying an assumed empty quota. Account changes invalidate pending reads.
+The same account-authenticated `/v1/storage` API already powers Meeting Notes.
+
+A read-only aggregate audit of the production database found zero plaintext rows
+in the retained meeting-content columns and zero plaintext job-checkpoint rows.
+The configured account quota remained 2,000,000,000 bytes. The live binary matched
+the security release documented in `deployment/security/VERIFICATION.md`.
+Regression tests verify all six retained content columns, authenticated read-back,
+legacy migration, encrypted job recovery, cross-field/job substitution rejection,
+and removal of completed checkpoints. No production migration or server deployment
+was needed for this UI update and verification.

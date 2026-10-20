@@ -1056,6 +1056,16 @@
             </div>
           </div>
 
+          <div class="settings-card account-card storage-allowance" id="account-cloud-storage">
+            <div class="account-card-header storage-card-heading"><span>Online Meeting Storage</span><button type="button" id="account-storage-refresh" class="storage-refresh-btn">Refresh</button></div>
+            <div class="storage-allowance-body">
+              <p id="account-storage-remaining" class="storage-remaining" role="status">Loading storage…</p>
+              <progress id="account-storage-meter" max="100" value="0" aria-label="Online meeting storage used" hidden></progress>
+              <p id="account-storage-detail" class="storage-note"></p>
+              <p id="account-storage-note" class="storage-note">Local recordings do not count toward your cloud quota.</p>
+            </div>
+          </div>
+
           <div class="settings-card account-card" id="transcription-usage">
             <div class="account-card-header">Transcription</div>
             <div class="account-table-body">
