@@ -394,7 +394,7 @@ func TestRunCommandTransformationStreamMidStreamReset(t *testing.T) {
 		flusher := w.(http.Flusher)
 		chunkJSON, _ := json.Marshal(map[string]interface{}{
 			"choices": []map[string]interface{}{
-				{"delta": map[string]string{"content": "Clean complete command output"}},
+				{"delta": map[string]string{"content": `{ "speektome_result": {"text":"Clean complete command output"}}`}},
 			},
 		})
 		w.Write([]byte("data: " + string(chunkJSON) + "\n\n"))
@@ -446,16 +446,8 @@ func TestRunCommandTransformationStreamMidStreamReset(t *testing.T) {
 		t.Errorf("Expected final result 'Clean complete command output', got %q", res)
 	}
 
-	// Verify that [RESET] was sent between srv1 partial failure and srv2 clean output
-	foundReset := false
-	for _, d := range deltas {
-		if d == "[RESET]" {
-			foundReset = true
-			break
-		}
-	}
-	if !foundReset {
-		t.Errorf("Expected [RESET] chunk to be emitted upon mid-stream fallback, but got deltas: %v", deltas)
+	if len(deltas) != 1 || deltas[0] != "Clean complete command output" {
+		t.Errorf("unvalidated provider output leaked: %v", deltas)
 	}
 }
 

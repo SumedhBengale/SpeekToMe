@@ -90,3 +90,55 @@ mod tests {
         assert!(!is_limit("Network connection interrupted"));
     }
 }
+
+// Defensive handling for old servers that accidentally return model control
+// output inside a successful text response. Never paste the reserved object.
+pub fn validate_command_result(text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("The AI returned an empty result. Your text was not replaced.".into());
+    }
+    let t = text
+        .trim()
+        .strip_prefix("```json")
+        .and_then(|s| s.strip_suffix("```"))
+        .unwrap_or(text)
+        .trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+        if v.get("speektome_error").is_some() {
+            return Err("The AI could not complete this request. Your text was not replaced. Try a clearer instruction.".into());
+        }
+    }
+    Ok(())
+}
+pub fn notify_warning(message: Option<&str>) {
+    if let Some(text) = message.filter(|s| !s.is_empty()) {
+        crate::win32::show_tray_notification(
+            "SpeekTo.Me — Enhancement Unavailable",
+            text,
+            crate::win32::NotificationLevel::Warning,
+        );
+    }
+}
+
+#[cfg(test)]
+mod model_error_tests {
+    use super::*;
+    #[test]
+    fn control_output_never_becomes_replacement_text() {
+        assert!(validate_command_result(r#"{"speektome_error":{"code":"refused"}}"#).is_err());
+        assert!(validate_command_result(
+            "```json\n{\"speektome_error\":{\"code\":\"missing_input\"}}\n```"
+        )
+        .is_err());
+        assert!(validate_command_result("").is_err());
+        assert!(validate_command_result("मुझे खेद है, मैं ऐसा नहीं कर सकता।").is_ok());
+        assert!(validate_command_result("I’m sorry, but I can’t comply with that.").is_ok());
+        assert_eq!(
+            message(
+                422,
+                r#"{"error":"More information needed","code":"missing_input","stage":"command"}"#
+            ),
+            "More information needed"
+        );
+    }
+}

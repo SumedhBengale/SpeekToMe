@@ -89,7 +89,7 @@ func TestTransformAccountConcurrencyAliasesAndUsage(t *testing.T) {
 		entered <- struct{}{}
 		<-release
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"Hello"}}],"usage":{"prompt_tokens":20,"completion_tokens":2}}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"speektome_result\":{\"text\":\"Hello\"}}"}}],"usage":{"prompt_tokens":20,"completion_tokens":2}}`)
 	})
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- transformRequest(a, "user1", "/transform", false) }()
@@ -225,7 +225,7 @@ func TestMeetingQueueAdmissionAndResumes(t *testing.T) {
 func TestTransformRateLimitAndProEntitlement(t *testing.T) {
 	a := limitApp(t)
 	mockCommand(t, func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":20,"completion_tokens":2}}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"speektome_result\":{\"text\":\"ok\"}}"}}],"usage":{"prompt_tokens":20,"completion_tokens":2}}`)
 	})
 	for i := 0; i < 10; i++ {
 		token := "user1"

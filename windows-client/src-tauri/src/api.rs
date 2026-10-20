@@ -42,6 +42,8 @@ pub struct TranscribeResult {
 
 #[derive(Deserialize)]
 struct TranscriptResponse {
+ #[serde(default)]
+ warning: Option<String>,
     text: String,
     #[serde(default)]
     log_id: Option<i64>,
@@ -464,6 +466,7 @@ pub async fn stream_transcribe_audio(
             Ok(Message::Text(text)) => {
                 if let Ok(event) = serde_json::from_str::<crate::stream::StreamEventResponse>(&text) {
                     if event.event_type == "final" {
+                        crate::account_errors::notify_warning(event.warning.as_deref());
                         crate::win32::set_preview_text(&event.text);
                         return Ok(TranscribeResult {
                             text: event.text,
@@ -725,6 +728,7 @@ pub async fn transcribe_audio(
     if status.is_success() {
         let resp: TranscriptResponse = serde_json::from_str(&body_text)
             .map_err(|e| format!("Failed to parse response: {}", e))?;
+        crate::account_errors::notify_warning(resp.warning.as_deref());
         Ok(TranscribeResult {
             text: resp.text,
             log_id: resp.log_id,
@@ -734,10 +738,8 @@ pub async fn transcribe_audio(
         let body_trimmed = body_text.trim().to_string();
         if status.as_u16() == 401 {
             Err("401 Unauthorized: Session token is invalid or expired.".to_string())
-        } else if status.as_u16() == 429 {
-            Err(crate::account_errors::message(status.as_u16(), &body_text))
         } else if !body_trimmed.is_empty() {
-            Err(body_trimmed)
+            Err(crate::account_errors::message(status.as_u16(), &body_text))
         } else {
             Err(format!("Server error with HTTP status {}", status))
         }
@@ -826,22 +828,23 @@ where
         let body_text = res.text().await.unwrap_or_default();
         let resp: TransformResponse = serde_json::from_str(&body_text)
             .map_err(|e| format!("Failed to parse response: {}", e))?;
+        crate::account_errors::validate_command_result(&resp.text)?;
         on_chunk(&resp.text, &resp.text);
         return Ok(resp.text);
     }
 
     let mut stream = res.bytes_stream();
-    let mut buffer = String::new();
+    let mut buffer: Vec<u8> = Vec::new();
     let mut accumulated = String::new();
+    let mut completed = false;
 
     while let Some(chunk_res) = stream.next().await {
         let bytes = chunk_res.map_err(|e| format!("Stream error: {}", e))?;
-        let text_chunk = String::from_utf8_lossy(&bytes);
-        buffer.push_str(&text_chunk);
+        buffer.extend_from_slice(&bytes);
 
-        while let Some(newline_pos) = buffer.find('\n') {
-            let line = buffer[..newline_pos].trim().to_string();
-            buffer = buffer[newline_pos + 1..].to_string();
+        while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
+            let frame: Vec<u8> = buffer.drain(..=newline_pos).collect();
+            let line = std::str::from_utf8(&frame).map_err(|_| "Invalid text encoding in Command Mode response".to_string())?.trim();
 
             if line.starts_with("data: ") {
                 let data = line.trim_start_matches("data: ").trim();
@@ -864,11 +867,12 @@ where
                     if let Some(ref delta) = parsed.delta {
                         if !delta.is_empty() {
                             accumulated.push_str(delta);
-                            on_chunk(delta, &accumulated);
+                            // Provider deltas remain buffered until done=true.
                         }
                     }
 
                     if parsed.done.unwrap_or(false) {
+                        completed = true;
                         if let Some(ref full) = parsed.text {
                             if !full.is_empty() {
                                 accumulated = full.clone();
@@ -877,7 +881,7 @@ where
                     } else if let Some(ref full) = parsed.text {
                         if !full.is_empty() && accumulated.is_empty() {
                             accumulated = full.clone();
-                            on_chunk(&accumulated, &accumulated);
+                            // Hold the completed text for validation.
                         }
                     }
                 }
@@ -885,15 +889,11 @@ where
         }
     }
 
-    if accumulated.is_empty() && !buffer.trim().is_empty() {
-        let data = buffer.trim().trim_start_matches("data: ").trim();
-        if let Ok(parsed) = serde_json::from_str::<StreamChunk>(data) {
-            if let Some(ref delta) = parsed.delta {
-                accumulated.push_str(delta);
-                on_chunk(delta, &accumulated);
-            }
-        }
+    if !completed {
+        return Err("Command Mode ended before the result was complete. Your text was not replaced.".into());
     }
+    crate::account_errors::validate_command_result(&accumulated)?;
+    on_chunk(&accumulated, &accumulated);
 
     Ok(accumulated)
 }
@@ -1049,4 +1049,41 @@ pub fn record_delivered_final(context: &crate::shortcuts::RecordingContext, text
         }
         crate::win32::show_tray_notification("SpeekTo.Me — History not saved", "Your text was delivered, but its encrypted history could not be saved. Check your connection.",crate::win32::NotificationLevel::Warning);
     });
+}
+
+#[cfg(test)]
+mod command_stream_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    fn response(body: String) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0u8; 8192];
+            let _ = socket.read(&mut request);
+            write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+            // Write bytewise to exercise multibyte characters across network reads.
+            for byte in body.as_bytes() { socket.write_all(&[*byte]).unwrap(); }
+        });
+        (url,worker)
+    }
+    #[tokio::test]
+    async fn only_validated_complete_output_reaches_typing_callback() {
+        for body in [
+            "data: {\"delta\":\"partial text\"}\n\ndata: {\"error\":\"missing information\",\"done\":true}\n\n".to_string(),
+            "data: {\"delta\":\"partial text\"}\n\n".to_string(),
+            format!("data: {}\n\n",serde_json::json!({"text":"{\"speektome_error\":{\"code\":\"refused\"}}","done":true})),
+        ] {
+            let (url,worker)=response(body); let mut delivered=Vec::new();
+            let result=transform_text_stream(&url,"test","original selection","translate",|delta,_|delivered.push(delta.to_owned())).await;
+            worker.join().unwrap();
+            assert!(result.is_err()); assert!(delivered.is_empty());
+        }
+        let expected="यह बिल्कुल सही था।";
+        let body=format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",serde_json::json!({"delta":expected}),serde_json::json!({"text":expected,"done":true}));
+        let (url,worker)=response(body);let mut delivered=Vec::new();
+        let result=transform_text_stream(&url,"test","selected text","translate",|delta,_|delivered.push(delta.to_owned())).await.unwrap();
+        worker.join().unwrap();assert_eq!(result,expected);assert_eq!(delivered,vec![expected]);
+    }
 }

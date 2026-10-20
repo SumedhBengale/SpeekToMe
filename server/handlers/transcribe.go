@@ -6,15 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	log "speektome-server/privacylog"
 	"net/http"
 	"os"
+	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"time"
 
 	"speektome-server/auth"
 	"speektome-server/config"
+	"speektome-server/modelresult"
 	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
@@ -158,6 +159,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	var whisperErr error
 	var groqLatency float64
 	var dsLatency float64
+	var enhancementWarning string
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
@@ -168,6 +170,8 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		groqLatency = time.Since(whisperStart).Seconds()
 	} else {
 		log.Printf("[TRANSCRIBE ERROR] Transcription failed: %v", whisperErr)
+		modelresult.Write(w, whisperErr, "asr")
+		return
 	}
 
 	pctx := pipeline.NewPipelineContext(user.ID)
@@ -182,6 +186,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
+			enhancementWarning = modelresult.New("enhancement_failed", "enhancement").Message
 			log.Printf("[GRAMMAR] Enhancement failed: %v", terr)
 		} else if enhancedText != "" {
 			currentText = restore(enhancedText)
@@ -237,6 +242,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"text":       finalOutput,
+		"warning":    enhancementWarning,
 		"vocabulary": audit,
 		"log_id":     logID,
 		"ack_token":  ackToken,

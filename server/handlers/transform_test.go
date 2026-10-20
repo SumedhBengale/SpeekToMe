@@ -3,9 +3,11 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"speektome-server/config"
 	"strings"
 	"testing"
 
@@ -98,5 +100,26 @@ func TestHandleTransformValidation(t *testing.T) {
 	app.HandleTransform(w, req)
 	if w.Code == http.StatusBadRequest {
 		t.Errorf("Expected empty selected_text to pass validation, but got 400 Bad Request: %s", w.Body.String())
+	}
+}
+
+func TestTransformNeverStreamsModelErrorsAsText(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			a := limitApp(t)
+			mockCommand(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				marker := `{"speektome_error":{"code":"missing_input","private":"PRIVATE SOURCE"}}`
+				chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": marker}}}})
+				fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+			})
+			cfg := config.ConfigManager.Get()
+			cfg.Models.CommandModels[0].Stream = true
+			config.ConfigManager.Set(cfg, config.ConfigManager.GetRawAll())
+			w := transformRequest(a, "user1", "/v1/transform", stream)
+			if w.Code != 422 || !strings.Contains(w.Body.String(), `"code":"missing_input"`) || strings.Contains(w.Body.String(), "PRIVATE SOURCE") || strings.Contains(w.Body.String(), "data:") || strings.Contains(w.Body.String(), "speektome_error") {
+				t.Fatalf("model output escaped: %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }

@@ -8,14 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	log "speektome-server/privacylog"
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	log "speektome-server/privacylog"
 	"strings"
 	"time"
 
 	"speektome-server/config"
+	"speektome-server/modelresult"
 )
 
 // PipelineContext tracks metadata and state through AI transformations
@@ -139,6 +140,7 @@ func callChatCompletionsAPIUnified(
 			FinishReason string `json:"finish_reason"`
 			Message      struct {
 				Content string `json:"content"`
+				Refusal string `json:"refusal"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -151,6 +153,9 @@ func callChatCompletionsAPIUnified(
 		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI returned empty choices")
 	}
 
+	if result.Choices[0].Message.Refusal != "" || result.Choices[0].FinishReason == "content_filter" {
+		return "", routingLoc, resp.StatusCode, respHeader, modelresult.New("refused", "llm")
+	}
 	if commandBudget(ctx) != nil && result.Choices[0].FinishReason == "length" {
 		return "", routingLoc, resp.StatusCode, respHeader, commandOutputLimit(ctx)
 	}
@@ -219,6 +224,7 @@ func callChatCompletionsAPIStreamUnified(
 	reader := bufio.NewReader(resp.Body)
 	var fullText strings.Builder
 	outputLimited := false
+	refused := false
 	var finalUsage *tokenUsage
 	complete, seenFinish, confirmedUsage := false, false, false
 	defer func() {
@@ -242,17 +248,22 @@ func callChatCompletionsAPIStreamUnified(
 			}
 
 			var chunk struct {
-				Usage   *tokenUsage `json:"usage"`
+				Error   json.RawMessage `json:"error"`
+				Usage   *tokenUsage     `json:"usage"`
 				Choices []struct {
 					FinishReason string `json:"finish_reason"`
 					Delta        struct {
 						Content          string `json:"content"`
 						ReasoningContent string `json:"reasoning_content,omitempty"`
+						Refusal          string `json:"refusal"`
 					} `json:"delta"`
 				} `json:"choices"`
 			}
 
 			if err := json.Unmarshal([]byte(data), &chunk); err == nil {
+				if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+					return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI stream reported a provider error")
+				}
 				if chunk.Usage != nil {
 					finalUsage = chunk.Usage
 					confirmedUsage = seenFinish
@@ -264,6 +275,9 @@ func callChatCompletionsAPIStreamUnified(
 						if chunk.Usage != nil {
 							confirmedUsage = true
 						}
+					}
+					if chunk.Choices[0].Delta.Refusal != "" || chunk.Choices[0].FinishReason == "content_filter" {
+						refused = true
 					}
 					if chunk.Choices[0].FinishReason == "length" {
 						outputLimited = true
@@ -286,6 +300,12 @@ func callChatCompletionsAPIStreamUnified(
 		}
 	}
 
+	if refused {
+		return "", routingLoc, resp.StatusCode, respHeader, modelresult.New("refused", "llm")
+	}
+	if !complete && !seenFinish {
+		return "", routingLoc, resp.StatusCode, respHeader, fmt.Errorf("AI stream ended before completion")
+	}
 	if commandBudget(ctx) != nil && outputLimited {
 		return fullText.String(), routingLoc, resp.StatusCode, respHeader, commandOutputLimit(ctx)
 	}
@@ -374,6 +394,7 @@ func getHTTPResponseRouting(resp *http.Response, remoteIP string) string {
 }
 
 type grammarPromptKey struct{}
+type commandResultKey struct{}
 
 // executeModelAttempt performs a single model execution attempt with circuit breaking,
 // provider resolution, and error/cooldown feedback.
@@ -422,6 +443,10 @@ func executeModelAttempt(
 		effectiveSystemPrompt = strings.TrimSpace(spec.SystemPrompt)
 	}
 
+	effectiveSystemPrompt += modelresult.Prompt
+	if ctx.Value(commandResultKey{}) == true {
+		effectiveSystemPrompt += modelresult.CommandPrompt
+	}
 	payload, err := provDef.FormatPayload(spec, effectiveSystemPrompt, userPrompt)
 	if err != nil {
 		if done != nil {
@@ -466,8 +491,14 @@ func executeModelAttempt(
 		)
 	}
 
+	if err == nil && ctx.Value(commandResultKey{}) == true {
+		res, err = modelresult.DecodeCommand(res)
+	} else if err == nil {
+		err = modelresult.Check(res, "llm")
+	}
 	if done != nil {
-		done(err == nil, statusCode, err, respHeader)
+		var resultErr *modelresult.Error
+		done(err == nil || errors.As(err, &resultErr), statusCode, err, respHeader)
 	}
 
 	return res, routing, err
@@ -503,6 +534,10 @@ func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, 
 			return res, nil
 		}
 
+		var terminal interface{ NoFallback() bool }
+		if errors.As(err, &terminal) && terminal.NoFallback() {
+			return "", err
+		}
 		log.Printf("[LLM ENHANCE FALLBACK] Candidate %s/%s failed: %v. Falling back to next candidate in order.",
 			spec.Provider, spec.Model, err)
 		lastErr = err
@@ -531,6 +566,7 @@ func RunCommandTransformationStream(
 	if client == nil {
 		client = http.DefaultClient
 	}
+	ctx = context.WithValue(ctx, commandResultKey{}, true)
 	cfg := config.ConfigManager.Get()
 	activeCandidates := cfg.GetActiveCommandModels()
 	if len(activeCandidates) == 0 {
@@ -549,7 +585,7 @@ func RunCommandTransformationStream(
 	if hasTarget {
 		userMessage = fmt.Sprintf("Target Text:\n\"\"\"\n%s\n\"\"\"\n\nInstruction:\n%s", selectedText, command)
 	} else {
-		userMessage = fmt.Sprintf("Instruction:\n%s", command)
+		userMessage = fmt.Sprintf("TARGET TEXT: not selected. Use source text explicitly supplied within the command, if any.\n\nUSER COMMAND (task instruction, not source text):\n%s", command)
 	}
 
 	var lastErr error
@@ -562,29 +598,15 @@ func RunCommandTransformationStream(
 		log.Printf("[COMMAND LLM] Attempting candidate provider=%s model=%s (stream=%v timeout=%dms)",
 			spec.Provider, spec.Model, spec.Stream, spec.TimeoutMs)
 
-		var providerEmittedChunks bool
-		provChunkHandler := func(delta, accumulated string) error {
-			providerEmittedChunks = true
-			if onChunk != nil {
-				return onChunk(delta, accumulated)
-			}
-			return nil
-		}
-
-		var res string
-		var routing string
-		var err error
-
-		if spec.Stream && onChunk != nil {
-			res, routing, err = executeModelAttempt(ctx, client, spec, systemPrompt, userMessage, provChunkHandler)
-		} else {
-			res, routing, err = executeModelAttempt(ctx, client, spec, systemPrompt, userMessage, nil)
-			if err == nil && onChunk != nil && res != "" {
-				_ = onChunk(res, res)
-			}
-		}
+		// Buffer the provider's JSON until the full result has been validated.
+		res, routing, err := executeModelAttempt(ctx, client, spec, systemPrompt, userMessage, nil)
 
 		if err == nil {
+			if onChunk != nil {
+				if err := onChunk(res, res); err != nil {
+					return "", err
+				}
+			}
 			if pctx != nil {
 				pctx.LLMProvider = spec.Provider
 				pctx.LLMModel = spec.Model
@@ -603,14 +625,6 @@ func RunCommandTransformationStream(
 
 		log.Printf("[COMMAND LLM FALLBACK] Candidate %s/%s failed: %v. Trying next candidate.",
 			spec.Provider, spec.Model, err)
-
-		// Mid-stream reset recovery: If this candidate already emitted partial chunks before failing,
-		// notify the client to clear accumulated output before falling back to the next candidate
-		if providerEmittedChunks && onChunk != nil {
-			log.Printf("[COMMAND LLM FALLBACK] Candidate %s/%s emitted partial chunks before failing. Signaling [RESET].",
-				spec.Provider, spec.Model)
-			_ = onChunk("[RESET]", "")
-		}
 
 		lastErr = err
 	}

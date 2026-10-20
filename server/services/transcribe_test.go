@@ -3,10 +3,15 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"github.com/coder/websocket"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"speektome-server/modelresult"
+	"strings"
 	"testing"
+	"time"
 
 	"speektome-server/config"
 	"speektome-server/pipeline"
@@ -265,5 +270,40 @@ func TestRunStreamingTranscribeWithPrompt_Fallback(t *testing.T) {
 
 	if text != "Streaming chunk transcribed cleanly." {
 		t.Errorf("Unexpected text: %q", text)
+	}
+}
+
+func TestASRProtocolErrorIsNotSuccessfulText(t *testing.T) {
+	original, raw := config.ConfigManager.Get(), config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(original, raw)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for i := 0; i < 2; i++ {
+			if _, _, err = conn.Read(r.Context()); err != nil {
+				return
+			}
+		}
+		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"error","error":{"message":"PRIVATE provider detail"}}`))
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	cfg := original
+	cfg.Models.StreamingProviders = map[string]config.StreamingProviderConfig{"test": {Enabled: true, BaseURL: strings.Replace(server.URL, "http://", "ws://", 1)}}
+	config.ConfigManager.Set(cfg, raw)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	session, err := CreateUpstreamStreamingSession(ctx, "test", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(websocket.StatusNormalClosure, "")
+	err = session.AwaitFinal(ctx)
+	var resultErr *modelresult.Error
+	if !errors.As(err, &resultErr) || resultErr.Code != "asr_failed" || strings.Contains(err.Error(), "PRIVATE") {
+		t.Fatal("ASR error lost", err)
 	}
 }

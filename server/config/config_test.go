@@ -195,3 +195,38 @@ func TestSyncConfigsFromDBWithNewDecoupledSchema(t *testing.T) {
 		t.Errorf("Expected active command models [bedrock], got %v", cmd)
 	}
 }
+
+func TestLegacyLLMConfigurationControlsRuntime(t *testing.T) {
+	raw := `{"command_llm_providers":{"deepinfra_later":{"enabled":true,"model":"second","priority":5,"stream":true},"bedrock_first":{"enabled":true,"model":"first","priority":1,"timeout_ms":4321,"base_url":"https://custom.example","system_prompt":"custom instruction"},"deepseek_disabled":{"enabled":false,"model":"disabled","priority":2}},"llm_providers":{"groq_custom":{"enabled":true,"model":"custom-enhancer","priority":1}}}`
+	cfg, _ := ParseRawConfigs(map[string]string{"models_config_json": raw})
+	models := cfg.GetActiveCommandModels()
+	if len(models) != 2 || models[0].Provider != "bedrock" || models[0].Model != "first" || models[0].TimeoutMs != 4321 || models[0].EndpointOverride != "https://custom.example" || models[0].SystemPrompt != "custom instruction" || models[1].Model != "second" {
+		t.Fatalf("legacy runtime ignored: %+v", models)
+	}
+	if got := cfg.GetActiveEnhancementModels(); len(got) != 1 || got[0].Model != "custom-enhancer" {
+		t.Fatalf("legacy enhancement ignored: %+v", got)
+	}
+}
+func TestExplicitDisabledOrEmptyModelsNeverReenableDefaults(t *testing.T) {
+	for _, raw := range []string{
+		`{"command_models":[],"enhancement_models":[]}`,
+		`{"command_models":[{"provider":"deepinfra","model":"x","enabled":false}],"enhancement_models":[]}`,
+		`{"command_llm_providers":{},"llm_providers":{}}`,
+		`{"command_llm_providers":{"deepinfra":{"enabled":false,"model":"x"}},"llm_providers":{"cerebras":{"enabled":false,"model":"x"}}}`,
+	} {
+		cfg, _ := ParseRawConfigs(map[string]string{"models_config_json": raw})
+		if len(cfg.GetActiveCommandModels()) != 0 || len(cfg.GetActiveEnhancementModels()) != 0 {
+			t.Fatal("disabled models silently reenabled", raw)
+		}
+	}
+	cfg, _ := ParseRawConfigs(map[string]string{"models_config_json": `{"command_models":[{"provider":"groq","model":"modern","enabled":true}],"command_llm_providers":{"deepinfra":{"model":"legacy","enabled":true}}}`})
+	if got := cfg.GetActiveCommandModels(); len(got) != 1 || got[0].Model != "modern" {
+		t.Fatalf("modern precedence broken %+v", got)
+	}
+}
+func TestLegacyDefaultCommandPromptKeepsGenerationMode(t *testing.T) {
+	specs := legacyLLMModels(map[string]LLMProviderConfig{"deepinfra": {Model: "x", Enabled: true, SystemPrompt: DefaultCommandLLMSystemPrompt}}, true)
+	if len(specs) != 1 || specs[0].SystemPrompt != "" {
+		t.Fatal("transformation prompt overrides generation")
+	}
+}

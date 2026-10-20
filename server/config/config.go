@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
@@ -738,13 +739,6 @@ func (p *ProviderConfig) GetActiveEnhancementModels() []ModelSpec {
 			active = append(active, spec)
 		}
 	}
-	if len(active) == 0 {
-		for _, spec := range DefaultModelsConfig().EnhancementModels {
-			if spec.Enabled {
-				active = append(active, spec)
-			}
-		}
-	}
 	return active
 }
 
@@ -753,13 +747,6 @@ func (p *ProviderConfig) GetActiveCommandModels() []ModelSpec {
 	for _, spec := range p.Models.CommandModels {
 		if spec.Enabled && strings.TrimSpace(spec.Model) != "" {
 			active = append(active, spec)
-		}
-	}
-	if len(active) == 0 {
-		for _, spec := range DefaultModelsConfig().CommandModels {
-			if spec.Enabled {
-				active = append(active, spec)
-			}
 		}
 	}
 	return active
@@ -966,11 +953,15 @@ func ParseRawConfigs(dbConfigs map[string]string) (ProviderConfig, map[string]st
 	if jsonStr, ok := dbConfigs["models_config_json"]; ok && strings.TrimSpace(jsonStr) != "" {
 		var parsed ModelsConfig
 		if err := json.Unmarshal([]byte(jsonStr), &parsed); err == nil {
-			if len(parsed.EnhancementModels) > 0 {
+			if parsed.EnhancementModels != nil {
 				models.EnhancementModels = parsed.EnhancementModels
+			} else if parsed.LLMProviders != nil {
+				models.EnhancementModels = legacyLLMModels(parsed.LLMProviders, false)
 			}
-			if len(parsed.CommandModels) > 0 {
+			if parsed.CommandModels != nil {
 				models.CommandModels = parsed.CommandModels
+			} else if parsed.CommandLLMProviders != nil {
+				models.CommandModels = legacyLLMModels(parsed.CommandLLMProviders, true)
 			}
 			if parsed.BatchSTTModels != nil {
 				models.BatchSTTModels = parsed.BatchSTTModels
@@ -1186,4 +1177,45 @@ func normalizeProviderName(name string) string {
 	default:
 		return lower
 	}
+}
+
+// Convert legacy database entries rather than silently using compiled defaults.
+// Credentials stay in the environment, never in ModelSpec.
+func legacyLLMModels(providers map[string]LLMProviderConfig, command bool) []ModelSpec {
+	names := make([]string, 0, len(providers))
+	for name := range providers {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		a, b := providers[names[i]].Priority, providers[names[j]].Priority
+		if a <= 0 {
+			a = 100
+		}
+		if b <= 0 {
+			b = 100
+		}
+		if a == b {
+			return names[i] < names[j]
+		}
+		return a < b
+	})
+	specs := make([]ModelSpec, 0, len(names))
+	for _, name := range names {
+		p := providers[name]
+		provider := NormalizeLLMProvider(name)
+		spec := ModelSpec{Provider: provider, Model: p.Model, Enabled: p.Enabled, TimeoutMs: p.TimeoutMs, Stream: p.Stream, FailFast: p.FailFast, EndpointOverride: p.BaseURL, SystemPrompt: p.SystemPrompt}
+		if p.PriorityFlag {
+			spec.ServiceTier = "priority"
+		}
+		if provider == ProviderDeepInfra || provider == ProviderDeepSeek {
+			spec.Reasoning = "disabled"
+		}
+		// This legacy default is transformation-only; let the request choose the
+		// generation prompt when no text was selected. Preserve custom prompts.
+		if command && strings.TrimSpace(spec.SystemPrompt) == DefaultCommandLLMSystemPrompt {
+			spec.SystemPrompt = ""
+		}
+		specs = append(specs, spec)
+	}
+	return specs
 }

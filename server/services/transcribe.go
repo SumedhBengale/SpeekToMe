@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	log "speektome-server/privacylog"
 	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptrace"
 	"os"
+	log "speektome-server/privacylog"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +23,7 @@ import (
 
 	"speektome-server/config"
 	"speektome-server/db"
+	"speektome-server/modelresult"
 	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/utils"
@@ -696,8 +697,10 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 
 	var result struct {
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Content string `json:"content"`
+				Refusal string `json:"refusal"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -705,6 +708,9 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 		return "", nil, "", err
 	}
 
+	if len(result.Choices) > 0 && (result.Choices[0].Message.Refusal != "" || result.Choices[0].FinishReason == "content_filter") {
+		return "", nil, routingLoc, modelresult.New("refused", "asr")
+	}
 	if len(result.Choices) == 0 {
 		return "", make([]WhisperSegment, 0), routingLoc, nil
 	}
@@ -1186,6 +1192,7 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 
 	go func() {
 		defer close(sess.DoneChan)
+		defer close(sess.TextChan)
 		var committedHistory string
 		var currentDelta strings.Builder
 		for {
@@ -1198,6 +1205,10 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 				var eventMap map[string]interface{}
 				if err := json.Unmarshal(data, &eventMap); err == nil {
 					eventType, _ := eventMap["type"].(string)
+					if eventType == "error" || eventMap["error"] != nil {
+						sess.ErrChan <- modelresult.New("asr_failed", "asr")
+						return
+					}
 
 					// Case A: Realtime streaming delta token (e.g. "conversation.item.input_audio_transcription.delta")
 					if deltaVal, ok := eventMap["delta"].(string); ok && deltaVal != "" {
@@ -1270,6 +1281,8 @@ func CreateUpstreamStreamingSession(ctx context.Context, providerName string, us
 func (s *UpstreamStreamingSession) AwaitFinal(ctx context.Context) error {
 	if s.replay == nil {
 		select {
+		case e := <-s.ErrChan:
+			return e
 		case <-time.After(350 * time.Millisecond):
 			return nil
 		case <-ctx.Done():

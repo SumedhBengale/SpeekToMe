@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	log "speektome-server/privacylog"
 	"net/http"
+	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +17,7 @@ import (
 	"speektome-server/auth"
 	"speektome-server/config"
 	"speektome-server/db"
+	"speektome-server/modelresult"
 	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
@@ -36,6 +37,9 @@ type StreamStartPayload struct {
 }
 
 type StreamEventMessage struct {
+	Code       string                    `json:"code,omitempty"`
+	Stage      string                    `json:"stage,omitempty"`
+	Warning    string                    `json:"warning,omitempty"`
 	Type       string                    `json:"type"`           // "session_ready" | "interim" | "final" | "error"
 	Mode       string                    `json:"mode,omitempty"` // "continuous_stream" | "chunked_vad"
 	Text       string                    `json:"text,omitempty"`
@@ -286,7 +290,7 @@ func (a *App) handleRealStreamingSession(
 
 			if err := upstream.SendAudio(ctx, data); err != nil {
 				log.Printf("[STREAM REAL ERROR] Failed to forward audio to upstream: %v", err)
-				_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription recovery failed; please retry."})
+				_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription recovery failed; please retry.", Code: "asr_failed", Stage: "asr"})
 				return
 			}
 		}
@@ -302,12 +306,12 @@ func (a *App) handleRealStreamingSession(
 		case <-ctx.Done():
 			return
 		case <-time.After(2 * time.Second):
-			_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription output could not be saved; please retry."})
+			_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription output could not be saved; please retry.", Code: "asr_failed", Stage: "asr"})
 			return
 		}
 	}
 	if flushError != nil {
-		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription could not be finalized; please retry."})
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: "Transcription could not be finalized; please retry.", Code: "asr_failed", Stage: "asr"})
 		return
 	}
 
@@ -327,6 +331,7 @@ func (a *App) handleRealStreamingSession(
 
 	currentText := audit.Resolved
 	var dsLatency float64
+	var enhancementWarning string
 	pctx := pipeline.NewPipelineContext(user.ID)
 
 	if finalRawTranscript != "" {
@@ -335,6 +340,7 @@ func (a *App) handleRealStreamingSession(
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
+			enhancementWarning = modelresult.New("enhancement_failed", "enhancement").Message
 			log.Printf("[STREAM REAL ENHANCE ERROR] %v", terr)
 		} else if enhancedText != "" {
 			currentText = restoreGrammar(enhancedText)
@@ -379,6 +385,7 @@ func (a *App) handleRealStreamingSession(
 
 	_ = writeStreamJSON(ctx, conn, StreamEventMessage{
 		Type:       "final",
+		Warning:    enhancementWarning,
 		Text:       finalOutput,
 		LogID:      logID,
 		AckToken:   ackToken,
@@ -527,7 +534,7 @@ func (a *App) handlePseudoStreamingSession(
 		finalRawTranscript, _, asrProvider, asrRouting, asrErr = services.RunStreamingTranscribe(ctx, toTranscribe, user.Languages)
 		if asrErr != nil {
 			log.Printf("[STREAM TRANSCRIBE ERROR] %v (routing: %s)", asrErr, asrRouting)
-			_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: fmt.Sprintf("Transcription error: %v", asrErr)})
+			_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: modelresult.New("asr_failed", "asr").Message, Code: "asr_failed", Stage: "asr"})
 			conn.Close(websocket.StatusInternalError, "ASR Failed")
 			return
 		}
@@ -540,6 +547,7 @@ func (a *App) handlePseudoStreamingSession(
 
 	currentText := audit.Resolved
 	var dsLatency float64
+	var enhancementWarning string
 	pctx := pipeline.NewPipelineContext(user.ID)
 
 	if enhance && finalRawTranscript != "" {
@@ -549,6 +557,7 @@ func (a *App) handlePseudoStreamingSession(
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
+			enhancementWarning = modelresult.New("enhancement_failed", "enhancement").Message
 			log.Printf("[STREAM AI ENHANCE ERROR] User ID: %d | Error: %v | Latency: %.2fs", user.ID, terr, dsLatency)
 		} else if enhancedText != "" {
 			log.Printf("[STREAM AI ENHANCE SUCCESS] User ID: %d | Latency: %.2fs (model: %s, provider: %s)", user.ID, dsLatency, pctx.LLMModel, pctx.LLMProvider)
@@ -595,6 +604,7 @@ func (a *App) handlePseudoStreamingSession(
 
 	_ = writeStreamJSON(ctx, conn, StreamEventMessage{
 		Type:       "final",
+		Warning:    enhancementWarning,
 		Text:       finalOutput,
 		LogID:      logID,
 		AckToken:   ackToken,

@@ -43,7 +43,7 @@ func TestCommandBudgetAccountsForFallbackAndFinalStreamingUsage(t *testing.T) {
 			t.Error("stream usage not requested")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"speektome_result\\\":{\\\"text\\\":\\\"hello\\\"}}\"}}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n")
 	}))
 	defer streamed.Close()

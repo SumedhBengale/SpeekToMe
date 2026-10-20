@@ -5,14 +5,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	log "speektome-server/privacylog"
 	"net/http"
 	"speektome-server/accountlimits"
+	log "speektome-server/privacylog"
 	"strings"
 	"time"
 
 	"speektome-server/auth"
 	"speektome-server/config"
+	"speektome-server/modelresult"
 	"speektome-server/pipeline"
 )
 
@@ -129,52 +130,17 @@ func (a *App) HandleTransform(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		transformed, err := pipeline.RunCommandTransformationStream(ctx, http.DefaultClient, selectedText, command, pctx, func(delta, accumulated string) error {
-			startStream()
-			if delta == "[RESET]" {
-				chunkBytes, _ := json.Marshal(map[string]interface{}{
-					"reset": true,
-					"delta": "",
-					"text":  "",
-					"done":  false,
-				})
-				_, writeErr := fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
-				if writeErr != nil {
-					return writeErr
-				}
-				flusher.Flush()
-				return nil
-			}
-
-			chunkBytes, _ := json.Marshal(map[string]interface{}{
-				"delta": delta,
-				"text":  accumulated,
-				"done":  false,
-			})
-			_, writeErr := fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
-			if writeErr != nil {
-				return writeErr
-			}
-			flusher.Flush()
-			return nil
-		})
+		// Hold provider deltas until the complete result has passed the error
+		// contract. No partial refusal, error JSON or failed attempt may reach
+		// the desktop's typing/clipboard path.
+		transformed, err := pipeline.RunCommandTransformationStream(ctx, http.DefaultClient, selectedText, command, pctx, func(string, string) error { return nil })
 
 		if err != nil {
-			if !started {
-				if limitStatus(err) != http.StatusBadGateway {
-					accountlimits.Write(w, err)
-				} else {
-					http.Error(w, "Transformation failed: "+err.Error(), http.StatusBadGateway)
-				}
-				return
+			if limitStatus(err) != http.StatusBadGateway {
+				accountlimits.Write(w, err)
+			} else {
+				modelresult.Write(w, err, "command")
 			}
-			log.Printf("[TRANSFORM ERROR] User %d failed transformation: %v", user.ID, err)
-			errBytes, _ := json.Marshal(map[string]interface{}{
-				"error": err.Error(),
-				"done":  true,
-			})
-			fmt.Fprintf(w, "data: %s\n\n", string(errBytes))
-			flusher.Flush()
 			return
 		}
 
@@ -182,6 +148,8 @@ func (a *App) HandleTransform(w http.ResponseWriter, r *http.Request) {
 			user.ID, len(selectedText), len(transformed), pctx.LLMModel, pctx.LLMProvider)
 
 		startStream()
+		chunkBytes, _ := json.Marshal(map[string]interface{}{"delta": transformed, "text": transformed, "done": false})
+		fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
 		finalBytes, _ := json.Marshal(map[string]interface{}{
 			"delta":    "",
 			"text":     transformed,
@@ -201,7 +169,7 @@ func (a *App) HandleTransform(w http.ResponseWriter, r *http.Request) {
 		if limitStatus(err) != http.StatusBadGateway {
 			accountlimits.Write(w, err)
 		} else {
-			http.Error(w, fmt.Sprintf("Transformation failed: %v", err), http.StatusBadGateway)
+			modelresult.Write(w, err, "command")
 		}
 		return
 	}

@@ -16,6 +16,8 @@ pub struct StreamEventResponse {
     #[serde(rename = "type")]
     pub event_type: String, // "session_ready" | "interim" | "final" | "error"
     #[serde(default)]
+    pub warning: Option<String>,
+    #[serde(default)]
     pub mode: Option<String>, // "continuous_stream" | "chunked_vad"
     #[serde(default)]
     pub text: String,
@@ -253,6 +255,7 @@ pub fn start_streaming_session(
                                     *interim_reader.lock().unwrap_or_else(|e| e.into_inner()) = event.text;
                                 }
                             } else if event.event_type == "final" {
+                                crate::account_errors::notify_warning(event.warning.as_deref());
                                 println!("[STREAM FINAL RECEIVED] Final result received");
                                 crate::win32::set_preview_text(&event.text);
 
