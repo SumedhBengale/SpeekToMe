@@ -1,5 +1,16 @@
 # Main-server security deployment
 
+The main instance is Linux **ARM64** (`uname -m`: `aarch64`). Build with:
+
+```sh
+cd server
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/speektome-server-arm64 .
+```
+
+Before stopping the running service, verify the uploaded artifact SHA-256 and
+check that `file` identifies it as static ARM aarch64. An x86 local test build
+cannot run on this server.
+
 The server migrates existing session tokens to SHA-256 digests without logging
 out installed clients. Existing raw Redis session keys must be removed **after
 stopping the previous server**, so it cannot recreate them. Clear the SaaS config
