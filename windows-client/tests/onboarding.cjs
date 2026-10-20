@@ -21,6 +21,8 @@ async function run(platform){
  w.document.getElementById('onboard-streaming-mode-check').checked=false;await t.goToStep(3);assert.equal(cfg.transcription_mode,'batch','later choices override the Pro default');
  await t.goToStep(4);assert.equal(t.step(),3,'missing permissions block progression');
  caps={...caps,shortcut:true,insertion:true};await t.refreshWizardAccess();w.document.getElementById('onboard-mic-test').click();await new Promise(r=>setTimeout(r,0));await t.goToStep(4);assert.equal(t.step(),4);
+ const toggleCard=w.document.querySelector('input[name="onboard-gesture"][value="toggle"]');toggleCard.click();await new Promise(r=>setTimeout(r,0));assert.equal(cfg.hotkey_mode,'toggle','gesture card saves through the shared config');assert.equal(toggleCard.closest('.setup-gesture-card').classList.contains('is-selected'),true);assert.match(w.document.getElementById('onboard-shortcut-keys').textContent,/Ctrl/);
+ w.document.getElementById('onboard-back-btn').click();await new Promise(r=>setTimeout(r,0));assert.equal(t.step(),3,'footer Back navigates without skipping access gates');await t.goToStep(4);
  w.document.getElementById('onboard-hotkey-mode-select').value='toggle';w.document.getElementById('onboard-hotkey-mode-select').dispatchEvent(new w.Event('change'));assert.match(w.document.getElementById('onboard-gesture-help').textContent,/Tap your shortcut/);
  assert.equal(cfg.theme,'classic_dark');assert.equal(cfg.sound_feedback,false);assert.equal(cfg.pill_bg_color,123,'setup must not recolour the native overlay');
  for(let step=5;step<=10;step++)await t.goToStep(step);

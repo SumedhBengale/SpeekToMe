@@ -1551,7 +1551,7 @@ function setupHotkeyRecorder(prefix) {
       document.removeEventListener('keyup', keyup, true);
       window.removeEventListener('blur', blur);
       document.removeEventListener('visibilitychange', visibility);
-      button.textContent = 'Record shortcut';
+      button.textContent = prefix === 'onboard-' ? 'Change shortcut' : 'Record shortcut';
       button.classList.remove('is-recording');
       select.disabled = false;
       const trigger = select.parentElement.querySelector('.custom-select-trigger');
@@ -1844,7 +1844,7 @@ const WIZARD_STEPS = 11;
 function wizardStatus(message) {
   const el = document.getElementById('onboard-save-status');
   el.textContent = message;
-  el.closest('.setup-footer').hidden = !message && document.getElementById('onboard-continue-btn').hidden;
+  el.closest('.setup-footer').hidden = currentStep <= 2 && !message;
 }
 function wizardIsSignedIn() { return Boolean(currentUserInfo && currentConfig?.session_token); }
 function wizardAccessReady() { return Boolean(wizardCapabilities?.shortcut && wizardCapabilities?.insertion && wizardCapabilities?.microphone !== false && wizardMicrophoneReady); }
@@ -1868,25 +1868,59 @@ function wizardCanAdvance() {
   return true;
 }
 function updateWizardNavigation() {
-  const next=document.getElementById('onboard-continue-btn');
+  const next = document.getElementById('onboard-continue-btn');
   next.hidden = currentStep <= 2 || currentStep === 11;
-  next.closest('.setup-footer').hidden=next.hidden&&!document.getElementById('onboard-save-status').textContent;
+  next.closest('.setup-footer').hidden = currentStep <= 2 && !document.getElementById('onboard-save-status').textContent;
   next.disabled = !wizardCanAdvance();
-  if(onboardNextStepBtn) { onboardNextStepBtn.hidden=currentStep<=2||currentStep===11; onboardNextStepBtn.disabled=!wizardCanAdvance(); }
-  if(onboardPrevStepBtn) onboardPrevStepBtn.disabled=currentStep<=1;
-  document.getElementById('onboard-step-label').textContent=`Step ${currentStep} of ${WIZARD_STEPS}`;
-  document.getElementById('onboard-progress').value=currentStep;
+  document.getElementById('onboard-back-btn').hidden = currentStep <= 2;
+  document.getElementById('onboard-finish-btn').hidden = currentStep !== 11;
+  if (onboardNextStepBtn) onboardNextStepBtn.hidden = true;
+  if (onboardPrevStepBtn) {
+    onboardPrevStepBtn.hidden = currentStep >= 3;
+    onboardPrevStepBtn.disabled = currentStep <= 1;
+  }
+  document.getElementById('onboard-step-label').textContent = `Step ${currentStep} of ${WIZARD_STEPS}`;
+  document.getElementById('onboard-progress').value = currentStep;
+}
+function wizardPermissionIcon(kind) {
+  const paths = {
+    shortcut: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 9h.01M11 9h.01M15 9h.01M7 12h.01M11 12h.01M15 12h.01M7 15h10"/>',
+    insertion: '<path d="M5 5h14M12 5v14M8 19h8"/>',
+    microphone: '<rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M9 22h6"/>'
+  };
+  const icon = document.createElement('span');
+  icon.className = 'setup-icon-badge';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = `<svg class="setup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${paths[kind]}</svg>`;
+  return icon;
 }
 async function refreshWizardAccess() {
   try {
     wizardCapabilities=await invoke('get_setup_capabilities');
     const list=document.getElementById('onboard-access-status'); list.replaceChildren();
-    const items=[['shortcut','Global shortcut'],['insertion','Text insertion']];
-    if(IS_MAC_CLIENT) items.push(['microphone','Microphone permission']);
-    for(const [key,label] of items) {
-      const row=document.createElement('div');row.className='setup-check'+(wizardCapabilities?.[key]?' is-ready':'');
-      const name=document.createElement('span');name.textContent=label;
-      const value=document.createElement('strong');value.textContent=wizardCapabilities?.[key]?'Ready':'Needs attention';row.append(name,value);list.append(row);
+    const items = [
+      ['shortcut', 'Global shortcut', 'Start dictation from any app.'],
+      ['insertion', 'Text insertion', 'Put your words into the active text field.'],
+      ['microphone', 'Microphone', 'Capture your voice for transcription.']
+    ];
+    for (const [key, label, description] of items) {
+      const ready = key === 'microphone'
+        ? wizardMicrophoneReady && wizardCapabilities?.microphone !== false
+        : Boolean(wizardCapabilities?.[key]);
+      const row = document.createElement('div');
+      row.className = 'setup-check' + (ready ? ' is-ready' : '');
+      const copy = document.createElement('div');
+      copy.className = 'setup-check-copy';
+      const name = document.createElement('strong');
+      name.textContent = label;
+      const detail = document.createElement('small');
+      detail.textContent = description;
+      copy.append(name, detail);
+      const value = document.createElement('span');
+      value.className = 'setup-check-status';
+      value.textContent = ready ? '✓ Ready' : key === 'microphone' && wizardCapabilities?.microphone_device && wizardCapabilities?.microphone !== false ? 'Test needed' : 'Needs access';
+      row.append(wizardPermissionIcon(key), copy, value);
+      list.append(row);
     }
     const request=document.getElementById('onboard-access-request'); request.hidden=!IS_MAC_CLIENT&&!IS_LINUX_CLIENT;
     document.getElementById('onboard-access-repair').hidden=!IS_MAC_CLIENT;
@@ -1912,12 +1946,44 @@ function renderWizardEntitlements() {
     : 'Your Free account receives the completed transcription after you stop. This still uses the transcription service and an internet connection.';
 }
 function updateWizardGesture() {
-  const gesture = document.getElementById('onboard-hotkey-mode-select').value === 'hold'
+  const hold = document.getElementById('onboard-hotkey-mode-select').value === 'hold';
+  const gesture = hold
     ? 'Hold your shortcut while speaking. Release it to submit.' : 'Tap your shortcut to start. Tap again to submit.';
+  const shortcut = displayHotkey(document.getElementById('onboard-hotkey-select').value);
   document.getElementById('onboard-gesture-help').textContent = gesture;
-  document.getElementById('onboard-practice-gesture').textContent = `${displayHotkey(document.getElementById('onboard-hotkey-select').value)} — ${gesture}`;
+  document.getElementById('onboard-practice-gesture').textContent = gesture;
+  document.getElementById('onboard-ready-shortcut').textContent = `Use ${shortcut} in a text field. ${hold ? 'Hold to talk.' : 'Tap to start and stop.'}`;
+  for (const radio of document.querySelectorAll('input[name="onboard-gesture"]')) {
+    radio.checked = radio.value === (hold ? 'hold' : 'toggle');
+    radio.closest('.setup-gesture-card').classList.toggle('is-selected', radio.checked);
+  }
+  for (const id of ['onboard-shortcut-keys', 'onboard-practice-keys']) {
+    const keys = document.getElementById(id);
+    keys.replaceChildren();
+    for (const [index, key] of shortcut.split(' + ').entries()) {
+      if (index) {
+        const separator = document.createElement('span');
+        separator.textContent = '+';
+        separator.setAttribute('aria-hidden', 'true');
+        keys.append(separator);
+      }
+      const cap = document.createElement('kbd');
+      cap.textContent = key;
+      keys.append(cap);
+    }
+  }
 }
 async function initializeWizard() {
+  document.getElementById('onboard-back-btn').addEventListener('click', () => goToStep(currentStep - 1));
+  for (const radio of document.querySelectorAll('input[name="onboard-gesture"]')) {
+    radio.addEventListener('change', () => {
+      if (!radio.checked) return;
+      const select = document.getElementById('onboard-hotkey-mode-select');
+      select.value = radio.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      saveWizardConfig().catch(() => wizardStatus('Could not save this choice. Please retry.'));
+    });
+  }
   document.getElementById('onboard-hotkey-mode-select').addEventListener('change', updateWizardGesture);
   document.getElementById('onboard-hotkey-select').addEventListener('change', updateWizardGesture);
   document.getElementById('onboard-continue-btn').addEventListener('click',()=>goToStep(currentStep+1));
@@ -1943,7 +2009,7 @@ async function initializeWizard() {
   });
   document.getElementById('onboard-practice-text').addEventListener('input',()=>{
     const hasText=Boolean(document.getElementById('onboard-practice-text').value.trim());
-    document.getElementById('onboard-practice-status').textContent=hasText?'Text is in the practice box. If you dictated it, your first transcription is ready. You can also try dictation in another app.':'Click here and use your shortcut. If insertion fails, check Settings; your text may be on the clipboard.';
+    document.getElementById('onboard-practice-status').textContent=hasText?'Text received. You can keep practicing or continue.':'Click in the box and use your shortcut to dictate.';
     updateWizardNavigation();
   });
   document.getElementById('onboard-practice-skip').addEventListener('click',()=>{wizardPracticeSkipped=true;goToStep(11);});
@@ -1977,8 +2043,8 @@ async function goToStep(step, restoring=false) {
   if(step===2) await renderOnboardingPromoUI();
   if(step===3) {await refreshWizardAccess();wizardCapabilityTimer=setInterval(refreshWizardAccess,3000);}
   updateWizardGesture();
-  document.getElementById('onboard-tray-help').textContent=IS_MAC_CLIENT?'Look for SpeekTo.Me in the menu bar at the top of your screen.':'Look for SpeekTo.Me in the system tray. It may be inside the hidden-icons menu.';
-  document.getElementById('onboard-ready-summary').textContent=wizardPracticeSkipped?'Your preferences are saved. Try your first dictation whenever you’re ready.':'Use your shortcut in a text field to dictate. Your microphone and desktop access have been checked.';
+  document.getElementById('onboard-tray-help').textContent=IS_MAC_CLIENT?'Open SpeekTo.Me in the menu bar at the top of your screen.':'Open SpeekTo.Me in the system tray, including the hidden-icons menu.';
+  document.getElementById('onboard-ready-summary').textContent=wizardPracticeSkipped?'Your preferences are saved. Try dictation when you’re ready.':'Your preferences are saved. Dictate wherever you type.';
   updateWizardNavigation();
   const heading=document.querySelector(`#onboard-step-${step} h2`);heading?.setAttribute('tabindex','-1');heading?.focus({preventScroll:true});
   document.querySelector('#onboarding .onboarding-content').scrollTop=0;

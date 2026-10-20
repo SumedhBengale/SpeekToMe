@@ -65,3 +65,15 @@ Rust tests cover legacy config migration, incomplete-account resume, and browser
 login attempt cancellation. Browser screenshots use synthetic data and mocked
 native commands. These checks do not replace live microphone, OS permission,
 shortcut, browser callback, or purchase testing on each platform.
+
+## Setup visual design
+
+The permissions, shortcut, practice, and completion pages follow a common
+four-screen reference generated from the existing screenshots. Permission rows
+use compact icons and text states; the microphone only becomes ready after its
+check. Shortcut gestures use keyboard-accessible radio cards backed by the
+existing native config. Keycaps use the compiled platform's labels. Completion
+separates shortcut, Settings location, and background behavior into short rows.
+The shared Back/Continue/Finish footer stays outside the scrolling body, including
+in smaller windows. Appearance changes do not add another webview or change
+recording, authentication, permissions, or saved setup progress.

@@ -5209,23 +5209,107 @@ html[data-platform="macos"] .window-titlebar { display: none; }
   #tab-history .history-result { padding:16px; }
 }
 
-/* Focused first-run setup: one decision per page, with persistent progress. */
+/* Shared setup components, based on the four-screen design reference. */
+#onboarding { --setup-primary: #dc2451; --setup-success: #248454; }
 #onboarding [hidden] { display: none !important; }
-#onboarding .onboarding-card { max-width: min(720px, 100%); max-height: 100%; }
-#onboarding .onboarding-header { flex-shrink: 0; }
-#onboarding .onboarding-content { min-height: 0; overflow-y: auto; padding-bottom: 20px; }
-.setup-progress { display: flex; flex-direction: column; gap: 7px; min-width: 110px; font-size: 12px; }
-.setup-progress progress { width: 100%; height: 5px; accent-color: var(--accent-color); }
-.setup-footer { margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 12px; }
-.setup-footer p { min-height: 18px; font-size: 12px; }
-.setup-choice, .setup-microphone, .setup-ready { padding: 22px; border: 1px solid var(--border-color); border-radius: 14px; margin: 20px 0; background: var(--bg-content); }
-.setup-choice .fluent-checkbox-container { margin: 0; }
-.setup-tip { margin: 18px 0; line-height: 1.6; color: var(--text-secondary); }
-.setup-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-.setup-checks { display: grid; gap: 10px; margin: 20px 0; }
-.setup-check { padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 10px; display: flex; justify-content: space-between; gap: 16px; }
-.setup-check.is-ready { border-color: var(--validation-success-text, #28835c); }
-.setup-practice { width: 100%; resize: vertical; min-height: 130px; margin-top: 10px; line-height: 1.6; }
-#onboarding button:disabled { opacity: .55; cursor: not-allowed; }
+#onboarding .onboarding-card { width: 660px; max-width: 100%; max-height: 100%; padding: 26px 30px 22px; gap: 0; border-radius: 22px; box-shadow: 0 12px 48px rgba(36,10,18,.08); font-size: 14px; line-height: 1.5; }
+#onboarding .onboarding-header { flex-shrink: 0; padding-bottom: 18px; }
+#onboarding .onboarding-content { min-height: 0; overflow-y: auto; padding: 22px 2px 2px; }
+#onboarding .onboarding-step h2 { font-size: 24px; line-height: 1.25; letter-spacing: -.55px; margin: 0 0 8px; }
+#onboarding .step-desc { font-size: 14px; line-height: 1.5; margin: 0 0 22px; }
 #onboarding h2[tabindex="-1"]:focus { outline: none; }
-@media (max-width: 560px) { #onboarding .onboarding-header { gap: 12px; flex-wrap: wrap; } .setup-check { flex-direction: column; gap: 3px; } }
+#onboarding h3 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.5; }
+#onboarding .step-tracker-container { background: transparent; border: 0; padding: 0; border-radius: 0; }
+.setup-progress { display: flex; flex-direction: column; gap: 8px; min-width: 100px; font-size: 12px; color: var(--text-secondary); text-align: right; }
+.setup-progress progress { appearance: none; -webkit-appearance: none; border: 0; border-radius: 4px; overflow: hidden; width: 100%; height: 4px; background: var(--border-color); accent-color: var(--setup-primary); }
+.setup-progress progress::-webkit-progress-bar { background: var(--border-color); border-radius: 4px; }
+.setup-progress progress::-webkit-progress-value { background: var(--setup-primary); border-radius: 4px; }
+.setup-footer { flex-shrink: 0; margin-top: 22px; border-top: 1px solid var(--border-color); padding-top: 16px; }
+#onboard-save-status { font-size: 12px; line-height: 1.5; margin: 0 0 12px; color: var(--text-secondary); }
+#onboard-save-status:empty { display: none; }
+.setup-footer-actions { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+#onboarding .setup-footer .onboard-nav-btn { width: auto; min-width: 144px; margin: 0 0 0 auto; padding: 0 22px; height: 42px; background: var(--setup-primary); color: #fff; border: 0; box-shadow: none; }
+#onboarding .setup-footer .onboard-nav-btn:hover { transform: none; filter: brightness(.94); box-shadow: none; }
+#onboarding .setup-footer .onboard-nav-btn:disabled { background: var(--border-color); color: var(--text-muted); filter: none; opacity: 1; }
+#onboarding .fluent-button, #onboarding .hotkey-record-btn { min-height: 38px; padding: 8px 14px; font-size: 13px; font-weight: 500; border-radius: 9px; }
+#onboard-back-btn { min-width: 90px; gap: 10px; }
+#onboarding button:disabled { cursor: not-allowed; opacity: .55; }
+.setup-icon { display: block; width: 22px; height: 22px; flex-shrink: 0; }
+.setup-icon-badge { width: 38px; height: 38px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 11px; color: var(--setup-primary); background: var(--accent-tint); }
+.setup-checks { border: 1px solid var(--border-color); border-radius: 12px; padding: 0 16px; }
+.setup-check { display: flex; align-items: center; gap: 12px; padding: 14px 0; }
+.setup-check + .setup-check { border-top: 1px solid var(--border-color); }
+.setup-check-copy { min-width: 0; flex: 1; }
+.setup-check-copy strong { display: block; font-size: 14px; font-weight: 600; }
+.setup-check-copy small { display: block; color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+.setup-check-status { flex-shrink: 0; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+.setup-check.is-ready .setup-check-status { color: var(--setup-success); }
+.setup-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 18px; }
+.setup-microphone { display: grid; grid-template-columns: auto 1fr auto; align-items: center; column-gap: 12px; row-gap: 10px; padding: 16px; border: 1px solid var(--border-color); border-radius: 12px; }
+.setup-mic-copy p { margin: 3px 0 0; color: var(--text-secondary); font-size: 12px; }
+.setup-mic-result { grid-column: 2 / -1; color: var(--text-secondary); font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+.setup-troubleshooting { font-size: 12px; color: var(--text-secondary); margin-top: 16px; }
+.setup-troubleshooting summary { cursor: pointer; width: fit-content; }
+.setup-troubleshooting p { line-height: 1.6; margin: 10px 0; }
+.setup-shortcut-bar { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--border-color); border-radius: 12px; }
+.setup-shortcut-bar > div:first-child { margin-right: auto; }
+.setup-shortcut-bar p { font-size: 12px; margin: 3px 0 0; color: var(--text-secondary); }
+.setup-keycaps { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12px; }
+.setup-keycaps kbd { border: 1px solid var(--input-border); border-bottom-width: 2px; background: var(--input-bg); color: var(--text-primary); border-radius: 7px; padding: 6px 11px; min-width: 36px; text-align: center; font: inherit; font-size: 13px; font-weight: 500; line-height: 1.4; box-sizing: border-box; white-space: nowrap; }
+.setup-preset-row { display: flex; align-items: center; gap: 14px; margin-top: 12px; font-size: 12px; color: var(--text-secondary); }
+.setup-preset-row > label { flex-shrink: 0; }
+.setup-preset-row .custom-select-wrapper, .setup-preset-row > select { flex: 1; min-width: 0; }
+#onboard-hotkey-record { width: auto; margin: 0; flex-shrink: 0; }
+#onboard-hotkey-record-hint { font-size: 12px; line-height: 1.5; color: var(--text-secondary); margin: 10px 0 0; display: block; }
+#onboard-hotkey-conflict-warning { margin-top: 10px; }
+.setup-gesture-group { border: 0; margin: 22px 0 0; padding: 0; min-width: 0; }
+.setup-gesture-group legend { font-weight: 600; font-size: 14px; margin-bottom: 10px; padding: 0; }
+.setup-gesture-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.setup-gesture-card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border-color); border-radius: 12px; padding: 16px 12px; cursor: pointer; }
+.setup-gesture-card input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--setup-primary); flex-shrink: 0; }
+.setup-gesture-card.is-selected { border-color: var(--setup-primary); background: var(--accent-tint); }
+.setup-gesture-card:focus-within { outline: 2px solid var(--setup-primary); outline-offset: 2px; }
+.setup-gesture-card .setup-icon-badge { width: 30px; height: 30px; background: transparent; }
+.setup-gesture-card strong { font-size: 14px; font-weight: 600; display: block; }
+.setup-gesture-card small { font-size: 12px; line-height: 1.5; display: block; color: var(--text-secondary); margin-top: 5px; }
+.setup-gesture-note { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
+.setup-choice { padding: 22px; border: 1px solid var(--border-color); border-radius: 12px; margin: 0; background: var(--bg-content); }
+.setup-choice .fluent-checkbox-container { margin: 0; }
+.setup-tip { margin: 18px 0 0; line-height: 1.6; color: var(--text-secondary); font-size: 13px; }
+.setup-practice-instruction { display: flex; align-items: center; gap: 18px; padding: 16px; background: var(--accent-tint); border: 1px solid var(--border-color); border-radius: 12px; margin-bottom: 18px; }
+.setup-practice-instruction .setup-keycaps { flex-shrink: 0; max-width: 50%; }
+.setup-practice-instruction p { font-size: 13px; margin: 0; color: var(--text-secondary); line-height: 1.5; }
+.setup-field-label { font-size: 12px; font-weight: 500; margin-bottom: 7px; }
+#onboarding .setup-practice { width: 100%; resize: vertical; min-height: 138px; max-height: 35vh; box-sizing: border-box; line-height: 1.6; font-size: 14px; margin: 0; padding: 14px; border-radius: 10px; }
+.setup-practice-status { font-size: 12px; color: var(--text-secondary); margin: 10px 0 0; }
+.setup-privacy { font-size: 12px; line-height: 1.6; color: var(--text-secondary); margin: 12px 0 0; }
+#onboard-practice-skip { align-self: flex-start; width: auto; margin: 12px 0 0; padding: 0; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; color: var(--setup-primary); }
+.setup-completion { align-items: center; text-align: center; }
+.setup-success-mark { color: var(--setup-success); background: rgba(36,132,84,.1); border-radius: 50%; width: 48px; height: 48px; display: grid; place-items: center; margin: 0 0 14px; }
+.setup-success-mark .setup-icon { width: 28px; height: 28px; }
+.setup-ready { width: 100%; box-sizing: border-box; text-align: left; padding: 0 16px; border: 1px solid var(--border-color); border-radius: 12px; }
+.setup-ready-row { display: flex; align-items: center; gap: 14px; padding: 16px 0; }
+.setup-ready-row + .setup-ready-row { border-top: 1px solid var(--border-color); }
+.setup-ready-row p { margin: 3px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+@media (max-width: 580px) {
+  #onboarding { padding: 42px 12px 12px; }
+  #onboarding .onboarding-card { padding: 20px; border-radius: 16px; }
+  #onboarding .onboarding-header { gap: 12px; }
+  #onboarding .logo-text { font-size: 15px; }
+  #onboarding .onboarding-step h2 { font-size: 22px; }
+  .setup-check-copy small { display: none; }
+  .setup-shortcut-bar { flex-wrap: wrap; }
+  .setup-shortcut-bar > div:first-child { width: 100%; }
+  .setup-gesture-options { grid-template-columns: 1fr; }
+  .setup-practice-instruction { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .setup-practice-instruction .setup-keycaps { max-width: 100%; }
+  .setup-microphone { grid-template-columns: auto 1fr; }
+  .setup-microphone button { grid-column: 2; justify-self: start; }
+}
+
+/* Keep all primary permission controls visible at a normal desktop height. */
+.setup-access .step-desc { margin-bottom: 16px !important; }
+.setup-access .setup-check { padding: 10px 0; }
+.setup-access .setup-actions { margin: 10px 0 12px; }
+.setup-access .setup-microphone { padding: 12px; }
+.setup-access .setup-troubleshooting { margin-top: 10px; }
