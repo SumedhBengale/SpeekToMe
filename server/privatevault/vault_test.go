@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -57,7 +58,7 @@ func fixture(t *testing.T) (*Vault, []byte, *memoryObjects) {
 	}
 	d.SetMaxOpenConns(1)
 	t.Cleanup(func() { d.Close() })
-	for _, s := range []string{`CREATE TABLE users(id INTEGER PRIMARY KEY,plan_tier TEXT,plan_active INTEGER,razorpay_current_end INTEGER)`, `INSERT INTO users VALUES(1,'pro',1,0),(2,'pro',1,0)`, `CREATE TABLE meetings(id INTEGER PRIMARY KEY,user_id INTEGER,audio_path TEXT)`, `INSERT INTO meetings VALUES(1,1,''),(2,1,''),(3,2,'')`, `CREATE TABLE meeting_jobs(job_key TEXT,user_id INTEGER,meeting_id INTEGER,status TEXT,admitted INTEGER)`, `CREATE TABLE usage_logs(id INTEGER PRIMARY KEY,user_id INTEGER,input_transcript TEXT,final_output TEXT,vocabulary_audit TEXT)`} {
+	for _, s := range []string{`CREATE TABLE users(id INTEGER PRIMARY KEY,plan_tier TEXT,plan_active INTEGER,razorpay_current_end INTEGER)`, `INSERT INTO users VALUES(1,'pro',1,0),(2,'pro',1,0)`, `CREATE TABLE meetings(id INTEGER PRIMARY KEY,user_id INTEGER,audio_path TEXT)`, `INSERT INTO meetings VALUES(1,1,''),(2,1,''),(3,2,'')`, `CREATE TABLE meeting_jobs(job_key TEXT,user_id INTEGER,meeting_id INTEGER,status TEXT,admitted INTEGER,client_id TEXT)`, `CREATE TABLE usage_logs(id INTEGER PRIMARY KEY,user_id INTEGER,input_transcript TEXT,final_output TEXT,vocabulary_audit TEXT)`} {
 		if _, e = d.Exec(s); e != nil {
 			t.Fatal(e)
 		}
@@ -413,5 +414,86 @@ func TestMigrationBatchesRollbackAndRetry(t *testing.T) {
 	must(t, v.db.QueryRow(`SELECT COUNT(*) FROM usage_logs WHERE input_transcript<>'' OR final_output<>'' OR vocabulary_audit<>''`).Scan(&private))
 	if private != 0 {
 		t.Fatal("private plaintext remained")
+	}
+}
+
+func TestArchivePathsBindOwnerAndManifest(t *testing.T) {
+	v, _, _ := fixture(t)
+	root := t.TempDir()
+	t.Setenv("MEETING_AUDIO_DIR", root)
+	ctx := context.Background()
+	client := "exact-meeting"
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte("1/"+client)))
+	dir := filepath.Join(root, key)
+	must(t, os.MkdirAll(dir, 0700))
+	file := filepath.Join(dir, "mixed.ogg")
+	must(t, os.WriteFile(file, []byte("audio"), 0600))
+	_, e := v.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,meeting_id,client_id) VALUES(?,1,1,?)`, key, client)
+	must(t, e)
+	if !v.trustedRecording(ctx, 1, 1, file) {
+		t.Fatal("valid manifest path refused")
+	}
+	if v.trustedRecording(ctx, 2, 1, file) {
+		t.Fatal("cross-owner path accepted")
+	}
+	if v.trustedRecording(ctx, 1, 1, filepath.Join(root, "server.env")) {
+		t.Fatal("arbitrary file accepted")
+	}
+	outside := filepath.Join(root, "unrelated.ogg")
+	must(t, os.WriteFile(outside, []byte("private"), 0600))
+	must(t, os.Remove(file))
+	must(t, os.Symlink(outside, file))
+	if v.trustedRecording(ctx, 1, 1, file) {
+		t.Fatal("recording symlink escaped manifest")
+	}
+	if _, ok := legacyPath(1, "uploads/meetings/meeting_1_123.ogg"); !ok {
+		t.Fatal("valid legacy identity")
+	}
+	if _, ok := legacyPath(2, "uploads/meetings/meeting_1_123.ogg"); ok {
+		t.Fatal("legacy owner mismatch accepted")
+	}
+	if _, ok := legacyPath(1, "uploads/meetings/../server.env"); ok {
+		t.Fatal("legacy traversal accepted")
+	}
+}
+
+func TestLegacyStagingPurgedOnlyAfterEncryptedBackupAndCompletion(t *testing.T) {
+	v, _, _ := fixture(t)
+	ctx := context.Background()
+	t.Chdir(t.TempDir())
+	must(t, os.MkdirAll("uploads/meetings", 0700))
+	for _, q := range []string{`ALTER TABLE meetings ADD COLUMN transcript TEXT DEFAULT ''`, `ALTER TABLE meetings ADD COLUMN timestamp TEXT DEFAULT ''`} {
+		_, e := v.db.Exec(q)
+		must(t, e)
+	}
+	first := "uploads/meetings/meeting_1_123.ogg"
+	second := "uploads/meetings/meeting_1_124.ogg"
+	plain := []byte("synthetic audio")
+	for id, p := range map[int]string{1: first, 2: second} {
+		must(t, os.WriteFile(p, plain, 0600))
+		_, e := v.db.Exec(`UPDATE meetings SET audio_path=?,timestamp=CURRENT_TIMESTAMP WHERE id=?`, p, id)
+		must(t, e)
+	}
+	_, e := v.db.Exec(`UPDATE meetings SET transcript='completed final' WHERE id=1`)
+	must(t, e)
+	must(t, v.ArchivePending(ctx))
+	if _, e = os.Stat(first); !os.IsNotExist(e) {
+		t.Fatal("completed legacy staging remained")
+	}
+	if _, e = os.Stat(second); e != nil {
+		t.Fatal("unfinished recording removed")
+	}
+	r, _, e := v.Audio(ctx, 1, 1)
+	must(t, e)
+	b, e := io.ReadAll(r)
+	must(t, e)
+	if !bytes.Equal(b, plain) {
+		t.Fatal("backup was not recoverable after staging purge")
+	}
+	_, e = v.db.Exec(`UPDATE meetings SET timestamp=datetime('now','-25 hours') WHERE id=2`)
+	must(t, e)
+	must(t, v.ArchivePending(ctx))
+	if _, e = os.Stat(second); !os.IsNotExist(e) {
+		t.Fatal("expired legacy staging remained")
 	}
 }

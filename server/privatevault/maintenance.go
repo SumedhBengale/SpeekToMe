@@ -3,6 +3,7 @@ package privatevault
 import (
 	"context"
 	"crypto/cipher"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -192,7 +193,11 @@ func (v *Vault) ArchivePending(ctx context.Context) error {
 	rows.Close()
 	for _, r := range batch {
 		state, next := "ready", time.Now().Add(time.Hour).Unix()
-		e = v.Archive(ctx, r.user, r.id, r.path)
+		if !v.trustedRecording(ctx, r.user, r.id, r.path) {
+			e = ErrNotFound
+		} else {
+			e = v.Archive(ctx, r.user, r.id, r.path)
+		}
 		switch {
 		case errors.Is(e, ErrQuota):
 			state = "storage_full"
@@ -239,8 +244,113 @@ func (v *Vault) ArchivePending(ctx context.Context) error {
 		}
 	}
 
+	legacy, e := v.db.QueryContext(ctx, `SELECT m.id,m.user_id,m.audio_path FROM meetings m JOIN meeting_audio_assets a ON a.meeting_id=m.id LEFT JOIN meeting_jobs j ON j.meeting_id=m.id LEFT JOIN meeting_archive_status s ON s.meeting_id=m.id WHERE a.state='ready' AND j.job_key IS NULL AND COALESCE(s.processing_purged,0)=0 AND (COALESCE(m.transcript,'')<>'' OR datetime(m.timestamp)<datetime('now','-24 hours')) LIMIT 100`)
+	if e != nil {
+		return e
+	}
+	var old []candidate
+	for legacy.Next() {
+		var r candidate
+		if e = legacy.Scan(&r.id, &r.user, &r.path); e != nil {
+			legacy.Close()
+			return e
+		}
+		old = append(old, r)
+	}
+	e = legacy.Err()
+	legacy.Close()
+	if e != nil {
+		return e
+	}
+	for _, r := range old {
+		if e = v.purgeLegacy(r.user, r.path); e != nil {
+			continue
+		}
+		if _, e = v.db.ExecContext(ctx, `INSERT INTO meeting_archive_status(meeting_id,user_id,state,processing_purged) VALUES(?,?,'ready',1) ON CONFLICT(meeting_id) DO UPDATE SET processing_purged=1`, r.id, r.user); e != nil {
+			return e
+		}
+	}
+
 	return nil
 }
+func legacyPath(user int64, path string) (string, bool) {
+	root, e := filepath.Abs("uploads/meetings")
+	if e != nil {
+		return "", false
+	}
+	abs, e := filepath.Abs(path)
+	if e != nil || filepath.Dir(abs) != root {
+		return "", false
+	}
+	name := filepath.Base(abs)
+	prefix := fmt.Sprintf("meeting_%d_", user)
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".ogg") {
+		return "", false
+	}
+	number := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".ogg")
+	if number == "" {
+		return "", false
+	}
+	for _, c := range number {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	return abs, true
+}
+func (v *Vault) trustedRecording(ctx context.Context, user, meeting int64, path string) bool {
+	var key, client string
+	e := v.db.QueryRowContext(ctx, `SELECT job_key,client_id FROM meeting_jobs WHERE user_id=? AND meeting_id=?`, user, meeting).Scan(&key, &client)
+	var expected string
+	if errors.Is(e, sql.ErrNoRows) {
+		var ok bool
+		expected, ok = legacyPath(user, path)
+		if !ok {
+			return false
+		}
+		var copies int
+		if v.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM meetings WHERE audio_path=?`, path).Scan(&copies) != nil || copies != 1 {
+			return false
+		}
+	} else if e == nil {
+		if key != fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d/%s", user, client)))) {
+			return false
+		}
+		root := os.Getenv("MEETING_AUDIO_DIR")
+		if root == "" {
+			root = "uploads/meetings/jobs"
+		}
+		expected, e = filepath.Abs(filepath.Join(root, key, "mixed.ogg"))
+		if e != nil {
+			return false
+		}
+	} else {
+		return false
+	}
+	actual, e := filepath.Abs(path)
+	if e != nil || actual != expected {
+		return false
+	}
+	// Directory links may be configured, but a recording must never resolve to
+	// another recording or a file outside its server-owned directory.
+	parent, e := filepath.EvalSymlinks(filepath.Dir(expected))
+	if e != nil {
+		return false
+	}
+	canonical, e := filepath.EvalSymlinks(expected)
+	return e == nil && canonical == filepath.Join(parent, filepath.Base(expected))
+}
+func (v *Vault) purgeLegacy(user int64, path string) error {
+	p, ok := legacyPath(user, path)
+	if !ok {
+		return ErrNotFound
+	}
+	if e := os.Remove(p); e != nil && !os.IsNotExist(e) {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 func (v *Vault) purgeProcessing(key string) error {
 	if len(key) != 64 {
 		return ErrUnavailable
@@ -332,6 +442,21 @@ func (v *Vault) Retention(ctx context.Context, now time.Time) error {
 			if e = v.purgeProcessing(key); e != nil {
 				return e
 			}
+		}
+		legacy, e := v.db.QueryContext(ctx, `SELECT m.audio_path FROM meetings m LEFT JOIN meeting_jobs j ON j.meeting_id=m.id WHERE m.user_id=? AND j.job_key IS NULL`, user)
+		if e != nil {
+			return e
+		}
+		var legacyPaths []string
+		for legacy.Next() {
+			var p string
+			if legacy.Scan(&p) == nil {
+				legacyPaths = append(legacyPaths, p)
+			}
+		}
+		legacy.Close()
+		for _, p := range legacyPaths {
+			_ = v.purgeLegacy(user, p)
 		}
 		objects, e := v.db.QueryContext(ctx, `SELECT meeting_id FROM meeting_audio_assets WHERE user_id=? LIMIT 10`, user)
 		if e != nil {
