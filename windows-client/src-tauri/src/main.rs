@@ -642,8 +642,8 @@ fn run_native_overlay_diagnostic() {
         let handle = app.handle().clone();
         let _ = TAURI_APP.set(handle.clone());
         linux_desktop::setup(&handle)?;
-        win32::set_preview_text("Native Rust preview. नमस्ते दुनिया. No webview is running.");
-        win32::set_preview_state(win32::PreviewState::Listening);
+        win32::set_preview_text(&"Native Rust preview. नमस्ते दुनिया. Processing glow with no webview.\n".repeat(16));
+        win32::set_preview_state(win32::PreviewState::Processing);
         gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(7), move || lifecycle::quit(&handle));
         Ok(())
     }).build(desktop_context()).expect("native overlay diagnostic");

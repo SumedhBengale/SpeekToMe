@@ -14,7 +14,12 @@ unchanged. Quit never waits for uploads or inference requests.
 
 The Linux pill and preview are native GTK/Cairo/Pango surfaces drawn from Rust.
 They use the configured colors, a 62 x 24 pill, five animated bars, Unicode text
-with four-line truncation, and the existing positioning/layer-shell rules.
+with content-driven height, and the existing positioning/layer-shell rules.
+Processing uses the original Windows violet/pink/amber/cyan palette on an animated
+border and diffuse halo around both the pill and preview. There is no fixed
+four-line/104-pixel preview cap: text is measured in full and the surface grows
+to the available display bounds. Custom anchors retain their pill position.
+Hidden overlays stop animation and discard cached text; expanded surfaces shrink.
 There is no HTML or JavaScript renderer for the overlay. Its drawing timer runs
 only while visible. Windows retains the existing native Win32/GDI renderer.
 

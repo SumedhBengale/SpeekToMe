@@ -90,6 +90,7 @@ struct NativeOverlay {
     surface: gtk::DrawingArea,
     layout: gtk::pango::Layout,
     has_preview: bool,
+    height: f64,
     timer: Option<gtk::glib::SourceId>,
     frame: u64,
     smoothed: f64,
@@ -151,8 +152,8 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     layout.set_font_description(Some(&font));
     layout.set_width(370 * gtk::pango::SCALE);
     layout.set_wrap(gtk::pango::WrapMode::WordChar);
-    layout.set_height(-4);
-    layout.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    layout.set_height(-1);
+    layout.set_ellipsize(gtk::pango::EllipsizeMode::None);
     let container = overlay.default_vbox()?;
     container.pack_start(&surface, true, true, 0);
     container.show();
@@ -162,6 +163,7 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
             surface,
             layout,
             has_preview: false,
+            height: 140.0,
             timer: None,
             frame: 0,
             smoothed: 0.0,
@@ -195,6 +197,8 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
             NATIVE_OVERLAY.with(|slot| {
                 if let Some(overlay) = slot.borrow().as_ref() {
                     let allocation = overlay.surface.allocation();
+                    let report=serde_json::json!({"width":allocation.width(),"height":allocation.height(),"lines":overlay.layout.line_count(),"mapped":overlay.surface.is_mapped(),"processing":OVERLAY_STATE.load(Ordering::SeqCst)==2});
+                    let _=std::fs::write(std::env::temp_dir().join("speektome-overlay-check.json"),report.to_string());
                     eprintln!(
                         "[NATIVE OVERLAY CHECK] mapped={} width={} height={} pill=({}, {})",
                         overlay.surface.is_mapped(),
@@ -230,7 +234,8 @@ fn draw_overlay(cr: &gtk::cairo::Context) {
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
     let _ = cr.paint();
     cr.set_operator(gtk::cairo::Operator::Over);
-    let background = crate::native_overlay::color(crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed));
+    let background =
+        crate::native_overlay::color(crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed));
     let wave = crate::native_overlay::color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed));
     NATIVE_OVERLAY.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -239,6 +244,19 @@ fn draw_overlay(cr: &gtk::cairo::Context) {
         cr.set_source_rgba(background.0, background.1, background.2, 235.0 / 255.0);
         rounded_rect(cr, x + 0.5, y + 0.5, 61.0, 23.0, 11.5);
         let _ = cr.fill();
+        if OVERLAY_STATE.load(Ordering::SeqCst) == 2 {
+            processing_border(
+                cr,
+                crate::native_overlay::Rect {
+                    x: x + 0.5,
+                    y: y + 0.5,
+                    width: 61.0,
+                    height: 23.0,
+                },
+                11.5,
+                overlay.frame,
+            );
+        }
         cr.set_source_rgb(wave.0, wave.1, wave.2);
         let level = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed) as f64;
         overlay.smoothed = crate::native_overlay::smooth_volume(overlay.smoothed, level);
@@ -249,24 +267,43 @@ fn draw_overlay(cr: &gtk::cairo::Context) {
         }
         if overlay.has_preview {
             let (width, height) = overlay.layout.pixel_size();
-            let card = crate::native_overlay::preview_card(x, y, width as f64, height as f64);
+            let card = crate::native_overlay::preview_card_in_surface(
+                x,
+                y,
+                width as f64,
+                height as f64,
+                overlay.height,
+            );
             rounded_rect(cr, card.x, card.y, card.width, card.height, 7.0);
             cr.set_source_rgba(background.0, background.1, background.2, 0.96);
             let _ = cr.fill_preserve();
             cr.set_source_rgba(wave.0, wave.1, wave.2, 0.64);
             cr.set_line_width(1.0);
             let _ = cr.stroke();
+            if processing {
+                processing_border(cr, card, 7.0, overlay.frame);
+            }
+            let _ = cr.save();
+            cr.rectangle(
+                card.x + 8.0,
+                card.y + 8.0,
+                card.width - 16.0,
+                card.height - 16.0,
+            );
+            cr.clip();
             let text = crate::native_overlay::text_color(background);
             cr.set_source_rgb(text.0, text.1, text.2);
             cr.move_to(card.x + 12.0, card.y + 8.0);
             pangocairo::functions::show_layout(cr, &overlay.layout);
+            let _ = cr.restore();
         }
         overlay.frame += 1;
     });
 }
 
 fn apply_overlay_text_and_theme() {
-    let text = crate::win32::get_preview_text();
+    let raw = crate::win32::get_preview_text();
+    let text = crate::native_overlay::preview_text(&raw, OVERLAY_STATE.load(Ordering::SeqCst) == 2);
     NATIVE_OVERLAY.with(|slot| {
         if let Some(overlay) = slot.borrow_mut().as_mut() {
             // Pango text, not markup, handles all scripts without browser UI.
@@ -275,6 +312,16 @@ fn apply_overlay_text_and_theme() {
             overlay.surface.queue_draw();
         }
     });
+    if let Some(window) = crate::TAURI_APP
+        .get()
+        .and_then(|app| app.get_window("overlay"))
+    {
+        let config = crate::get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        configure_overlay_position(&window, &config);
+    }
 }
 
 pub fn show_overlay() {
@@ -327,8 +374,16 @@ pub fn hide_overlay() {
                         timer.remove();
                     }
                     overlay.has_preview = false;
+                    overlay.layout.set_text("");
                 }
             });
+            if let Some(window) = handle.get_window("overlay") {
+                let config = crate::get_active_config()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                configure_overlay_position(&window, &config);
+            }
         });
     }
 }
@@ -339,6 +394,7 @@ pub fn set_preview_text(_text: &str) {
 }
 pub fn set_preview_state(state: u8) {
     OVERLAY_STATE.store(state, Ordering::SeqCst);
+    set_preview_text("");
 }
 pub fn sync_overlay_theme() {
     if let Some(app) = crate::TAURI_APP.get() {
@@ -396,35 +452,54 @@ fn configure_overlay_position(window: &tauri::Window, config: &crate::config::Ap
 
     let custom = config.pill_position_mode == "custom";
     let position = config.pill_predefined_position.as_str();
-    let design = crate::native_overlay::placement(monitor_width, monitor_height,
-        if custom { 4 } else { crate::native_overlay::position_code(position) },
-        config.pill_custom_x as f64, config.pill_custom_y as f64);
-    let (pill_x, pill_y) = (design.pill_x, design.pill_y);
-    let (x, y) = if custom {
-        (config.pill_custom_x as f64, config.pill_custom_y as f64)
+    let text_height = NATIVE_OVERLAY.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|o| o.has_preview)
+            .map(|o| o.layout.pixel_size().1 as f64)
+            .unwrap_or(0.0)
+    });
+    let position_code = if custom {
+        4
     } else {
-        let x = if position.ends_with("Left") {
-            50.0
-        } else if position.ends_with("Right") {
-            monitor_width - 420.0 - 50.0
-        } else {
-            (monitor_width - 420.0) / 2.0
-        };
-        let y = if position.starts_with("Bottom") {
-            monitor_height - 140.0 - 80.0
-        } else {
-            50.0
-        };
-        (x, y)
+        crate::native_overlay::position_code(position)
     };
-
+    let height = crate::native_overlay::surface_height_at(
+        text_height,
+        monitor_height,
+        position_code,
+        config.pill_custom_y as f64,
+    );
+    let design = crate::native_overlay::placement_with_height(
+        monitor_width,
+        monitor_height,
+        if custom {
+            4
+        } else {
+            crate::native_overlay::position_code(position)
+        },
+        config.pill_custom_x as f64,
+        config.pill_custom_y as f64,
+        height,
+    );
+    let (pill_x, pill_y) = (design.pill_x, design.pill_y);
+    let (x, y) = (design.x, design.y);
+    let changed =
+        NATIVE_OVERLAY.with(|slot| slot.borrow().as_ref().is_some_and(|o| o.height != height));
     NATIVE_OVERLAY.with(|slot| {
         if let Some(overlay) = slot.borrow_mut().as_mut() {
+            if overlay.height != height {
+                overlay.height = height;
+                overlay.surface.set_size_request(420, height.ceil() as i32);
+            }
             overlay.pill_x = pill_x;
             overlay.pill_y = pill_y;
             overlay.surface.queue_draw();
         }
     });
+    if changed {
+        let _ = window.set_size(tauri::LogicalSize::new(420.0, height));
+    }
     if LAYER_SHELL_ACTIVE.load(Ordering::SeqCst) {
         if let (Some(api), Ok(native)) = (layer_shell_api(), window.gtk_window()) {
             let ptr = native.as_ptr() as *mut gtk::ffi::GtkWindow;
@@ -463,4 +538,35 @@ pub fn notify(title: &str, message: &str) {
             .appname("SpeekTo.Me")
             .show();
     });
+}
+
+fn processing_border(
+    cr: &gtk::cairo::Context,
+    rect: crate::native_overlay::Rect,
+    radius: f64,
+    frame: u64,
+) {
+    for (width, alpha) in [
+        (8.0, 0.025),
+        (6.0, 0.045),
+        (4.0, 0.08),
+        (2.6, 0.16),
+        (1.2, 0.95),
+    ] {
+        let gradient = gtk::cairo::LinearGradient::new(
+            rect.x,
+            rect.y,
+            rect.x + rect.width,
+            rect.y + rect.height,
+        );
+        for i in 0..=8 {
+            let offset = i as f64 / 8.0;
+            let (r, g, b) = crate::native_overlay::processing_color(offset + frame as f64 * 0.008);
+            gradient.add_color_stop_rgba(offset, r, g, b, alpha);
+        }
+        rounded_rect(cr, rect.x, rect.y, rect.width, rect.height, radius);
+        let _ = cr.set_source(&gradient);
+        cr.set_line_width(width);
+        let _ = cr.stroke();
+    }
 }

@@ -325,7 +325,7 @@ mod win32_impl {
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    x, y, 62, 24,
+                    x - 4, y - 4, 70, 32,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
                 BringWindowToTop(hwnd);
@@ -421,7 +421,7 @@ mod win32_impl {
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    def_x, def_y, 62, 24,
+                    def_x - 4, def_y - 4, 70, 32,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
                 ShowWindow(hwnd, SW_HIDE);
@@ -727,11 +727,13 @@ mod win32_impl {
             let bg_color = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed);
             let wave_color = crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed);
 
-            let r = height as f32 / 2.0;
-            let c1_x = r;
-            let c1_y = r;
-            let c2_x = width as f32 - r;
-            let c2_y = r;
+            let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+            let margin=if state==PreviewState::Meeting{0.0}else{4.0};
+            let r = (height as f32 - margin*2.0) / 2.0;
+            let c1_x = margin+r;
+            let c1_y = margin+r;
+            let c2_x = width as f32 - margin-r;
+            let c2_y = margin+r;
 
             let bg_r = (bg_color & 0xFF) as f32;
             let bg_g = ((bg_color >> 8) & 0xFF) as f32;
@@ -768,7 +770,6 @@ mod win32_impl {
             }
 
             static SMOOTHED_VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
             let raw_vol = if state == PreviewState::Meeting {
                 let mic = crate::audio::MIC_VOLUME.load(Ordering::Relaxed);
                 let lb = crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed);
@@ -783,6 +784,13 @@ mod win32_impl {
             static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
 
+            if state==PreviewState::Processing {
+                let bounds=crate::native_overlay::Rect{x:4.0,y:4.0,width:(width-8)as f64,height:(height-8)as f64};
+                let background=crate::native_overlay::color(bg_color);
+                for y in 0..height {for x in 0..width {
+                    pixel_slice[(y*width+x)as usize]=crate::native_overlay::processing_pixel(x as f64+0.5,y as f64+0.5,bounds,12.0,frame as u64,background);
+                }}
+            }
             let bar_r = (wave_color & 0xFF) as u32;
             let bar_g = ((wave_color >> 8) & 0xFF) as u32;
             let bar_b = ((wave_color >> 16) & 0xFF) as u32;
@@ -981,30 +989,8 @@ mod win32_impl {
 
     // Apple Intelligence Chromatic Aurora Gradient Palette
     #[inline(always)]
-    fn get_apple_intelligence_color(u: f32) -> (f32, f32, f32) {
-        let pos = (u.rem_euclid(1.0)) * 4.0;
-        let seg = pos.floor() as usize;
-        let mut t = pos - seg as f32;
-        t = t * t * (3.0 - 2.0 * t); // Smooth cubic hermite interpolation
-
-        match seg % 4 {
-            0 => {
-                // Luminous Violet (155, 60, 245) -> Hot Pink / Magenta (236, 72, 153)
-                (155.0 + (236.0 - 155.0) * t, 60.0 + (72.0 - 60.0) * t, 245.0 + (153.0 - 245.0) * t)
-            }
-            1 => {
-                // Hot Pink / Magenta (236, 72, 153) -> Warm Golden Amber (245, 158, 11)
-                (236.0 + (245.0 - 236.0) * t, 72.0 + (158.0 - 72.0) * t, 153.0 + (11.0 - 153.0) * t)
-            }
-            2 => {
-                // Warm Golden Amber (245, 158, 11) -> Electric Cyan (6, 182, 212)
-                (245.0 + (6.0 - 245.0) * t, 158.0 + (182.0 - 158.0) * t, 11.0 + (212.0 - 11.0) * t)
-            }
-            _ => {
-                // Electric Cyan (6, 182, 212) -> Luminous Violet (155, 60, 245)
-                (6.0 + (155.0 - 6.0) * t, 182.0 + (60.0 - 182.0) * t, 212.0 + (245.0 - 212.0) * t)
-            }
-        }
+    fn get_apple_intelligence_color(u:f32)->(f32,f32,f32){
+        let (r,g,b)=crate::native_overlay::processing_color(u as f64);((r*255.0)as f32,(g*255.0)as f32,(b*255.0)as f32)
     }
 
     pub unsafe fn update_layered_preview(hwnd: HWND) {
@@ -1114,7 +1100,7 @@ mod win32_impl {
                     if is_processing {
                         // Angle around center + rotational flow
                         let angle = (y_f - cy).atan2(x_f - cx); // -PI to PI
-                        let u = (angle / (2.0 * std::f32::consts::PI) + 1.0 + frame * 0.016).rem_euclid(1.0);
+                        let u = (angle / (2.0 * std::f32::consts::PI) + 1.0 + frame * 0.008).rem_euclid(1.0);
                         let (chroma_r, chroma_g, chroma_b) = get_apple_intelligence_color(u);
 
                         if dist > 3.5 {
@@ -1649,7 +1635,7 @@ mod win32_impl {
             overlay_class.as_ptr(),
             ptr::null(),
             WS_POPUP,
-            0, 0, 62, 24,
+            0, 0, 70, 32,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,

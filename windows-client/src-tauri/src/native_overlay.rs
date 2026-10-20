@@ -17,6 +17,7 @@ pub struct Rect {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Placement {
+    pub height: f64,
     pub x: f64,
     pub y: f64,
     pub pill_x: f64,
@@ -35,11 +36,22 @@ pub fn position_code(name: &str) -> i32 {
 }
 
 pub fn placement(width: f64, height: f64, position: i32, x: f64, y: f64) -> Placement {
+    placement_with_height(width, height, position, x, y, HEIGHT)
+}
+pub fn placement_with_height(
+    width: f64,
+    height: f64,
+    position: i32,
+    x: f64,
+    y: f64,
+    surface_height: f64,
+) -> Placement {
     let custom = position == 4;
     let left = position == 5 || position == 7;
     let right = position == 6 || position == 8;
-    let bottom = position == 0 || position == 7 || position == 8;
+    let bottom = position == 0 || position == 7 || position == 8 || (custom && y > height / 2.0);
     Placement {
+        height: surface_height,
         x: (if custom {
             x
         } else if left {
@@ -51,24 +63,28 @@ pub fn placement(width: f64, height: f64, position: i32, x: f64, y: f64) -> Plac
         })
         .clamp(0.0, (width - WIDTH).max(0.0)),
         y: (if custom {
-            y
+            if bottom {
+                y - (surface_height - PILL_HEIGHT - 4.0)
+            } else {
+                y - 4.0
+            }
         } else if bottom {
-            height - HEIGHT - 80.0
+            height - surface_height - 80.0
         } else {
             50.0
         })
-        .clamp(0.0, (height - HEIGHT).max(0.0)),
+        .clamp(0.0, (height - surface_height).max(0.0)),
         pill_x: if custom || left {
-            0.0
+            4.0
         } else if right {
-            WIDTH - PILL_WIDTH
+            WIDTH - PILL_WIDTH - 4.0
         } else {
             (WIDTH - PILL_WIDTH) / 2.0
         },
-        pill_y: if bottom && !custom {
-            HEIGHT - PILL_HEIGHT
+        pill_y: if bottom {
+            surface_height - PILL_HEIGHT - 4.0
         } else {
-            0.0
+            4.0
         },
     }
 }
@@ -101,14 +117,23 @@ pub fn bars(x: f64, y: f64, frame: u64, volume: f64, processing: bool) -> [Rect;
 }
 
 pub fn preview_card(x: f64, y: f64, text_width: f64, text_height: f64) -> Rect {
+    preview_card_in_surface(x, y, text_width, text_height, HEIGHT)
+}
+pub fn preview_card_in_surface(
+    x: f64,
+    y: f64,
+    text_width: f64,
+    text_height: f64,
+    surface_height: f64,
+) -> Rect {
     let width = (text_width + 24.0).clamp(160.0, 394.0);
-    let height = (text_height + 16.0).min(104.0);
+    let height = (text_height + 16.0).min((surface_height - PILL_HEIGHT - 16.0).max(16.0));
     Rect {
         x: (x + 31.0 - width / 2.0).clamp(4.0, WIDTH - width - 4.0),
-        y: if y > 70.0 {
+        y: if y > surface_height / 2.0 {
             (y - height - 8.0).max(4.0)
         } else {
-            (y + 32.0).min(HEIGHT - height - 4.0)
+            (y + 32.0).min(surface_height - height - 4.0)
         },
         width,
         height,
@@ -170,5 +195,144 @@ mod tests {
         assert_eq!(color(0xff0000), (0.0, 0.0, 1.0));
         assert!(text_color(color(0xffffff)).0 < 0.1);
         assert!(text_color(color(0)).0 > 0.9);
+    }
+}
+
+/// Content determines height; only the physical display bounds limit the surface.
+pub fn surface_height(text_height: f64, screen_height: f64) -> f64 {
+    (text_height + 16.0 + PILL_HEIGHT + 8.0 + 8.0)
+        .max(HEIGHT)
+        .min((screen_height - 100.0).max(64.0))
+}
+pub fn processing_color(u: f64) -> (f64, f64, f64) {
+    let palette = [
+        (155.0, 60.0, 245.0),
+        (236.0, 72.0, 153.0),
+        (245.0, 158.0, 11.0),
+        (6.0, 182.0, 212.0),
+    ];
+    let phase = u.rem_euclid(1.0) * 4.0;
+    let index = phase.floor() as usize;
+    let t = phase - index as f64;
+    let t = t * t * (3.0 - 2.0 * t);
+    let a = palette[index % 4];
+    let b = palette[(index + 1) % 4];
+    (
+        (a.0 + (b.0 - a.0) * t) / 255.0,
+        (a.1 + (b.1 - a.1) * t) / 255.0,
+        (a.2 + (b.2 - a.2) * t) / 255.0,
+    )
+}
+pub fn preview_text(raw: &str, processing: bool) -> &str {
+    if processing && raw.trim().is_empty() {
+        "Polishing..."
+    } else {
+        raw
+    }
+}
+
+#[cfg(test)]
+mod processing_design_tests {
+    use super::*;
+    #[test]
+    fn long_preview_grows_past_the_old_four_line_limit() {
+        let height = surface_height(500.0, 1080.0);
+        assert!(height > 500.0);
+        for position in [0, 1, 4, 5, 6, 7, 8] {
+            let p = placement_with_height(1920.0, 1080.0, position, 0.0, 0.0, height);
+            let card = preview_card_in_surface(p.pill_x, p.pill_y, 370.0, 500.0, height);
+            assert_eq!(card.height, 516.0);
+            assert!(card.y >= 4.0 && card.y + card.height <= height - 4.0);
+        }
+    }
+    #[test]
+    fn processing_palette_matches_the_original_windows_colors() {
+        assert_eq!(
+            processing_color(0.0),
+            (155.0 / 255.0, 60.0 / 255.0, 245.0 / 255.0)
+        );
+        assert_eq!(
+            processing_color(0.25),
+            (236.0 / 255.0, 72.0 / 255.0, 153.0 / 255.0)
+        );
+        assert_eq!(processing_color(0.0), processing_color(1.0));
+        assert_ne!(processing_color(0.0), processing_color(0.02));
+    }
+}
+
+/// Premultiplied Win32 BGRA pixel, using the original processing border profile.
+pub fn processing_pixel(
+    x: f64,
+    y: f64,
+    rect: Rect,
+    radius: f64,
+    frame: u64,
+    background: (f64, f64, f64),
+) -> u32 {
+    let cx = rect.x + rect.width / 2.0;
+    let cy = rect.y + rect.height / 2.0;
+    let qx = (x - cx).abs() - (rect.width / 2.0 - radius);
+    let qy = (y - cy).abs() - (rect.height / 2.0 - radius);
+    let distance = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius;
+    if distance > 3.5 {
+        return 0;
+    }
+    let phase = (y - cy).atan2(x - cx) / (std::f64::consts::PI * 2.0) + frame as f64 * 0.008;
+    let color = processing_color(phase);
+    let (color, alpha) = if distance > 0.0 {
+        (color, (150.0 * (1.0 - distance / 3.5).powi(2)) as u32)
+    } else {
+        let mix = if distance >= -1.2 {
+            0.85
+        } else {
+            (0.85 * (distance + 2.8) / 1.6).clamp(0.0, 0.85)
+        };
+        (
+            (
+                background.0 * (1.0 - mix) + color.0 * mix,
+                background.1 * (1.0 - mix) + color.1 * mix,
+                background.2 * (1.0 - mix) + color.2 * mix,
+            ),
+            242,
+        )
+    };
+    (alpha << 24)
+        | (((color.0 * alpha as f64) as u32) << 16)
+        | (((color.1 * alpha as f64) as u32) << 8)
+        | ((color.2 * alpha as f64) as u32)
+}
+
+/// Custom anchors keep their pill position while the card grows toward the
+/// larger free side of the monitor, rather than pushing the pill up the screen.
+pub fn surface_height_at(
+    text_height: f64,
+    screen_height: f64,
+    position: i32,
+    custom_y: f64,
+) -> f64 {
+    if position != 4 {
+        return surface_height(text_height, screen_height);
+    }
+    let available = if custom_y > screen_height / 2.0 {
+        custom_y + PILL_HEIGHT + 4.0
+    } else {
+        screen_height - custom_y + 4.0
+    };
+    (text_height + 16.0 + PILL_HEIGHT + 16.0)
+        .max(HEIGHT)
+        .min(available.max(64.0))
+}
+#[cfg(test)]
+mod custom_anchor_tests {
+    use super::*;
+    #[test]
+    fn tall_previews_do_not_move_a_custom_pill() {
+        for y in [100.0, 540.0, 950.0] {
+            let h = surface_height_at(800.0, 1080.0, 4, y);
+            let p = placement_with_height(1920.0, 1080.0, 4, 100.0, y, h);
+            assert!((p.y + p.pill_y - y).abs() < 0.01);
+            let card = preview_card_in_surface(p.pill_x, p.pill_y, 370.0, 800.0, h);
+            assert!(card.y >= 4.0 && card.y + card.height <= h - 4.0);
+        }
     }
 }

@@ -23,7 +23,7 @@ static void (*shortcutEdge)(bool);
 static CFMachPortRef eventTap;
 static bool chordActive, triggerDown;
 static NSPanel *panel;
-typedef struct { double x, y, pill_x, pill_y; } S2MOverlayPlacement;
+typedef struct { double height, x, y, pill_x, pill_y; } S2MOverlayPlacement;
 static void (*overlayDraw)(CGContextRef, double, double);
 static S2MOverlayPlacement (*overlayPlacement)(double, double, int, double, double);
 static NSTimer *overlayTimer;
@@ -322,6 +322,9 @@ static void updatePanel(void) {
     NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
     NSRect frame = screen.visibleFrame;
     S2MOverlayPlacement layout = overlayPlacement(frame.size.width, frame.size.height, placement, customX, customY);
+    surfaceHeight=layout.height;
+    [panel setContentSize:NSMakeSize(surfaceWidth,surfaceHeight)];
+    [panel.contentView setFrameSize:NSMakeSize(surfaceWidth,surfaceHeight)];
     pillX = layout.pill_x; pillY = layout.pill_y;
     [panel setFrameOrigin:NSMakePoint(NSMinX(frame) + layout.x, NSMaxY(frame) - layout.y - surfaceHeight)];
     [panel.contentView setNeedsDisplay:YES];
