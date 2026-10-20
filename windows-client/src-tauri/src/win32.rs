@@ -471,14 +471,15 @@ mod win32_impl {
                 let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                 calculate_pill_position(&config, pill_width, 24)
             };
+            let margin=if state==PreviewState::Meeting{0}else{4};
             unsafe {
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    x,
-                    y,
-                    pill_width,
-                    24,
+                    x-margin,
+                    y-margin,
+                    pill_width+margin*2,
+                    24+margin*2,
                     SWP_NOACTIVATE,
                 );
                 BringWindowToTop(hwnd);
