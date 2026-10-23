@@ -61,7 +61,7 @@ python3 deployment/diarization-server/test_gateway_admission.py
 From `windows-client`:
 
 ```sh
-cargo test --locked -- --skip test_clipboard_lifecycle
+cargo test --locked
 cargo build --locked
 cargo build --locked --target x86_64-pc-windows-gnu
 ```

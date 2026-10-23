@@ -52,10 +52,9 @@ type StreamEventMessage struct {
 }
 
 func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-		OriginPatterns:     []string{"*"},
-	})
+	// Default origin checks reject cross-site browser pages; the desktop client
+	// sends no Origin header.
+	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		log.Printf("[STREAM ERROR] WebSocket upgrade failed: %v", err)
 		return
@@ -66,18 +65,12 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
-	// 1. Authenticate user from Query Param, Cookie, or Authorization Header
-	token := r.URL.Query().Get("token")
+	// 1. Authenticate from the Authorization header. Desktop builds released
+	// before header authentication still send ?token=; nginx drops query
+	// strings from access logs. Remove the fallback once those builds expire.
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if token == "" {
-		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			token = strings.TrimPrefix(authHeader, "Bearer ")
-		}
-	}
-	if token == "" {
-		if cookie, err := r.Cookie("token"); err == nil {
-			token = cookie.Value
-		}
+		token = r.URL.Query().Get("token")
 	}
 
 	if token == "" {

@@ -103,8 +103,14 @@ pub fn upload(filepath: &str) -> Result<String, String> {
             .map_err(|e| e.to_string())?,
         filepath,
     )?;
-    let user_id=account.get("id").and_then(Value::as_i64).filter(|id|*id>0).ok_or("Account identity unavailable")?;
-    if !crate::recording_identity::owns(&record,user_id,&token) {return Err("Sign in to the account that recorded this meeting. Older recordings require their original session.".into());}
+    let user_id = account
+        .get("id")
+        .and_then(Value::as_i64)
+        .filter(|id| *id > 0)
+        .ok_or("Account identity unavailable")?;
+    if !crate::recording_identity::owns(&record, user_id, &token) {
+        return Err("Sign in to the account that recorded this meeting. Older recordings require their original session.".into());
+    }
     let path = Path::new(filepath);
     let files = BTreeMap::from([
         ("mic", path.with_extension("mic.ogg")),
@@ -251,9 +257,13 @@ pub fn start_recovery() {
                     .unwrap_or_else(|e| e.into_inner())
                     .clone()
             };
-            if crate::meeting_session::is_starting(){continue;}
+            if crate::meeting_session::is_starting() {
+                continue;
+            }
             for record in crate::load_meeting_index() {
-                if crate::meeting_session::is_starting(){break;}
+                if crate::meeting_session::is_starting() {
+                    break;
+                }
                 if RETRY_AT
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -280,8 +290,14 @@ pub fn start_recovery() {
                     {
                         continue;
                     };
-                    if let Err(message)=crate::recording_recovery::repair_meeting(Path::new(&record.filepath)) {
-                        crate::update_meeting_status(&record.filepath,"capture_failed",Some(message));
+                    if let Err(message) =
+                        crate::recording_recovery::repair_meeting(Path::new(&record.filepath))
+                    {
+                        crate::update_meeting_status(
+                            &record.filepath,
+                            "capture_failed",
+                            Some(message),
+                        );
                         crate::account_errors::notify("Meetings", "An interrupted recording could not be recovered automatically. Local audio files have been retained.");
                         continue;
                     }
@@ -296,13 +312,20 @@ pub fn start_recovery() {
     });
 }
 
-pub fn cache_account(token: &str, email: &str, user_id:i64) {
+pub fn cache_account(token: &str, email: &str, user_id: i64) {
     let path = crate::config::get_config_path().with_file_name("recording_account.json");
     let temporary = path.with_extension("tmp");
     let data =
         json!({"fingerprint":format!("{:x}",Sha256::digest(token.as_bytes())),"email":email,"id":user_id})
             .to_string();
-    if let Ok(mut file) = File::create(&temporary) {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(mut file) = options.open(&temporary) {
         use std::io::Write;
         if file.write_all(data.as_bytes()).is_ok() && file.sync_all().is_ok() {
             drop(file);
@@ -355,8 +378,12 @@ pub fn retry(filepath: &str) -> Result<String, String> {
     Ok(state.to_string())
 }
 
-pub fn cached_account_id(token:&str)->Option<i64>{
- let path=crate::config::get_config_path().with_file_name("recording_account.json");
- let data:Value=serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
- if data["fingerprint"]==format!("{:x}",Sha256::digest(token.as_bytes())){data["id"].as_i64().filter(|id|*id>0)}else{None}
+pub fn cached_account_id(token: &str) -> Option<i64> {
+    let path = crate::config::get_config_path().with_file_name("recording_account.json");
+    let data: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    if data["fingerprint"] == format!("{:x}", Sha256::digest(token.as_bytes())) {
+        data["id"].as_i64().filter(|id| *id > 0)
+    } else {
+        None
+    }
 }

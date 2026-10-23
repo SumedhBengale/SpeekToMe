@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 fn default_pill_position_mode() -> String {
     "predefined".to_string()
@@ -40,19 +40,19 @@ pub const HOTKEY_WIN: u32 = 0x08;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub api_url: Option<String>,
-    
+
     #[serde(default = "default_hotkey")]
-    pub hotkey: String,       // Validated shortcut name, shared by presets and custom combinations.
-    
+    pub hotkey: String, // Validated shortcut name, shared by presets and custom combinations.
+
     #[serde(default = "default_hotkey_mode")]
-    pub hotkey_mode: String,  // "hold" | "toggle"
+    pub hotkey_mode: String, // "hold" | "toggle"
 
     #[serde(default = "default_command_mode")]
-    pub command_mode: bool,   // true/false - AI transformation command mode
+    pub command_mode: bool, // true/false - AI transformation command mode
 
-    pub typing_mode: bool,    // true/false
-    pub sound_feedback: bool, // true/false
-    pub custom_prompt: String,// String prompt instructions
+    pub typing_mode: bool,     // true/false
+    pub sound_feedback: bool,  // true/false
+    pub custom_prompt: String, // String prompt instructions
     pub session_token: Option<String>,
     #[serde(default)]
     pub onboarding_version: u32,
@@ -60,33 +60,33 @@ pub struct AppConfig {
     pub onboarding_step: u8,
     #[serde(default)]
     pub onboarding_pro_defaults_applied: bool,
-    pub autostart: bool,      // true/false
-    pub theme: String,        // "forest", "lavender", "mint", "classic_dark"
-    
+    pub autostart: bool, // true/false
+    pub theme: String,   // "forest", "lavender", "mint", "classic_dark"
+
     #[serde(default = "default_transcription_mode")]
     pub transcription_mode: String, // "stream" | "batch"
-    
+
     #[serde(default)]
     pub languages: Option<Vec<String>>,
 
     #[serde(default)]
     pub active_language: String,
-    
+
     #[serde(default = "default_pill_position_mode")]
     pub pill_position_mode: String,
-    
+
     #[serde(default = "default_pill_predefined_position")]
     pub pill_predefined_position: String,
-    
+
     #[serde(default = "default_pill_custom_x")]
     pub pill_custom_x: i32,
-    
+
     #[serde(default = "default_pill_custom_y")]
     pub pill_custom_y: i32,
-    
+
     #[serde(default = "default_pill_bg_color")]
     pub pill_bg_color: u32,
-    
+
     #[serde(default = "default_pill_wave_color")]
     pub pill_wave_color: u32,
 }
@@ -101,7 +101,11 @@ impl AppConfig {
     }
 
     pub fn normalize_speaking_language(&mut self) {
-        if self.languages.as_ref().map_or(true, |languages| languages.is_empty()) {
+        if self
+            .languages
+            .as_ref()
+            .map_or(true, |languages| languages.is_empty())
+        {
             self.languages = Some(vec!["en".into()]);
         }
         self.active_language = self.speaking_language();
@@ -160,7 +164,9 @@ pub fn get_config_path() -> std::path::PathBuf {
         let config_root = std::env::var_os("XDG_CONFIG_HOME")
             .filter(|p| !p.is_empty())
             .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config")));
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+            });
 
         if let Some(root) = config_root {
             let directory = root.join("SpeekToMe");
@@ -189,18 +195,24 @@ pub fn get_config_path() -> std::path::PathBuf {
     }
     #[cfg(target_os = "macos")]
     {
-        let root = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        let root = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
         let directory = root.join("Library/Application Support/SpeekToMe");
         let _ = std::fs::create_dir_all(&directory);
         let path = directory.join("config.json");
         let legacy = root.join(".config/SpeekToMe/config.json");
-        if !path.exists() && legacy.is_file() { let _ = std::fs::copy(legacy, &path); }
+        if !path.exists() && legacy.is_file() {
+            let _ = std::fs::copy(legacy, &path);
+        }
         path
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         if let Ok(home) = std::env::var("HOME") {
-            let directory = std::path::PathBuf::from(home).join(".config").join("SpeekToMe");
+            let directory = std::path::PathBuf::from(home)
+                .join(".config")
+                .join("SpeekToMe");
             let _ = std::fs::create_dir_all(&directory);
             directory.join("config.json")
         } else {
@@ -223,10 +235,23 @@ fn decode_config(data: &str) -> Option<AppConfig> {
     Some(config)
 }
 pub fn load_config() -> AppConfig {
-    std::fs::read_to_string(get_config_path())
+    let mut config = std::fs::read_to_string(get_config_path())
         .ok()
         .and_then(|data| decode_config(&data))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    match crate::session_store::load() {
+        Some(token) => config.session_token = Some(token),
+        // Builds before the credential store kept the token in config.json.
+        // Move it there and rewrite the file without it.
+        None => {
+            if let Some(token) = config.session_token.clone() {
+                if crate::session_store::store(&token) {
+                    let _ = write_config_file(&config);
+                }
+            }
+        }
+    }
+    config
 }
 pub fn save_config(config: &AppConfig) {
     if let Err(error) = try_save_config(config) {
@@ -235,27 +260,7 @@ pub fn save_config(config: &AppConfig) {
 }
 
 pub fn try_save_config(config: &AppConfig) -> Result<(), String> {
-    let path = get_config_path();
-    let data = serde_json::to_string_pretty(config).map_err(|_| "Settings could not be encoded".to_string())?;
-    {
-        use std::io::Write;
-        let temporary = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
-        let result = (|| -> std::io::Result<()> {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
-            let mut file = options.open(&temporary)?;
-            file.write_all(data.as_bytes())?;
-            file.sync_all()?;
-            drop(file);
-            crate::meeting_upload::replace_file(&temporary, &path)
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-            return Err("Settings could not be saved. Check available disk space and profile permissions.".into());
-        }
-    }
+    write_config_file(config)?;
     #[cfg(target_os = "linux")]
     crate::linux_util::sync_autostart(config.autostart);
     #[cfg(target_os = "macos")]
@@ -267,8 +272,63 @@ pub fn try_save_config(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Writes settings atomically. The session token goes to the credential store
+/// and is left out of the file whenever the store accepts it.
+fn write_config_file(config: &AppConfig) -> Result<(), String> {
+    let mut on_disk = config.clone();
+    match &config.session_token {
+        Some(token) if crate::session_store::store(token) => on_disk.session_token = None,
+        Some(_) => {}
+        None => crate::session_store::clear(),
+    }
+    let path = get_config_path();
+    let data = serde_json::to_string_pretty(&on_disk)
+        .map_err(|_| "Settings could not be encoded".to_string())?;
+    {
+        use std::io::Write;
+        let temporary = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| -> std::io::Result<()> {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temporary)?;
+            file.write_all(data.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            crate::meeting_upload::replace_file(&temporary, &path)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(
+                "Settings could not be saved. Check available disk space and profile permissions."
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The settings shown to the webview: never the session token itself.
+pub fn frontend_view(config: &AppConfig) -> serde_json::Value {
+    let mut value = serde_json::to_value(config).unwrap_or_default();
+    if let Some(object) = value.as_object_mut() {
+        object.insert("session_token".into(), serde_json::Value::Null);
+        object.insert(
+            "signed_in".into(),
+            serde_json::Value::Bool(config.session_token.is_some()),
+        );
+    }
+    value
+}
+
 pub fn parse_hotkey_combo(name: &str) -> u32 {
-    crate::hotkey::parse(name).map(|h| h.combo).unwrap_or(HOTKEY_CTRL | HOTKEY_WIN)
+    crate::hotkey::parse(name)
+        .map(|h| h.combo)
+        .unwrap_or(HOTKEY_CTRL | HOTKEY_WIN)
 }
 
 #[cfg(test)]
@@ -316,7 +376,8 @@ mod speaking_language_tests {
         assert_eq!(config.speaking_language(), "en");
         config.active_language = "auto".into();
         assert_eq!(config.speaking_language(), "en");
-        let restored: AppConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        let restored: AppConfig =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
         assert_eq!(restored.speaking_language(), "en");
     }
 }

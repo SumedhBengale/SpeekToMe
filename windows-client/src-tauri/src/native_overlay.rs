@@ -202,7 +202,10 @@ mod tests {
 
     #[test]
     fn recording_logo_is_still_in_silence_and_preserves_svg_at_full_volume() {
-        assert_eq!(bars(0.0, 0.0, 0, 0.0, false), bars(0.0, 0.0, 500, 0.0, false));
+        assert_eq!(
+            bars(0.0, 0.0, 0, 0.0, false),
+            bars(0.0, 0.0, 500, 0.0, false)
+        );
         assert_eq!(bars(0.0, 0.0, 0, 0.0, false), bars(0.0, 0.0, 0, 2.0, false));
         let loud = bars(0.0, 0.0, 0, 120.0, false);
         for (bar, original) in loud.iter().zip([120.0, 208.0, 316.0, 208.0, 120.0]) {
@@ -216,7 +219,10 @@ mod tests {
             assert!(shape[0].height < shape[1].height && shape[1].height < shape[2].height);
             assert!(shape.iter().zip(loud).all(|(a, b)| a.height <= b.height));
         }
-        assert_eq!(color(LOGO_COLOR), (250.0 / 255.0, 83.0 / 255.0, 136.0 / 255.0));
+        assert_eq!(
+            color(LOGO_COLOR),
+            (250.0 / 255.0, 83.0 / 255.0, 136.0 / 255.0)
+        );
     }
 
     #[test]
@@ -224,8 +230,13 @@ mod tests {
         assert_eq!(smooth_volume(0.0, 1000.0), smooth_volume(0.0, 120.0));
         assert!(smooth_volume(0.0, 100.0) > 100.0 - smooth_volume(100.0, 0.0));
         let mut level = 120.0;
-        for _ in 0..30 { level = smooth_volume(level, 0.0); }
-        assert!(level < 2.0, "one second of silence should reach the resting shape");
+        for _ in 0..30 {
+            level = smooth_volume(level, 0.0);
+        }
+        assert!(
+            level < 2.0,
+            "one second of silence should reach the resting shape"
+        );
     }
 
     #[test]

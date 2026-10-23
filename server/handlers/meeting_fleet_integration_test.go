@@ -140,9 +140,10 @@ func TestRealCPUQueueSerial(t *testing.T) {
 	d.token = string(bytes.TrimSpace(credential))
 	for i, key := range []string{"real-first", "real-second"} {
 		addDiarizationMeeting(t, j, key, i)
-		if err := os.WriteFile(filepath.Join(j.root, key, "system.ogg"), audio, 0600); err != nil {
+		if err := j.spool.Delete(context.Background(), key); err != nil {
 			t.Fatal(err)
 		}
+		spoolAudio(t, j.spool, int64(i), key, map[string][]byte{"system": audio})
 	}
 	deadline := time.Now().Add(120 * time.Second)
 	observedQueued := false

@@ -354,8 +354,12 @@ extern "C" fn draw(context: *mut c_void, x: f64, y: f64) {
                 renderer.smoothed = design::smooth_volume(renderer.smoothed, volume as f64);
                 for bar in design::bars(x, y, renderer.frame, renderer.smoothed, state == 2) {
                     rounded(
-                        context, bar, bar.width / 2.0,
-                        design::color(design::LOGO_COLOR), 1.0, false,
+                        context,
+                        bar,
+                        bar.width / 2.0,
+                        design::color(design::LOGO_COLOR),
+                        1.0,
+                        false,
                     );
                 }
                 let raw = crate::win32::get_preview_text();

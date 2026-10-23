@@ -2,6 +2,7 @@
 import ast
 import asyncio
 import json
+import struct
 import logging
 from pathlib import Path
 import secrets
@@ -16,6 +17,16 @@ import os
 class Response:
     def __init__(self, content, status_code=200, headers=None):
         self.content, self.status_code = content, status_code
+
+
+class PassthroughCipher:
+    """Stands in for AES-GCM so fixtures need only the standard library."""
+
+    def encrypt(self, nonce, data, aad):
+        return bytes(data) + bytes(16)
+
+    def decrypt(self, nonce, data, aad):
+        return data[:-16]
 
 
 class HTTPException(Exception):
@@ -49,7 +60,8 @@ class AdmissionTest(unittest.TestCase):
                        DATA=Path(self.temp.name), ready=True, active=None,
                        lock=threading.RLock(), slot=threading.Lock(),
                        MAX_UPLOAD=1024, RESERVE=0, log=logging.getLogger('test'),
-                       cleanup_old=lambda: None)
+                       cleanup_old=lambda: None, struct=struct,
+                   SPOOL_CIPHER=PassthroughCipher(), RECORD_BYTES=1024)
         self.ns['snapshot'] = lambda: {'active_job': self.ns['active']}
 
         def process(job):
@@ -65,7 +77,7 @@ class AdmissionTest(unittest.TestCase):
         functions = []
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in (
-                    'atomic_json', 'job_dir', 'update', 'submit'):
+                    'atomic_json', 'job_dir', 'update', 'submit', 'seal_record'):
                 node.decorator_list = []
                 functions.append(node)
         exec(compile(ast.Module(body=functions, type_ignores=[]), 'gateway.py', 'exec'), self.ns)

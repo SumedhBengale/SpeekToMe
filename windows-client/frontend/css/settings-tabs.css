@@ -1,0 +1,523 @@
+/* ==========================================
+   Dictation & Languages Tab Redesign (100% Theme-Driven)
+   ========================================== */
+
+.dictation-feature-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px;
+  border-radius: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.dictation-icon-box {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-soft);
+  color: var(--accent-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dictation-feature-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.dictation-feature-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.dictation-feature-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.dictation-feature-desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.dictation-feature-toggle {
+  flex-shrink: 0;
+}
+
+/* Modern Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--border-color);
+  transition: 0.2s ease;
+  border-radius: 999px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #ffffff;
+  transition: 0.2s ease;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: var(--accent-color);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(20px);
+}
+
+/* Languages Card */
+.languages-card {
+  padding: 22px 24px;
+  border-radius: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.languages-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.languages-header-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.languages-card-title {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.languages-card-desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.lang-pill-count {
+  background: var(--accent-tint);
+  color: var(--accent-color);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-soft);
+  flex-shrink: 0;
+}
+
+.languages-section-group {
+  margin-bottom: 16px;
+}
+
+.languages-section-label {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.languages-chips-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.lang-chip {
+  display: inline-flex;
+  align-items: center;
+  background: var(--accent-tint);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 8px;
+  border-radius: 8px;
+  gap: 6px;
+}
+
+.lang-chip.is-current {
+  background: var(--accent-tint);
+  border-color: var(--accent-color);
+}
+
+.lang-chip-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.lang-chip-star[aria-pressed="true"] {
+  color: var(--accent-color);
+}
+
+.lang-chip-star[aria-pressed="true"] svg {
+  fill: currentColor;
+}
+
+.lang-chip-star:hover {
+  color: var(--accent-color);
+  background: var(--accent-tint);
+}
+
+.lang-chip-star:focus-visible,
+.lang-chip-remove:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.lang-chip-current {
+  color: var(--accent-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.lang-chip button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.lang-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lang-chip-remove:hover {
+  color: var(--accent-color);
+}
+
+.languages-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 18px 0;
+}
+
+.languages-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lang-combobox-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.lang-search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.lang-search-input {
+  width: 100%;
+  height: 40px;
+  padding-left: 36px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  background: var(--input-bg) !important;
+  border: 1px solid var(--input-border, var(--border-color)) !important;
+  color: var(--text-primary) !important;
+  box-sizing: border-box;
+}
+
+.lang-search-input:focus {
+  border-color: var(--border-focus, var(--accent-color)) !important;
+  box-shadow: 0 0 0 2px var(--accent-tint) !important;
+}
+
+.lang-add-btn {
+  height: 40px;
+  padding: 0 22px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  background: var(--btn-primary-bg, var(--accent-tint)) !important;
+  color: var(--btn-primary-text, var(--accent-color)) !important;
+  border: 1px solid var(--btn-primary-border, var(--accent-soft)) !important;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lang-add-btn:hover {
+  background: var(--btn-primary-hover-bg, var(--accent-hover)) !important;
+  color: var(--btn-primary-text, var(--accent-text)) !important;
+}
+
+.languages-info-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  margin-top: 18px;
+}
+
+/* ==========================================
+   Account Tab Redesign (100% Theme-Driven)
+   ========================================== */
+
+.account-card {
+  padding: 22px 24px;
+  border-radius: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.account-card-header {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--accent-color);
+  margin-bottom: 14px;
+}
+
+.account-details-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.account-user-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.account-email {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.account-provider {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.manage-acc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--btn-secondary-border, var(--border-color));
+  background: var(--btn-secondary-bg, transparent);
+  color: var(--btn-secondary-text, var(--text-primary));
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.manage-acc-btn:hover {
+  background: var(--btn-secondary-hover-bg, var(--accent-tint));
+  border-color: var(--border-focus);
+}
+
+.account-table-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13.5px;
+}
+
+.account-row-label {
+  color: var(--text-secondary);
+}
+
+.account-row-val {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.plan-pill-tag {
+  background: var(--pro-tag-bg, var(--accent-tint));
+  color: var(--pro-tag-text, var(--accent-color));
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--pro-tag-border, var(--accent-soft));
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.status-pill-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--badge-active-bg, #0f172a);
+  color: var(--badge-active-color, #ffffff);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.4px;
+}
+
+.status-pill-tag.inactive {
+  background: var(--badge-inactive-bg);
+  color: var(--badge-inactive-color, var(--text-secondary));
+}
+
+.status-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+
+.status-pill-dot.inactive {
+  background: var(--text-muted);
+}
+
+.account-table-dashed-divider {
+  height: 1px;
+  border-bottom: 1px dashed var(--border-subtle);
+  margin: 6px 0;
+}
+
+.account-usage-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.account-usage-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.account-usage-text {
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.info-bubble {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+.info-bubble:hover {
+  color: var(--accent-color);
+}
+
+.info-bubble:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.account-logout-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--btn-danger-bg, var(--accent-tint));
+  border: 1px solid var(--btn-danger-border, var(--accent-soft));
+  color: var(--btn-danger-text, var(--accent-color));
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+  margin-top: 4px;
+}
+
+.account-logout-btn:hover {
+  background: var(--accent-tint-hover, var(--accent-soft));
+}

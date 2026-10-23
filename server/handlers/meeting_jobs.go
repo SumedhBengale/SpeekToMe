@@ -14,10 +14,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"speektome-server/audiospool"
 	"speektome-server/config"
 	"speektome-server/pipeline"
 	log "speektome-server/privacylog"
@@ -42,15 +42,25 @@ type MeetingUpload struct {
 	Files    map[string]MeetingFile `json:"files"`
 }
 type MeetingJobs struct {
-	app                *App
-	db                 *sql.DB
+	app   *App
+	db    *sql.DB
+	spool *audiospool.Spool
+	// root is the pre-spool plaintext directory, read only to migrate old jobs.
 	root, fleet, token string
 	uploads            [64]sync.Mutex
 	client             *http.Client
 	diarization        *MeetingDiarization
 }
 
+// Spooled audio is kept only while its job needs it. Failed meetings can be
+// retried within this window; after it the desktop uploads its local copy again.
+const meetingSpoolRetention = 24 * time.Hour
+
+// Processing is bounded to six hours, so nothing outlives this hard limit.
+const meetingSpoolHardLimit = meetingSpoolRetention + 6*time.Hour
+
 var clientMeetingID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,96}$`)
+var jobKeyPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
 	root := os.Getenv("MEETING_AUDIO_DIR")
@@ -59,9 +69,6 @@ func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
 	}
 	root, e := filepath.Abs(root)
 	if e != nil {
-		return e
-	}
-	if e = os.MkdirAll(root, 0700); e != nil {
 		return e
 	}
 	fleet := os.Getenv("SPEEKTOME_FLEET_URL")
@@ -120,6 +127,16 @@ func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
 		}
 	}
 	if _, e = jobs.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_one_account_job ON meeting_jobs(user_id) WHERE admitted=1"); e != nil {
+		return e
+	}
+	var purgedColumn int
+	_ = jobs.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('meeting_jobs') WHERE name='spool_purged'").Scan(&purgedColumn)
+	if purgedColumn == 0 {
+		if _, e = jobs.db.Exec("ALTER TABLE meeting_jobs ADD COLUMN spool_purged INTEGER NOT NULL DEFAULT 0"); e != nil {
+			return e
+		}
+	}
+	if jobs.spool, e = newMeetingSpool(a); e != nil {
 		return e
 	}
 	jobs.diarization, e = newMeetingDiarization(jobs)
@@ -248,14 +265,6 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 
 	unlock := j.lock(key)
 	defer unlock()
-	if e = os.MkdirAll(filepath.Join(j.root, key), 0700); e != nil {
-		http.Error(w, "storage unavailable", 503)
-		return
-	}
-	if e = syncMeetingDirectory(j.root); e != nil {
-		http.Error(w, "storage durability unavailable", 503)
-		return
-	}
 	_, e = j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,created_at,language) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM meeting_jobs WHERE user_id=? AND admitted=0 AND status IN ('uploading','queued'))<3 ON CONFLICT(user_id,client_id) DO NOTHING`, key, user.ID, req.ID, req.Title, string(data), time.Now().Unix(), language, user.ID)
 	if e != nil {
 		http.Error(w, "database unavailable", 503)
@@ -264,7 +273,6 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 	var existing string
 	if err := j.db.QueryRow(`SELECT files_json FROM meeting_jobs WHERE job_key=?`, key).Scan(&existing); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			os.Remove(filepath.Join(j.root, key))
 			accountlimits.Write(w, accountlimits.Denied("meeting_queue_full", "Your account already has three meetings waiting to be processed. Your recording is saved locally; upload it after a queued meeting finishes.", 30))
 		} else {
 			accountlimits.Write(w, accountlimits.Unavailable())
@@ -288,11 +296,7 @@ func (j *MeetingJobs) respond(w http.ResponseWriter, key string) {
 	json.Unmarshal([]byte(files), &manifest)
 	offsets := map[string]int64{}
 	for channel := range manifest {
-		if info, e := os.Stat(filepath.Join(j.root, key, channel+".ogg")); e == nil {
-			offsets[channel] = info.Size()
-		} else {
-			offsets[channel] = 0
-		}
+		offsets[channel], _ = j.spool.Size(context.Background(), key, channel)
 	}
 	response := map[string]any{"status": status, "offsets": offsets, "error": lastError, "meeting_id": meeting.Int64}
 	var diarStatus, diarError string
@@ -316,7 +320,7 @@ func (j *MeetingJobs) status(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (j *MeetingJobs) upload(w http.ResponseWriter, r *http.Request) {
-	_, key, ok := j.identity(w, r)
+	userID, key, ok := j.identity(w, r)
 	if !ok {
 		return
 	}
@@ -350,44 +354,24 @@ func (j *MeetingJobs) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	var manifest map[string]MeetingFile
 	json.Unmarshal([]byte(files), &manifest)
-	file, e := os.OpenFile(filepath.Join(j.root, key, channel+".ogg"), os.O_CREATE|os.O_RDWR, 0600)
-	if e != nil {
-		http.Error(w, "storage unavailable", 503)
-		return
-	}
-	defer file.Close()
-	info, e := file.Stat()
-	if e != nil {
-		http.Error(w, "storage unavailable", 503)
-		return
-	}
-	if offset != info.Size() {
-		w.Header().Set("Upload-Offset", strconv.FormatInt(info.Size(), 10))
-		http.Error(w, "offset mismatch", 409)
-		return
-	}
-	// Read a bounded chunk before appending so interrupted requests cannot leave
-	// ambiguous partial writes. Fsync before acknowledging its new offset.
 	if offset+int64(len(data)) > manifest[channel].Size {
 		http.Error(w, "invalid upload chunk", 413)
 		return
 	}
-	if _, e = file.Seek(offset, 0); e == nil {
-		_, e = file.Write(data)
-	}
-	if e == nil {
-		e = file.Sync()
-	}
-	if e == nil {
-		e = syncMeetingDirectory(filepath.Dir(file.Name()))
+	// The chunk is sealed before it reaches storage and acknowledged only after
+	// its index row is durable.
+	next, e := j.spool.Append(r.Context(), userID, key, channel, offset, data)
+	clear(data)
+	if errors.Is(e, audiospool.ErrOffset) {
+		w.Header().Set("Upload-Offset", strconv.FormatInt(next, 10))
+		http.Error(w, "offset mismatch", 409)
+		return
 	}
 	if e != nil {
-		file.Truncate(offset)
-		file.Sync()
 		http.Error(w, "storage write failed", 503)
 		return
 	}
-	w.Header().Set("Upload-Offset", strconv.FormatInt(offset+int64(len(data)), 10))
+	w.Header().Set("Upload-Offset", strconv.FormatInt(next, 10))
 	w.WriteHeader(204)
 }
 func (j *MeetingJobs) commit(w http.ResponseWriter, r *http.Request) {
@@ -408,34 +392,45 @@ func (j *MeetingJobs) commit(w http.ResponseWriter, r *http.Request) {
 	}
 	var manifest map[string]MeetingFile
 	json.Unmarshal([]byte(files), &manifest)
-	for channel, expected := range manifest {
-		f, e := os.Open(filepath.Join(j.root, key, channel+".ogg"))
-		if e != nil {
+	// Verify each channel from the sealed spool: checksum against the manifest
+	// and duration from the Ogg pages themselves, never from client claims.
+	duration := 0.0
+	for _, channel := range []string{"mic", "system", "mixed"} {
+		expected := manifest[channel]
+		seconds, size, sum, e := j.verifyChannel(r.Context(), userID, key, channel)
+		if errors.Is(e, audiospool.ErrCorrupt) || (e == nil && size != expected.Size) {
 			http.Error(w, "upload incomplete", 409)
 			return
 		}
-		hash := sha256.New()
-		size, e := io.Copy(hash, f)
-		f.Close()
-		if e != nil || size != expected.Size || hex.EncodeToString(hash.Sum(nil)) != expected.SHA {
-			http.Error(w, "audio checksum mismatch", 422)
+		if errors.Is(e, audiospool.ErrInvalidAudio) || (e == nil && (math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 14400)) {
+			http.Error(w, "invalid recording or duration exceeds four hours", 422)
 			return
 		}
-	}
-	// Validate actual durations rather than trusting the upload manifest.
-	duration := 0.0
-	for _, channel := range []string{"mic", "system", "mixed"} {
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		output, e := probeMeetingDuration(ctx, filepath.Join(j.root, key, channel+".ogg"))
-		cancel()
-		seconds, parse := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
-		if e != nil || parse != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 14400 {
-			http.Error(w, "invalid recording or duration exceeds four hours", 422)
+		if e != nil {
+			http.Error(w, "storage unavailable", 503)
+			return
+		}
+		if sum != expected.SHA {
+			http.Error(w, "audio checksum mismatch", 422)
 			return
 		}
 		if seconds > duration {
 			duration = seconds
 		}
+	}
+	var existingMeeting sql.NullInt64
+	_ = j.db.QueryRowContext(r.Context(), `SELECT meeting_id FROM meeting_jobs WHERE job_key=?`, key).Scan(&existingMeeting)
+	if existingMeeting.Valid {
+		// A re-upload after the server spool expired: the meeting row and its
+		// quota charge already exist from the first commit.
+		if _, e := j.db.ExecContext(r.Context(), `UPDATE meeting_jobs SET status='queued',error='',next_attempt=0 WHERE job_key=? AND status='uploading'`, key); e != nil {
+			http.Error(w, "cannot enqueue meeting", 503)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(202)
+		j.respond(w, key)
+		return
 	}
 	tx, e := j.db.BeginTx(r.Context(), nil)
 	if e != nil {
@@ -481,7 +476,7 @@ func (j *MeetingJobs) commit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "monthly meeting quota exceeded", 403)
 		return
 	}
-	res, e := tx.Exec(`INSERT INTO meetings(user_id,title,duration,audio_path,transcript,summary,action_items,segments_json) VALUES(?,?,?,?,'','','','[]')`, userID, title, duration, filepath.Join(j.root, key, "mixed.ogg"))
+	res, e := tx.Exec(`INSERT INTO meetings(user_id,title,duration,audio_path,transcript,summary,action_items,segments_json) VALUES(?,?,?,'','','','','[]')`, userID, title, duration)
 	if e != nil {
 		http.Error(w, "database unavailable", 503)
 		return
@@ -522,8 +517,10 @@ func (j *MeetingJobs) fleetCall(ctx context.Context, path string, body any) erro
 func (j *MeetingJobs) loop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	j.migrateLegacyAudio(ctx)
 	for {
 		j.expireUploads(ctx)
+		j.maintainSpool(ctx)
 		j.dispatch(ctx)
 		select {
 		case <-ctx.Done():
@@ -551,10 +548,14 @@ func (j *MeetingJobs) expireUploads(ctx context.Context) {
 	rows.Close()
 	for _, key := range keys {
 		unlock := j.lock(key)
-		result, err := j.db.ExecContext(ctx, "DELETE FROM meeting_jobs WHERE job_key=? AND status='uploading' AND created_at<?", key, cutoff)
+		// A re-upload after expiry already owns a meeting row; keep the job so
+		// a later retry can attach to it instead of deleting the meeting.
+		_, _ = j.db.ExecContext(ctx, "UPDATE meeting_jobs SET status='failed',spool_purged=1,error='The upload did not finish. Retry to upload it again from this device.' WHERE job_key=? AND status='uploading' AND created_at<? AND meeting_id IS NOT NULL", key, cutoff)
+		result, err := j.db.ExecContext(ctx, "DELETE FROM meeting_jobs WHERE job_key=? AND status='uploading' AND created_at<? AND meeting_id IS NULL", key, cutoff)
 		if err == nil {
 			if n, _ := result.RowsAffected(); n == 1 {
-				_ = os.RemoveAll(filepath.Join(j.root, key))
+				// A failed delete leaves an orphan that maintenance removes.
+				_ = j.spool.Delete(ctx, key)
 			}
 		}
 		unlock()
@@ -795,16 +796,16 @@ func (j *MeetingJobs) stage(ctx context.Context, key, attempt, stage string) ([]
 	if stage != "mic" && stage != "system" {
 		return nil, true, errors.New("GPU stage must be mic or system")
 	}
-	channel := stage
-	file, e := os.Open(filepath.Join(j.root, key, channel+".ogg"))
+	audio, size, e := j.openChannel(ctx, key, stage)
+	if e != nil {
+		return nil, errors.Is(e, audiospool.ErrCorrupt), e
+	}
+	defer audio.Close()
+	request, e := http.NewRequestWithContext(ctx, "POST", j.fleet+"/v1/meeting/"+stage+"?language="+url.QueryEscape(j.language(key)), audio)
 	if e != nil {
 		return nil, true, e
 	}
-	defer file.Close()
-	request, e := http.NewRequestWithContext(ctx, "POST", j.fleet+"/v1/meeting/"+stage+"?language="+url.QueryEscape(j.language(key)), file)
-	if e != nil {
-		return nil, true, e
-	}
+	request.ContentLength = size
 	request.Header.Set("Content-Type", "audio/ogg")
 	request.Header.Set("Authorization", "Bearer "+j.token)
 	request.Header.Set("X-SpeekToMe-Meeting-ID", key+"_"+attempt)
@@ -981,21 +982,6 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 	return nil
 }
 
-func probeMeetingDuration(ctx context.Context, path string) ([]byte, error) {
-	if _, e := exec.LookPath("ffprobe"); e == nil {
-		return exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path).Output()
-	}
-	output, _ := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-i", path).CombinedOutput()
-	match := regexp.MustCompile(`Duration: ([0-9]+):([0-9]+):([0-9]+\.[0-9]+)`).FindStringSubmatch(string(output))
-	if len(match) != 4 {
-		return nil, errors.New("audio duration unavailable")
-	}
-	hours, _ := strconv.ParseFloat(match[1], 64)
-	minutes, _ := strconv.ParseFloat(match[2], 64)
-	seconds, _ := strconv.ParseFloat(match[3], 64)
-	return []byte(strconv.FormatFloat(hours*3600+minutes*60+seconds, 'f', 6, 64)), nil
-}
-
 func (j *MeetingJobs) language(key string) string {
 	var language string
 	if j.db.QueryRow(`SELECT language FROM meeting_jobs WHERE job_key=?`, key).Scan(&language) == nil && language != "" {
@@ -1018,7 +1004,9 @@ func (j *MeetingJobs) retryHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, e := j.db.Exec(`UPDATE meeting_jobs SET status='queued',attempts=0,next_attempt=0,error='' WHERE job_key=? AND status='failed' AND (SELECT COUNT(*) FROM meeting_jobs pending WHERE pending.user_id=meeting_jobs.user_id AND pending.admitted=0 AND pending.status IN ('uploading','queued'))<3`, key)
+	// Once its spool expired, a failed meeting needs the desktop's local copy
+	// again; the job returns to uploading and keeps its meeting row.
+	res, e := j.db.Exec(`UPDATE meeting_jobs SET status=CASE WHEN spool_purged=1 THEN 'uploading' ELSE 'queued' END,mic_result=CASE WHEN spool_purged=1 THEN '' ELSE mic_result END,system_result=CASE WHEN spool_purged=1 THEN '' ELSE system_result END,diar_result=CASE WHEN spool_purged=1 THEN '' ELSE diar_result END,spool_purged=0,attempts=0,next_attempt=0,error='',created_at=CASE WHEN spool_purged=1 THEN ? ELSE created_at END WHERE job_key=? AND status='failed' AND (SELECT COUNT(*) FROM meeting_jobs pending WHERE pending.user_id=meeting_jobs.user_id AND pending.admitted=0 AND pending.status IN ('uploading','queued'))<3`, time.Now().Unix(), key)
 	if e != nil {
 		http.Error(w, "database unavailable", 503)
 		return
@@ -1034,15 +1022,6 @@ func (j *MeetingJobs) retryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(202)
 	j.respond(w, key)
-}
-
-func syncMeetingDirectory(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
 }
 
 func fieldsPlainSegments(data []byte) string { return string(data) }

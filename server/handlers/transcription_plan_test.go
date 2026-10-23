@@ -242,7 +242,7 @@ func TestFreeCannotBypassPlanThroughMeetingRoutesWithoutVault(t *testing.T) {
 	if _, err := a.DB.GetDB().Exec(`UPDATE users SET plan_tier='free',plan_active=0 WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []http.HandlerFunc{a.HandleUploadMeeting, a.HandleStartMeetingSession} {
+	for _, handler := range []http.HandlerFunc{a.HandleStartMeetingSession} {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{}`))
 		req.Header.Set("Authorization", "Bearer user1")
 		w := httptest.NewRecorder()

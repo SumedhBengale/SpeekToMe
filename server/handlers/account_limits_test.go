@@ -18,6 +18,7 @@ import (
 	"speektome-server/config"
 	"speektome-server/db"
 	"speektome-server/pipeline"
+	"speektome-server/ratelimit"
 )
 
 func limitApp(t *testing.T) *App {
@@ -253,7 +254,7 @@ func TestAbandonedUploadsExpireWithoutDeletingCommittedJobs(t *testing.T) {
 	if e := a.StartMeetingJobs(ctx, http.NewServeMux()); e != nil {
 		t.Fatal(e)
 	}
-	j := &MeetingJobs{app: a, db: a.DB.GetDB(), root: root}
+	j := &MeetingJobs{app: a, db: a.DB.GetDB(), spool: testMeetingSpool(t, a), root: root}
 	for _, status := range []string{"uploading", "queued"} {
 		_, e := j.db.Exec("INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at) VALUES(?,1,?,'test','{}',?,?)", status, status, status, time.Now().Add(-25*time.Hour).Unix())
 		if e != nil {
@@ -282,7 +283,7 @@ func TestAdmissionSurvivesCPUWaitAndRecoversPreexistingCheckpoints(t *testing.T)
 	if e := a.StartMeetingJobs(initCtx, http.NewServeMux()); e != nil {
 		t.Fatal(e)
 	}
-	j := &MeetingJobs{app: a, db: a.DB.GetDB(), root: root, token: strings.Repeat("x", 32), client: http.DefaultClient}
+	j := &MeetingJobs{app: a, db: a.DB.GetDB(), spool: testMeetingSpool(t, a), root: root, token: strings.Repeat("x", 32), client: http.DefaultClient}
 	for i, key := range []string{"old-checkpoint", "next-meeting"} {
 		_, e := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at,mic_result,system_result) VALUES(?,1,?,'test','{}','queued',?,'{"words":[]}','{"words":[]}')`, key, key, i)
 		if e != nil {
@@ -442,6 +443,8 @@ func TestAuthMeCommandAllowanceUsesConfiguredLimits(t *testing.T) {
 	}
 	cfg, raw := config.ConfigManager.Get(), config.ConfigManager.GetRawAll()
 	t.Cleanup(func() { config.ConfigManager.Set(cfg, raw) })
+	// Admin updates and the background loop sync configuration; /auth/me reads memory.
+	config.SyncConfigsFromDB(a.DB, ratelimit.GroqRateLimiter.SetLimit)
 	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	end := start.AddDate(0, 1, 0)
 	if _, err := a.DB.GetDB().Exec(`UPDATE users SET razorpay_current_start=?,razorpay_current_end=? WHERE id=1`, start.Unix(), end.Unix()); err != nil {

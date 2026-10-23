@@ -53,10 +53,14 @@ mod tests {
 }
 
 pub fn start(chord: &str) -> Result<(Keywatch, UnboundedReceiver<Event>), String> {
-    let metadata = std::fs::metadata(HELPER)
-        .map_err(|_| "Modifier-only shortcuts require the native SpeekTo.Me package and its keyboard helper".to_string())?;
+    let metadata = std::fs::metadata(HELPER).map_err(|_| {
+        "Modifier-only shortcuts require the native SpeekTo.Me package and its keyboard helper"
+            .to_string()
+    })?;
     if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
-        return Err("The installed keyboard helper has unsafe file ownership or permissions".into());
+        return Err(
+            "The installed keyboard helper has unsafe file ownership or permissions".into(),
+        );
     }
     let mut child = Command::new("pkexec")
         .arg(HELPER)
@@ -66,7 +70,10 @@ pub fn start(chord: &str) -> Result<(Keywatch, UnboundedReceiver<Event>), String
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|err| format!("Could not request keyboard helper access: {err}"))?;
-    let output = child.stdout.take().ok_or("Keyboard helper output is unavailable")?;
+    let output = child
+        .stdout
+        .take()
+        .ok_or("Keyboard helper output is unavailable")?;
     let (tx, rx) = unbounded_channel();
     std::thread::spawn(move || {
         for line in BufReader::new(output).lines() {

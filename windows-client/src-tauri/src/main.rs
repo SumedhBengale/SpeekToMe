@@ -2,16 +2,21 @@
 
 #[macro_use]
 mod privacy_log;
+pub mod config;
+mod gestures;
 mod playback;
 mod recording_recovery;
-pub mod config;
+mod session_store;
+mod shortcuts;
 #[cfg(any(target_os = "windows", test))]
 mod windows_autostart;
-mod gestures;
-mod shortcuts;
-mod native_overlay;
-#[cfg(target_os = "macos")]
-mod macos_overlay;
+// Shared overlay geometry: each platform adapter uses a different subset.
+pub mod api;
+pub mod audio;
+pub mod audio_processing;
+mod capture;
+mod delivery;
+mod dictation;
 mod hotkey;
 mod hotkey_conflicts;
 #[cfg(target_os = "linux")]
@@ -19,45 +24,46 @@ mod hotkey_linux;
 #[cfg(any(target_os = "macos", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod hotkey_macos;
-#[cfg(any(target_os = "linux", test))]
-mod portal_gestures;
-#[cfg(target_os = "macos")]
-mod macos_desktop;
-#[cfg(target_os = "macos")]
-mod macos_audio;
-mod lifecycle;
-mod settings_lifecycle;
-#[cfg(any(target_os = "macos", test))]
-mod macos_browser;
-pub mod audio;
-pub mod audio_processing;
-pub mod meeting_echo;
-pub mod api;
 pub mod keyboard;
-pub mod win32;
-pub mod stream;
-pub mod meeting_stream;
-pub mod vad;
 pub mod lang;
-#[cfg(target_os = "linux")]
-mod linux_portal;
-#[cfg(target_os = "linux")]
-mod linux_util;
+mod lifecycle;
 #[cfg(target_os = "linux")]
 mod linux_desktop;
 #[cfg(target_os = "linux")]
 mod linux_focus;
 #[cfg(target_os = "linux")]
 mod linux_keywatch;
+#[cfg(target_os = "linux")]
+mod linux_portal;
+#[cfg(target_os = "linux")]
+mod linux_util;
+#[cfg(target_os = "macos")]
+mod macos_audio;
+#[cfg(any(target_os = "macos", test))]
+mod macos_browser;
+#[cfg(target_os = "macos")]
+mod macos_desktop;
+#[cfg(target_os = "macos")]
+mod macos_overlay;
+pub mod meeting_echo;
+pub mod meeting_stream;
+#[allow(dead_code)]
+mod native_overlay;
+#[cfg(any(target_os = "linux", test))]
+mod portal_gestures;
+mod settings_lifecycle;
+pub mod stream;
+pub mod vad;
+pub mod win32;
 
-use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use zeroize::Zeroize;
 
-use tauri::{Manager, Emitter, PhysicalPosition, PhysicalSize};
 use crate::config::AppConfig;
 use crate::win32::SendHWND;
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
 // Global static Tauri App handle
 pub static TAURI_APP: OnceLock<tauri::AppHandle> = OnceLock::new();
@@ -88,7 +94,9 @@ pub fn set_transform_word_limit(limit: usize) {
 }
 
 // A single expansion also emits the macOS embedded Info.plist exactly once.
-pub fn desktop_context() -> tauri::Context<tauri::Wry> { tauri::generate_context!() }
+pub fn desktop_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
 
 pub fn sync_active_config_atomics(config: &AppConfig) {
     ACTIVE_HOTKEY_COMBO.store(config::parse_hotkey_combo(&config.hotkey), Ordering::SeqCst);
@@ -120,9 +128,13 @@ pub fn get_active_config() -> &'static Mutex<AppConfig> {
 // ==========================================
 
 #[tauri::command]
-fn get_config() -> AppConfig {
+fn get_config() -> serde_json::Value {
     settings_lifecycle::note_config_read();
-    get_active_config().lock().unwrap_or_else(|e| e.into_inner()).clone()
+    config::frontend_view(
+        &get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+    )
 }
 
 #[tauri::command]
@@ -133,11 +145,17 @@ fn get_desktop_platform() -> &'static str {
 #[tauri::command]
 fn get_linux_capabilities() -> serde_json::Value {
     #[cfg(target_os = "linux")]
-    { serde_json::to_value(linux_portal::capabilities()).unwrap_or_default() }
+    {
+        serde_json::to_value(linux_portal::capabilities()).unwrap_or_default()
+    }
     #[cfg(target_os = "macos")]
-    { macos_desktop::capabilities() }
+    {
+        macos_desktop::capabilities()
+    }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    { serde_json::json!({"shortcut": true, "insertion": true, "detail": ""}) }
+    {
+        serde_json::json!({"shortcut": true, "insertion": true, "detail": ""})
+    }
 }
 
 #[tauri::command]
@@ -175,10 +193,15 @@ async fn check_setup_microphone() -> Result<serde_json::Value, String> {
 #[tauri::command]
 async fn repair_desktop_permissions() -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    { tauri::async_runtime::spawn_blocking(macos_desktop::repair_permissions)
-        .await.map_err(|error| error.to_string())? }
+    {
+        tauri::async_runtime::spawn_blocking(macos_desktop::repair_permissions)
+            .await
+            .map_err(|error| error.to_string())?
+    }
     #[cfg(not(target_os = "macos"))]
-    { Err("Desktop permission repair is only available on macOS.".into()) }
+    {
+        Err("Desktop permission repair is only available on macOS.".into())
+    }
 }
 
 #[tauri::command]
@@ -213,21 +236,32 @@ async fn save_config(app: tauri::AppHandle, mut config: AppConfig) -> Result<(),
     let _ = &app;
     #[cfg(target_os = "linux")]
     let (old_hotkey, old_hotkey_mode) = {
-        let active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let active = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         (active.hotkey.clone(), active.hotkey_mode.clone())
     };
     {
-        let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let mut active = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Preserve tray changes and persist the whole config under the same lock.
         config.languages = active.languages.clone();
         config.active_language = active.speaking_language();
+        // The webview never holds the session token or chooses the API server.
+        config.session_token = active.session_token.clone();
+        config.api_url = active.api_url.clone();
         config::try_save_config(&config)?;
         *active = config.clone();
     }
     HOTKEY_ALLOWED.store(true, Ordering::SeqCst);
     sync_active_config_atomics(&config);
     #[cfg(target_os = "linux")]
-    if old_hotkey != config.hotkey || old_hotkey_mode != config.hotkey_mode || !linux_portal::capabilities().shortcut || !linux_portal::capabilities().insertion {
+    if old_hotkey != config.hotkey
+        || old_hotkey_mode != config.hotkey_mode
+        || !linux_portal::capabilities().shortcut
+        || !linux_portal::capabilities().insertion
+    {
         linux_portal::rebind();
     }
     crate::win32::update_overlay_position();
@@ -277,7 +311,10 @@ fn is_window_maximized(window: tauri::WebviewWindow) -> bool {
 
 #[tauri::command]
 fn toggle_maximize_window(window: tauri::WebviewWindow) -> bool {
-    let mut toggle_lock = LAST_MAXIMIZE_TOGGLE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+    let mut toggle_lock = LAST_MAXIMIZE_TOGGLE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let now = std::time::Instant::now();
     if let Some(last_time) = *toggle_lock {
         if now.duration_since(last_time) < std::time::Duration::from_millis(250) {
@@ -358,18 +395,28 @@ fn open_external_url(url: String) {
 fn logout() {
     playback::clear();
     let token_opt = {
-        let active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let active = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         active.session_token.clone()
     };
     if let Some(token) = token_opt {
         thread::spawn(move || {
-            let client = reqwest::blocking::Client::new();
-            let _ = client.post(format!("{}/auth/logout", api::get_api_url()))
+            let Ok(client) = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+            else {
+                return;
+            };
+            let _ = client
+                .post(format!("{}/auth/logout", api::get_api_url()))
                 .header("Authorization", format!("Bearer {}", token))
                 .send();
         });
     }
-    let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+    let mut active = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     active.session_token = None;
     sync_active_config_atomics(&active);
     config::save_config(&active);
@@ -378,14 +425,18 @@ fn logout() {
 #[tauri::command]
 async fn get_user_info() -> Option<api::UserInfo> {
     let token = {
-        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let config = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         config.session_token.clone()
     };
     if let Some(ref t) = token {
         let user = api::fetch_user_info(&api::get_api_url(), t).await.ok();
         if let Some(ref user) = user {
             {
-                let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                let mut active = get_active_config()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 active.languages = user.languages.clone();
                 active.normalize_speaking_language();
                 config::save_config(&active);
@@ -399,12 +450,17 @@ async fn get_user_info() -> Option<api::UserInfo> {
 }
 
 #[tauri::command]
-async fn login_with_credentials(email: String, mut password: String) -> Result<api::UserInfo, String> {
+async fn login_with_credentials(
+    email: String,
+    mut password: String,
+) -> Result<api::UserInfo, String> {
     let res = api::login_with_credentials(&api::get_api_url(), &email, &password).await;
     password.zeroize();
     match res {
         Ok((token, user_info)) => {
-            let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+            let mut active = get_active_config()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             active.session_token = Some(token);
             sync_active_config_atomics(&active);
             config::save_config(&active);
@@ -415,7 +471,11 @@ async fn login_with_credentials(email: String, mut password: String) -> Result<a
 }
 
 #[tauri::command]
-async fn signup_with_credentials(email: String, mut password: String, name: String) -> Result<String, String> {
+async fn signup_with_credentials(
+    email: String,
+    mut password: String,
+    name: String,
+) -> Result<String, String> {
     let res = api::signup_with_credentials(&api::get_api_url(), &email, &password, &name).await;
     password.zeroize();
     res
@@ -424,7 +484,9 @@ async fn signup_with_credentials(email: String, mut password: String, name: Stri
 #[tauri::command]
 async fn get_vocabulary() -> Result<Vec<api::ClientVocabularyTerm>, String> {
     let token = {
-        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let config = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
     api::fetch_vocabulary(&api::get_api_url(), &token).await
@@ -433,7 +495,9 @@ async fn get_vocabulary() -> Result<Vec<api::ClientVocabularyTerm>, String> {
 #[tauri::command]
 async fn add_vocabulary_term(term: String) -> Result<(), String> {
     let token = {
-        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let config = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
     api::add_vocab_term(&api::get_api_url(), &token, &term).await
@@ -442,7 +506,9 @@ async fn add_vocabulary_term(term: String) -> Result<(), String> {
 #[tauri::command]
 async fn delete_vocabulary_term(term: String) -> Result<(), String> {
     let token = {
-        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let config = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
     api::delete_vocab_term(&api::get_api_url(), &token, &term).await
@@ -451,12 +517,16 @@ async fn delete_vocabulary_term(term: String) -> Result<(), String> {
 #[tauri::command]
 async fn update_languages(languages: Vec<String>) -> Result<Vec<String>, String> {
     let token = {
-        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let config = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
     let res = api::update_user_languages(&api::get_api_url(), &token, languages.clone()).await?;
     {
-        let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let mut active = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         active.languages = Some(res.clone());
         active.normalize_speaking_language();
         config::save_config(&active);
@@ -466,17 +536,30 @@ async fn update_languages(languages: Vec<String>) -> Result<Vec<String>, String>
 }
 
 pub fn speaking_language() -> String {
-    get_active_config().lock().unwrap_or_else(|e| e.into_inner()).speaking_language()
+    get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .speaking_language()
 }
 
 pub fn speaking_language_options() -> Vec<(String, String)> {
-    let spoken = get_active_config().lock().unwrap_or_else(|e| e.into_inner())
-        .languages.clone().unwrap_or_else(|| vec!["en".into()]);
+    let spoken = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .languages
+        .clone()
+        .unwrap_or_else(|| vec!["en".into()]);
     let catalog = lang::get_language_manager().get_languages();
     let mut choices = Vec::new();
     for code in spoken {
-        if code == "auto" || choices.iter().any(|(c, _)| c == &code) { continue; }
-        let name = catalog.iter().find(|l| l.code == code).map(|l| l.name.clone()).unwrap_or_else(|| code.clone());
+        if code == "auto" || choices.iter().any(|(c, _)| c == &code) {
+            continue;
+        }
+        let name = catalog
+            .iter()
+            .find(|l| l.code == code)
+            .map(|l| l.name.clone())
+            .unwrap_or_else(|| code.clone());
         choices.push((code, name));
     }
     choices
@@ -484,7 +567,10 @@ pub fn speaking_language_options() -> Vec<(String, String)> {
 
 fn notify_language_changed() {
     if let Some(app) = TAURI_APP.get() {
-        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let config = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let _ = app.emit("speaking-language-changed", serde_json::json!({"language": config.speaking_language(), "languages": config.languages}));
         #[cfg(target_os = "linux")]
         linux_desktop::refresh_language_menu(app);
@@ -496,8 +582,16 @@ fn notify_language_changed() {
 #[tauri::command]
 fn set_active_language(language: String) -> Result<String, String> {
     {
-        let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-        if language == "auto" || !active.languages.as_deref().unwrap_or(&[]).contains(&language) {
+        let mut active = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if language == "auto"
+            || !active
+                .languages
+                .as_deref()
+                .unwrap_or(&[])
+                .contains(&language)
+        {
             return Err("Star a saved language in Languages I Speak".into());
         }
         active.active_language = language.clone();
@@ -514,13 +608,16 @@ fn get_supported_languages() -> Vec<lang::LanguageItem> {
 
 pub fn handle_session_expired(reason: Option<&str>) {
     {
-        let mut active = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let mut active = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         active.session_token = None;
         sync_active_config_atomics(&active);
         config::save_config(&active);
     }
 
-    let msg = reason.unwrap_or("Your session has expired. Please sign in again to continue dictating.");
+    let msg =
+        reason.unwrap_or("Your session has expired. Please sign in again to continue dictating.");
     crate::win32::show_tray_notification(
         "SpeekTo.Me — Session Expired",
         msg,
@@ -534,7 +631,9 @@ pub fn handle_session_expired(reason: Option<&str>) {
 }
 
 pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
-    if lifecycle::is_quitting() { return; }
+    if lifecycle::is_quitting() {
+        return;
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
@@ -545,23 +644,40 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         // Saved geometry remains authoritative after the user manually resizes.
         let monitor = app.primary_monitor().ok().flatten();
         let scale = monitor.as_ref().map(|m| m.scale_factor()).unwrap_or(1.0);
-        let (default_width, default_height) = monitor.as_ref().map(|m| {
-            let area = m.work_area();
-            ((area.size.width as f64 / scale - 48.0).max(1.0).min(1280.0),
-             (area.size.height as f64 / scale - 48.0).max(1.0).min(960.0))
-        }).unwrap_or((1280.0, 960.0));
-        let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-            .title("SpeekTo.Me Settings")
-            // All durable preferences/auth live in Rust. Give each macOS
-            // Settings view its own disposable WebKit website-data store.
-            .incognito(cfg!(target_os = "macos"))
-            .resizable(true)
-            .decorations(cfg!(target_os = "macos"))
-            .skip_taskbar(false)
-            .min_inner_size(default_width.min(760.0), default_height.min(560.0));
+        let (default_width, default_height) = monitor
+            .as_ref()
+            .map(|m| {
+                let area = m.work_area();
+                (
+                    (area.size.width as f64 / scale - 48.0).max(1.0).min(1280.0),
+                    (area.size.height as f64 / scale - 48.0).max(1.0).min(960.0),
+                )
+            })
+            .unwrap_or((1280.0, 960.0));
+        let mut builder = tauri::WebviewWindowBuilder::new(
+            app,
+            "main",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("SpeekTo.Me Settings")
+        // All durable preferences/auth live in Rust. Give each macOS
+        // Settings view its own disposable WebKit website-data store.
+        .incognito(cfg!(target_os = "macos"))
+        .resizable(true)
+        .decorations(cfg!(target_os = "macos"))
+        .skip_taskbar(false)
+        .min_inner_size(default_width.min(760.0), default_height.min(560.0));
 
-        let pos_opt = LAST_WINDOW_POSITION.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let size_opt = LAST_WINDOW_SIZE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let pos_opt = LAST_WINDOW_POSITION
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let size_opt = LAST_WINDOW_SIZE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         if let Some(pos) = pos_opt {
             builder = builder.position(pos.x as f64, pos.y as f64);
@@ -578,7 +694,11 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
                 #[cfg(target_os = "windows")]
                 if let Ok(hwnd_ptr) = window.hwnd() {
                     let hwnd = hwnd_ptr.0 as *mut std::ffi::c_void;
-                    let current_theme = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).theme.clone();
+                    let current_theme = get_active_config()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .theme
+                        .clone();
                     crate::win32::set_window_icon_for_theme(hwnd, &current_theme);
                 }
                 let _ = window.show();
@@ -586,40 +706,49 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
                 println!("[WINDOW] Settings window built and displayed successfully.");
             }
             Err(e) => {
-                eprintln!("[WINDOW BUILD ERROR] Failed to build settings window: {}", e);
+                eprintln!(
+                    "[WINDOW BUILD ERROR] Failed to build settings window: {}",
+                    e
+                );
             }
         }
     }
 }
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+mod account_errors;
+mod meeting_session;
 mod meeting_upload;
 mod recording_identity;
-mod meeting_session;
-mod account_errors;
 static MEETING_INDEX_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LocalMeetingRecord {
-    #[serde(default)] pub language: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
     pub id: String,
     pub title: String,
     pub created_at: u64,
     pub filepath: String,
     pub status: String, // "recording" | "recorded" | "uploaded" | "failed"
     pub error: Option<String>,
-    #[serde(default)] pub owner_email: Option<String>,
-    #[serde(default)] pub owner_user_id: Option<i64>,
-    #[serde(default)] pub token_fingerprint: Option<String>,
+    #[serde(default)]
+    pub owner_email: Option<String>,
+    #[serde(default)]
+    pub owner_user_id: Option<i64>,
+    #[serde(default)]
+    pub token_fingerprint: Option<String>,
 }
 
 fn get_meeting_index_path() -> Option<std::path::PathBuf> {
-    config::get_config_path().parent().map(|p| p.join("recordings").join("meetings_index.json"))
+    config::get_config_path()
+        .parent()
+        .map(|p| p.join("recordings").join("meetings_index.json"))
 }
 
 fn load_meeting_index() -> Vec<LocalMeetingRecord> {
- let _guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
- load_meeting_index_unlocked()
+    let _guard = MEETING_INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    load_meeting_index_unlocked()
 }
 fn load_meeting_index_unlocked() -> Vec<LocalMeetingRecord> {
     let mut records = Vec::new();
@@ -633,10 +762,16 @@ fn load_meeting_index_unlocked() -> Vec<LocalMeetingRecord> {
             if let Ok(entries) = std::fs::read_dir(parent) {
                 for entry in entries.flatten() {
                     let file = entry.path();
-                    if !file.to_string_lossy().ends_with(".meeting.json") { continue; }
+                    if !file.to_string_lossy().ends_with(".meeting.json") {
+                        continue;
+                    }
                     if let Ok(data) = std::fs::read(&file) {
                         if let Ok(record) = serde_json::from_slice::<LocalMeetingRecord>(&data) {
-                            if std::path::Path::new(&record.filepath).exists() && !records.iter().any(|r| r.id == record.id) { records.push(record); }
+                            if std::path::Path::new(&record.filepath).exists()
+                                && !records.iter().any(|r| r.id == record.id)
+                            {
+                                records.push(record);
+                            }
                         }
                     }
                 }
@@ -649,16 +784,18 @@ fn load_meeting_index_unlocked() -> Vec<LocalMeetingRecord> {
 fn save_meeting_index(records: &[LocalMeetingRecord]) -> Result<(), String> {
     for record in records {
         let path = std::path::Path::new(&record.filepath).with_extension("meeting.json");
-        let data=serde_json::to_vec(record).map_err(|_|"Cannot serialize recording manifest")?;
-        recording_recovery::atomic_write(&path,&data).map_err(|_|"Cannot save recording manifest. Check available disk space and folder permissions.")?;
+        let data = serde_json::to_vec(record).map_err(|_| "Cannot serialize recording manifest")?;
+        recording_recovery::atomic_write(&path, &data).map_err(|_| {
+            "Cannot save recording manifest. Check available disk space and folder permissions."
+        })?;
     }
-    let path=get_meeting_index_path().ok_or("Recording index location unavailable")?;
-    let data=serde_json::to_vec(records).map_err(|_|"Cannot serialize recording index")?;
-    recording_recovery::atomic_write(&path,&data).map_err(|_|"Cannot save recording index".into())
+    let path = get_meeting_index_path().ok_or("Recording index location unavailable")?;
+    let data = serde_json::to_vec(records).map_err(|_| "Cannot serialize recording index")?;
+    recording_recovery::atomic_write(&path, &data).map_err(|_| "Cannot save recording index".into())
 }
 
 fn update_meeting_status(filepath: &str, status: &str, err: Option<String>) {
-    let _guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let _guard = MEETING_INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut records = load_meeting_index_unlocked();
     for r in &mut records {
         if r.filepath == filepath {
@@ -673,104 +810,126 @@ fn update_meeting_status(filepath: &str, status: &str, err: Option<String>) {
 }
 
 fn set_meeting_title(filepath: &str, title: &str) {
-    if title.trim().is_empty() { return; }
-    let _guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
-    let mut records=load_meeting_index_unlocked();
-    for record in &mut records { if record.filepath==filepath { record.title=title.trim().to_string(); break; } }
+    if title.trim().is_empty() {
+        return;
+    }
+    let _guard = MEETING_INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut records = load_meeting_index_unlocked();
+    for record in &mut records {
+        if record.filepath == filepath {
+            record.title = title.trim().to_string();
+            break;
+        }
+    }
     if save_meeting_index(&records).is_err() {
         account_errors::notify("Meetings", "Recording metadata could not be saved. Check available disk space. Local audio files have been retained.");
     }
 }
 
 fn cleanup_old_recordings() {
- // Retain all recordings until an explicit user deletion. Pending and queued
- // meeting sidecars must never be removed by an age-only cleanup policy.
+    // Retain all recordings until an explicit user deletion. Pending and queued
+    // meeting sidecars must never be removed by an age-only cleanup policy.
 }
 
 // A bounded native rendering check without microphone capture, portal prompts,
 // uploads or network calls. It uses the actual production pill/preview renderer.
 #[cfg(target_os = "linux")]
 fn run_native_overlay_diagnostic() {
-    let app = tauri::Builder::default().setup(move |app| {
-        let handle = app.handle().clone();
-        let _ = TAURI_APP.set(handle.clone());
-        linux_desktop::setup(&handle)?;
-        // Synthetic levels exercise the production recording renderer without capture.
-        win32::set_preview_state(win32::PreviewState::Listening);
-        audio::CURRENT_VOLUME.store(0, Ordering::Relaxed);
-        for (millis, level) in [(800, 12), (1600, 120), (2400, 0)] {
-            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(millis), move || {
-                audio::CURRENT_VOLUME.store(level, Ordering::Relaxed);
+    let app = tauri::Builder::default()
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            let _ = TAURI_APP.set(handle.clone());
+            linux_desktop::setup(&handle)?;
+            // Synthetic levels exercise the production recording renderer without capture.
+            win32::set_preview_state(win32::PreviewState::Listening);
+            audio::CURRENT_VOLUME.store(0, Ordering::Relaxed);
+            for (millis, level) in [(800, 12), (1600, 120), (2400, 0)] {
+                gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(millis),
+                    move || {
+                        audio::CURRENT_VOLUME.store(level, Ordering::Relaxed);
+                    },
+                );
+            }
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(3600), || {
+                win32::set_preview_text(
+                    &"Native Rust preview. नमस्ते दुनिया. Processing glow with no webview.\n"
+                        .repeat(16),
+                );
+                win32::set_preview_state(win32::PreviewState::Processing);
             });
-        }
-        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(3600), || {
-            win32::set_preview_text(&"Native Rust preview. नमस्ते दुनिया. Processing glow with no webview.\n".repeat(16));
-            win32::set_preview_state(win32::PreviewState::Processing);
-        });
-        gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(7), move || lifecycle::quit(&handle));
-        Ok(())
-    }).build(desktop_context()).expect("native overlay diagnostic");
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(7), move || {
+                lifecycle::quit(&handle)
+            });
+            Ok(())
+        })
+        .build(desktop_context())
+        .expect("native overlay diagnostic");
     app.run(|_, event| {
         if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
-            if lifecycle::keep_tray_alive(code) { api.prevent_exit(); }
+            if lifecycle::keep_tray_alive(code) {
+                api.prevent_exit();
+            }
         }
     });
 }
 
 fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
-            get_config,
-            get_desktop_platform,
-            get_linux_capabilities,
-            request_desktop_permissions,
-            repair_desktop_permissions,
-            get_audio_level,
-            save_config,
-            validate_hotkey,
-            check_hotkey_conflicts,
-            set_shortcut_capture,
-            hide_window,
-            start_login,
-            cancel_login,
-            get_setup_capabilities,
-            check_setup_microphone,
-            logout,
-            get_user_info,
-            login_with_credentials,
-            signup_with_credentials,
-            get_vocabulary,
-            add_vocabulary_term,
-            delete_vocabulary_term,
-            update_languages,
-            set_active_language,
-            get_supported_languages,
-            start_meeting,
-            stop_meeting,
-            cancel_meeting,
-            get_active_meeting,
-            get_meeting_levels,
-            upload_meeting,
-            list_local_meetings,
-            transcription_history,
-            cloud_storage_usage,
-            download_meeting_audio,
-            delete_transcription_history,
-            get_local_meeting_audio,
-            retry_upload_meeting,
-            delete_local_meeting,
-            get_api_url,
-            open_external_url,
-            validate_prompt,
-            minimize_window,
-            is_window_maximized,
-            toggle_maximize_window,
-            close_window,
-            update_tray_theme
-        ]
+        get_config,
+        get_desktop_platform,
+        get_linux_capabilities,
+        request_desktop_permissions,
+        repair_desktop_permissions,
+        get_audio_level,
+        save_config,
+        validate_hotkey,
+        check_hotkey_conflicts,
+        set_shortcut_capture,
+        hide_window,
+        start_login,
+        cancel_login,
+        get_setup_capabilities,
+        check_setup_microphone,
+        logout,
+        get_user_info,
+        login_with_credentials,
+        signup_with_credentials,
+        get_vocabulary,
+        add_vocabulary_term,
+        delete_vocabulary_term,
+        update_languages,
+        set_active_language,
+        get_supported_languages,
+        start_meeting,
+        stop_meeting,
+        cancel_meeting,
+        get_active_meeting,
+        upload_meeting,
+        list_local_meetings,
+        transcription_history,
+        cloud_storage_usage,
+        download_meeting_audio,
+        delete_transcription_history,
+        get_local_meeting_audio,
+        retry_upload_meeting,
+        delete_local_meeting,
+        get_api_url,
+        open_external_url,
+        api::api_request,
+        validate_prompt,
+        minimize_window,
+        is_window_maximized,
+        toggle_maximize_window,
+        close_window,
+        update_tray_theme
+    ]
 }
 
 fn main() {
-    std::panic::set_hook(Box::new(|_| { std::eprintln!("[FATAL] Desktop operation panicked; private details omitted."); }));
+    std::panic::set_hook(Box::new(|_| {
+        std::eprintln!("[FATAL] Desktop operation panicked; private details omitted.");
+    }));
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         // Fedora's WebKitGTK/Mesa combination can send an explicit-sync
@@ -786,23 +945,33 @@ fn main() {
         AttachConsole(ATTACH_PARENT_PROCESS);
     }
 
-
     // Read-only policy diagnostic: no preferences, microphone or app instance.
     if std::env::args().nth(1).as_deref() == Some("--check-shortcut") {
         let value = std::env::args().nth(2).unwrap_or_default();
         let result = tauri::async_runtime::block_on(hotkey_conflicts::check(&value));
         match result {
-            Ok(report) => { let error = report.ensure_allowed().err(); println!("{}", serde_json::json!({"report":report,"error":error})); }
+            Ok(report) => {
+                let error = report.ensure_allowed().err();
+                println!("{}", serde_json::json!({"report":report,"error":error}));
+            }
             Err(error) => println!("{}", serde_json::json!({"error":error})),
         }
         return;
     }
 
     #[cfg(target_os = "macos")]
-    if !macos_desktop::ensure_single_instance() { return; }
+    if !macos_desktop::ensure_single_instance() {
+        return;
+    }
     #[cfg(target_os = "macos")]
-    if std::env::args().any(|arg| arg == "--diagnose-macos") { macos_desktop::run_diagnostic(); return; }
-    if std::env::args().any(|arg| arg == "--diagnose-settings-lifecycle") { settings_lifecycle::run_diagnostic(); return; }
+    if std::env::args().any(|arg| arg == "--diagnose-macos") {
+        macos_desktop::run_diagnostic();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--diagnose-settings-lifecycle") {
+        settings_lifecycle::run_diagnostic();
+        return;
+    }
     println!("[STARTUP 1] Starting SpeekTo.Me desktop client...");
 
     // Install process-level default CryptoProvider for rustls / tokio-tungstenite TLS
@@ -822,12 +991,17 @@ fn main() {
     // 1. Initialize global loaded config
     let _ = get_active_config();
     println!("[STARTUP 4] Active config initialized.");
-    let startup_hotkey = get_active_config().lock().unwrap_or_else(|e| e.into_inner()).hotkey.clone();
+    let startup_hotkey = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .hotkey
+        .clone();
     let hotkey_result = tauri::async_runtime::block_on(hotkey_conflicts::check(&startup_hotkey))
         .and_then(|report| report.ensure_allowed());
     HOTKEY_ALLOWED.store(hotkey_result.is_ok(), Ordering::SeqCst);
-    if let Err(error) = &hotkey_result { eprintln!("[SHORTCUT] Saved shortcut disabled: {error}"); }
-
+    if let Err(error) = &hotkey_result {
+        eprintln!("[SHORTCUT] Saved shortcut disabled: {error}");
+    }
 
     #[cfg(target_os = "linux")]
     if std::env::args().any(|arg| arg == "--diagnose-native-overlay") {
@@ -837,9 +1011,9 @@ fn main() {
 
     // 2. Retain local meeting recordings for explicit deletion and retry.
     cleanup_old_recordings();
- meeting_upload::start_recovery();
+    meeting_upload::start_recovery();
     println!("[STARTUP 5] Cleanup recordings completed.");
-    
+
     // 3. Spawn Keyboard Hook & System Tray Worker Thread
     #[cfg(target_os = "windows")]
     thread::spawn(|| {
@@ -848,7 +1022,7 @@ fn main() {
             win32::run_win32_hook_and_tray_thread();
         }
     });
-    
+
     // 4. Launch Tauri app
     println!("[STARTUP 6] Building Tauri application...");
     let app = tauri::Builder::default()
@@ -907,15 +1081,20 @@ fn main() {
 
     app.run(|_app_handle, event| {
         #[cfg(target_os = "macos")]
-        if matches!(&event, tauri::RunEvent::Reopen { .. }) { show_or_create_settings_window(_app_handle); }
+        if matches!(&event, tauri::RunEvent::Reopen { .. }) {
+            show_or_create_settings_window(_app_handle);
+        }
         if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-            if lifecycle::keep_tray_alive(code) { api.prevent_exit(); }
+            if lifecycle::keep_tray_alive(code) {
+                api.prevent_exit();
+            }
         }
     });
 }
 
 pub static CURRENT_MEETING_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
-pub static CURRENT_MEETING_STREAM: Mutex<Option<crate::meeting_stream::MeetingStreamHandle>> = Mutex::new(None);
+pub static CURRENT_MEETING_STREAM: Mutex<Option<crate::meeting_stream::MeetingStreamHandle>> =
+    Mutex::new(None);
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ActiveMeetingInfo {
@@ -958,13 +1137,17 @@ fn get_active_meeting() -> Option<ActiveMeetingInfo> {
 #[tauri::command]
 async fn start_meeting(title: String) -> Result<String, String> {
     let _starting = crate::meeting_session::begin()?;
-    println!("[MEETING LOG] >>> start_meeting command called with title: '{}'", title);
-    
+    println!(
+        "[MEETING LOG] >>> start_meeting command called with title: '{}'",
+        title
+    );
+
     let temp_dir = crate::config::get_config_path()
         .parent()
         .ok_or("Unable to determine SpeekTo.Me data directory")?
         .join("recordings");
-    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
     let now = std::time::SystemTime::now();
     let nonce = now
         .duration_since(std::time::UNIX_EPOCH)
@@ -976,21 +1159,64 @@ async fn start_meeting(title: String) -> Result<String, String> {
     println!("[MEETING LOG] Output path generated: {}", path_str);
 
     let start_instant = std::time::Instant::now();
-    let start_unix = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let start_unix = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let turns_cache = std::sync::Arc::new(Mutex::new(Vec::new()));
 
     let recording_language = speaking_language();
-    let recording_token={get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone()};
-    let token_fingerprint=recording_token.as_ref().map(|token|{use sha2::Digest;format!("{:x}",sha2::Sha256::digest(token.as_bytes()))});
-    let owner = if let Some(ref token)=recording_token {
- tokio::time::timeout(std::time::Duration::from_secs(3),api::fetch_user_info(&api::get_api_url(),token)).await.ok().and_then(Result::ok)
- } else {None};
- let owner_user_id=owner.as_ref().filter(|u|u.id>0).map(|u|u.id);
- let owner_email=owner.map(|u|u.email).or_else(||recording_token.as_deref().and_then(meeting_upload::cached_account));
-    let stream_tx = None;
+    let recording_token = {
+        get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .session_token
+            .clone()
+    };
+    let token_fingerprint = recording_token.as_ref().map(|token| {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(token.as_bytes()))
+    });
+    let owner = if let Some(ref token) = recording_token {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            api::fetch_user_info(&api::get_api_url(), token),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+    } else {
+        None
+    };
+    let owner_user_id = owner.as_ref().filter(|u| u.id > 0).map(|u| u.id);
+    let owner_email = owner.map(|u| u.email).or_else(|| {
+        recording_token
+            .as_deref()
+            .and_then(meeting_upload::cached_account)
+    });
     println!("[MEETING LOG] Starting CPAL audio capture streams...");
     let permit = crate::meeting_session::acquire().await?;
-    let _index_guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    // Live transcription is a preview that needs the recording permit above.
+    // The recording itself is saved locally either way and uploaded afterwards
+    // for the final transcript and speaker identification.
+    let stream_tx = recording_token.as_ref().and_then(|token| {
+        match crate::meeting_stream::start_meeting_streaming_session(
+            api::get_api_url(),
+            token.clone(),
+            title.clone(),
+            Some(turns_cache.clone()),
+        ) {
+            Ok(handle) => {
+                let tx = handle.tx.clone();
+                *CURRENT_MEETING_STREAM
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(handle);
+                Some(tx)
+            }
+            Err(_) => None,
+        }
+    });
+    let _index_guard = MEETING_INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut records = load_meeting_index_unlocked();
     records.push(LocalMeetingRecord {
         language: Some(recording_language),
@@ -1004,21 +1230,40 @@ async fn start_meeting(title: String) -> Result<String, String> {
         owner_user_id,
         token_fingerprint,
     });
-    if let Err(error)=save_meeting_index(&records) { crate::meeting_session::abandon(permit); return Err(error); }
+    if let Err(error) = save_meeting_index(&records) {
+        crate::meeting_session::abandon(permit);
+        return Err(error);
+    }
     drop(_index_guard);
     if let Err(e) = crate::audio::start_meeting_recording(path.clone(), stream_tx) {
+        CURRENT_MEETING_STREAM
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         crate::meeting_session::abandon(permit);
-        update_meeting_status(&path_str,"capture_failed",Some("Recording could not start. Check microphone and system audio access.".into()));
-        account_errors::notify("Meetings", "Recording could not start. Check microphone and system audio permissions.");
+        update_meeting_status(
+            &path_str,
+            "capture_failed",
+            Some("Recording could not start. Check microphone and system audio access.".into()),
+        );
+        account_errors::notify(
+            "Meetings",
+            "Recording could not start. Check microphone and system audio permissions.",
+        );
         return Err(format!("Failed to start recording: {}", e));
     }
     crate::meeting_session::install(permit);
     println!("[MEETING LOG] Audio capture successfully started!");
-    
+
     {
-        let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
+        let mut path_lock = CURRENT_MEETING_PATH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *path_lock = Some(path.clone());
-        println!("[MEETING LOG] Stored CURRENT_MEETING_PATH = Some({})", path_str);
+        println!(
+            "[MEETING LOG] Stored CURRENT_MEETING_PATH = Some({})",
+            path_str
+        );
     }
 
     {
@@ -1032,10 +1277,35 @@ async fn start_meeting(title: String) -> Result<String, String> {
         });
     }
 
+    // Push level-meter updates to the webview while the meeting records.
+    std::thread::spawn(|| {
+        use tauri::Emitter;
+        while ACTIVE_MEETING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+        {
+            if let Some(app) = TAURI_APP.get() {
+                let levels = (
+                    audio::MIC_VOLUME.load(Ordering::Relaxed),
+                    audio::LOOPBACK_VOLUME.load(Ordering::Relaxed),
+                );
+                let _ = app.emit("meeting-levels", levels);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+        if let Some(app) = TAURI_APP.get() {
+            let _ = app.emit("meeting-levels", (0u32, 0u32));
+        }
+    });
+
     // Show native floating meeting overlay pill on desktop
     crate::win32::show_meeting_overlay();
-    
-    println!("[MEETING LOG] Meeting record indexed locally. Returning path: {}", path_str);
+
+    println!(
+        "[MEETING LOG] Meeting record indexed locally. Returning path: {}",
+        path_str
+    );
 
     Ok(path_str)
 }
@@ -1046,24 +1316,39 @@ async fn stop_meeting(title: Option<String>) -> Result<String, String> {
     crate::win32::hide_meeting_overlay();
     *ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
-    let finalize_error=crate::audio::stop_meeting_recording();
+    let finalize_error = crate::audio::stop_meeting_recording();
     crate::meeting_session::finish();
-    if let Err(e)=finalize_error {
-        if let Some(path)=CURRENT_MEETING_PATH.lock().unwrap_or_else(|error|error.into_inner()).take() {
-            update_meeting_status(&path.to_string_lossy(), "recording", Some("Recording interrupted; recovery will run after restart".into()));
+    if let Err(e) = finalize_error {
+        if let Some(path) = CURRENT_MEETING_PATH
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            update_meeting_status(
+                &path.to_string_lossy(),
+                "recording",
+                Some("Recording interrupted; recovery will run after restart".into()),
+            );
         }
         return Err(e);
     }
     println!("[MEETING LOG] Audio recording stopped in audio engine.");
-    
+
     let stream_handle = {
-        let mut lock = CURRENT_MEETING_STREAM.lock().unwrap_or_else(|e| e.into_inner());
+        let mut lock = CURRENT_MEETING_STREAM
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         lock.take()
     };
-    println!("[MEETING LOG] Live stream handle present: {}", stream_handle.is_some());
+    println!(
+        "[MEETING LOG] Live stream handle present: {}",
+        stream_handle.is_some()
+    );
 
     let path_str = {
-        let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
+        let mut path_lock = CURRENT_MEETING_PATH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(path) = path_lock.take() {
             path.to_string_lossy().to_string()
         } else {
@@ -1071,38 +1356,23 @@ async fn stop_meeting(title: Option<String>) -> Result<String, String> {
             return Err("No active meeting recording found".to_string());
         }
     };
-    if let Some(title)=title { set_meeting_title(&path_str,&title); }
+    if let Some(title) = title {
+        set_meeting_title(&path_str, &title);
+    }
     println!("[MEETING LOG] Found active meeting path: {}", path_str);
 
     if let Some(handle) = stream_handle {
-        println!("[MEETING LOG] Waiting up to 30s for live stream final result from server...");
-        match handle.rx_final.recv_timeout(std::time::Duration::from_secs(30)) {
-            Ok(Ok(final_json)) => {
-                println!("[MEETING LOG] Received finalized meeting json from server (len: {} bytes).", final_json.len());
-                print_meeting_review(&final_json);
-                update_meeting_status(&path_str, "uploaded", None);
-                return Ok(final_json);
-            }
-            Ok(Err(e)) => {
-                eprintln!("[MEETING LOG ERROR] Live stream finalize error: {}.", e);
-                update_meeting_status(&path_str, "failed", Some(e.clone()));
-                return Err(format!("Live stream finalize error: {}", e));
-            }
-            Err(e) => {
-                eprintln!("[MEETING LOG WARNING] Timed out waiting for live stream ({:?}).", e);
-                update_meeting_status(&path_str, "failed", Some(e.to_string()));
-                return Err(format!("Timed out waiting for server meeting finalization: {}", e));
-            }
-        }
+        // Let the server flush the last live turns; the saved recording is
+        // uploaded for the final transcript regardless of the preview.
+        let _ = handle.done.recv_timeout(std::time::Duration::from_secs(10));
     }
 
-    println!("[MEETING LOG] Returning local filepath for batch upload: {}", path_str);
+    println!(
+        "[MEETING LOG] Returning local filepath for batch upload: {}",
+        path_str
+    );
     update_meeting_status(&path_str, "recorded", None);
     Ok(path_str)
-}
-
-pub fn print_meeting_review(_json_str: &str) {
-    println!("[MEETING] Processing completed; private content omitted.");
 }
 
 #[tauri::command]
@@ -1111,32 +1381,39 @@ async fn cancel_meeting() -> Result<(), String> {
     crate::win32::hide_meeting_overlay();
     *ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
-    let stopped=crate::audio::stop_meeting_recording();
+    let stopped = crate::audio::stop_meeting_recording();
     crate::meeting_session::finish();
     stopped?;
-    
+
     {
-        let mut stream_lock = CURRENT_MEETING_STREAM.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stream_lock = CURRENT_MEETING_STREAM
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *stream_lock = None;
     }
 
-    let mut path_lock = CURRENT_MEETING_PATH.lock().unwrap_or_else(|e| e.into_inner());
+    let mut path_lock = CURRENT_MEETING_PATH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(path) = path_lock.take() {
         let path_str = path.to_string_lossy().to_string();
-        println!("[MEETING LOG] Cancelling and cleaning files for: {}", path_str);
-        let _index_guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+        println!(
+            "[MEETING LOG] Cancelling and cleaning files for: {}",
+            path_str
+        );
+        let _index_guard = MEETING_INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut records = load_meeting_index_unlocked();
         records.retain(|r| r.filepath != path_str);
         if save_meeting_index(&records).is_err() {
-        account_errors::notify("Meetings", "Recording metadata could not be saved. Check available disk space. Local audio files have been retained.");
-    }
+            account_errors::notify("Meetings", "Recording metadata could not be saved. Check available disk space. Local audio files have been retained.");
+        }
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("mic.ogg"));
         let _ = std::fs::remove_file(path.with_extension("loopback.ogg"));
         let _ = std::fs::remove_file(path.with_extension("energy.json"));
-    let _ = std::fs::remove_file(path.with_extension("meeting.json"));
-    let _ = std::fs::remove_file(path.with_extension("wav"));
+        let _ = std::fs::remove_file(path.with_extension("meeting.json"));
+        let _ = std::fs::remove_file(path.with_extension("wav"));
     } else {
         println!("[MEETING LOG] cancel_meeting: CURRENT_MEETING_PATH was already None.");
     }
@@ -1144,42 +1421,51 @@ async fn cancel_meeting() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_meeting_levels() -> (u32, u32) {
-    use std::sync::atomic::Ordering;
-    let mic = crate::audio::MIC_VOLUME.load(Ordering::Relaxed);
-    let loopback = crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed);
-    (mic, loopback)
-}
-
-#[tauri::command]
 async fn upload_meeting(title: String, filepath: String) -> Result<String, String> {
- set_meeting_title(&filepath,&title);
- let path=filepath.clone();
- tauri::async_runtime::spawn_blocking(move ||meeting_upload::upload(&path)).await.map_err(|e|e.to_string())?
+    set_meeting_title(&filepath, &title);
+    let path = filepath.clone();
+    tauri::async_runtime::spawn_blocking(move || meeting_upload::upload(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 fn list_local_meetings() -> Result<Vec<LocalMeetingRecord>, String> {
-    let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone();
-    let Some(token)=token else{return Ok(Vec::new());};
-    let Some(user)=meeting_upload::cached_account_id(&token) else{return Ok(Vec::new());};
-    Ok(load_meeting_index().into_iter().filter(|r|recording_identity::owns(r,user,&token)).collect())
+    let token = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .clone();
+    let Some(token) = token else {
+        return Ok(Vec::new());
+    };
+    let Some(user) = meeting_upload::cached_account_id(&token) else {
+        return Ok(Vec::new());
+    };
+    Ok(load_meeting_index()
+        .into_iter()
+        .filter(|r| recording_identity::owns(r, user, &token))
+        .collect())
 }
 
 #[tauri::command]
 async fn retry_upload_meeting(filepath: String) -> Result<String, String> {
     let records = load_meeting_index();
-    let record = records.iter().find(|r| r.filepath == filepath)
+    let record = records
+        .iter()
+        .find(|r| r.filepath == filepath)
         .cloned()
         .ok_or_else(|| format!("No local meeting record found for: {}", filepath))?;
 
-    let _=record;
- tauri::async_runtime::spawn_blocking(move||meeting_upload::retry(&filepath)).await.map_err(|e|e.to_string())?
+    let _ = record;
+    tauri::async_runtime::spawn_blocking(move || meeting_upload::retry(&filepath))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 fn delete_local_meeting(filepath: String) -> Result<(), String> {
-    let _index_guard=MEETING_INDEX_LOCK.lock().unwrap_or_else(|e|e.into_inner());
+    let _index_guard = MEETING_INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut records = load_meeting_index_unlocked();
     records.retain(|r| r.filepath != filepath);
     if save_meeting_index(&records).is_err() {
@@ -1199,89 +1485,247 @@ fn delete_local_meeting(filepath: String) -> Result<(), String> {
 #[tauri::command]
 async fn get_local_meeting_audio(meeting_id: i64) -> Result<String, String> {
     playback::clear();
-    let generation=playback::generation();
-    let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to play recordings")?;
-    let base=api::get_api_url();
-    let user=api::fetch_user_info(&base,&token).await.map_err(|_|"Recording owner could not be verified")?;
-    let response=reqwest::Client::new().get(format!("{}/meetings/{}",base,meeting_id)).bearer_auth(&token).send().await.map_err(|_|"Meeting identity could not be verified")?;
-    if !response.status().is_success(){return Err("Meeting unavailable for this account".into());}
-    let meeting:serde_json::Value=response.json().await.map_err(|_|"Meeting identity unavailable")?;
-    let client_id=meeting["client_id"].as_str().filter(|s|!s.is_empty());
-    let root=get_meeting_index_path().and_then(|p|p.parent().map(std::path::Path::to_path_buf)).ok_or("Recording folder unavailable")?;
-    let records=load_meeting_index();
-    let path=client_id.and_then(|id|recording_identity::resolve(&records,id,user.id,&token,&root).ok());
+    let generation = playback::generation();
+    let token = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .clone()
+        .ok_or("Sign in to play recordings")?;
+    let base = api::get_api_url();
+    let user = api::fetch_user_info(&base, &token)
+        .await
+        .map_err(|_| "Recording owner could not be verified")?;
+    let response = api::http()
+        .get(format!("{}/meetings/{}", base, meeting_id))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "Meeting identity could not be verified")?;
+    if !response.status().is_success() {
+        return Err("Meeting unavailable for this account".into());
+    }
+    let meeting: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| "Meeting identity unavailable")?;
+    let client_id = meeting["client_id"].as_str().filter(|s| !s.is_empty());
+    let root = get_meeting_index_path()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        .ok_or("Recording folder unavailable")?;
+    let records = load_meeting_index();
+    let path = client_id
+        .and_then(|id| recording_identity::resolve(&records, id, user.id, &token, &root).ok());
     // Recheck after network awaits so switching accounts cannot reveal the old result.
-    if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
-    tauri::async_runtime::spawn_blocking(move||playback::prepare(path,&base,meeting_id,token,generation)).await.map_err(|_|"Recording playback unavailable".to_string())?
-
+    if get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .as_deref()
+        != Some(token.as_str())
+    {
+        return Err("Account changed".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        playback::prepare(path, &base, meeting_id, token, generation)
+    })
+    .await
+    .map_err(|_| "Recording playback unavailable".to_string())?
 }
 
 #[tauri::command]
-async fn download_meeting_audio(app:tauri::AppHandle,meeting_id:i64)->Result<String,String>{
- use tauri::Manager;
- if meeting_id<=0{return Err("Invalid meeting identity".into());}
- let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to download recordings")?;
- let base=api::get_api_url();
- let root=app.path().download_dir().map_err(|_|"Downloads folder unavailable")?;
- tauri::async_runtime::spawn_blocking(move||{
-  use std::io::{Read,Write};
-  let destination=root.join(format!("SpeekToMe-recording-{}.ogg",uuid::Uuid::new_v4()));
-  let temporary=destination.with_extension("ogg.partial");
-  let result=(||->Result<String,String>{
-   let response=reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(20*60)).build().map_err(|_|"Download unavailable")?.get(format!("{}/meetings/{}/audio",base,meeting_id)).bearer_auth(&token).send().map_err(|_|"Recording download failed")?;
-   if !response.status().is_success()||!response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v|v.to_str().ok()).is_some_and(|v|v.starts_with("audio/ogg")){return Err("Encrypted cloud audio is not available for this account and meeting".into());}
-   let expected=response.content_length();if expected.is_some_and(|n|n>2_000_000_000){return Err("Recording exceeds the download limit".into());}
-   let mut options=std::fs::OpenOptions::new();options.write(true).create_new(true);
-   #[cfg(unix)]{use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
-   let mut file=options.open(&temporary).map_err(|_|"Could not create the audio download")?;
-   let size=std::io::copy(&mut response.take(2_000_000_001),&mut file).map_err(|_|"Recording download was interrupted")?;
-   if size>2_000_000_000||expected.is_some_and(|n|n!=size){return Err("Recording download was incomplete".into());}
-   file.flush().map_err(|_|"Could not save the audio download")?;file.sync_all().map_err(|_|"Could not save the audio download")?;drop(file);
-   if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed; download cancelled".into());}
-   std::fs::rename(&temporary,&destination).map_err(|_|"Could not finish the audio download")?;
-   Ok(destination.to_string_lossy().into_owned())
-  })();
-  if result.is_err(){let _=std::fs::remove_file(temporary);}
-  result
- }).await.map_err(|_|"Recording download unavailable".to_string())?
+async fn download_meeting_audio(app: tauri::AppHandle, meeting_id: i64) -> Result<String, String> {
+    use tauri::Manager;
+    if meeting_id <= 0 {
+        return Err("Invalid meeting identity".into());
+    }
+    let token = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .clone()
+        .ok_or("Sign in to download recordings")?;
+    let base = api::get_api_url();
+    let root = app
+        .path()
+        .download_dir()
+        .map_err(|_| "Downloads folder unavailable")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{Read, Write};
+        let destination = root.join(format!("SpeekToMe-recording-{}.ogg", uuid::Uuid::new_v4()));
+        let temporary = destination.with_extension("ogg.partial");
+        let result = (|| -> Result<String, String> {
+            let response = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(20 * 60))
+                .build()
+                .map_err(|_| "Download unavailable")?
+                .get(format!("{}/meetings/{}/audio", base, meeting_id))
+                .bearer_auth(&token)
+                .send()
+                .map_err(|_| "Recording download failed")?;
+            if !response.status().is_success()
+                || !response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|v| v.starts_with("audio/ogg"))
+            {
+                return Err(
+                    "Encrypted cloud audio is not available for this account and meeting".into(),
+                );
+            }
+            let expected = response.content_length();
+            if expected.is_some_and(|n| n > 2_000_000_000) {
+                return Err("Recording exceeds the download limit".into());
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options
+                .open(&temporary)
+                .map_err(|_| "Could not create the audio download")?;
+            let size = std::io::copy(&mut response.take(2_000_000_001), &mut file)
+                .map_err(|_| "Recording download was interrupted")?;
+            if size > 2_000_000_000 || expected.is_some_and(|n| n != size) {
+                return Err("Recording download was incomplete".into());
+            }
+            file.flush()
+                .map_err(|_| "Could not save the audio download")?;
+            file.sync_all()
+                .map_err(|_| "Could not save the audio download")?;
+            drop(file);
+            if get_active_config()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .session_token
+                .as_deref()
+                != Some(token.as_str())
+            {
+                return Err("Account changed; download cancelled".into());
+            }
+            std::fs::rename(&temporary, &destination)
+                .map_err(|_| "Could not finish the audio download")?;
+            Ok(destination.to_string_lossy().into_owned())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(temporary);
+        }
+        result
+    })
+    .await
+    .map_err(|_| "Recording download unavailable".to_string())?
 }
 
 #[tauri::command]
-async fn cloud_storage_usage()->Result<serde_json::Value,String>{
- let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to see storage usage")?;
- let response=reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).build().map_err(|_|"Storage unavailable")?.get(format!("{}/v1/storage",api::get_api_url())).bearer_auth(&token).send().await.map_err(|_|"Storage unavailable")?;
- if !response.status().is_success(){return Err("Storage unavailable".into());}
- let data=response.json().await.map_err(|_|"Storage unavailable")?;
- if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
- Ok(data)
+async fn cloud_storage_usage() -> Result<serde_json::Value, String> {
+    let token = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .clone()
+        .ok_or("Sign in to see storage usage")?;
+    let response = api::http()
+        .get(format!("{}/v1/storage", api::get_api_url()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "Storage unavailable")?;
+    if !response.status().is_success() {
+        return Err("Storage unavailable".into());
+    }
+    let data = response.json().await.map_err(|_| "Storage unavailable")?;
+    if get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .as_deref()
+        != Some(token.as_str())
+    {
+        return Err("Account changed".into());
+    }
+    Ok(data)
 }
 
 #[tauri::command]
-async fn transcription_history(before:Option<i64>, before_id:Option<String>) -> Result<serde_json::Value,String> {
-    let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to see your history")?;
-    let mut url=reqwest::Url::parse(&format!("{}/v1/transcriptions/history",api::get_api_url())).map_err(|_|"Invalid server address")?;
-    if let Some(before)=before {url.query_pairs_mut().append_pair("before",&before.to_string()).append_pair("before_id",before_id.as_deref().unwrap_or_default());}
-    let response=reqwest::Client::new().get(url).bearer_auth(&token).send().await.map_err(|_|"History could not be loaded")?;
-    if !response.status().is_success(){return Err("History could not be loaded. Check your connection and sign-in.".into());}
-    let value=response.json().await.map_err(|_|"History response unavailable")?;
-    if get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.as_deref()!=Some(token.as_str()){return Err("Account changed".into());}
+async fn transcription_history(
+    before: Option<i64>,
+    before_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let token = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .clone()
+        .ok_or("Sign in to see your history")?;
+    let mut url = reqwest::Url::parse(&format!("{}/v1/transcriptions/history", api::get_api_url()))
+        .map_err(|_| "Invalid server address")?;
+    if let Some(before) = before {
+        url.query_pairs_mut()
+            .append_pair("before", &before.to_string())
+            .append_pair("before_id", before_id.as_deref().unwrap_or_default());
+    }
+    let response = api::http()
+        .get(url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "History could not be loaded")?;
+    if !response.status().is_success() {
+        return Err("History could not be loaded. Check your connection and sign-in.".into());
+    }
+    let value = response
+        .json()
+        .await
+        .map_err(|_| "History response unavailable")?;
+    if get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .as_deref()
+        != Some(token.as_str())
+    {
+        return Err("Account changed".into());
+    }
     Ok(value)
 }
 #[tauri::command]
-async fn delete_transcription_history(id:String)->Result<(),String>{
-    if uuid::Uuid::parse_str(&id).is_err(){return Err("Invalid history identity".into());}
-    let token=get_active_config().lock().unwrap_or_else(|e|e.into_inner()).session_token.clone().ok_or("Sign in to manage history")?;
-    let response=reqwest::Client::new().delete(format!("{}/v1/transcriptions/history/{}",api::get_api_url(),id)).bearer_auth(&token).send().await.map_err(|_|"History could not be deleted")?;
-    if !response.status().is_success(){return Err("History could not be deleted".into());}Ok(())
+async fn delete_transcription_history(id: String) -> Result<(), String> {
+    if uuid::Uuid::parse_str(&id).is_err() {
+        return Err("Invalid history identity".into());
+    }
+    let token = get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .clone()
+        .ok_or("Sign in to manage history")?;
+    let response = api::http()
+        .delete(format!(
+            "{}/v1/transcriptions/history/{}",
+            api::get_api_url(),
+            id
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| "History could not be deleted")?;
+    if !response.status().is_success() {
+        return Err("History could not be deleted".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
 async fn validate_prompt(prompt: String) -> Result<api::PromptValidationResult, String> {
     let token = {
-        let config = get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let config = get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         config.session_token.clone().ok_or("Not logged in")?
     };
     api::validate_custom_prompt(&api::get_api_url(), &token, &prompt).await
 }
-
-

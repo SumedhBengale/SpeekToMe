@@ -1,237 +1,23 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sort"
 	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"time"
 
-	"speektome-server/accountlimits"
 	"speektome-server/auth"
-	"speektome-server/config"
 	"speektome-server/pipeline"
-	"speektome-server/ratelimit"
-	"speektome-server/services"
-	"speektome-server/utils"
 )
 
-func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	user, err := auth.Authenticate(r, a.DB)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	if user.PlanTier != "pro" || user.PlanActive != 1 {
-		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
-		return
-	}
-	owner, admissionErr := a.limits().Acquire(r.Context(), user.ID, "meeting processing", 6*time.Hour+5*time.Minute)
-	if admissionErr != nil {
-		accountlimits.Write(w, admissionErr)
-		return
-	}
-	defer a.limits().Release(user.ID, "meeting processing", owner)
-	var activeJobs int
-	if err := a.DB.GetDB().QueryRowContext(r.Context(), "SELECT COUNT(*) FROM meeting_jobs WHERE user_id=? AND admitted=1", user.ID).Scan(&activeJobs); err != nil {
-		accountlimits.Write(w, accountlimits.Unavailable())
-		return
-	}
-	if activeJobs > 0 {
-		accountlimits.Write(w, accountlimits.Denied("meeting_processing_busy", "Your account already has a meeting being processed. Wait for it to finish.", 30))
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Hour)
-	defer cancel()
-	r = r.WithContext(ctx)
-	limit := config.ConfigManager.Get().DefaultUserRateLimitRPM
-	if user.RateLimitRPM.Valid {
-		userOverride := int(user.RateLimitRPM.Int64)
-		if userOverride < limit {
-			limit = userOverride
-		}
-	}
-	userLimiter := ratelimit.UserRateLimiterReg.GetLimiter(user.ID, limit)
-	if !userLimiter.Allow() {
-		http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 120<<20)
-	err = r.ParseMultipartForm(100 << 20)
-	if err != nil {
-		http.Error(w, "Failed to parse multipart form: audio payload exceeds limit (max 120MB)", http.StatusBadRequest)
-		return
-	}
-
-	title := r.FormValue("title")
-	if title == "" {
-		title = fmt.Sprintf("Meeting on %s", time.Now().Format("2006-01-02 15:04"))
-	}
-
-	language, languageErr := utils.ResolveSpeakingLanguage(r.FormValue("language"), user.Languages)
-	if languageErr != nil {
-		http.Error(w, languageErr.Error(), http.StatusBadRequest)
-		return
-	}
-	requestUser := *user
-	requestUser.Languages = []string{language}
-	user = &requestUser
-
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "Missing file parameter", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	var audioBuf bytes.Buffer
-	if _, err := io.Copy(&audioBuf, file); err != nil {
-		http.Error(w, "Failed to read audio file payload", http.StatusInternalServerError)
-		return
-	}
-	audioBytes := audioBuf.Bytes()
-	audioSizeBytes := len(audioBytes)
-
-	duration := utils.GetOggOpusDuration(audioBytes)
-
-	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
-	var monthlyLimitSeconds float64
-	cfg := config.ConfigManager.GetRawAll()
-	if isPaid {
-		monthlyLimitSeconds = 180000.0
-		if val, ok := cfg["quota_paid_monthly_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		} else if val, ok := cfg["paid_monthly_limit_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		}
-	} else {
-		monthlyLimitSeconds = 3600.0
-		if val, ok := cfg["quota_free_monthly_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		} else if val, ok := cfg["free_monthly_limit_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		}
-	}
-
-	if user.MonthlyUsageSeconds+duration > monthlyLimitSeconds {
-		log.Printf("[MONTHLY LIMIT] Meeting Upload from %s denied: Exceeded monthly limit (%.1f + %.1f > %.1f seconds)", user.Email, user.MonthlyUsageSeconds, duration, monthlyLimitSeconds)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": fmt.Sprintf("Monthly usage limit exceeded. Your plan is limited to %.1f hours of transcription per month. You have already used %.1f hours.", monthlyLimitSeconds/3600.0, user.MonthlyUsageSeconds/3600.0),
-		})
-		return
-	}
-
-	dir := "uploads/meetings"
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		http.Error(w, "Failed to create uploads directory", http.StatusInternalServerError)
-		return
-	}
-
-	filename := fmt.Sprintf("meeting_%d_%d.ogg", user.ID, time.Now().UnixNano())
-	audioPath := filepath.Join(dir, filename)
-	if err := os.WriteFile(audioPath, audioBytes, 0600); err != nil {
-		http.Error(w, "Failed to save audio file to disk", http.StatusInternalServerError)
-		return
-	}
-
-	meetingID, err := a.DB.CreateMeeting(user.ID, title, duration, audioPath)
-	if err != nil {
-		log.Printf("[DB ERROR] Failed to record meeting for user %d: %v", user.ID, err)
-		http.Error(w, "Failed to record meeting", http.StatusInternalServerError)
-		return
-	}
-
-	var rawText string
-	var segmentsJSON string = "[]"
-	var whisperProvider string
-	var whisperRouting string
-
-	energyJSONStr := r.FormValue("energy_json")
-	var energySamples []EnergySample
-	if energyJSONStr != "" {
-		_ = json.Unmarshal([]byte(energyJSONStr), &energySamples)
-	}
-
-	if config.AWSBearerTokenBedrock != "" || (config.CloudflareAPIToken != "" && config.CloudflareAccountID != "") || config.DeepInfraAPIKey != "" || config.GroqAPIKey != "" {
-		var errWhisper error
-		var segments []services.WhisperSegment
-		var mixProvider, mixRouting string
-		rawText, segments, mixProvider, mixRouting, errWhisper = services.RunWhisperTranscribeWithModel(r.Context(), audioBytes, "whisper-large-v3-turbo", user.Languages)
-		if errWhisper == nil {
-			whisperProvider = mixProvider
-			whisperRouting = mixRouting
-
-			userName := user.Name
-			if userName == "" {
-				userName = "Local Speaker"
-			}
-
-			merged, rawTextStr := diarizeSegmentsWithEnergy(segments, energySamples, userName)
-			rawText = rawTextStr
-
-			segBytes, _ := json.Marshal(merged)
-			segmentsJSON = string(segBytes)
-		} else {
-			log.Printf("[GROQ ERROR] Transcription failed: %v", errWhisper)
-		}
-	}
-
-	pctx := pipeline.NewPipelineContext(user.ID)
-	var polished string = rawText
-	var summary string = "AI Summary not available (no speech detected in recording)."
-	var actionItems string = "No action items extracted."
-
-	if rawText != "" {
-		polished, summary, actionItems, err = generateMeetingAIAnalysis(r.Context(), rawText, pctx)
-		if err != nil {
-			log.Printf("[MEETING AI ERROR] Failed to generate AI analysis: %v", err)
-			polished = rawText
-			summary = fmt.Sprintf("AI Summary generation failed: %v", err)
-		}
-	}
-
-	err = a.DB.UpdateMeetingResult(meetingID, polished, summary, actionItems, segmentsJSON)
-	if err != nil {
-		log.Printf("[DB ERROR] Failed to update meeting: %v", err)
-	}
-
-	log.Printf("[MEETING UPLOAD ROUTING] Transcription routing: %s | LLM routing: %s", whisperRouting, pctx.LLMRouting)
-	_, _ = a.DB.LogUsageAndUpdateQuota(user.ID, duration, 0, 0, 0, false, "meeting-whisper", rawText, polished, "success", audioSizeBytes, whisperProvider, pctx.LLMProvider)
-
-	updatedMeeting, err := a.DB.GetMeeting(meetingID)
-	if err != nil {
-		http.Error(w, "Failed to load updated meeting details", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(updatedMeeting)
+// HandleRetiredMeetingUpload answers the old single-request upload, which
+// wrote plaintext audio to server disk. Current desktops use encrypted,
+// resumable meeting jobs.
+func HandleRetiredMeetingUpload(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "This version of SpeekTo.Me can no longer upload meetings. Update the desktop app to continue.", http.StatusGone)
 }
 
 func (a *App) HandleGetMeetings(w http.ResponseWriter, r *http.Request) {
@@ -335,19 +121,19 @@ func (a *App) HandleDeleteMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cleanedPath := filepath.Clean(meeting.AudioPath)
-	normalizedPath := filepath.ToSlash(cleanedPath)
-	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") && !validMeetingAudioPath(cleanedPath) {
-		http.Error(w, "Forbidden: Invalid audio file path", http.StatusForbidden)
-		return
-	}
-
 	var job string
 	if a.DB.GetDB().QueryRow("SELECT job_key FROM meeting_jobs WHERE meeting_id=? AND user_id=?", meetingID, user.ID).Scan(&job) == nil {
 		a.limits().Release(user.ID, "meeting processing", job)
 	}
 	_, _ = a.DB.GetDB().Exec(`UPDATE meeting_jobs SET admitted=0,status='cancelled',attempt='',lease_until=0 WHERE meeting_id=? AND user_id=?`, meetingID, user.ID)
-	_ = os.Remove(meeting.AudioPath)
+	// Spooled audio of a cancelled job is deleted by maintenance if this fails.
+	if job != "" && a.DB.Privacy != nil && a.DB.Privacy.Spool != nil {
+		_ = a.DB.Privacy.Spool.Delete(r.Context(), job)
+	}
+	// Recordings from before the encrypted spool may still be on local disk.
+	if meeting.AudioPath != "" && a.DB.Privacy != nil {
+		_ = a.DB.Privacy.PurgeRecording(meeting.UserID, meeting.AudioPath)
+	}
 
 	err = a.DB.DeleteMeeting(meetingID)
 	if err != nil {
@@ -388,31 +174,24 @@ func (a *App) HandleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if a.DB.Privacy != nil {
-		if r.Header.Get("Range") != "" && (len(r.Header.Get("Range")) > 128 || strings.Contains(r.Header.Get("Range"), ",")) {
-			http.Error(w, "invalid audio range", 416)
-			return
-		}
-		reader, _, err := a.DB.Privacy.Audio(r.Context(), user.ID, meetingID)
-		if err != nil {
-			http.Error(w, "Encrypted cloud audio is not available yet", 404)
-			return
-		}
-		w.Header().Set("Cache-Control", "private, no-store")
-		w.Header().Set("Content-Type", "audio/ogg")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		http.ServeContent(w, r, "recording.ogg", time.Time{}, reader)
+	if a.DB.Privacy == nil {
+		http.Error(w, "Encrypted cloud audio is not available yet", 404)
 		return
 	}
-	cleanedPath := filepath.Clean(meeting.AudioPath)
-	normalizedPath := filepath.ToSlash(cleanedPath)
-	if !strings.HasPrefix(normalizedPath, "uploads/meetings/") && !validMeetingAudioPath(cleanedPath) {
-		http.Error(w, "Forbidden: Invalid audio file path", http.StatusForbidden)
+	if r.Header.Get("Range") != "" && (len(r.Header.Get("Range")) > 128 || strings.Contains(r.Header.Get("Range"), ",")) {
+		http.Error(w, "invalid audio range", 416)
 		return
 	}
-
+	// Recordings are served only from the encrypted bucket, never local disk.
+	reader, _, err := a.DB.Privacy.Audio(r.Context(), user.ID, meetingID)
+	if err != nil {
+		http.Error(w, "Encrypted cloud audio is not available yet", 404)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("Content-Type", "audio/ogg")
-	http.ServeFile(w, r, meeting.AudioPath)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, "recording.ogg", time.Time{}, reader)
 }
 
 func generateMeetingAIAnalysis(ctx context.Context, transcript string, pctx *pipeline.PipelineContext) (polished string, summary string, actionItems string, err error) {
@@ -479,12 +258,6 @@ Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" 
 	return polishedStr, summaryStr, actionItemsStr, nil
 }
 
-type EnergySample struct {
-	Time float64 `json:"time"`
-	Mic  uint32  `json:"mic"`
-	Lb   uint32  `json:"lb"`
-}
-
 type MeetingSegment struct {
 	SpeakerID string  `json:"speaker_id,omitempty"`
 	Channel   string  `json:"channel,omitempty"`
@@ -492,248 +265,4 @@ type MeetingSegment struct {
 	End       float64 `json:"end"`
 	Text      string  `json:"text"`
 	Speaker   string  `json:"speaker"`
-}
-
-func diarizeSegmentsWithEnergy(segments []services.WhisperSegment, energySamples []EnergySample, localSpeakerName string) ([]MeetingSegment, string) {
-	if localSpeakerName == "" {
-		localSpeakerName = "Local Speaker"
-	}
-
-	type rawLabeled struct {
-		Start   float64
-		End     float64
-		Text    string
-		Speaker string
-	}
-
-	var labeled []rawLabeled
-
-	for _, seg := range segments {
-		cleanText := strings.TrimSpace(seg.Text)
-		if cleanText == "" {
-			continue
-		}
-
-		var totalMic, totalLb float64
-		var count float64
-
-		if len(energySamples) > 0 {
-			for _, sample := range energySamples {
-				if sample.Time >= seg.Start && sample.Time <= seg.End {
-					totalMic += float64(sample.Mic)
-					totalLb += float64(sample.Lb)
-					count++
-				}
-			}
-		}
-
-		speaker := localSpeakerName
-		if count > 0 {
-			avgMic := totalMic / count
-			avgLb := totalLb / count
-			if avgLb > 15.0 && avgLb >= avgMic*0.75 {
-				speaker = "Remote Speaker"
-			}
-		}
-
-		labeled = append(labeled, rawLabeled{
-			Start:   seg.Start,
-			End:     seg.End,
-			Text:    cleanText,
-			Speaker: speaker,
-		})
-	}
-
-	var merged []MeetingSegment
-	for _, seg := range labeled {
-		if len(merged) == 0 {
-			merged = append(merged, MeetingSegment{
-				Start:   seg.Start,
-				End:     seg.End,
-				Text:    seg.Text,
-				Speaker: seg.Speaker,
-			})
-			continue
-		}
-
-		last := &merged[len(merged)-1]
-		if last.Speaker == seg.Speaker && seg.Start <= last.End+1.5 {
-			last.Text = strings.TrimSpace(last.Text + " " + seg.Text)
-			if seg.End > last.End {
-				last.End = seg.End
-			}
-		} else {
-			merged = append(merged, MeetingSegment{
-				Start:   seg.Start,
-				End:     seg.End,
-				Text:    seg.Text,
-				Speaker: seg.Speaker,
-			})
-		}
-	}
-
-	for i := range merged {
-		merged[i].Channel, merged[i].SpeakerID = "mic", "speaker_local"
-		if merged[i].Speaker == "Remote Speaker" {
-			merged[i].Channel, merged[i].SpeakerID = "system", "remote"
-		}
-	}
-
-	var transcriptBuilder strings.Builder
-	for _, s := range merged {
-		transcriptBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", s.Speaker, s.Text))
-	}
-
-	return merged, transcriptBuilder.String()
-}
-
-func deduplicateMeetingSegments(micSegs []services.WhisperSegment, lbSegs []services.WhisperSegment, localSpeakerName string) ([]MeetingSegment, string) {
-	if localSpeakerName == "" {
-		localSpeakerName = "Local Speaker"
-	}
-
-	var candidates []MeetingSegment
-
-	for _, s := range lbSegs {
-		cleanText := strings.TrimSpace(s.Text)
-		if cleanText == "" {
-			continue
-		}
-		candidates = append(candidates, MeetingSegment{
-			Start:     s.Start,
-			End:       s.End,
-			Text:      cleanText,
-			Speaker:   "Remote Speaker",
-			SpeakerID: "remote", Channel: "system",
-		})
-	}
-
-	for _, m := range micSegs {
-		cleanMicText := strings.TrimSpace(m.Text)
-		if cleanMicText == "" {
-			continue
-		}
-
-		isBleed := false
-		for _, lb := range lbSegs {
-			cleanLbText := strings.TrimSpace(lb.Text)
-			if cleanLbText == "" {
-				continue
-			}
-
-			// Time overlap check (within +/- 2.0s window)
-			timeOverlap := !(m.End < lb.Start-2.0 || m.Start > lb.End+2.0)
-			if timeOverlap {
-				similarity := calculateTextSimilarity(cleanMicText, cleanLbText)
-				if similarity >= 0.45 {
-					isBleed = true
-					break
-				}
-			}
-		}
-
-		if !isBleed {
-			candidates = append(candidates, MeetingSegment{
-				Start:     m.Start,
-				End:       m.End,
-				Text:      cleanMicText,
-				Speaker:   localSpeakerName,
-				SpeakerID: "speaker_local", Channel: "mic",
-			})
-		}
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].Start == candidates[j].Start {
-			return candidates[i].End < candidates[j].End
-		}
-		return candidates[i].Start < candidates[j].Start
-	})
-
-	var merged []MeetingSegment
-	for _, seg := range candidates {
-		if len(merged) == 0 {
-			merged = append(merged, seg)
-			continue
-		}
-
-		last := &merged[len(merged)-1]
-		if last.Speaker == seg.Speaker && last.Channel == seg.Channel && last.SpeakerID == seg.SpeakerID && seg.Start <= last.End+1.5 {
-			last.Text = strings.TrimSpace(last.Text + " " + seg.Text)
-			if seg.End > last.End {
-				last.End = seg.End
-			}
-		} else {
-			merged = append(merged, seg)
-		}
-	}
-
-	var transcriptBuilder strings.Builder
-	for _, s := range merged {
-		transcriptBuilder.WriteString(fmt.Sprintf("[%s]: %s\n", s.Speaker, s.Text))
-	}
-
-	return merged, transcriptBuilder.String()
-}
-
-func calculateTextSimilarity(s1, s2 string) float64 {
-	words1 := tokenizeString(s1)
-	words2 := tokenizeString(s2)
-
-	if len(words1) == 0 || len(words2) == 0 {
-		return 0.0
-	}
-
-	set1 := make(map[string]bool)
-	for _, w := range words1 {
-		set1[w] = true
-	}
-
-	var common int
-	for _, w := range words2 {
-		if set1[w] {
-			common++
-		}
-	}
-
-	maxWords := len(words1)
-	if len(words2) > maxWords {
-		maxWords = len(words2)
-	}
-
-	return float64(common) / float64(maxWords)
-}
-
-func tokenizeString(s string) []string {
-	s = strings.ToLower(s)
-	var sb strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == ' ' {
-			sb.WriteRune(r)
-		} else {
-			sb.WriteRune(' ')
-		}
-	}
-	return strings.Fields(sb.String())
-}
-
-func validMeetingAudioPath(path string) bool {
-	root := os.Getenv("MEETING_AUDIO_DIR")
-	if root == "" {
-		root = "uploads/meetings/jobs"
-	}
-	absoluteRoot, e := filepath.Abs(root)
-	if e != nil {
-		return false
-	}
-	absolute, e := filepath.Abs(path)
-	if e != nil {
-		return false
-	}
-	relative, e := filepath.Rel(absoluteRoot, absolute)
-	if e != nil || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) || relative == ".." {
-		return false
-	}
-	parts := strings.Split(relative, string(os.PathSeparator))
-	return len(parts) == 2 && len(parts[0]) == 64 && parts[1] == "mixed.ogg"
 }

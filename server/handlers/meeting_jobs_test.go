@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"speektome-server/audiospool"
 	"strings"
 	"sync"
 	"testing"
@@ -66,11 +67,9 @@ func TestMeetingJobPersistsStagesAndCompletesWithoutClient(t *testing.T) {
 		t.Fatal(e)
 	}
 	key := jobKey(1, "persistent-meeting")
-	os.Mkdir(filepath.Join(root, key), 0700)
-	for _, channel := range []string{"mic", "system"} {
-		os.WriteFile(filepath.Join(root, key, channel+".ogg"), []byte("fake-audio"), 0600)
-	}
-	id, e := database.CreateMeeting(1, "meeting", 1, filepath.Join(root, key, "mixed.ogg"))
+	spool := testMeetingSpool(t, app)
+	spoolAudio(t, spool, 1, key, map[string][]byte{"mic": []byte("fake-audio"), "system": []byte("fake-audio")})
+	id, e := database.CreateMeeting(1, "meeting", 1, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -80,7 +79,7 @@ func TestMeetingJobPersistsStagesAndCompletesWithoutClient(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	processor := &MeetingJobs{app: app, db: database.GetDB(), root: root, fleet: worker.URL, token: "01234567890123456789012345678901", client: worker.Client()}
+	processor := &MeetingJobs{app: app, db: database.GetDB(), spool: spool, root: root, fleet: worker.URL, token: "01234567890123456789012345678901", client: worker.Client()}
 	processor.process(ctx, key, "attempt")
 	var status string
 	database.GetDB().QueryRow(`SELECT status FROM meeting_jobs WHERE job_key=?`, key).Scan(&status)
@@ -266,5 +265,89 @@ func TestMeetingSpeakerZeroAndHigherIDsAreSeparateFromMicrophone(t *testing.T) {
 		if turns[i+1].Channel != "system" || turns[i+1].SpeakerID != id {
 			t.Fatal(turns[i+1])
 		}
+	}
+}
+
+func TestMeetingUploadIsSealedAndCommitVerifiesOgg(t *testing.T) {
+	database, err := db.NewDatabase(filepath.Join(t.TempDir(), "sealed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err = database.GetDB().Exec(`INSERT INTO users(id,email,name,plan_tier,plan_active) VALUES(1,'owner@example.com','Owner','pro',1)`); err != nil {
+		t.Fatal(err)
+	}
+	database.CreateSession("owner", 1, 0)
+	legacy := t.TempDir()
+	t.Setenv("MEETING_AUDIO_DIR", legacy)
+	spoolDir := t.TempDir()
+	t.Setenv("MEETING_SPOOL_DIR", spoolDir)
+	t.Setenv("SPEEKTOME_WORKER_TOKEN_FILE", filepath.Join(t.TempDir(), "absent"))
+	app := &App{DB: database}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mux := http.NewServeMux()
+	if err := app.StartMeetingJobs(ctx, mux); err != nil {
+		t.Fatal(err)
+	}
+	audio := audiospool.SyntheticOggOpus(42)
+	sum := sha256.Sum256(audio)
+	files := map[string]MeetingFile{}
+	for _, channel := range []string{"mic", "system", "mixed"} {
+		files[channel] = MeetingFile{Size: int64(len(audio)), SHA: hex.EncodeToString(sum[:])}
+	}
+	manifest, _ := json.Marshal(MeetingUpload{ID: "sealed", Title: "Test", Files: files, Language: "en"})
+	send := func(method, path, offset string, data []byte) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, bytes.NewReader(data))
+		r.Header.Set("Authorization", "Bearer owner")
+		if offset != "" {
+			r.Header.Set("Upload-Offset", offset)
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	if w := send("POST", "/v1/meetings/jobs", "", manifest); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for _, channel := range []string{"mic", "system", "mixed"} {
+		if w := send("PUT", "/v1/meetings/jobs/sealed/audio/"+channel, "0", audio); w.Code != 204 {
+			t.Fatal(channel, w.Code, w.Body.String())
+		}
+	}
+	if w := send("POST", "/v1/meetings/jobs/sealed/commit", "", nil); w.Code != 202 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var duration float64
+	var audioPath string
+	if err := database.GetDB().QueryRow(`SELECT duration,audio_path FROM meetings WHERE user_id=1`).Scan(&duration, &audioPath); err != nil {
+		t.Fatal(err)
+	}
+	if duration < 41.9 || duration > 42.1 || audioPath != "" {
+		t.Fatalf("meeting duration %v from Ogg pages, audio path %q", duration, audioPath)
+	}
+	for _, dir := range []string{legacy, spoolDir} {
+		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				if data, _ := os.ReadFile(path); bytes.Contains(data, []byte("OpusHead")) {
+					t.Fatalf("plaintext audio stored at %s", path)
+				}
+			}
+			return nil
+		})
+	}
+	// Completed meetings release their spool; nothing remains afterwards.
+	if _, err := database.GetDB().Exec(`UPDATE meeting_jobs SET status='completed' WHERE client_id='sealed'`); err != nil {
+		t.Fatal(err)
+	}
+	// Deleting sealed chunks needs no key, so a second spool handle suffices.
+	spool, err := newMeetingSpool(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := &MeetingJobs{app: app, db: database.GetDB(), spool: spool}
+	jobs.maintainSpool(context.Background())
+	if jobs.spool.Has(context.Background(), jobKey(1, "sealed")) {
+		t.Fatal("completed meeting kept spooled audio")
 	}
 }

@@ -101,7 +101,7 @@ Gesture regression tests use synthetic timestamps and do not capture audio or
 contact the server. Run the client suite without its clipboard-mutating test:
 
 ```sh
-cargo test --locked -- --skip test_clipboard_lifecycle
+cargo test --locked
 ```
 
 ### Custom shortcuts

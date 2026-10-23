@@ -1,18 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -91,42 +91,21 @@ func (g *gateway) meeting(w http.ResponseWriter, r *http.Request) {
 	defer g.stats.end(stat)
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
 	defer cancel()
-	dir, e := os.MkdirTemp("", "speektome-meeting-*")
-	if e != nil {
-		http.Error(w, "temporary storage unavailable", 503)
-		return
-	}
-	defer os.RemoveAll(dir)
-	input := filepath.Join(dir, "input.ogg")
-	f, e := os.OpenFile(input, os.O_CREATE|os.O_WRONLY, 0600)
-	if e != nil {
-		http.Error(w, "storage unavailable", 503)
-		return
-	}
-	_, e = io.Copy(f, http.MaxBytesReader(w, r.Body, 512<<20))
-	if e == nil {
-		e = f.Sync()
-	}
-	f.Close()
-	if e != nil {
-		http.Error(w, "upload failed or oversized", 413)
-		return
-	}
-	// Bound recordings to four hours. Probe first so oversize input is rejected,
-	// never silently truncated. Output disk usage is bounded by PCM16 geometry.
-	probe, e := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", input).Output()
-	duration, pe := strconv.ParseFloat(strings.TrimSpace(string(probe)), 64)
-	if e != nil || pe != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 || duration > 14400 {
+	// Decode straight from the request into memory. Meeting audio is never
+	// written to this worker's disk, not even as a temporary file.
+	pcm, e := decodeMeetingAudio(ctx, http.MaxBytesReader(w, r.Body, 512<<20))
+	defer clear(pcm)
+	if errors.Is(e, errMeetingTooLong) {
 		http.Error(w, "invalid audio or recording exceeds four hours", 422)
 		return
 	}
-	wav := filepath.Join(dir, "audio.wav")
-	if e = exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", input, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav).Run(); e != nil {
+	if e != nil {
 		http.Error(w, "cannot decode audio", 422)
 		return
 	}
+	duration := float64(len(pcm)) / pcmBytesPerSecond
 	if stage == "diar" {
-		result, e := g.meetingBackend(ctx, "/v1/audio/diarizations", wav, map[string]string{"mode": "streaming"})
+		result, e := g.meetingBackend(ctx, "/v1/audio/diarizations", pcm, map[string]string{"mode": "streaming"})
 		if e != nil {
 			http.Error(w, "diarization failed: "+e.Error(), 502)
 			return
@@ -141,12 +120,7 @@ func (g *gateway) meeting(w http.ResponseWriter, r *http.Request) {
 	for start := 0.0; start < duration; start += 30 {
 		from := math.Max(0, start-4.48)
 		to := math.Min(duration, start+30+4.48)
-		part := filepath.Join(dir, "part.pcm")
-		if e = exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", fmt.Sprint(from), "-i", wav, "-t", fmt.Sprint(to-from), "-c:a", "pcm_s16le", "-f", "s16le", part).Run(); e != nil {
-			http.Error(w, "cannot section audio", 502)
-			return
-		}
-		section, e := g.meetingStreamingASR(ctx, part, r.URL.Query().Get("language"), contexts)
+		section, e := g.meetingStreamingASR(ctx, bytes.NewReader(pcmSection(pcm, from, to)), r.URL.Query().Get("language"), contexts)
 		if e != nil {
 			http.Error(w, "transcription failed: "+e.Error(), 502)
 			return
@@ -168,12 +142,8 @@ func (g *gateway) meeting(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
-func (g *gateway) meetingBackend(ctx context.Context, path, wav string, fields map[string]string) ([]byte, error) {
-	input, e := os.Open(wav)
-	if e != nil {
-		return nil, e
-	}
-	defer input.Close()
+func (g *gateway) meetingBackend(ctx context.Context, path string, pcm []byte, fields map[string]string) ([]byte, error) {
+	input := io.MultiReader(bytes.NewReader(wavHeader(len(pcm))), bytes.NewReader(pcm))
 	reader, writer := io.Pipe()
 	form := multipart.NewWriter(writer)
 	finished := make(chan error, 1)
@@ -228,7 +198,7 @@ func (g *gateway) meetingBackend(ctx context.Context, path, wav string, fields m
 // allocates attention tensors proportional to section length and can exhaust a
 // fractional GPU when live streams share it. Each bounded section is a separate
 // streaming session; the runtime consumes queued PCM at its own compute speed.
-func (g *gateway) meetingStreamingASR(ctx context.Context, pcmPath, language string, contexts ...[]speechContext) (meetingASR, error) {
+func (g *gateway) meetingStreamingASR(ctx context.Context, input io.Reader, language string, contexts ...[]speechContext) (meetingASR, error) {
 	result := meetingASR{Words: []meetingWord{}}
 	endpoint := *g.upstream
 	endpoint.Scheme = "ws"
@@ -263,11 +233,6 @@ func (g *gateway) meetingStreamingASR(ctx context.Context, pcmPath, language str
 	if err = conn.WriteJSON(map[string]interface{}{"type": "session.update", "session": session}); err != nil {
 		return result, err
 	}
-	input, err := os.Open(pcmPath)
-	if err != nil {
-		return result, err
-	}
-	defer input.Close()
 	sent := make(chan error, 1)
 	go func() {
 		var sendErr error
@@ -312,7 +277,7 @@ func (g *gateway) meetingStreamingASR(ctx context.Context, pcmPath, language str
 		}
 		sendErr = conn.WriteJSON(map[string]string{"type": "input_audio_buffer.commit"})
 	}()
-	// Ensure the sender exits before closing its input, including read failures.
+	// Ensure the sender exits before returning, including read failures.
 	defer func() { conn.Close(); <-sent }()
 	for {
 		var event struct {
@@ -341,4 +306,64 @@ func (g *gateway) meetingStreamingASR(ctx context.Context, pcmPath, language str
 func meetingASRInterval(live int) time.Duration {
 	spare := max(2, 16-live)
 	return time.Duration(float64(1120*time.Millisecond) / float64(spare))
+}
+
+const pcmBytesPerSecond = 16000 * 2
+
+var errMeetingTooLong = errors.New("recording exceeds four hours")
+
+// decodeMeetingAudio pipes an uploaded recording through ffmpeg and returns
+// 16 kHz mono PCM16 held only in memory. Output is bounded to four hours.
+func decodeMeetingAudio(ctx context.Context, body io.Reader) ([]byte, error) {
+	limit := int64(14400 * pcmBytesPerSecond)
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-i", "pipe:0", "-ac", "1", "-ar", "16000", "-f", "s16le", "-c:a", "pcm_s16le", "pipe:1")
+	cmd.Stdin = body
+	stdout, e := cmd.StdoutPipe()
+	if e != nil {
+		return nil, e
+	}
+	if e = cmd.Start(); e != nil {
+		return nil, e
+	}
+	pcm, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
+	if int64(len(pcm)) > limit {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		clear(pcm)
+		return nil, errMeetingTooLong
+	}
+	waitErr := cmd.Wait()
+	if readErr != nil || waitErr != nil || len(pcm) < 2 {
+		clear(pcm)
+		return nil, errors.New("cannot decode audio")
+	}
+	return pcm[:len(pcm)&^1], nil
+}
+
+// pcmSection returns the PCM16 samples between two times without copying.
+func pcmSection(pcm []byte, from, to float64) []byte {
+	start := min(len(pcm), int(from*16000)*2)
+	end := min(len(pcm), int(to*16000)*2)
+	if end < start {
+		end = start
+	}
+	return pcm[start:end]
+}
+
+// wavHeader describes 16 kHz mono PCM16 data of the given length.
+func wavHeader(size int) []byte {
+	header := make([]byte, 44)
+	copy(header, "RIFF")
+	binary.LittleEndian.PutUint32(header[4:], uint32(36+size))
+	copy(header[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(header[16:], 16)
+	binary.LittleEndian.PutUint16(header[20:], 1)
+	binary.LittleEndian.PutUint16(header[22:], 1)
+	binary.LittleEndian.PutUint32(header[24:], 16000)
+	binary.LittleEndian.PutUint32(header[28:], pcmBytesPerSecond)
+	binary.LittleEndian.PutUint16(header[32:], 2)
+	binary.LittleEndian.PutUint16(header[34:], 16)
+	copy(header[36:], "data")
+	binary.LittleEndian.PutUint32(header[40:], uint32(size))
+	return header
 }

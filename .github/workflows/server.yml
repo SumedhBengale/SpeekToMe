@@ -1,0 +1,36 @@
+name: Server
+on:
+  pull_request:
+    paths: ['server/**', 'shared/**', 'deployment/**', '.github/workflows/server.yml']
+  push:
+    branches: [master]
+    paths: ['server/**', 'shared/**', 'deployment/**', '.github/workflows/server.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Vet and test the API server
+        working-directory: server
+        run: |
+          go vet ./...
+          go test ./...
+          go test -race . ./db ./handlers ./audiospool ./privatevault ./accountlimits
+      - name: Test the GPU gateway
+        working-directory: deployment/spot-worker/gateway
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          go vet ./...
+          go test ./...
+      - name: Test the CPU diarization gateway
+        working-directory: deployment/diarization-server
+        run: |
+          python3 -m pip install --quiet cryptography==50.0.0 numpy
+          python3 -m unittest test_gateway_admission test_gateway_sealing

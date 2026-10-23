@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"speektome-server/audiospool"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 var ErrUnavailable = errors.New("encrypted personal storage unavailable")
 var ErrQuota = errors.New("cloud audio storage is full; the local recording is preserved")
 var ErrNotFound = errors.New("recording unavailable")
+var ErrNotPaid = errors.New("paid access is required for cloud audio")
 
 const DefaultQuota int64 = 2_000_000_000
 
@@ -27,6 +29,7 @@ type Vault struct {
 	db           *sql.DB
 	master       cipher.AEAD
 	Objects      Objects
+	Spool        *audiospool.Spool
 	Bucket       string
 	historySlots chan struct{}
 }

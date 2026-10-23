@@ -9,32 +9,26 @@ mod win32_impl {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, RECT};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx,
-        WH_KEYBOARD_LL, KBDLLHOOKSTRUCT, MSG,
-        GetMessageW, TranslateMessage, DispatchMessageW, PostQuitMessage, DefWindowProcW,
-        RegisterClassW, CreateWindowExW, ShowWindow, GetSystemMetrics,
-        WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_PAINT, WM_DESTROY,
-        CS_HREDRAW, CS_VREDRAW, SW_HIDE, SW_SHOWNA, WS_POPUP,
-        WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_NOACTIVATE,
-        WNDCLASSW, SetTimer, KillTimer, WM_CREATE, WM_TIMER,
-        SetWindowPos, SWP_NOZORDER, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SWP_NOMOVE,
-        HWND_TOPMOST, UpdateLayeredWindow, BringWindowToTop, WINDOWPOS, WM_WINDOWPOSCHANGING,
-        CreateIconIndirect, DestroyIcon, ICONINFO, SendMessageW,
-    };
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
-        BeginPaint, EndPaint, SelectObject, DeleteObject,
-        PAINTSTRUCT, CreateCompatibleDC, DeleteDC,
-        CreateDIBSection, GetDC, ReleaseDC,
-        CreateFontW, SetBkMode, SetTextColor,
-        CreateBitmap, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, BI_RGB,
-        HDC,
+        BeginPaint, CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC,
+        DeleteObject, EndPaint, GetDC, ReleaseDC, SelectObject, SetBkMode, SetTextColor,
+        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, PAINTSTRUCT,
     };
     use windows_sys::Win32::UI::Shell::{
-        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIF_INFO,
-        NIIF_INFO, NIIF_WARNING, NIIF_ERROR,
+        Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO,
+        NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, CallNextHookEx, CreateIconIndirect, CreateWindowExW, DefWindowProcW,
+        DestroyIcon, DispatchMessageW, GetMessageW, GetSystemMetrics, KillTimer, PostQuitMessage,
+        RegisterClassW, SendMessageW, SetTimer, SetWindowPos, SetWindowsHookExW, ShowWindow,
+        TranslateMessage, UnhookWindowsHookEx, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW,
+        HWND_TOPMOST, ICONINFO, KBDLLHOOKSTRUCT, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WH_KEYBOARD_LL, WINDOWPOS, WM_CREATE,
+        WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_PAINT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+        WM_WINDOWPOSCHANGING, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
     };
 
     const SM_CXSCREEN: i32 = 0;
@@ -89,7 +83,10 @@ mod win32_impl {
         fn ReleaseCapture() -> i32;
         fn SetCapture(hWnd: HWND) -> HWND;
         fn GetCursorPos(lpPoint: *mut windows_sys::Win32::Foundation::POINT) -> i32;
-        fn LoadCursorW(hInstance: *mut std::ffi::c_void, lpCursorName: *const u16) -> *mut std::ffi::c_void;
+        fn LoadCursorW(
+            hInstance: *mut std::ffi::c_void,
+            lpCursorName: *const u16,
+        ) -> *mut std::ffi::c_void;
         fn SetCursor(hCursor: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
     }
 
@@ -117,7 +114,8 @@ mod win32_impl {
     }
 
     pub static PREVIEW_HWND: std::sync::OnceLock<SendHWND> = std::sync::OnceLock::new();
-    pub static PREVIEW_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+    pub static PREVIEW_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> =
+        std::sync::OnceLock::new();
     pub static PREVIEW_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     pub static TRAY_HWND: std::sync::OnceLock<SendHWND> = std::sync::OnceLock::new();
 
@@ -178,7 +176,8 @@ mod win32_impl {
     }
 
     pub fn get_preview_text() -> String {
-        PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
+        PREVIEW_TEXT
+            .get_or_init(|| std::sync::Mutex::new(String::new()))
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -186,7 +185,8 @@ mod win32_impl {
 
     pub fn set_preview_text(text: &str) {
         {
-            let mut lock = PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
+            let mut lock = PREVIEW_TEXT
+                .get_or_init(|| std::sync::Mutex::new(String::new()))
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             *lock = text.to_string();
@@ -210,14 +210,18 @@ mod win32_impl {
         }
     }
 
-    pub fn calculate_pill_position(config: &crate::config::AppConfig, width: i32, height: i32) -> (i32, i32) {
+    pub fn calculate_pill_position(
+        config: &crate::config::AppConfig,
+        width: i32,
+        height: i32,
+    ) -> (i32, i32) {
         if config.pill_position_mode == "custom" {
             (config.pill_custom_x, config.pill_custom_y)
         } else {
             unsafe {
                 let screen_width = GetSystemMetrics(SM_CXSCREEN);
                 let screen_height = GetSystemMetrics(SM_CYSCREEN);
-                
+
                 match config.pill_predefined_position.as_str() {
                     "Top Left" => (50, 50),
                     "Top Right" => (screen_width - width - 50, 50),
@@ -237,12 +241,18 @@ mod win32_impl {
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
 
-        let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let config = crate::get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let (pill_x, pill_y) = calculate_pill_position(&config, 62, 24);
 
         let display_text = if text.trim().is_empty() {
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
-            if state == PreviewState::Processing { "Polishing..." } else { "Listening..." }
+            if state == PreviewState::Processing {
+                "Polishing..."
+            } else {
+                "Listening..."
+            }
         } else {
             text
         };
@@ -252,8 +262,14 @@ mod win32_impl {
         let hdc_screen = GetDC(std::ptr::null_mut());
         let font_name = encode_wide("Segoe UI");
         let hfont = CreateFontW(
-            -13, 0, 0, 0,
-            FW_NORMAL, 0, 0, 0,
+            -13,
+            0,
+            0,
+            0,
+            FW_NORMAL,
+            0,
+            0,
+            0,
             DEFAULT_CHARSET,
             OUT_DEFAULT_PRECIS,
             CLIP_DEFAULT_PRECIS,
@@ -318,14 +334,23 @@ mod win32_impl {
             unsafe {
                 let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
                 if (ex_style & (WS_EX_TRANSPARENT as i32)) == 0 {
-                    SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | (WS_EX_TRANSPARENT as i32) | (WS_EX_TOPMOST as i32));
+                    SetWindowLongW(
+                        hwnd,
+                        GWL_EXSTYLE,
+                        ex_style | (WS_EX_TRANSPARENT as i32) | (WS_EX_TOPMOST as i32),
+                    );
                 }
-                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                let config = crate::get_active_config()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let (x, y) = calculate_pill_position(&config, 62, 24);
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    x - 4, y - 4, 70, 32,
+                    x - 4,
+                    y - 4,
+                    70,
+                    32,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
                 BringWindowToTop(hwnd);
@@ -380,15 +405,24 @@ mod win32_impl {
             unsafe {
                 // Remove WS_EX_TRANSPARENT so the overlay pill can be clicked & dragged by the user; ensure WS_EX_TOPMOST
                 let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-                SetWindowLongW(hwnd, GWL_EXSTYLE, (ex_style & !(WS_EX_TRANSPARENT as i32)) | (WS_EX_TOPMOST as i32));
+                SetWindowLongW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    (ex_style & !(WS_EX_TRANSPARENT as i32)) | (WS_EX_TOPMOST as i32),
+                );
 
-                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                let config = crate::get_active_config()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let (x, y) = calculate_pill_position(&config, 104, 24);
 
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    x, y, 104, 24,
+                    x,
+                    y,
+                    104,
+                    24,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
                 BringWindowToTop(hwnd);
@@ -412,16 +446,25 @@ mod win32_impl {
             unsafe {
                 // Restore WS_EX_TRANSPARENT for normal click-through dictation; ensure WS_EX_TOPMOST
                 let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-                SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | (WS_EX_TRANSPARENT as i32) | (WS_EX_TOPMOST as i32));
+                SetWindowLongW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    ex_style | (WS_EX_TRANSPARENT as i32) | (WS_EX_TOPMOST as i32),
+                );
 
-                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                let config = crate::get_active_config()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 let (def_x, def_y) = calculate_pill_position(&config, 62, 24);
 
                 // Reposition back to default position and 62x24 size, then hide
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    def_x - 4, def_y - 4, 70, 32,
+                    def_x - 4,
+                    def_y - 4,
+                    70,
+                    32,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
                 ShowWindow(hwnd, SW_HIDE);
@@ -464,22 +507,33 @@ mod win32_impl {
         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
             let hwnd = send_hwnd.0;
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
-            let pill_width = if state == PreviewState::Meeting { 104 } else { 62 };
-            let (x, y) = if state == PreviewState::Meeting && MEETING_DRAGGED_X.load(Ordering::Relaxed) >= 0 {
-                (MEETING_DRAGGED_X.load(Ordering::Relaxed), MEETING_DRAGGED_Y.load(Ordering::Relaxed))
+            let pill_width = if state == PreviewState::Meeting {
+                104
             } else {
-                let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+                62
+            };
+            let (x, y) = if state == PreviewState::Meeting
+                && MEETING_DRAGGED_X.load(Ordering::Relaxed) >= 0
+            {
+                (
+                    MEETING_DRAGGED_X.load(Ordering::Relaxed),
+                    MEETING_DRAGGED_Y.load(Ordering::Relaxed),
+                )
+            } else {
+                let config = crate::get_active_config()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 calculate_pill_position(&config, pill_width, 24)
             };
-            let margin=if state==PreviewState::Meeting{0}else{4};
+            let margin = if state == PreviewState::Meeting { 0 } else { 4 };
             unsafe {
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    x-margin,
-                    y-margin,
-                    pill_width+margin*2,
-                    24+margin*2,
+                    x - margin,
+                    y - margin,
+                    pill_width + margin * 2,
+                    24 + margin * 2,
                     SWP_NOACTIVATE,
                 );
                 BringWindowToTop(hwnd);
@@ -508,11 +562,20 @@ mod win32_impl {
 
         let bytes = if start { START_CHIME } else { END_CHIME };
         unsafe {
-            PlaySoundW(bytes.as_ptr(), std::ptr::null_mut(), SND_ASYNC | SND_MEMORY | SND_NODEFAULT);
+            PlaySoundW(
+                bytes.as_ptr(),
+                std::ptr::null_mut(),
+                SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
+            );
         }
     }
 
-    pub unsafe extern "system" fn wnd_proc_overlay(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    pub unsafe extern "system" fn wnd_proc_overlay(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match msg {
             WM_CREATE => {
                 SetTimer(hwnd, 1, 30, None);
@@ -529,13 +592,17 @@ mod win32_impl {
             WM_TIMER => {
                 let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
                 if state != PreviewState::Hidden {
-                    static TOPMOST_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    static TOPMOST_COUNTER: std::sync::atomic::AtomicU32 =
+                        std::sync::atomic::AtomicU32::new(0);
                     let count = TOPMOST_COUNTER.fetch_add(1, Ordering::Relaxed);
                     if count % 10 == 0 {
                         SetWindowPos(
                             hwnd,
                             HWND_TOPMOST,
-                            0, 0, 0, 0,
+                            0,
+                            0,
+                            0,
+                            0,
                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                         );
                         BringWindowToTop(hwnd);
@@ -604,7 +671,10 @@ mod win32_impl {
                     let mut rect: RECT = mem::zeroed();
                     GetWindowRect(hwnd, &mut rect);
                     let (new_x, new_y) = (rect.left, rect.top);
-                    println!("[OVERLAY] Pill placed at ({}, {}) for this meeting session.", new_x, new_y);
+                    println!(
+                        "[OVERLAY] Pill placed at ({}, {}) for this meeting session.",
+                        new_x, new_y
+                    );
                     MEETING_DRAGGED_X.store(new_x, Ordering::Relaxed);
                     MEETING_DRAGGED_Y.store(new_y, Ordering::Relaxed);
                     SetWindowPos(
@@ -660,7 +730,12 @@ mod win32_impl {
         }
     }
 
-    pub unsafe extern "system" fn wnd_proc_preview(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    pub unsafe extern "system" fn wnd_proc_preview(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match msg {
             WM_CREATE => {
                 SetTimer(hwnd, 1, 30, None);
@@ -700,7 +775,8 @@ mod win32_impl {
         let hdc_mem = CreateCompatibleDC(hdc_screen);
 
         let mut bmi: windows_sys::Win32::Graphics::Gdi::BITMAPINFO = mem::zeroed();
-        bmi.bmiHeader.biSize = mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biSize =
+            mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
         bmi.bmiHeader.biWidth = width;
         bmi.bmiHeader.biHeight = -height;
         bmi.bmiHeader.biPlanes = 1;
@@ -708,14 +784,7 @@ mod win32_impl {
         bmi.bmiHeader.biCompression = 0;
 
         let mut bits: *mut std::ffi::c_void = ptr::null_mut();
-        let dib = CreateDIBSection(
-            hdc_mem,
-            &bmi as *const _,
-            0,
-            &mut bits,
-            ptr::null_mut(),
-            0,
-        );
+        let dib = CreateDIBSection(hdc_mem, &bmi as *const _, 0, &mut bits, ptr::null_mut(), 0);
 
         if !dib.is_null() && !bits.is_null() {
             let old_bitmap = SelectObject(hdc_mem, dib);
@@ -728,12 +797,16 @@ mod win32_impl {
             let bg_color = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed);
 
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
-            let margin=if state==PreviewState::Meeting{0.0}else{4.0};
-            let r = (height as f32 - margin*2.0) / 2.0;
-            let c1_x = margin+r;
-            let c1_y = margin+r;
-            let c2_x = width as f32 - margin-r;
-            let c2_y = margin+r;
+            let margin = if state == PreviewState::Meeting {
+                0.0
+            } else {
+                4.0
+            };
+            let r = (height as f32 - margin * 2.0) / 2.0;
+            let c1_x = margin + r;
+            let c1_y = margin + r;
+            let c2_x = width as f32 - margin - r;
+            let c2_y = margin + r;
 
             let bg_r = (bg_color & 0xFF) as f32;
             let bg_g = ((bg_color >> 8) & 0xFF) as f32;
@@ -764,12 +837,14 @@ mod win32_impl {
                         let pr = (bg_r as u32 * alpha) / 255;
                         let pg = (bg_g as u32 * alpha) / 255;
                         let pb = (bg_b as u32 * alpha) / 255;
-                        pixel_slice[(y * width + x) as usize] = (alpha << 24) | (pr << 16) | (pg << 8) | pb;
+                        pixel_slice[(y * width + x) as usize] =
+                            (alpha << 24) | (pr << 16) | (pg << 8) | pb;
                     }
                 }
             }
 
-            static SMOOTHED_VOLUME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            static SMOOTHED_VOLUME: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
             let raw_vol = if state == PreviewState::Meeting {
                 let mic = crate::audio::MIC_VOLUME.load(Ordering::Relaxed);
                 let lb = crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed);
@@ -778,31 +853,53 @@ mod win32_impl {
                 crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed)
             };
             let smoothed = crate::native_overlay::smooth_volume(
-                f64::from_bits(SMOOTHED_VOLUME.load(Ordering::Relaxed)), raw_vol as f64,
+                f64::from_bits(SMOOTHED_VOLUME.load(Ordering::Relaxed)),
+                raw_vol as f64,
             );
             SMOOTHED_VOLUME.store(smoothed.to_bits(), Ordering::Relaxed);
 
             static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
 
-            if state==PreviewState::Processing {
-                let bounds=crate::native_overlay::Rect{x:4.0,y:4.0,width:(width-8)as f64,height:(height-8)as f64};
-                let background=crate::native_overlay::color(bg_color);
-                for y in 0..height {for x in 0..width {
-                    pixel_slice[(y*width+x)as usize]=crate::native_overlay::processing_pixel(x as f64+0.5,y as f64+0.5,bounds,12.0,frame as u64,background);
-                }}
+            if state == PreviewState::Processing {
+                let bounds = crate::native_overlay::Rect {
+                    x: 4.0,
+                    y: 4.0,
+                    width: (width - 8) as f64,
+                    height: (height - 8) as f64,
+                };
+                let background = crate::native_overlay::color(bg_color);
+                for y in 0..height {
+                    for x in 0..width {
+                        pixel_slice[(y * width + x) as usize] =
+                            crate::native_overlay::processing_pixel(
+                                x as f64 + 0.5,
+                                y as f64 + 0.5,
+                                bounds,
+                                12.0,
+                                frame as u64,
+                                background,
+                            );
+                    }
+                }
             }
             let logo_color = crate::native_overlay::LOGO_COLOR;
             let bar_r = logo_color & 0xFF;
             let bar_g = (logo_color >> 8) & 0xFF;
             let bar_b = (logo_color >> 16) & 0xFF;
             // Keep the meeting indicator beside its timer; center normal dictation.
-            let logo_x = if state == PreviewState::Meeting { -7.0 } else {
+            let logo_x = if state == PreviewState::Meeting {
+                -7.0
+            } else {
                 (width as f64 - crate::native_overlay::PILL_WIDTH) / 2.0
             };
             let logo_y = (height as f64 - crate::native_overlay::PILL_HEIGHT) / 2.0;
             for bar in crate::native_overlay::bars(
-                logo_x, logo_y, frame as u64, smoothed, state == PreviewState::Processing,
+                logo_x,
+                logo_y,
+                frame as u64,
+                smoothed,
+                state == PreviewState::Processing,
             ) {
                 let radius = (bar.width / 2.0) as f32;
                 let x_center = (bar.x + bar.width / 2.0) as f32;
@@ -838,13 +935,17 @@ mod win32_impl {
                             let src_b = (bar_b * bar_alpha) / 255;
 
                             if dst_a == 0 {
-                                pixel_slice[idx] = (bar_alpha << 24) | (src_r << 16) | (src_g << 8) | src_b;
+                                pixel_slice[idx] =
+                                    (bar_alpha << 24) | (src_r << 16) | (src_g << 8) | src_b;
                             } else {
                                 let out_r = src_r + (dst >> 16 & 0xFF) * (255 - bar_alpha) / 255;
                                 let out_g = src_g + (dst >> 8 & 0xFF) * (255 - bar_alpha) / 255;
                                 let out_b = src_b + (dst & 0xFF) * (255 - bar_alpha) / 255;
                                 let out_a = bar_alpha + dst_a * (255 - bar_alpha) / 255;
-                                pixel_slice[idx] = (out_a << 24) | (out_r.min(255) << 16) | (out_g.min(255) << 8) | out_b.min(255);
+                                pixel_slice[idx] = (out_a << 24)
+                                    | (out_r.min(255) << 16)
+                                    | (out_g.min(255) << 8)
+                                    | out_b.min(255);
                             }
                         }
                     }
@@ -865,15 +966,22 @@ mod win32_impl {
 
                 if !mask_dib.is_null() && !mask_bits.is_null() {
                     let old_mask_bitmap = SelectObject(hdc_mask, mask_dib);
-                    let mask_slice = std::slice::from_raw_parts_mut(mask_bits as *mut u32, pixel_count);
+                    let mask_slice =
+                        std::slice::from_raw_parts_mut(mask_bits as *mut u32, pixel_count);
                     for p in mask_slice.iter_mut() {
                         *p = 0;
                     }
 
                     let font_name = encode_wide("Segoe UI");
                     let hfont = CreateFontW(
-                        -11, 0, 0, 0,
-                        FW_SEMIBOLD, 0, 0, 0,
+                        -11,
+                        0,
+                        0,
+                        0,
+                        FW_SEMIBOLD,
+                        0,
+                        0,
+                        0,
                         DEFAULT_CHARSET,
                         OUT_DEFAULT_PRECIS,
                         CLIP_DEFAULT_PRECIS,
@@ -923,9 +1031,15 @@ mod win32_impl {
                                 let src_a = (glyph_alpha * 245) / 255;
                                 let out_a = src_a + (dst_a * (255 - src_a)) / 255;
                                 if out_a > 0 {
-                                    let out_r = ((text_r * src_a) + (dst_r * dst_a * (255 - src_a) / 255)) / out_a;
-                                    let out_g = ((text_g * src_a) + (dst_g * dst_a * (255 - src_a) / 255)) / out_a;
-                                    let out_b = ((text_b * src_a) + (dst_b * dst_a * (255 - src_a) / 255)) / out_a;
+                                    let out_r = ((text_r * src_a)
+                                        + (dst_r * dst_a * (255 - src_a) / 255))
+                                        / out_a;
+                                    let out_g = ((text_g * src_a)
+                                        + (dst_g * dst_a * (255 - src_a) / 255))
+                                        / out_a;
+                                    let out_b = ((text_b * src_a)
+                                        + (dst_b * dst_a * (255 - src_a) / 255))
+                                        / out_a;
 
                                     let pr = ((out_r.min(255) * out_a) / 255).min(255);
                                     let pg = ((out_g.min(255) * out_a) / 255).min(255);
@@ -945,9 +1059,12 @@ mod win32_impl {
                 DeleteDC(hdc_mask);
             }
 
-            let psize = windows_sys::Win32::Foundation::SIZE { cx: width, cy: height };
+            let psize = windows_sys::Win32::Foundation::SIZE {
+                cx: width,
+                cy: height,
+            };
             let ppt_src = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
-            
+
             let mut blend: windows_sys::Win32::Graphics::Gdi::BLENDFUNCTION = mem::zeroed();
             blend.BlendOp = 0;
             blend.BlendFlags = 0;
@@ -976,8 +1093,9 @@ mod win32_impl {
 
     // Apple Intelligence Chromatic Aurora Gradient Palette
     #[inline(always)]
-    fn get_apple_intelligence_color(u:f32)->(f32,f32,f32){
-        let (r,g,b)=crate::native_overlay::processing_color(u as f64);((r*255.0)as f32,(g*255.0)as f32,(b*255.0)as f32)
+    fn get_apple_intelligence_color(u: f32) -> (f32, f32, f32) {
+        let (r, g, b) = crate::native_overlay::processing_color(u as f64);
+        ((r * 255.0) as f32, (g * 255.0) as f32, (b * 255.0) as f32)
     }
 
     pub unsafe fn update_layered_preview(hwnd: HWND) {
@@ -1006,7 +1124,8 @@ mod win32_impl {
         let hdc_mem = CreateCompatibleDC(hdc_screen);
 
         let mut bmi: windows_sys::Win32::Graphics::Gdi::BITMAPINFO = mem::zeroed();
-        bmi.bmiHeader.biSize = mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biSize =
+            mem::size_of::<windows_sys::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32;
         bmi.bmiHeader.biWidth = width;
         bmi.bmiHeader.biHeight = -height;
         bmi.bmiHeader.biPlanes = 1;
@@ -1014,14 +1133,7 @@ mod win32_impl {
         bmi.bmiHeader.biCompression = 0;
 
         let mut bits: *mut std::ffi::c_void = ptr::null_mut();
-        let dib = CreateDIBSection(
-            hdc_mem,
-            &bmi as *const _,
-            0,
-            &mut bits,
-            ptr::null_mut(),
-            0,
-        );
+        let dib = CreateDIBSection(hdc_mem, &bmi as *const _, 0, &mut bits, ptr::null_mut(), 0);
 
         if !dib.is_null() && !bits.is_null() {
             let old_bitmap = SelectObject(hdc_mem, dib);
@@ -1052,7 +1164,8 @@ mod win32_impl {
                 (245u32, 245u32, 250u32)
             };
 
-            static PREVIEW_FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            static PREVIEW_FRAME_COUNT: std::sync::atomic::AtomicU32 =
+                std::sync::atomic::AtomicU32::new(0);
             let frame = PREVIEW_FRAME_COUNT.fetch_add(1, Ordering::Relaxed) as f32;
 
             let w_f = width as f32;
@@ -1087,7 +1200,8 @@ mod win32_impl {
                     if is_processing {
                         // Angle around center + rotational flow
                         let angle = (y_f - cy).atan2(x_f - cx); // -PI to PI
-                        let u = (angle / (2.0 * std::f32::consts::PI) + 1.0 + frame * 0.008).rem_euclid(1.0);
+                        let u = (angle / (2.0 * std::f32::consts::PI) + 1.0 + frame * 0.008)
+                            .rem_euclid(1.0);
                         let (chroma_r, chroma_g, chroma_b) = get_apple_intelligence_color(u);
 
                         if dist > 3.5 {
@@ -1102,7 +1216,8 @@ mod win32_impl {
                                 let pr = ((chroma_r * halo_alpha as f32) / 255.0) as u32;
                                 let pg = ((chroma_g * halo_alpha as f32) / 255.0) as u32;
                                 let pb = ((chroma_b * halo_alpha as f32) / 255.0) as u32;
-                                pixel_slice[(py * width + px) as usize] = (halo_alpha << 24) | (pr << 16) | (pg << 8) | pb;
+                                pixel_slice[(py * width + px) as usize] =
+                                    (halo_alpha << 24) | (pr << 16) | (pg << 8) | pb;
                             } else {
                                 pixel_slice[(py * width + px) as usize] = 0;
                             }
@@ -1129,7 +1244,8 @@ mod win32_impl {
                             let pg = (((cg * alpha_u as f32) / 255.0).min(255.0)) as u32;
                             let pb = (((cb * alpha_u as f32) / 255.0).min(255.0)) as u32;
 
-                            pixel_slice[(py * width + px) as usize] = (alpha_u << 24) | (pr << 16) | (pg << 8) | pb;
+                            pixel_slice[(py * width + px) as usize] =
+                                (alpha_u << 24) | (pr << 16) | (pg << 8) | pb;
                         }
                     } else {
                         // Listening state: Clean, minimal static theme border (1.2px)
@@ -1150,7 +1266,8 @@ mod win32_impl {
                         let pg = (((cg * alpha_u as f32) / 255.0).min(255.0)) as u32;
                         let pb = (((cb * alpha_u as f32) / 255.0).min(255.0)) as u32;
 
-                        pixel_slice[(py * width + px) as usize] = (alpha_u << 24) | (pr << 16) | (pg << 8) | pb;
+                        pixel_slice[(py * width + px) as usize] =
+                            (alpha_u << 24) | (pr << 16) | (pg << 8) | pb;
                     }
                 }
             }
@@ -1176,8 +1293,14 @@ mod win32_impl {
 
                 let font_name = encode_wide("Segoe UI");
                 let hfont = CreateFontW(
-                    -13, 0, 0, 0,
-                    FW_NORMAL, 0, 0, 0,
+                    -13,
+                    0,
+                    0,
+                    0,
+                    FW_NORMAL,
+                    0,
+                    0,
+                    0,
                     DEFAULT_CHARSET,
                     OUT_DEFAULT_PRECIS,
                     CLIP_DEFAULT_PRECIS,
@@ -1191,7 +1314,11 @@ mod win32_impl {
                 SetTextColor(hdc_mask, 0x00FFFFFF);
 
                 let display_text = if raw_text.trim().is_empty() {
-                    if is_processing { "Polishing..." } else { "Listening..." }
+                    if is_processing {
+                        "Polishing..."
+                    } else {
+                        "Listening..."
+                    }
                 } else {
                     &raw_text
                 };
@@ -1232,9 +1359,15 @@ mod win32_impl {
                             let src_a = (glyph_alpha * 245) / 255;
                             let out_a = src_a + (dst_a * (255 - src_a)) / 255;
                             if out_a > 0 {
-                                let out_r = ((text_r * src_a) + (dst_r * dst_a * (255 - src_a) / 255)) / out_a;
-                                let out_g = ((text_g * src_a) + (dst_g * dst_a * (255 - src_a) / 255)) / out_a;
-                                let out_b = ((text_b * src_a) + (dst_b * dst_a * (255 - src_a) / 255)) / out_a;
+                                let out_r = ((text_r * src_a)
+                                    + (dst_r * dst_a * (255 - src_a) / 255))
+                                    / out_a;
+                                let out_g = ((text_g * src_a)
+                                    + (dst_g * dst_a * (255 - src_a) / 255))
+                                    / out_a;
+                                let out_b = ((text_b * src_a)
+                                    + (dst_b * dst_a * (255 - src_a) / 255))
+                                    / out_a;
 
                                 let pr = ((out_r.min(255) * out_a) / 255).min(255);
                                 let pg = ((out_g.min(255) * out_a) / 255).min(255);
@@ -1253,7 +1386,10 @@ mod win32_impl {
             }
             DeleteDC(hdc_mask);
 
-            let psize = windows_sys::Win32::Foundation::SIZE { cx: width, cy: height };
+            let psize = windows_sys::Win32::Foundation::SIZE {
+                cx: width,
+                cy: height,
+            };
             let ppt_src = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
 
             let mut blend: windows_sys::Win32::Graphics::Gdi::BLENDFUNCTION = mem::zeroed();
@@ -1282,7 +1418,12 @@ mod win32_impl {
         ReleaseDC(std::ptr::null_mut(), hdc_screen);
     }
 
-    pub unsafe extern "system" fn wnd_proc_tray(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    pub unsafe extern "system" fn wnd_proc_tray(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match msg {
             WM_TRAYICON => {
                 let event = lparam as u32;
@@ -1291,47 +1432,82 @@ mod win32_impl {
                         crate::show_or_create_settings_window(app);
                     }
                 } else if event == windows_sys::Win32::UI::WindowsAndMessaging::WM_RBUTTONUP {
-                    let is_meeting = crate::ACTIVE_MEETING.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+                    let is_meeting = crate::ACTIVE_MEETING
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_some();
                     let menu = windows_sys::Win32::UI::WindowsAndMessaging::CreatePopupMenu();
 
                     if is_meeting {
                         let meeting_str = encode_wide("🔴 Open Active Meeting");
-                        windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING, 3, meeting_str.as_ptr());
+                        windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                            menu,
+                            windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING,
+                            3,
+                            meeting_str.as_ptr(),
+                        );
                     }
                     let language_options = crate::speaking_language_options();
                     let active_language = crate::speaking_language();
-                    let language_menu = windows_sys::Win32::UI::WindowsAndMessaging::CreatePopupMenu();
+                    let language_menu =
+                        windows_sys::Win32::UI::WindowsAndMessaging::CreatePopupMenu();
                     for (index, (code, name)) in language_options.iter().enumerate() {
                         let label = encode_wide(name);
                         let flags = windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING
-                            | if code == &active_language { windows_sys::Win32::UI::WindowsAndMessaging::MF_CHECKED } else { 0 };
-                        windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(language_menu, flags, 1000 + index, label.as_ptr());
+                            | if code == &active_language {
+                                windows_sys::Win32::UI::WindowsAndMessaging::MF_CHECKED
+                            } else {
+                                0
+                            };
+                        windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                            language_menu,
+                            flags,
+                            1000 + index,
+                            label.as_ptr(),
+                        );
                     }
                     let language_label = encode_wide("Speaking language");
-                    windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu,
-                        windows_sys::Win32::UI::WindowsAndMessaging::MF_POPUP, language_menu as usize, language_label.as_ptr());
+                    windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                        menu,
+                        windows_sys::Win32::UI::WindowsAndMessaging::MF_POPUP,
+                        language_menu as usize,
+                        language_label.as_ptr(),
+                    );
                     let settings_str = encode_wide("Settings");
                     let exit_str = encode_wide("Exit");
-                    windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING, 1, settings_str.as_ptr());
-                    windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(menu, windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING, 2, exit_str.as_ptr());
-                    
+                    windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                        menu,
+                        windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING,
+                        1,
+                        settings_str.as_ptr(),
+                    );
+                    windows_sys::Win32::UI::WindowsAndMessaging::AppendMenuW(
+                        menu,
+                        windows_sys::Win32::UI::WindowsAndMessaging::MF_STRING,
+                        2,
+                        exit_str.as_ptr(),
+                    );
+
                     let mut pt = mem::zeroed();
                     windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
                     windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
-                    
+
                     let cmd = windows_sys::Win32::UI::WindowsAndMessaging::TrackPopupMenu(
                         menu,
-                        windows_sys::Win32::UI::WindowsAndMessaging::TPM_RETURNCMD | windows_sys::Win32::UI::WindowsAndMessaging::TPM_RIGHTBUTTON,
+                        windows_sys::Win32::UI::WindowsAndMessaging::TPM_RETURNCMD
+                            | windows_sys::Win32::UI::WindowsAndMessaging::TPM_RIGHTBUTTON,
                         pt.x,
                         pt.y,
                         0,
                         hwnd,
-                        ptr::null()
+                        ptr::null(),
                     );
                     windows_sys::Win32::UI::WindowsAndMessaging::DestroyMenu(menu);
-                    
+
                     if cmd >= 1000 && (cmd as usize - 1000) < language_options.len() {
-                        let _ = crate::set_active_language(language_options[cmd as usize - 1000].0.clone());
+                        let _ = crate::set_active_language(
+                            language_options[cmd as usize - 1000].0.clone(),
+                        );
                     } else if cmd == 1 || cmd == 3 {
                         if let Some(app) = crate::TAURI_APP.get() {
                             crate::show_or_create_settings_window(app);
@@ -1356,16 +1532,23 @@ mod win32_impl {
         if req_vk != 0 && vk_code == req_vk {
             return true;
         }
-        if (req_modifiers & crate::config::HOTKEY_CTRL != 0) && (vk_code == 0x11 || vk_code == 0xA2 || vk_code == 0xA3) {
+        if (req_modifiers & crate::config::HOTKEY_CTRL != 0)
+            && (vk_code == 0x11 || vk_code == 0xA2 || vk_code == 0xA3)
+        {
             return true;
         }
-        if (req_modifiers & crate::config::HOTKEY_SHIFT != 0) && (vk_code == 0x10 || vk_code == 0xA0 || vk_code == 0xA1) {
+        if (req_modifiers & crate::config::HOTKEY_SHIFT != 0)
+            && (vk_code == 0x10 || vk_code == 0xA0 || vk_code == 0xA1)
+        {
             return true;
         }
-        if (req_modifiers & crate::config::HOTKEY_ALT != 0) && (vk_code == 0x12 || vk_code == 0xA4 || vk_code == 0xA5) {
+        if (req_modifiers & crate::config::HOTKEY_ALT != 0)
+            && (vk_code == 0x12 || vk_code == 0xA4 || vk_code == 0xA5)
+        {
             return true;
         }
-        if (req_modifiers & crate::config::HOTKEY_WIN != 0) && (vk_code == 0x5B || vk_code == 0x5C) {
+        if (req_modifiers & crate::config::HOTKEY_WIN != 0) && (vk_code == 0x5B || vk_code == 0x5C)
+        {
             return true;
         }
         false
@@ -1377,7 +1560,7 @@ mod win32_impl {
             0x10 | 0xA0 | 0xA1 | // Shift
             0x11 | 0xA2 | 0xA3 | // Ctrl
             0x12 | 0xA4 | 0xA5 | // Alt
-            0x5B | 0x5C          // Win
+            0x5B | 0x5C // Win
         )
     }
 
@@ -1393,11 +1576,18 @@ mod win32_impl {
     // Latch the physical chord independently from recording state. The chord
     // remains down while processing or copying selected text, so repeats and
     // trailing modifier releases cannot count as another input.
-    static PHYSICAL_CHORD: std::sync::OnceLock<Mutex<crate::gestures::ChordLatch>> = std::sync::OnceLock::new();
+    static PHYSICAL_CHORD: std::sync::OnceLock<Mutex<crate::gestures::ChordLatch>> =
+        std::sync::OnceLock::new();
     static LAST_WIN_HOTKEY_ACTIVE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
-    pub unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code < 0 { return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam); }
+    pub unsafe extern "system" fn keyboard_hook_proc(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code < 0 {
+            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+        }
         let kb = *(lparam as *const KBDLLHOOKSTRUCT);
         // Ignore injected input, but keep real releases even while the app is
         // copying a selection. SIMULATING_KEY used to swallow those releases.
@@ -1411,35 +1601,56 @@ mod win32_impl {
         let down = wparam as u32 == WM_KEYDOWN || wparam as u32 == WM_SYSKEYDOWN;
         let up = wparam as u32 == WM_KEYUP || wparam as u32 == WM_SYSKEYUP;
         let part = is_key_part_of_combo(vk, modifiers, trigger);
-        let mut chord = PHYSICAL_CHORD.get_or_init(|| Mutex::new(crate::gestures::ChordLatch::default()))
-            .lock().unwrap_or_else(|e| e.into_inner());
+        let mut chord = PHYSICAL_CHORD
+            .get_or_init(|| Mutex::new(crate::gestures::ChordLatch::default()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if crate::shortcuts::selecting() || !crate::HOTKEY_ALLOWED.load(Ordering::SeqCst) {
-            if down || up { let _ = chord.edge(vk, down, combo); }
+            if down || up {
+                let _ = chord.edge(vk, down, combo);
+            }
             return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
         }
         let was_active = chord.active();
-        let edge = if down || up { chord.edge(vk, down, combo) } else { None };
+        let edge = if down || up {
+            chord.edge(vk, down, combo)
+        } else {
+            None
+        };
         let mut suppress = part && (was_active || chord.active()) && should_suppress_key(vk);
-        if down && was_active && !part && crate::ACTIVE_HOTKEY_MODE.load(Ordering::Relaxed) == 0
-            && crate::shortcuts::is_capturing() {
+        if down
+            && was_active
+            && !part
+            && crate::ACTIVE_HOTKEY_MODE.load(Ordering::Relaxed) == 0
+            && crate::shortcuts::is_capturing()
+        {
             crate::shortcuts::cancel();
         }
         if let Some(pressed) = edge {
             if pressed && !crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::SeqCst) {
-                show_tray_notification("SpeekTo.Me — Sign In Required",
-                    "Please sign in in Settings to start voice dictation.", NotificationLevel::Warning);
-                if let Some(app) = crate::TAURI_APP.get() { crate::show_or_create_settings_window(app); }
+                show_tray_notification(
+                    "SpeekTo.Me — Sign In Required",
+                    "Please sign in in Settings to start voice dictation.",
+                    NotificationLevel::Warning,
+                );
+                if let Some(app) = crate::TAURI_APP.get() {
+                    crate::show_or_create_settings_window(app);
+                }
             } else {
                 crate::shortcuts::on_edge(pressed);
             }
         }
         if (modifiers & crate::config::HOTKEY_WIN) != 0 {
             if chord.active() || was_active {
-                *LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+                *LAST_WIN_HOTKEY_ACTIVE
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
                 crate::keyboard::suppress_win_key_start_menu();
             }
             if up && matches!(vk, 0x5B | 0x5C) {
-                let recent = LAST_WIN_HOTKEY_ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
+                let recent = LAST_WIN_HOTKEY_ACTIVE
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .is_some_and(|at| at.elapsed() < Duration::from_millis(600));
                 if recent {
                     crate::keyboard::suppress_win_key_start_menu();
@@ -1447,10 +1658,15 @@ mod win32_impl {
                 }
             }
         }
-        if suppress { 1 } else { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
+        if suppress {
+            1
+        } else {
+            CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+        }
     }
 
-    static CURRENT_TRAY_HICON: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+    static CURRENT_TRAY_HICON: std::sync::atomic::AtomicIsize =
+        std::sync::atomic::AtomicIsize::new(0);
 
     pub unsafe fn create_themed_soundwave_icon(theme: &str) -> *mut std::ffi::c_void {
         let (r, g, b) = match theme {
@@ -1469,11 +1685,31 @@ mod win32_impl {
             radius: f32,
         }
         let bars = [
-            Bar { cx: 4.5, half_h: 5.0, radius: 1.8 },
-            Bar { cx: 10.25, half_h: 10.0, radius: 1.8 },
-            Bar { cx: 16.0, half_h: 14.2, radius: 1.8 },
-            Bar { cx: 21.75, half_h: 10.0, radius: 1.8 },
-            Bar { cx: 27.5, half_h: 5.0, radius: 1.8 },
+            Bar {
+                cx: 4.5,
+                half_h: 5.0,
+                radius: 1.8,
+            },
+            Bar {
+                cx: 10.25,
+                half_h: 10.0,
+                radius: 1.8,
+            },
+            Bar {
+                cx: 16.0,
+                half_h: 14.2,
+                radius: 1.8,
+            },
+            Bar {
+                cx: 21.75,
+                half_h: 10.0,
+                radius: 1.8,
+            },
+            Bar {
+                cx: 27.5,
+                half_h: 5.0,
+                radius: 1.8,
+            },
         ];
 
         for y in 0..size {
@@ -1512,7 +1748,7 @@ mod win32_impl {
                     bgra[idx + 0] = (b as f32 * alpha) as u8; // B
                     bgra[idx + 1] = (g as f32 * alpha) as u8; // G
                     bgra[idx + 2] = (r as f32 * alpha) as u8; // R
-                    bgra[idx + 3] = a;                        // A
+                    bgra[idx + 3] = a; // A
                 }
             }
         }
@@ -1571,7 +1807,11 @@ mod win32_impl {
                     nid.uFlags = NIF_ICON;
                     nid.hIcon = h_icon;
                     let res = Shell_NotifyIconW(NIM_MODIFY, &nid);
-                    println!("[WIN32] Updated tray icon for theme: {} (success: {})", theme, res != 0);
+                    println!(
+                        "[WIN32] Updated tray icon for theme: {} (success: {})",
+                        theme,
+                        res != 0
+                    );
 
                     let old_icon = CURRENT_TRAY_HICON.swap(h_icon as isize, Ordering::SeqCst);
                     if old_icon != 0 {
@@ -1601,7 +1841,7 @@ mod win32_impl {
     pub unsafe fn run_win32_hook_and_tray_thread() {
         PlaySoundW(std::ptr::null(), std::ptr::null_mut(), 0);
         let hinstance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
-        
+
         let overlay_class = encode_wide("SpeekTo.MeOverlayClass");
         let wnd_class_overlay = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
@@ -1616,19 +1856,22 @@ mod win32_impl {
             lpszClassName: overlay_class.as_ptr(),
         };
         RegisterClassW(&wnd_class_overlay);
-        
+
         let hwnd_overlay = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
             overlay_class.as_ptr(),
             ptr::null(),
             WS_POPUP,
-            0, 0, 70, 32,
+            0,
+            0,
+            70,
+            32,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
-            ptr::null_mut()
+            ptr::null_mut(),
         );
-        
+
         crate::OVERLAY_HWND.set(SendHWND(hwnd_overlay)).ok();
         update_overlay_position();
 
@@ -1652,15 +1895,18 @@ mod win32_impl {
             preview_class.as_ptr(),
             ptr::null(),
             WS_POPUP,
-            0, 0, 160, 36,
+            0,
+            0,
+            160,
+            36,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
-            ptr::null_mut()
+            ptr::null_mut(),
         );
 
         PREVIEW_HWND.set(SendHWND(hwnd_preview)).ok();
-        
+
         let tray_class = encode_wide("SpeekTo.MeTrayClass");
         let wnd_class_tray = WNDCLASSW {
             style: 0,
@@ -1675,25 +1921,28 @@ mod win32_impl {
             lpszClassName: tray_class.as_ptr(),
         };
         RegisterClassW(&wnd_class_tray);
-        
+
         let hwnd_tray = CreateWindowExW(
             0,
             tray_class.as_ptr(),
             encode_wide("SpeekTo.Me Message Window").as_ptr(),
             0,
-            0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
-            ptr::null_mut()
+            ptr::null_mut(),
         );
-        
+
         if hwnd_tray == std::ptr::null_mut() {
             panic!("Failed to create SpeekTo.Me tray helper window!");
         }
 
         TRAY_HWND.set(SendHWND(hwnd_tray)).ok();
-        
+
         let mut nid: NOTIFYICONDATAW = mem::zeroed();
         nid.cbSize = mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = hwnd_tray;
@@ -1706,7 +1955,7 @@ mod win32_impl {
             CURRENT_TRAY_HICON.store(h_icon as isize, Ordering::SeqCst);
         }
         nid.hIcon = h_icon;
-        
+
         let tip = encode_wide("SpeekTo.Me (Hold Shortcut to transcribe)");
         for (i, &c) in tip.iter().enumerate() {
             if i < nid.szTip.len() {
@@ -1714,27 +1963,25 @@ mod win32_impl {
             }
         }
         let tray_ok = Shell_NotifyIconW(NIM_ADD, &nid);
-        println!("[WIN32] Themed system tray icon registered (success: {}).", tray_ok != 0);
-        
-        let hook_id = SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            Some(keyboard_hook_proc),
-            hinstance,
-            0
+        println!(
+            "[WIN32] Themed system tray icon registered (success: {}).",
+            tray_ok != 0
         );
-        
+
+        let hook_id = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), hinstance, 0);
+
         if hook_id == std::ptr::null_mut() {
             eprintln!("[WIN32 ERROR] Failed to register global keyboard hook!");
         } else {
             println!("[WIN32] Global keyboard hook successfully registered.");
         }
-        
+
         let mut msg: MSG = mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        
+
         println!("[WIN32] Win32 message loop exited.");
         UnhookWindowsHookEx(hook_id);
         Shell_NotifyIconW(NIM_DELETE, &nid);
@@ -1744,7 +1991,8 @@ mod win32_impl {
         use windows_sys::Win32::Foundation::ERROR_ALREADY_EXISTS;
         use windows_sys::Win32::System::Threading::CreateMutexW;
 
-        static SINGLE_INSTANCE_MUTEX: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+        static SINGLE_INSTANCE_MUTEX: std::sync::atomic::AtomicIsize =
+            std::sync::atomic::AtomicIsize::new(0);
         let mutex_name = encode_wide("Local\\SpeekToMeSingleInstanceMutex");
         unsafe {
             let h_mutex = CreateMutexW(std::ptr::null(), 1, mutex_name.as_ptr());
@@ -1759,13 +2007,12 @@ mod win32_impl {
 
 #[cfg(target_os = "windows")]
 pub use win32_impl::{
-    SendHWND, PreviewState, PREVIEW_HWND, PREVIEW_TEXT, PREVIEW_STATE, TRAY_HWND, NotificationLevel,
-    calculate_pill_position, update_overlay_position, play_chime,
-    show_overlay, hide_overlay, show_preview, hide_preview,
-    show_meeting_overlay, hide_meeting_overlay, update_tray_tooltip,
-    set_preview_text, get_preview_text, set_preview_state, update_preview_position,
-    show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance,
-    update_tray_icon_for_theme, set_window_icon_for_theme
+    calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
+    hide_overlay, hide_preview, play_chime, run_win32_hook_and_tray_thread, set_preview_state,
+    set_preview_text, set_window_icon_for_theme, show_meeting_overlay, show_overlay, show_preview,
+    show_tray_notification, update_overlay_position, update_preview_position,
+    update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
+    PREVIEW_HWND, PREVIEW_STATE, PREVIEW_TEXT, TRAY_HWND,
 };
 
 // ==========================================
@@ -1800,7 +2047,11 @@ mod win32_stub {
         crate::macos_desktop::notify(title, message);
     }
 
-    pub fn calculate_pill_position(_config: &crate::config::AppConfig, _width: i32, _height: i32) -> (i32, i32) {
+    pub fn calculate_pill_position(
+        _config: &crate::config::AppConfig,
+        _width: i32,
+        _height: i32,
+    ) -> (i32, i32) {
         (0, 0)
     }
 
@@ -1821,13 +2072,18 @@ mod win32_stub {
     pub fn hide_overlay() {
         #[cfg(target_os = "macos")]
         {
-            *PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new())).lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+            *PREVIEW_TEXT
+                .get_or_init(|| std::sync::Mutex::new(String::new()))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = String::new();
             crate::macos_desktop::set_state(0);
         }
         #[cfg(target_os = "linux")]
         {
-            *PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
-                .lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+            *PREVIEW_TEXT
+                .get_or_init(|| std::sync::Mutex::new(String::new()))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = String::new();
             crate::linux_desktop::set_preview_text("");
             crate::linux_desktop::hide_overlay();
         }
@@ -1851,13 +2107,19 @@ mod win32_stub {
 
     pub fn update_tray_tooltip(_text: &str) {}
 
-    pub fn show_preview() { show_overlay(); }
+    pub fn show_preview() {
+        show_overlay();
+    }
 
-    pub fn hide_preview() { hide_overlay(); }
+    pub fn hide_preview() {
+        hide_overlay();
+    }
 
     pub fn set_preview_text(text: &str) {
-        *PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
-            .lock().unwrap_or_else(|e| e.into_inner()) = text.to_string();
+        *PREVIEW_TEXT
+            .get_or_init(|| std::sync::Mutex::new(String::new()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = text.to_string();
         #[cfg(target_os = "linux")]
         crate::linux_desktop::set_preview_text(text);
         #[cfg(target_os = "macos")]
@@ -1865,8 +2127,11 @@ mod win32_stub {
     }
 
     pub fn get_preview_text() -> String {
-        PREVIEW_TEXT.get_or_init(|| std::sync::Mutex::new(String::new()))
-            .lock().unwrap_or_else(|e| e.into_inner()).clone()
+        PREVIEW_TEXT
+            .get_or_init(|| std::sync::Mutex::new(String::new()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn set_preview_state(state: PreviewState) {
@@ -1876,11 +2141,15 @@ mod win32_stub {
         crate::linux_desktop::set_preview_state(state as u8);
         match state {
             PreviewState::Hidden => hide_overlay(),
-            PreviewState::Listening | PreviewState::Processing | PreviewState::Meeting => show_overlay(),
+            PreviewState::Listening | PreviewState::Processing | PreviewState::Meeting => {
+                show_overlay()
+            }
         }
     }
 
-    pub fn update_preview_position() { update_overlay_position(); }
+    pub fn update_preview_position() {
+        update_overlay_position();
+    }
 
     pub fn play_chime(_start: bool) {
         #[cfg(target_os = "macos")]
@@ -1902,10 +2171,9 @@ mod win32_stub {
 
 #[cfg(not(target_os = "windows"))]
 pub use win32_stub::{
-    SendHWND, PreviewState, NotificationLevel, calculate_pill_position, update_overlay_position, play_chime,
-    show_overlay, hide_overlay, show_preview, hide_preview,
-    show_meeting_overlay, hide_meeting_overlay, update_tray_tooltip,
-    set_preview_text, get_preview_text, set_preview_state, update_preview_position,
-    show_tray_notification, run_win32_hook_and_tray_thread, ensure_single_instance,
-    update_tray_icon_for_theme, set_window_icon_for_theme
+    calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
+    hide_overlay, hide_preview, play_chime, run_win32_hook_and_tray_thread, set_preview_state,
+    set_preview_text, set_window_icon_for_theme, show_meeting_overlay, show_overlay, show_preview,
+    show_tray_notification, update_overlay_position, update_preview_position,
+    update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
 };

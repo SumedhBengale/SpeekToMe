@@ -1,8 +1,9 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UserInfo {
-    #[serde(default)] pub id: i64,
+    #[serde(default)]
+    pub id: i64,
     pub name: String,
     pub email: String,
     pub plan_tier: String,
@@ -42,8 +43,8 @@ pub struct TranscribeResult {
 
 #[derive(Deserialize)]
 struct TranscriptResponse {
- #[serde(default)]
- warning: Option<String>,
+    #[serde(default)]
+    warning: Option<String>,
     text: String,
     #[serde(default)]
     log_id: Option<i64>,
@@ -56,18 +57,131 @@ struct AuthResponse {
     token: String,
 }
 
+fn build_client(timeout: std::time::Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Shared client for short API calls. Clones share one connection pool.
+pub fn http() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| build_client(std::time::Duration::from_secs(30)))
+        .clone()
+}
+
+/// Shared client for transcription and other calls that wait on models.
 fn create_client() -> reqwest::Client {
-    let mut builder = reqwest::Client::builder();
-    builder = builder.timeout(std::time::Duration::from_secs(120));
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| build_client(std::time::Duration::from_secs(120)))
+        .clone()
+}
+
+#[derive(Serialize)]
+pub struct ApiResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+/// Whether the webview may make this request. Each entry is a method and a
+/// path pattern where `*` matches one non-empty segment.
+fn webview_request_allowed(method: &str, path: &str) -> bool {
+    const ALLOWED: &[(&str, &str)] = &[
+        ("GET", "/meetings"),
+        ("GET", "/meetings/*"),
+        ("DELETE", "/meetings/*"),
+        ("PUT", "/meetings/*/speakers"),
+        ("POST", "/v1/meetings/jobs/*/retry"),
+        ("GET", "/config/promo"),
+    ];
+    let segments: Vec<&str> = path.split('/').collect();
+    let safe = |segment: &str| {
+        !segment.is_empty()
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    ALLOWED.iter().any(|(allowed_method, pattern)| {
+        let expected: Vec<&str> = pattern.split('/').collect();
+        *allowed_method == method
+            && expected.len() == segments.len()
+            && expected.iter().zip(&segments).all(|(want, got)| {
+                if *want == "*" {
+                    safe(got)
+                } else {
+                    want == got
+                }
+            })
+    })
+}
+
+/// Makes an API request on the webview's behalf, adding the session token
+/// here so it never crosses into JavaScript.
+#[tauri::command]
+pub async fn api_request(
+    method: String,
+    path: String,
+    body: Option<serde_json::Value>,
+) -> Result<ApiResponse, String> {
+    if !webview_request_allowed(&method, &path) {
+        return Err("Request not permitted".into());
+    }
+    let token = crate::get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .clone();
+    let url = format!("{}{}", get_api_url(), path);
+    let mut request = match method.as_str() {
+        "GET" => http().get(&url),
+        "DELETE" => http().delete(&url),
+        "PUT" => http().put(&url),
+        _ => http().post(&url),
+    };
+    if path != "/config/promo" {
+        request = request.bearer_auth(token.as_deref().ok_or("Sign in to continue")?);
+    }
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| "Network unavailable. Check your connection.".to_string())?;
+    let status = response.status().as_u16();
+    let body = response.text().await.unwrap_or_default();
+    // A response for an account the user has since left must not reach the UI.
+    if token.is_some()
+        && crate::get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .session_token
+            != token
+    {
+        return Err("Account changed".into());
+    }
+    Ok(ApiResponse { status, body })
 }
 
 pub fn get_api_url() -> String {
-    let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-    config.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string())
+    let config = crate::get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    config
+        .api_url
+        .clone()
+        .unwrap_or_else(|| "https://api.speekto.me".to_string())
 }
 
 pub fn open_browser(url: &str) {
+    // Only web pages: a file path or other scheme could launch a program.
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return;
+    }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -225,9 +339,17 @@ pub fn listen_for_token(attempt: u64) -> Option<String> {
     }
     None
 }
-pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, language: String, context: crate::shortcuts::RecordingContext) {
+pub fn process_and_paste(
+    samples: Vec<i16>,
+    sample_rate: u32,
+    channels: u16,
+    language: String,
+    context: crate::shortcuts::RecordingContext,
+) {
     let (token_opt, custom_prompt, transcription_mode, api_url) = {
-        let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
+        let config = crate::get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         (
             context.history_identity().1.map(str::to_owned),
             config.custom_prompt.clone(),
@@ -272,11 +394,20 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
     tauri::async_runtime::spawn(async move {
         let context = context; // Keep the session lease through the complete async operation.
         let transcript_result = if transcription_mode == "stream" {
-            match stream_transcribe_audio(&api_url, &token, ogg_opus_bytes.clone(), &custom_prompt, &language).await {
+            match stream_transcribe_audio(
+                &api_url,
+                &token,
+                ogg_opus_bytes.clone(),
+                &custom_prompt,
+                &language,
+            )
+            .await
+            {
                 Ok(res) => Ok(res),
                 Err(err) => {
                     println!("[STREAM WARNING] Streaming transcription failed ({}), falling back to batch API...", err);
-                    transcribe_audio(&api_url, &token, ogg_opus_bytes, &custom_prompt, &language).await
+                    transcribe_audio(&api_url, &token, ogg_opus_bytes, &custom_prompt, &language)
+                        .await
                 }
             }
         } else {
@@ -285,197 +416,21 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
 
         match transcript_result {
             Ok(result) => {
-                let text = result.text.trim();
+                let text = result.text.trim().to_string();
                 if !text.is_empty() {
-                    crate::win32::set_preview_text(text);
-
-                    let is_command_mode = context.is_command_mode;
-                    let selected_text = context.selected_text.clone();
-
-                    if is_command_mode {
-                        println!("\n=======================================================");
-                        println!("✨ [COMMAND MODE COMPLETED — EXECUTING LLM TRANSFORMATION]");
-                        println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                        println!("-------------------------------------------------------");
-                        println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                        println!("=======================================================\n");
-
-                        // Check dynamic word limit
-                        let max_words = crate::get_transform_word_limit();
-                        if let Some(ref target) = selected_text {
-                            let word_count = target.split_whitespace().count();
-                            if word_count > max_words {
-                                println!("[COMMAND MODE WARNING] Selected text exceeds {} words ({} words).", max_words, word_count);
-                                crate::win32::set_preview_text(&format!("⚠️ Text exceeds {} words", max_words));
-                                crate::win32::show_tray_notification(
-                                    "SpeekTo.Me — Text Too Long",
-                                    &format!("Text longer than {} words is not supported at the moment.", max_words),
-                                    crate::win32::NotificationLevel::Warning,
-                                );
-                                return;
-                            }
-                        }
-
-                        let target_text = selected_text.unwrap_or_default();
-                        let has_target = !target_text.trim().is_empty();
-
-                        crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
-                        if has_target {
-                            crate::win32::set_preview_text("✨ Transforming text...");
-                        } else {
-                            crate::win32::set_preview_text("✨ Generating...");
-                        }
-
-                        let typing_mode = {
-                            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                            config.typing_mode
-                        };
-
-                        let mut is_first_chunk = true;
-                        let mut last_ui_update = std::time::Instant::now();
-
-                        let res = transform_text_stream(&api_url, &token, &target_text, text, move |delta, accumulated| {
-                            if delta == "[RESET]" {
-                                println!("[STREAM] Received [RESET], resetting stream UI preview");
-                                crate::win32::set_preview_text("✨ Retrying with backup AI...");
-                                is_first_chunk = true;
-                                return;
-                            }
-
-                            if is_first_chunk {
-                                if has_target && typing_mode {
-                                    crate::keyboard::simulate_single_key(0x08);
-                                    std::thread::sleep(std::time::Duration::from_millis(20));
-                                }
-                                is_first_chunk = false;
-                            }
-
-                            if typing_mode {
-                                crate::keyboard::simulate_typing(delta);
-                            }
-
-                            if last_ui_update.elapsed() >= std::time::Duration::from_millis(80) {
-                                last_ui_update = std::time::Instant::now();
-                                let preview_display = if let Some((start_byte, _)) = accumulated.char_indices().rev().nth(31) {
-                                    let tail = &accumulated[start_byte..];
-                                    format!("✨ ...{}", tail.trim_start())
-                                } else {
-                                    format!("✨ {}", accumulated)
-                                };
-                                crate::win32::set_preview_text(&preview_display);
-                            }
-                        }).await;
-
-                        match res {
-                            Ok(transformed) => {
-                                println!("\n=======================================================");
-                                println!("✨ [COMMAND MODE — LLM TRANSFORMATION COMPLETED]");
-                                println!("Transformed Output ({} characters):", transformed.len());
-                                println!("-------------------------------------------------------");
-                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                                println!("=======================================================\n");
-
-                                crate::win32::set_preview_text("✨ Done!");
-
-                                if !typing_mode {
-                                    crate::keyboard::paste_transformed_text(&transformed);
-                                } else {
-                                    // Permanently retain full transformed text in clipboard as a fallback
-                                    if let Ok(mut ctx) = arboard::Clipboard::new() {
-                                        let _ = ctx.set_text(crate::keyboard::normalize_newlines(&transformed));
-                                    }
-                                }
-
-                                let (notify_title, notify_msg) = if has_target {
-                                    (
-                                        "SpeekTo.Me — Transformed Text Ready",
-                                        "Transformed text replaced selection and is copied to clipboard.",
-                                    )
-                                } else {
-                                    (
-                                        "SpeekTo.Me — AI Response Ready",
-                                        "AI generated text inserted and is copied to clipboard.",
-                                    )
-                                };
-
-                                crate::win32::show_tray_notification(
-                                    notify_title,
-                                    notify_msg,
-                                    crate::win32::NotificationLevel::Info,
-                                );
-
-                                record_delivered_final(&context, &transformed);
-                                if let Some(app) = crate::TAURI_APP.get() {
-                                    use tauri::Emitter;
-                                    let _ = app.emit("command-transformed", transformed);
-                                }
-                            }
-                            Err(err) => {
-                                eprintln!("[TRANSFORM ERROR] {}", err);
-                                crate::win32::set_preview_text("⚠️ Transformation failed");
-                                if crate::account_errors::is_limit(&err) {
-                                    crate::account_errors::notify("Command Mode", &err);
-                                } else {
-                                    crate::win32::show_tray_notification(
-                                        "SpeekTo.Me — Transformation Failed", &err,
-                                        crate::win32::NotificationLevel::Warning,
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                        let typing_mode = {
-                            let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                            config.typing_mode
-                        };
-
-                        if typing_mode {
-                            crate::keyboard::simulate_typing(text);
-                        } else {
-                            crate::keyboard::paste_text(text);
-                        }
-
-                        record_delivered_final(&context, text);
-                        if let Some(app) = crate::TAURI_APP.get() {
-                            use tauri::Emitter;
-                            let _ = app.emit("dictation-transcribed", text.to_string());
-                        }
+                    crate::win32::set_preview_text(&text);
+                    if context.is_command_mode {
+                        crate::delivery::run_command(text, context, api_url, token).await;
+                        return;
                     }
+                    crate::delivery::insert_dictation(&text, &context);
                 }
-                crate::win32::hide_overlay();
-                crate::win32::hide_preview();
+                crate::delivery::hide_overlay();
             }
             Err(err) => {
                 eprintln!("Transcription failed: {}", err);
-                crate::win32::hide_overlay();
-                crate::win32::hide_preview();
-
-                let err_lower = err.to_lowercase();
-                if err_lower.contains("401") || err_lower.contains("unauthorized") || err_lower.contains("invalid token") || err_lower.contains("token expired") {
-                    crate::handle_session_expired(Some("Your session has expired. Please sign in again to continue dictating."));
-                } else if err_lower.contains("limit") || err_lower.contains("quota") || err_lower.contains("429") {
-                    crate::win32::show_tray_notification(
-                        "SpeekTo.Me — Usage Limit Reached",
-                        "You have reached your monthly transcription limit. Upgrade your plan in Settings.",
-                        crate::win32::NotificationLevel::Warning,
-                    );
-                    if let Some(app) = crate::TAURI_APP.get() {
-                        crate::show_or_create_settings_window(app);
-                    }
-                } else if err_lower.contains("network") || err_lower.contains("timeout") || err_lower.contains("connection refused") || err_lower.contains("dns") {
-                    crate::win32::show_tray_notification(
-                        "SpeekTo.Me — Network Error",
-                        "Could not connect to SpeekTo.Me server. Please check your internet connection.",
-                        crate::win32::NotificationLevel::Error,
-                    );
-                } else {
-                    crate::win32::show_tray_notification(
-                        "SpeekTo.Me — Transcription Error",
-                        &format!("Transcription failed: {}", err),
-                        crate::win32::NotificationLevel::Error,
-                    );
-                }
+                crate::delivery::hide_overlay();
+                crate::delivery::report_failure(&err, "Transcription failed");
             }
         }
     });
@@ -489,11 +444,12 @@ pub async fn stream_transcribe_audio(
     language: &str,
 ) -> Result<TranscribeResult, String> {
     use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::Message;
 
-    let ws_url = crate::stream::get_stream_ws_url(api_url, token);
-    let (ws_stream, _) = connect_async(&ws_url).await
+    let request = crate::stream::authorized_ws_request(api_url, "/v1/stream", token)?;
+    let (ws_stream, _) = connect_async(request)
+        .await
         .map_err(|e| format!("WebSocket stream connection error: {}", e))?;
 
     let (mut write, mut read) = ws_stream.split();
@@ -507,21 +463,28 @@ pub async fn stream_transcribe_audio(
         "language": language,
     });
 
-    write.send(Message::Text(start_payload.to_string())).await
+    write
+        .send(Message::Text(start_payload.to_string()))
+        .await
         .map_err(|e| format!("Failed to send stream handshake: {}", e))?;
 
     for chunk in ogg_opus_bytes.chunks(4096) {
-        write.send(Message::Binary(chunk.to_vec())).await
+        write
+            .send(Message::Binary(chunk.to_vec()))
+            .await
             .map_err(|e| format!("Failed to send audio chunk: {}", e))?;
     }
 
-    write.send(Message::Text(r#"{"type":"end_of_stream"}"#.to_string())).await
+    write
+        .send(Message::Text(r#"{"type":"end_of_stream"}"#.to_string()))
+        .await
         .map_err(|e| format!("Failed to send end_of_stream: {}", e))?;
 
     while let Some(msg_res) = read.next().await {
         match msg_res {
             Ok(Message::Text(text)) => {
-                if let Ok(event) = serde_json::from_str::<crate::stream::StreamEventResponse>(&text) {
+                if let Ok(event) = serde_json::from_str::<crate::stream::StreamEventResponse>(&text)
+                {
                     if event.event_type == "final" {
                         crate::account_errors::notify_warning(event.warning.as_deref());
                         crate::win32::set_preview_text(&event.text);
@@ -533,7 +496,9 @@ pub async fn stream_transcribe_audio(
                     } else if event.event_type == "interim" && !event.text.is_empty() {
                         crate::win32::set_preview_text(&event.text);
                     } else if event.event_type == "error" {
-                        return Err(event.error.unwrap_or_else(|| "Server streaming transcription error".to_string()));
+                        return Err(event.error.unwrap_or_else(|| {
+                            "Server streaming transcription error".to_string()
+                        }));
                     }
                 }
             }
@@ -560,7 +525,10 @@ pub async fn fetch_client_config(api_url: &str) -> Result<ClientConfig, String> 
         if let Ok(cfg) = res.json::<ClientConfig>().await {
             if let Some(limit) = cfg.transform_input_tokens {
                 crate::set_transform_word_limit(limit);
-                println!("[CONFIG SYNC] Dynamic transform input word limit set from server: {}", limit);
+                println!(
+                    "[CONFIG SYNC] Dynamic transform input word limit set from server: {}",
+                    limit
+                );
             }
             return Ok(cfg);
         }
@@ -570,7 +538,8 @@ pub async fn fetch_client_config(api_url: &str) -> Result<ClientConfig, String> 
 
 pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, String> {
     let client = create_client();
-    let res = client.get(format!("{}/auth/me", api_url))
+    let res = client
+        .get(format!("{}/auth/me", api_url))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -578,11 +547,17 @@ pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, Str
 
     let status = res.status();
     if status.is_success() {
-        let info = res.json::<UserInfo>().await.map_err(|e| format!("Failed to parse user info: {}", e))?;
- crate::meeting_upload::cache_account(token,&info.email,info.id);
+        let info = res
+            .json::<UserInfo>()
+            .await
+            .map_err(|e| format!("Failed to parse user info: {}", e))?;
+        crate::meeting_upload::cache_account(token, &info.email, info.id);
         if let Some(limit) = info.transform_input_tokens {
             crate::set_transform_word_limit(limit);
-            println!("[CONFIG SYNC] Dynamic transform input word limit updated from user info: {}", limit);
+            println!(
+                "[CONFIG SYNC] Dynamic transform input word limit updated from user info: {}",
+                limit
+            );
         }
         Ok(info)
     } else if status.as_u16() == 401 {
@@ -594,13 +569,18 @@ pub async fn fetch_user_info(api_url: &str, token: &str) -> Result<UserInfo, Str
     }
 }
 
-pub async fn login_with_credentials(api_url: &str, email: &str, password: &str) -> Result<(String, UserInfo), String> {
+pub async fn login_with_credentials(
+    api_url: &str,
+    email: &str,
+    password: &str,
+) -> Result<(String, UserInfo), String> {
     let client = create_client();
     let mut map = std::collections::HashMap::new();
     map.insert("email", email);
     map.insert("password", password);
 
-    let res = client.post(format!("{}/auth/login", api_url))
+    let res = client
+        .post(format!("{}/auth/login", api_url))
         .json(&map)
         .send()
         .await
@@ -610,7 +590,10 @@ pub async fn login_with_credentials(api_url: &str, email: &str, password: &str) 
     let body_text = res.text().await.unwrap_or_default();
     if status.is_success() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_text) {
-            if v.get("require_2fa").and_then(|b| b.as_bool()).unwrap_or(false) {
+            if v.get("require_2fa")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false)
+            {
                 return Err("This account is not allowed to login.".to_string());
             }
         }
@@ -628,14 +611,20 @@ pub async fn login_with_credentials(api_url: &str, email: &str, password: &str) 
     }
 }
 
-pub async fn signup_with_credentials(api_url: &str, email: &str, password: &str, name: &str) -> Result<String, String> {
+pub async fn signup_with_credentials(
+    api_url: &str,
+    email: &str,
+    password: &str,
+    name: &str,
+) -> Result<String, String> {
     let client = create_client();
     let mut map = std::collections::HashMap::new();
     map.insert("email", email);
     map.insert("password", password);
     map.insert("name", name);
 
-    let res = client.post(format!("{}/auth/signup", api_url))
+    let res = client
+        .post(format!("{}/auth/signup", api_url))
         .json(&map)
         .send()
         .await
@@ -660,9 +649,13 @@ pub async fn signup_with_credentials(api_url: &str, email: &str, password: &str,
     }
 }
 
-pub async fn fetch_vocabulary(api_url: &str, token: &str) -> Result<Vec<ClientVocabularyTerm>, String> {
+pub async fn fetch_vocabulary(
+    api_url: &str,
+    token: &str,
+) -> Result<Vec<ClientVocabularyTerm>, String> {
     let client = create_client();
-    let res = client.get(format!("{}/auth/vocabulary", api_url))
+    let res = client
+        .get(format!("{}/auth/vocabulary", api_url))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -686,7 +679,8 @@ pub async fn add_vocab_term(api_url: &str, token: &str, term: &str) -> Result<()
     let mut map = std::collections::HashMap::new();
     map.insert("canonical_term", term);
 
-    let res = client.post(format!("{}/auth/vocabulary", api_url))
+    let res = client
+        .post(format!("{}/auth/vocabulary", api_url))
         .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()
@@ -710,7 +704,8 @@ pub async fn delete_vocab_term(api_url: &str, token: &str, term: &str) -> Result
     let mut map = std::collections::HashMap::new();
     map.insert("canonical_term", term);
 
-    let res = client.delete(format!("{}/auth/vocabulary", api_url))
+    let res = client
+        .delete(format!("{}/auth/vocabulary", api_url))
         .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()
@@ -729,12 +724,17 @@ pub async fn delete_vocab_term(api_url: &str, token: &str, term: &str) -> Result
     }
 }
 
-pub async fn validate_custom_prompt(api_url: &str, token: &str, prompt: &str) -> Result<PromptValidationResult, String> {
+pub async fn validate_custom_prompt(
+    api_url: &str,
+    token: &str,
+    prompt: &str,
+) -> Result<PromptValidationResult, String> {
     let client = create_client();
     let mut map = std::collections::HashMap::new();
     map.insert("prompt", prompt);
 
-    let res = client.post(format!("{}/validate-prompt", api_url))
+    let res = client
+        .post(format!("{}/validate-prompt", api_url))
         .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()
@@ -769,7 +769,8 @@ pub async fn transcribe_audio(
         .text("language", language.to_string())
         .text("prompt", custom_prompt.to_string());
 
-    let res = client.post(format!("{}/generate", api_url))
+    let res = client
+        .post(format!("{}/generate", api_url))
         .header("Authorization", format!("Bearer {}", token))
         .multipart(form)
         .send()
@@ -871,7 +872,8 @@ where
         return Err(message);
     }
 
-    let is_event_stream = res.headers()
+    let is_event_stream = res
+        .headers()
         .get("content-type")
         .and_then(|h| h.to_str().ok())
         .map(|ct| ct.contains("text/event-stream"))
@@ -897,7 +899,9 @@ where
 
         while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
             let frame: Vec<u8> = buffer.drain(..=newline_pos).collect();
-            let line = std::str::from_utf8(&frame).map_err(|_| "Invalid text encoding in Command Mode response".to_string())?.trim();
+            let line = std::str::from_utf8(&frame)
+                .map_err(|_| "Invalid text encoding in Command Mode response".to_string())?
+                .trim();
 
             if line.starts_with("data: ") {
                 let data = line.trim_start_matches("data: ").trim();
@@ -911,7 +915,9 @@ where
                     }
 
                     if parsed.reset.unwrap_or(false) {
-                        println!("[STREAM RESET] Server signaled stream reset due to provider fallback.");
+                        println!(
+                            "[STREAM RESET] Server signaled stream reset due to provider fallback."
+                        );
                         accumulated.clear();
                         on_chunk("[RESET]", "");
                         continue;
@@ -943,7 +949,9 @@ where
     }
 
     if !completed {
-        return Err("Command Mode ended before the result was complete. Your text was not replaced.".into());
+        return Err(
+            "Command Mode ended before the result was complete. Your text was not replaced.".into(),
+        );
     }
     crate::account_errors::validate_command_result(&accumulated)?;
     on_chunk(&accumulated, &accumulated);
@@ -991,72 +999,17 @@ pub async fn send_transcribe_ack(
     }
 }
 
-pub async fn upload_meeting(
+pub async fn update_user_languages(
     api_url: &str,
     token: &str,
-    title: &str,
-    language: &str,
-    mixed_bytes: Vec<u8>,
-    mic_bytes: Option<Vec<u8>>,
-    loopback_bytes: Option<Vec<u8>>,
-    energy_json: Option<String>,
-) -> Result<String, String> {
-    let client = create_client();
-    let mixed_part = reqwest::multipart::Part::bytes(mixed_bytes)
-        .file_name("recording.ogg")
-        .mime_str("audio/ogg")
-        .unwrap();
-
-    let mut form = reqwest::multipart::Form::new()
-        .part("file", mixed_part)
-        .text("title", title.to_string())
-        .text("language", language.to_string());
-
-    if let Some(mic) = mic_bytes {
-        let mic_part = reqwest::multipart::Part::bytes(mic)
-            .file_name("recording_mic.ogg")
-            .mime_str("audio/ogg")
-            .unwrap();
-        form = form.part("file_mic", mic_part);
-    }
-
-    if let Some(loopback) = loopback_bytes {
-        let lb_part = reqwest::multipart::Part::bytes(loopback)
-            .file_name("recording_loopback.ogg")
-            .mime_str("audio/ogg")
-            .unwrap();
-        form = form.part("file_loopback", lb_part);
-    }
-
-    if let Some(energy) = energy_json {
-        form = form.text("energy_json", energy);
-    }
-
-    let res = client.post(format!("{}/meetings", api_url))
-        .header("Authorization", format!("Bearer {}", token))
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {}", e))?;
-
-    let status = res.status();
-    let body_text = res.text().await.unwrap_or_default();
-    if status.is_success() {
-        Ok(body_text)
-    } else if status.as_u16() == 401 {
-        crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
-        Err("Session expired. Please sign in again.".to_string())
-    } else {
-        Err(format!("Upload failed with status {}: {}", status, body_text))
-    }
-}
-
-pub async fn update_user_languages(api_url: &str, token: &str, languages: Vec<String>) -> Result<Vec<String>, String> {
+    languages: Vec<String>,
+) -> Result<Vec<String>, String> {
     let client = create_client();
     let mut payload = std::collections::HashMap::new();
     payload.insert("languages", languages);
 
-    let res = client.post(format!("{}/auth/languages", api_url))
+    let res = client
+        .post(format!("{}/auth/languages", api_url))
         .header("Authorization", format!("Bearer {}", token))
         .json(&payload)
         .send()
@@ -1069,7 +1022,10 @@ pub async fn update_user_languages(api_url: &str, token: &str, languages: Vec<St
         struct Resp {
             languages: Vec<String>,
         }
-        let parsed = res.json::<Resp>().await.map_err(|e| format!("Failed to parse response: {}", e))?;
+        let parsed = res
+            .json::<Resp>()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
         Ok(parsed.languages)
     } else if status.as_u16() == 401 {
         crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
@@ -1083,21 +1039,44 @@ pub async fn update_user_languages(api_url: &str, token: &str, languages: Vec<St
 // Persist only the actual delivered result. Bind retries to the recording's
 // original account and backend; never use a subsequently switched session.
 pub fn record_delivered_final(context: &crate::shortcuts::RecordingContext, text: &str) {
-    if text.trim().is_empty() { return; }
+    if text.trim().is_empty() {
+        return;
+    }
     let (id, token, base) = context.history_identity();
-    let Some(token) = token else { return; };
-    let (id, token, base, text) = (id.to_string(),token.to_string(),base.to_string(),text.to_string());
-    let mode = if context.is_command_mode { "command" } else { "dictation" };
+    let Some(token) = token else {
+        return;
+    };
+    let (id, token, base, text) = (
+        id.to_string(),
+        token.to_string(),
+        base.to_string(),
+        text.to_string(),
+    );
+    let mode = if context.is_command_mode {
+        "command"
+    } else {
+        "dictation"
+    };
     tauri::async_runtime::spawn(async move {
-        let client=reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).build().unwrap_or_default();
+        let client = http();
         for attempt in 0..3 {
-            if attempt>0 {tokio::time::sleep(std::time::Duration::from_secs(2*attempt)).await;}
-            let result=client.post(format!("{}/v1/transcriptions/final",base)).bearer_auth(&token)
-                .json(&serde_json::json!({"request_id":id,"text":text,"mode":mode})).send().await;
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(2 * attempt)).await;
+            }
+            let result = client
+                .post(format!("{}/v1/transcriptions/final", base))
+                .bearer_auth(&token)
+                .json(&serde_json::json!({"request_id":id,"text":text,"mode":mode}))
+                .send()
+                .await;
             match result {
-                Ok(response) if response.status().is_success()=>return,
-                Ok(response) if response.status().is_client_error() && response.status().as_u16()!=429=>break,
-                _=>{}
+                Ok(response) if response.status().is_success() => return,
+                Ok(response)
+                    if response.status().is_client_error() && response.status().as_u16() != 429 =>
+                {
+                    break
+                }
+                _ => {}
             }
         }
         crate::win32::show_tray_notification("SpeekTo.Me — History not saved", "Your text was delivered, but its encrypted history could not be saved. Check your connection.",crate::win32::NotificationLevel::Warning);
@@ -1117,9 +1096,11 @@ mod command_stream_tests {
             let _ = socket.read(&mut request);
             write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
             // Write bytewise to exercise multibyte characters across network reads.
-            for byte in body.as_bytes() { socket.write_all(&[*byte]).unwrap(); }
+            for byte in body.as_bytes() {
+                socket.write_all(&[*byte]).unwrap();
+            }
         });
-        (url,worker)
+        (url, worker)
     }
     #[tokio::test]
     async fn only_validated_complete_output_reaches_typing_callback() {
@@ -1133,11 +1114,23 @@ mod command_stream_tests {
             worker.join().unwrap();
             assert!(result.is_err()); assert!(delivered.is_empty());
         }
-        let expected="यह बिल्कुल सही था।";
-        let body=format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",serde_json::json!({"delta":expected}),serde_json::json!({"text":expected,"done":true}));
-        let (url,worker)=response(body);let mut delivered=Vec::new();
-        let result=transform_text_stream(&url,"test","selected text","translate",|delta,_|delivered.push(delta.to_owned())).await.unwrap();
-        worker.join().unwrap();assert_eq!(result,expected);assert_eq!(delivered,vec![expected]);
+        let expected = "यह बिल्कुल सही था।";
+        let body = format!(
+            "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({"delta":expected}),
+            serde_json::json!({"text":expected,"done":true})
+        );
+        let (url, worker) = response(body);
+        let mut delivered = Vec::new();
+        let result =
+            transform_text_stream(&url, "test", "selected text", "translate", |delta, _| {
+                delivered.push(delta.to_owned())
+            })
+            .await
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(delivered, vec![expected]);
     }
 }
 
@@ -1152,5 +1145,27 @@ mod login_attempt_tests {
         let second = super::begin_login();
         assert!(super::login_is_current(second));
         assert!(!super::login_is_current(first));
+    }
+}
+
+#[cfg(test)]
+mod webview_request_tests {
+    use super::webview_request_allowed;
+
+    #[test]
+    fn only_listed_meeting_routes_are_allowed() {
+        assert!(webview_request_allowed("GET", "/meetings"));
+        assert!(webview_request_allowed("DELETE", "/meetings/42"));
+        assert!(webview_request_allowed("PUT", "/meetings/42/speakers"));
+        assert!(webview_request_allowed(
+            "POST",
+            "/v1/meetings/jobs/abc-123_x/retry"
+        ));
+        assert!(!webview_request_allowed("POST", "/meetings"));
+        assert!(!webview_request_allowed("GET", "/admin/users"));
+        assert!(!webview_request_allowed("DELETE", "/auth/account"));
+        assert!(!webview_request_allowed("GET", "/meetings/../admin"));
+        assert!(!webview_request_allowed("GET", "/meetings/42?x=1"));
+        assert!(!webview_request_allowed("GET", "/meetings//"));
     }
 }

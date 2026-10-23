@@ -54,17 +54,11 @@ func paid(ctx context.Context, q interface {
 	e := q.QueryRowContext(ctx, `SELECT COALESCE(plan_tier,'free'),COALESCE(plan_active,0),COALESCE(razorpay_current_end,0) FROM users WHERE id=?`, user).Scan(&tier, &active, &end)
 	return e == nil && tier == "pro" && active == 1 && (end == 0 || end+48*3600 > time.Now().Unix())
 }
+
+// Archive uploads a legacy plaintext recording that predates the encrypted
+// spool. Migration archives it regardless of plan so it can leave local disk;
+// the normal unpaid-retention clock still applies afterwards.
 func (v *Vault) Archive(ctx context.Context, user, meeting int64, path string) error {
-	if v.Objects == nil {
-		return ErrUnavailable
-	}
-	var owner int64
-	if v.db.QueryRowContext(ctx, `SELECT user_id FROM meetings WHERE id=? AND NOT EXISTS(SELECT 1 FROM private_account_deletions WHERE user_id=?)`, meeting, user).Scan(&owner) != nil || owner != user {
-		return ErrNotFound
-	}
-	if !paid(ctx, v.db, user) {
-		return errors.New("paid access is required for cloud audio")
-	}
 	file, e := os.Open(path)
 	if e != nil {
 		return ErrNotFound
@@ -74,7 +68,30 @@ func (v *Vault) Archive(ctx context.Context, user, meeting int64, path string) e
 	if e != nil || st.Size() <= 0 {
 		return ErrNotFound
 	}
-	size, e := sio.EncryptedSize(uint64(st.Size()))
+	return v.archive(ctx, user, meeting, file, st.Size(), true)
+}
+
+// ArchiveReader encrypts a recording streamed from the meeting spool into the
+// private bucket. Plaintext is never written to local storage.
+func (v *Vault) ArchiveReader(ctx context.Context, user, meeting int64, body io.Reader, plainSize int64) error {
+	return v.archive(ctx, user, meeting, body, plainSize, false)
+}
+
+func (v *Vault) archive(ctx context.Context, user, meeting int64, body io.Reader, plainSize int64, migration bool) error {
+	if v.Objects == nil {
+		return ErrUnavailable
+	}
+	var owner int64
+	if v.db.QueryRowContext(ctx, `SELECT user_id FROM meetings WHERE id=? AND NOT EXISTS(SELECT 1 FROM private_account_deletions WHERE user_id=?)`, meeting, user).Scan(&owner) != nil || owner != user {
+		return ErrNotFound
+	}
+	if !migration && !paid(ctx, v.db, user) {
+		return ErrNotPaid
+	}
+	if plainSize <= 0 {
+		return ErrNotFound
+	}
+	size, e := sio.EncryptedSize(uint64(plainSize))
 	if e != nil || size > uint64(DefaultQuota) {
 		return ErrQuota
 	}
@@ -108,7 +125,7 @@ func (v *Vault) Archive(ctx context.Context, user, meeting int64, path string) e
 	if e != nil {
 		return e
 	}
-	wrapped, e := v.seal(a, dataKey, fmt.Sprintf("audio-key-v1:%d:%d:%s:%d", user, meeting, id, st.Size()))
+	wrapped, e := v.seal(a, dataKey, fmt.Sprintf("audio-key-v1:%d:%d:%s:%d", user, meeting, id, plainSize))
 	if e != nil {
 		return e
 	}
@@ -121,7 +138,15 @@ func (v *Vault) Archive(ctx context.Context, user, meeting int64, path string) e
 	if e != nil {
 		return ErrUnavailable
 	}
-	reservation, e := tx.ExecContext(ctx, `UPDATE user_cloud_storage SET reserved_bytes=reserved_bytes+? WHERE user_id=? AND used_bytes+reserved_bytes+?<=limit_bytes AND NOT EXISTS(SELECT 1 FROM meeting_audio_tombstones WHERE user_id=? AND meeting_id=?) AND NOT EXISTS(SELECT 1 FROM private_account_deletions WHERE user_id=?)`, int64(size), user, int64(size), user, meeting, user)
+	// Migration moves existing recordings off local disk even past the quota;
+	// new recordings must fit.
+	quotaClause := ` AND used_bytes+reserved_bytes+?<=limit_bytes`
+	args := []any{int64(size), user, int64(size), user, meeting, user}
+	if migration {
+		quotaClause = ``
+		args = []any{int64(size), user, user, meeting, user}
+	}
+	reservation, e := tx.ExecContext(ctx, `UPDATE user_cloud_storage SET reserved_bytes=reserved_bytes+? WHERE user_id=?`+quotaClause+` AND NOT EXISTS(SELECT 1 FROM meeting_audio_tombstones WHERE user_id=? AND meeting_id=?) AND NOT EXISTS(SELECT 1 FROM private_account_deletions WHERE user_id=?)`, args...)
 	if e != nil {
 		return ErrUnavailable
 	}
@@ -130,16 +155,20 @@ func (v *Vault) Archive(ctx context.Context, user, meeting int64, path string) e
 		return ErrQuota
 	}
 	key := "audio/v1/" + id
-	_, e = tx.ExecContext(ctx, `INSERT INTO meeting_audio_assets(id,user_id,meeting_id,object_key,wrapped_key,plain_bytes,cipher_bytes,state,created_at) VALUES(?,?,?,?,?,?,?,'uploading',?)`, id, user, meeting, key, wrapped, st.Size(), int64(size), time.Now().Unix())
+	_, e = tx.ExecContext(ctx, `INSERT INTO meeting_audio_assets(id,user_id,meeting_id,object_key,wrapped_key,plain_bytes,cipher_bytes,state,created_at) VALUES(?,?,?,?,?,?,?,'uploading',?)`, id, user, meeting, key, wrapped, plainSize, int64(size), time.Now().Unix())
 	if e != nil {
 		return ErrUnavailable
 	}
 	if e = tx.Commit(); e != nil {
 		return ErrUnavailable
 	}
-	encrypted, e := sio.EncryptReader(file, streamConfig(dataKey))
+	counted := &countingReader{r: body}
+	encrypted, e := sio.EncryptReader(counted, streamConfig(dataKey))
 	if e == nil {
 		e = v.Objects.Put(ctx, key, encrypted)
+	}
+	if e == nil && counted.n != plainSize {
+		e = ErrUnavailable
 	}
 	if e != nil {
 		// Keep the reservation and a durable deletion marker until R2 cleanup is
@@ -170,6 +199,18 @@ func (v *Vault) Archive(ctx context.Context, user, meeting int64, path string) e
 	}
 	return tx.Commit()
 }
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, e := c.r.Read(p)
+	c.n += int64(n)
+	return n, e
+}
+
 func (v *Vault) Asset(ctx context.Context, user, meeting int64) (AudioAsset, error) {
 	var a AudioAsset
 	e := v.db.QueryRowContext(ctx, `SELECT id,meeting_id,plain_bytes,cipher_bytes,state FROM meeting_audio_assets WHERE user_id=? AND meeting_id=?`, user, meeting).Scan(&a.ID, &a.MeetingID, &a.PlainBytes, &a.CipherBytes, &a.State)

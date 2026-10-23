@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 static TIMER: OnceLock<std::thread::Thread> = OnceLock::new();
 // Settings publishes this before taking the coordinator lock. Capture must never
 // lock AppConfig while holding Controller (Settings takes them in reverse order).
-static RECORDING_ACCOUNT: Mutex<(Option<String>,Option<String>)> = Mutex::new((None,None));
-pub fn publish_account(config:&crate::AppConfig) {
-    *RECORDING_ACCOUNT.lock().unwrap_or_else(|e|e.into_inner())=(config.session_token.clone(),config.api_url.clone());
+static RECORDING_ACCOUNT: Mutex<(Option<String>, Option<String>)> = Mutex::new((None, None));
+pub fn publish_account(config: &crate::AppConfig) {
+    *RECORDING_ACCOUNT.lock().unwrap_or_else(|e| e.into_inner()) =
+        (config.session_token.clone(), config.api_url.clone());
 }
 const PORTAL_GRACE: Duration = Duration::from_millis(20);
 
@@ -19,14 +20,24 @@ const PORTAL_GRACE: Duration = Duration::from_millis(20);
 static SELECTING: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub fn selecting() -> bool {
-    SELECTING.lock().unwrap_or_else(|e| e.into_inner())
+    SELECTING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .is_some_and(|until| Instant::now() < until)
 }
 
 pub fn set_selecting(active: bool) {
-    *SELECTING.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some(Instant::now() + if active { Duration::from_secs(30) } else { Duration::from_millis(250) });
-    if active { cancel(); }
+    *SELECTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+        Instant::now()
+            + if active {
+                Duration::from_secs(30)
+            } else {
+                Duration::from_millis(250)
+            },
+    );
+    if active {
+        cancel();
+    }
 }
 
 struct Controller {
@@ -139,7 +150,13 @@ impl RecordingSession {
 }
 
 impl RecordingContext {
-    pub fn history_identity(&self) -> (&str, Option<&str>, &str) { (&self.life.history_id, self.life.origin_token.as_deref(), &self.life.origin_url) }
+    pub fn history_identity(&self) -> (&str, Option<&str>, &str) {
+        (
+            &self.life.history_id,
+            self.life.origin_token.as_deref(),
+            &self.life.origin_url,
+        )
+    }
     pub fn capture_finished(&self) {
         let mut c = controller().lock().unwrap_or_else(|e| e.into_inner());
         if c.active == Some(self.life.id) {
@@ -162,9 +179,15 @@ impl Controller {
                     self.route = Some(route);
                     let cancelled = Arc::new(AtomicBool::new(false));
                     self.cancelled = Some(cancelled.clone());
-                    let (origin_token,origin_url)={
-                        let account=RECORDING_ACCOUNT.lock().unwrap_or_else(|e|e.into_inner());
-                        (account.0.clone(),account.1.clone().unwrap_or_else(||"https://api.speekto.me".into()))
+                    let (origin_token, origin_url) = {
+                        let account = RECORDING_ACCOUNT.lock().unwrap_or_else(|e| e.into_inner());
+                        (
+                            account.0.clone(),
+                            account
+                                .1
+                                .clone()
+                                .unwrap_or_else(|| "https://api.speekto.me".into()),
+                        )
                     };
                     let session = RecordingSession {
                         route: route_rx,
@@ -288,10 +311,11 @@ pub fn on_edge_at(pressed: bool, now: Instant) {
     }
     // Always accept releases, including after auth expires or a meeting starts.
     if pressed
-        && (!crate::HOTKEY_ALLOWED.load(Ordering::SeqCst) || crate::ACTIVE_MEETING
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some()
+        && (!crate::HOTKEY_ALLOWED.load(Ordering::SeqCst)
+            || crate::ACTIVE_MEETING
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some()
             || !crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::SeqCst))
     {
         return;
@@ -388,7 +412,12 @@ mod tests {
                     let (tcp, _) = listener.accept().await.unwrap();
                     let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
                     let start = ws.next().await.unwrap().unwrap();
-                    assert!(serde_json::from_str::<serde_json::Value>(&start.into_text().unwrap()).unwrap().get("enhance").is_none());
+                    assert!(
+                        serde_json::from_str::<serde_json::Value>(&start.into_text().unwrap())
+                            .unwrap()
+                            .get("enhance")
+                            .is_none()
+                    );
                     ws.send(Message::Text(
                         r#"{"type":"session_ready","mode":"continuous_stream"}"#.into(),
                     ))

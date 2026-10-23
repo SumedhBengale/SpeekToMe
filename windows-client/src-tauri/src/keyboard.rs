@@ -1,6 +1,94 @@
+use arboard::Clipboard;
 use std::thread;
 use std::time::Duration;
-use arboard::Clipboard;
+
+/// Puts dictated text on the clipboard without adding it to clipboard history,
+/// cloud clipboard sync or clipboard monitors, where the platform allows.
+fn set_private_text(clipboard: &mut Clipboard, text: &str) -> Result<(), arboard::Error> {
+    #[cfg(target_os = "windows")]
+    {
+        use arboard::SetExtWindows;
+        clipboard
+            .set()
+            .exclude_from_monitoring()
+            .exclude_from_cloud()
+            .exclude_from_history()
+            .text(text.to_owned())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use arboard::SetExtApple;
+        clipboard.set().exclude_from_history().text(text.to_owned())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use arboard::SetExtLinux;
+        clipboard.set().exclude_from_history().text(text.to_owned())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        clipboard.set_text(text.to_owned())
+    }
+}
+
+/// Leaves text on the clipboard for the user, kept out of clipboard history.
+pub fn copy_private(text: &str) {
+    if let Ok(mut clipboard) = Clipboard::new() {
+        let _ = set_private_text(&mut clipboard, text);
+    }
+}
+
+/// What the user had on the clipboard before dictation borrowed it.
+enum ClipboardSnapshot {
+    Text(String),
+    Image(arboard::ImageData<'static>),
+    Empty,
+}
+
+impl ClipboardSnapshot {
+    fn capture(clipboard: &mut Clipboard) -> Self {
+        if let Ok(text) = clipboard.get_text() {
+            return Self::Text(text);
+        }
+        if let Ok(image) = clipboard.get_image() {
+            return Self::Image(image.to_owned_img());
+        }
+        Self::Empty
+    }
+
+    fn restore(&self, clipboard: &mut Clipboard) -> bool {
+        match self {
+            Self::Text(text) => clipboard.set_text(text.clone()).is_ok(),
+            Self::Image(image) => clipboard.set_image(image.clone()).is_ok(),
+            Self::Empty => clipboard.clear().is_ok(),
+        }
+    }
+}
+
+/// Restores the user's clipboard once the target app has had time to read the
+/// pasted text, unless the user copied something new in the meantime.
+#[cfg(not(target_os = "linux"))]
+fn restore_clipboard_later(original: ClipboardSnapshot, pasted: String) {
+    thread::spawn(move || {
+        // Slow targets (remote desktops, Electron apps) can read the clipboard
+        // a few hundred milliseconds after the paste keystroke.
+        thread::sleep(Duration::from_millis(600));
+        for &retry_delay in &[0, 50, 150] {
+            if retry_delay > 0 {
+                thread::sleep(Duration::from_millis(retry_delay));
+            }
+            let Ok(mut clipboard) = Clipboard::new() else {
+                continue;
+            };
+            if clipboard.get_text().ok().as_deref() != Some(pasted.as_str()) {
+                return;
+            }
+            if original.restore(&mut clipboard) {
+                return;
+            }
+        }
+    });
+}
 
 // ==========================================
 // Windows Implementation
@@ -24,7 +112,7 @@ fn send_inputs(inputs: &[INPUT]) {
         windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput(
             inputs.len() as u32,
             inputs.as_ptr() as *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
-            std::mem::size_of::<INPUT>() as i32
+            std::mem::size_of::<INPUT>() as i32,
         );
         crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
     }
@@ -105,11 +193,10 @@ pub fn simulate_copy() {
 pub fn get_selected_text() -> Option<String> {
     crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
 
-    // 1. Backup existing clipboard content
-    let original_clipboard = match Clipboard::new() {
-        Ok(mut c) => c.get_text().ok(),
-        Err(_) => None,
-    };
+    // 1. Backup existing clipboard content, including images
+    let original_clipboard = Clipboard::new()
+        .ok()
+        .map(|mut c| ClipboardSnapshot::capture(&mut c));
 
     // 2. Clear clipboard text so we can reliably detect fresh selection
     if let Ok(mut c) = Clipboard::new() {
@@ -143,7 +230,7 @@ pub fn get_selected_text() -> Option<String> {
     if selected.is_none() {
         if let Some(orig) = original_clipboard {
             if let Ok(mut c) = Clipboard::new() {
-                let _ = c.set_text(orig);
+                orig.restore(&mut c);
             }
         }
     }
@@ -232,7 +319,8 @@ pub fn suppress_win_key_start_menu() {}
 pub fn release_modifier_keys() {
     unsafe {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-            GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY,
+            GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+            KEYEVENTF_KEYUP,
         };
 
         crate::SIMULATING_KEY.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -259,17 +347,17 @@ pub fn release_modifier_keys() {
         let mut inputs: Vec<INPUT> = Vec::with_capacity(8);
 
         let check_keys = [
-            (0x11u16, 0u32, 0x11i32),                       // VK_CONTROL
-            (0xA2u16, 0u32, 0xA2i32),                       // VK_LCONTROL
-            (0xA3u16, KEYEVENTF_EXTENDEDKEY, 0xA3i32),      // VK_RCONTROL
-            (0x12u16, 0u32, 0x12i32),                       // VK_MENU (Alt)
-            (0xA4u16, 0u32, 0xA4i32),                       // VK_LMENU
-            (0xA5u16, KEYEVENTF_EXTENDEDKEY, 0xA5i32),      // VK_RMENU
-            (0x10u16, 0u32, 0x10i32),                       // VK_SHIFT
-            (0xA0u16, 0u32, 0xA0i32),                       // VK_LSHIFT
-            (0xA1u16, KEYEVENTF_EXTENDEDKEY, 0xA1i32),      // VK_RSHIFT
-            (0x5Bu16, 0u32, 0x5Bi32),                       // VK_LWIN
-            (0x5Cu16, KEYEVENTF_EXTENDEDKEY, 0x5Ci32),      // VK_RWIN
+            (0x11u16, 0u32, 0x11i32),                  // VK_CONTROL
+            (0xA2u16, 0u32, 0xA2i32),                  // VK_LCONTROL
+            (0xA3u16, KEYEVENTF_EXTENDEDKEY, 0xA3i32), // VK_RCONTROL
+            (0x12u16, 0u32, 0x12i32),                  // VK_MENU (Alt)
+            (0xA4u16, 0u32, 0xA4i32),                  // VK_LMENU
+            (0xA5u16, KEYEVENTF_EXTENDEDKEY, 0xA5i32), // VK_RMENU
+            (0x10u16, 0u32, 0x10i32),                  // VK_SHIFT
+            (0xA0u16, 0u32, 0xA0i32),                  // VK_LSHIFT
+            (0xA1u16, KEYEVENTF_EXTENDEDKEY, 0xA1i32), // VK_RSHIFT
+            (0x5Bu16, 0u32, 0x5Bi32),                  // VK_LWIN
+            (0x5Cu16, KEYEVENTF_EXTENDEDKEY, 0x5Ci32), // VK_RWIN
         ];
 
         for (vk, flags, vki) in check_keys {
@@ -455,7 +543,11 @@ pub fn release_modifier_keys() {}
 
 #[cfg(target_os = "linux")]
 pub fn simulate_single_key(vk: u32) {
-    let key = match vk { 0x08 => 0xff08, 0x0d => 0xff0d, _ => return };
+    let key = match vk {
+        0x08 => 0xff08,
+        0x0d => 0xff0d,
+        _ => return,
+    };
     if let Err(err) = crate::linux_portal::send_keys(vec![key, 1, key, 0]) {
         eprintln!("[KEYBOARD] Portal key failed: {err}");
     }
@@ -479,13 +571,25 @@ pub fn simulate_key_up(vk: u32) {
 pub fn simulate_typing(text: &str) {
     // Keep a usable copy if the focused surface has no editable widget.
     let clipboard_ready = Clipboard::new()
-        .and_then(|mut clipboard| clipboard.set_text(text.to_owned()))
+        .and_then(|mut clipboard| set_private_text(&mut clipboard, text))
         .is_ok();
     if crate::linux_focus::focused_target() == crate::linux_focus::Focus::NotEditable {
         crate::win32::show_tray_notification(
-            if clipboard_ready { "SpeekTo.Me copied your text" } else { "SpeekTo.Me could not copy your text" },
-            if clipboard_ready { "No editable field is focused. Your text is on the clipboard." } else { "No editable field is focused and the clipboard is unavailable." },
-            if clipboard_ready { crate::win32::NotificationLevel::Info } else { crate::win32::NotificationLevel::Warning },
+            if clipboard_ready {
+                "SpeekTo.Me copied your text"
+            } else {
+                "SpeekTo.Me could not copy your text"
+            },
+            if clipboard_ready {
+                "No editable field is focused. Your text is on the clipboard."
+            } else {
+                "No editable field is focused and the clipboard is unavailable."
+            },
+            if clipboard_ready {
+                crate::win32::NotificationLevel::Info
+            } else {
+                crate::win32::NotificationLevel::Warning
+            },
         );
         return;
     }
@@ -504,7 +608,9 @@ pub fn simulate_typing(text: &str) {
         return;
     }
     for ch in text.chars() {
-        if ch == '\r' { continue; }
+        if ch == '\r' {
+            continue;
+        }
         let (keysym, shifted) = match ch {
             '\n' => (0xff0d, false),
             'A'..='Z' => (ch.to_ascii_lowercase() as i32, true),
@@ -540,7 +646,11 @@ pub fn simulate_typing(text: &str) {
             eprintln!("[KEYBOARD] Portal typing failed: {err}");
             crate::win32::show_tray_notification(
                 "SpeekTo.Me copied your text",
-                if clipboard_ready { "Typing stopped because desktop keyboard control is unavailable. The full text is on the clipboard." } else { "Typing stopped and the clipboard is unavailable." },
+                if clipboard_ready {
+                    "Typing stopped because desktop keyboard control is unavailable. The full text is on the clipboard."
+                } else {
+                    "Typing stopped and the clipboard is unavailable."
+                },
                 crate::win32::NotificationLevel::Warning,
             );
             break;
@@ -550,16 +660,24 @@ pub fn simulate_typing(text: &str) {
 
 #[cfg(target_os = "linux")]
 pub fn simulate_backspaces(count: usize) {
-    for _ in 0..count { simulate_single_key(0x08); }
+    for _ in 0..count {
+        simulate_single_key(0x08);
+    }
 }
 
 #[cfg(target_os = "macos")]
-pub fn simulate_copy() { let _ = crate::macos_desktop::chord(false); }
+pub fn simulate_copy() {
+    let _ = crate::macos_desktop::chord(false);
+}
 
 #[cfg(target_os = "macos")]
 pub fn simulate_paste() {
     if let Err(error) = crate::macos_desktop::chord(true) {
-        crate::win32::show_tray_notification("SpeekTo.Me copied your text", error, crate::win32::NotificationLevel::Warning);
+        crate::win32::show_tray_notification(
+            "SpeekTo.Me copied your text",
+            error,
+            crate::win32::NotificationLevel::Warning,
+        );
     }
 }
 
@@ -567,13 +685,20 @@ pub fn simulate_paste() {
 pub fn release_modifier_keys() {}
 
 #[cfg(target_os = "macos")]
-pub fn simulate_single_key(vk: u32) { simulate_key_down(vk); simulate_key_up(vk); }
+pub fn simulate_single_key(vk: u32) {
+    simulate_key_down(vk);
+    simulate_key_up(vk);
+}
 
 #[cfg(target_os = "macos")]
-pub fn simulate_key_down(vk: u32) { crate::macos_desktop::key(vk, true); }
+pub fn simulate_key_down(vk: u32) {
+    crate::macos_desktop::key(vk, true);
+}
 
 #[cfg(target_os = "macos")]
-pub fn simulate_key_up(vk: u32) { crate::macos_desktop::key(vk, false); }
+pub fn simulate_key_up(vk: u32) {
+    crate::macos_desktop::key(vk, false);
+}
 
 #[cfg(target_os = "macos")]
 pub fn simulate_typing(text: &str) {
@@ -581,13 +706,21 @@ pub fn simulate_typing(text: &str) {
     let result = crate::macos_desktop::type_text(text);
     crate::SIMULATING_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
     if let Err(error) = result {
-        let _ = Clipboard::new().and_then(|mut c| c.set_text(text.to_owned()));
-        crate::win32::show_tray_notification("SpeekTo.Me could not insert your text", error, crate::win32::NotificationLevel::Warning);
+        let _ = Clipboard::new().and_then(|mut c| set_private_text(&mut c, text));
+        crate::win32::show_tray_notification(
+            "SpeekTo.Me could not insert your text",
+            error,
+            crate::win32::NotificationLevel::Warning,
+        );
     }
 }
 
 #[cfg(target_os = "macos")]
-pub fn simulate_backspaces(count: usize) { for _ in 0..count { simulate_single_key(8); } }
+pub fn simulate_backspaces(count: usize) {
+    for _ in 0..count {
+        simulate_single_key(8);
+    }
+}
 
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub fn simulate_paste() {
@@ -625,9 +758,13 @@ pub fn simulate_backspaces(count: usize) {
 pub fn normalize_newlines(text: &str) -> String {
     let normalized = text.replace("\r\n", "\n");
     #[cfg(target_os = "windows")]
-    { normalized.replace('\n', "\r\n") }
+    {
+        normalized.replace('\n', "\r\n")
+    }
     #[cfg(not(target_os = "windows"))]
-    { normalized }
+    {
+        normalized
+    }
 }
 
 // ==========================================
@@ -646,16 +783,24 @@ pub fn paste_text(text: &str) {
         let mut ctx = match Clipboard::new() {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[CLIPBOARD WARNING] Attempt {} failed to open clipboard: {:?}", attempt + 1, e);
+                eprintln!(
+                    "[CLIPBOARD WARNING] Attempt {} failed to open clipboard: {:?}",
+                    attempt + 1,
+                    e
+                );
                 continue;
             }
         };
 
         #[cfg(not(target_os = "linux"))]
-        let original_text = ctx.get_text().ok();
+        let original = ClipboardSnapshot::capture(&mut ctx);
 
-        if let Err(e) = ctx.set_text(normalized.clone()) {
-            eprintln!("[CLIPBOARD WARNING] Attempt {} failed to set clipboard text: {:?}", attempt + 1, e);
+        if let Err(e) = set_private_text(&mut ctx, &normalized) {
+            eprintln!(
+                "[CLIPBOARD WARNING] Attempt {} failed to set clipboard text: {:?}",
+                attempt + 1,
+                e
+            );
             continue;
         }
 
@@ -666,21 +811,7 @@ pub fn paste_text(text: &str) {
         // On Linux, accessibility metadata may not identify a focused editor.
         // Keep the dictated text available if injection had nowhere to go.
         #[cfg(not(target_os = "linux"))]
-        if let Some(orig) = original_text {
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(250));
-                for &restore_delay in &[0, 50, 150] {
-                    if restore_delay > 0 {
-                        thread::sleep(Duration::from_millis(restore_delay));
-                    }
-                    if let Ok(mut ctx) = Clipboard::new() {
-                        if ctx.set_text(orig.clone()).is_ok() {
-                            break;
-                        }
-                    }
-                }
-            });
-        }
+        restore_clipboard_later(original, normalized.clone());
         break;
     }
 
@@ -711,13 +842,21 @@ pub fn paste_transformed_text(text: &str) {
         let mut ctx = match Clipboard::new() {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[CLIPBOARD WARNING] Attempt {} failed to open clipboard: {:?}", attempt + 1, e);
+                eprintln!(
+                    "[CLIPBOARD WARNING] Attempt {} failed to open clipboard: {:?}",
+                    attempt + 1,
+                    e
+                );
                 continue;
             }
         };
 
-        if let Err(e) = ctx.set_text(normalized.clone()) {
-            eprintln!("[CLIPBOARD WARNING] Attempt {} failed to set clipboard text: {:?}", attempt + 1, e);
+        if let Err(e) = set_private_text(&mut ctx, &normalized) {
+            eprintln!(
+                "[CLIPBOARD WARNING] Attempt {} failed to set clipboard text: {:?}",
+                attempt + 1,
+                e
+            );
             continue;
         }
 
@@ -738,7 +877,10 @@ pub fn paste_transformed_text(text: &str) {
 mod tests {
     use super::*;
 
+    // Uses the real system clipboard: it needs a display and overwrites
+    // whatever the developer copied. Run with `cargo test -- --ignored`.
     #[test]
+    #[ignore = "uses the real system clipboard"]
     fn test_clipboard_lifecycle() {
         if let Ok(mut c) = Clipboard::new() {
             let sample = "SpeekToMe Test Selection";
@@ -766,8 +908,9 @@ mod tests {
     fn test_multibyte_unicode_slicing() {
         // Test Hindi text with multi-byte Devanagari characters including virama/halants (\u{94d})
         let hindi_text = "क्लाउड कंप्यूटिंग हमारे तकनीक तक पहुँचने और प्रबंधित करने के तरीके में क्रांति लाती है।";
-        
-        let preview_display = if let Some((start_byte, _)) = hindi_text.char_indices().rev().nth(31) {
+
+        let preview_display = if let Some((start_byte, _)) = hindi_text.char_indices().rev().nth(31)
+        {
             let tail = &hindi_text[start_byte..];
             format!("✨ ...{}", tail.trim_start())
         } else {
@@ -778,7 +921,8 @@ mod tests {
 
         // Short string test (< 32 chars)
         let short_hindi = "नमस्ते दुनिया";
-        let short_preview = if let Some((start_byte, _)) = short_hindi.char_indices().rev().nth(31) {
+        let short_preview = if let Some((start_byte, _)) = short_hindi.char_indices().rev().nth(31)
+        {
             let tail = &short_hindi[start_byte..];
             format!("✨ ...{}", tail.trim_start())
         } else {

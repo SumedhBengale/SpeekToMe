@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"github.com/gorilla/websocket"
@@ -8,7 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"testing"
 )
 
@@ -41,10 +42,6 @@ func TestMeetingAdmissionSeparatesLiveCapacity(t *testing.T) {
 
 func TestRecordedASRUsesCacheAwareStreaming(t *testing.T) {
 	pcm := make([]byte, 17920*3)
-	file := filepath.Join(t.TempDir(), "audio.pcm")
-	if err := os.WriteFile(file, pcm, 0600); err != nil {
-		t.Fatal(err)
-	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/audio/transcriptions/realtime" {
 			t.Errorf("unexpected backend %s", r.URL.Path)
@@ -93,7 +90,7 @@ func TestRecordedASRUsesCacheAwareStreaming(t *testing.T) {
 	}))
 	defer server.Close()
 	upstream, _ := url.Parse(server.URL)
-	result, err := (&gateway{upstream: upstream}).meetingStreamingASR(context.Background(), file, "en", []speechContext{{Phrases: []string{"Redis"}, Boost: 1.5}})
+	result, err := (&gateway{upstream: upstream}).meetingStreamingASR(context.Background(), bytes.NewReader(pcm), "en", []speechContext{{Phrases: []string{"Redis"}, Boost: 1.5}})
 	if err != nil || len(result.Words) != 1 || result.Words[0].Word != "hello" {
 		t.Fatalf("%+v %v", result, err)
 	}
@@ -125,5 +122,44 @@ func TestExclusiveMeetingPreventsLiveAdmission(t *testing.T) {
 	}
 	if !g.admitMeeting("next", "mic") {
 		t.Fatal("exclusive slot leaked")
+	}
+}
+
+func TestPCMSectionsAndWAVHeader(t *testing.T) {
+	pcm := make([]byte, 10*pcmBytesPerSecond)
+	if got := len(pcmSection(pcm, 2, 4.5)); got != int(2.5*pcmBytesPerSecond) {
+		t.Fatal(got)
+	}
+	if got := len(pcmSection(pcm, 9, 40)); got != pcmBytesPerSecond {
+		t.Fatal(got)
+	}
+	header := wavHeader(len(pcm))
+	if string(header[:4]) != "RIFF" || string(header[36:40]) != "data" || len(header) != 44 {
+		t.Fatal(header)
+	}
+}
+
+func TestDecodeMeetingAudioStaysInMemory(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg unavailable")
+	}
+	encode := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-f", "ogg", "pipe:1")
+	ogg, err := encode.Output()
+	if err != nil {
+		t.Skip("ffmpeg without libopus")
+	}
+	t.Setenv("TMPDIR", t.TempDir())
+	pcm, err := decodeMeetingAudio(context.Background(), bytes.NewReader(ogg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seconds := float64(len(pcm)) / pcmBytesPerSecond; seconds < 2.9 || seconds > 3.1 {
+		t.Fatal(seconds)
+	}
+	if entries, _ := os.ReadDir(os.Getenv("TMPDIR")); len(entries) != 0 {
+		t.Fatal("decoder wrote temporary files")
+	}
+	if _, err = decodeMeetingAudio(context.Background(), bytes.NewReader([]byte("not audio"))); err == nil {
+		t.Fatal("decoded invalid audio")
 	}
 }

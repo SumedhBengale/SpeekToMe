@@ -48,25 +48,34 @@ extern "C" fn settings_backgrounded() {
 }
 
 pub fn track_settings(window: &tauri::WebviewWindow) {
-    let _ = window.with_webview(|view| unsafe { s2m_track_settings(view.inner()); });
+    let _ = window.with_webview(|view| unsafe {
+        s2m_track_settings(view.inner());
+    });
 }
 
 pub fn prepare_settings_close(window: &tauri::WebviewWindow) {
-    let _ = window.with_webview(|view| unsafe { s2m_prepare_settings_close(view.inner()); });
+    let _ = window.with_webview(|view| unsafe {
+        s2m_prepare_settings_close(view.inner());
+    });
 }
 
 pub fn settings_snapshot() -> serde_json::Value {
     unsafe {
         let value = s2m_settings_snapshot();
-        if value.is_null() { return serde_json::Value::Null; }
-        let result = serde_json::from_str(&std::ffi::CStr::from_ptr(value).to_string_lossy()).unwrap_or_default();
+        if value.is_null() {
+            return serde_json::Value::Null;
+        }
+        let result = serde_json::from_str(&std::ffi::CStr::from_ptr(value).to_string_lossy())
+            .unwrap_or_default();
         s2m_free(value);
         result
     }
 }
 
 pub fn release_idle_browser(app: &tauri::AppHandle) {
-    unsafe { s2m_finish_settings_close(); }
+    unsafe {
+        s2m_finish_settings_close();
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         // Destroyed is emitted before the runtime has necessarily dropped its
@@ -123,15 +132,26 @@ pub fn request_permissions() {
 /// bundle, through Apple's supported utility. Approval still belongs to the user.
 pub fn repair_permissions() -> Result<(), String> {
     let bits = unsafe { s2m_permissions() };
-    for (service, granted) in [("Accessibility", bits & 2 != 0), ("ListenEvent", bits & 4 != 0)] {
-        if granted { continue; }
+    for (service, granted) in [
+        ("Accessibility", bits & 2 != 0),
+        ("ListenEvent", bits & 4 != 0),
+    ] {
+        if granted {
+            continue;
+        }
         let output = std::process::Command::new("/usr/bin/tccutil")
             .args(["reset", service, "me.speekto.SpeekToMe"])
-            .output().map_err(|error| format!("Could not reset {service}: {error}"))?;
+            .output()
+            .map_err(|error| format!("Could not reset {service}: {error}"))?;
         if !output.status.success() {
-            return Err(format!("Could not reset {service}: {}", String::from_utf8_lossy(&output.stderr).trim()));
+            return Err(format!(
+                "Could not reset {service}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
         }
-        eprintln!("[MACOS PERMISSIONS] Reset denied {service} record; fresh user approval required.");
+        eprintln!(
+            "[MACOS PERMISSIONS] Reset denied {service} record; fresh user approval required."
+        );
     }
     request_permissions();
     Ok(())
@@ -139,10 +159,12 @@ pub fn repair_permissions() -> Result<(), String> {
 extern "C" fn shortcut_edge(pressed: bool) {
     let _ = std::panic::catch_unwind(|| {
         if !crate::SIMULATING_KEY.load(Ordering::SeqCst) {
-            eprintln!("[MACOS SHORTCUT] {} (signed_in={}, allowed={})",
+            eprintln!(
+                "[MACOS SHORTCUT] {} (signed_in={}, allowed={})",
                 if pressed { "pressed" } else { "released" },
                 crate::ACTIVE_HAS_SESSION_TOKEN.load(Ordering::SeqCst),
-                crate::HOTKEY_ALLOWED.load(Ordering::SeqCst));
+                crate::HOTKEY_ALLOWED.load(Ordering::SeqCst)
+            );
             crate::shortcuts::on_edge(pressed);
         }
     });
@@ -214,7 +236,9 @@ pub fn refresh_language_menu(app: &tauri::AppHandle) {
 pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory)?;
     crate::macos_overlay::install();
-    unsafe { s2m_settings_observers(settings_backgrounded); }
+    unsafe {
+        s2m_settings_observers(settings_backgrounded);
+    }
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu(app)?)
         .tooltip("SpeekTo.Me");
@@ -280,7 +304,9 @@ pub fn set_preview_text(text: &str) {
         s2m_overlay(STATE.load(Ordering::SeqCst) as i32, text.as_ptr());
     }
 }
-pub fn overlay_state() -> u8 { STATE.load(Ordering::SeqCst) }
+pub fn overlay_state() -> u8 {
+    STATE.load(Ordering::SeqCst)
+}
 
 pub fn set_state(state: u8) {
     STATE.store(state, Ordering::SeqCst);
@@ -364,10 +390,15 @@ pub fn sync_autostart(enabled: bool) {
 fn native_overlay_snapshot() -> serde_json::Value {
     unsafe {
         let value = s2m_overlay_snapshot();
-        let result = if value.is_null() { serde_json::Value::Null } else {
-            serde_json::from_str(&std::ffi::CStr::from_ptr(value).to_string_lossy()).unwrap_or_default()
+        let result = if value.is_null() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&std::ffi::CStr::from_ptr(value).to_string_lossy())
+                .unwrap_or_default()
         };
-        if !value.is_null() { s2m_free(value); }
+        if !value.is_null() {
+            s2m_free(value);
+        }
         result
     }
 }

@@ -6,6 +6,7 @@ import ast
 import asyncio
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import struct
 import logging
 import os
 from pathlib import Path
@@ -14,6 +15,16 @@ import shutil
 import sys
 import threading
 import time
+
+
+class PassthroughCipher:
+    """Stands in for AES-GCM so fixtures need only the standard library."""
+
+    def encrypt(self, nonce, data, aad):
+        return bytes(data) + bytes(16)
+
+    def decrypt(self, nonce, data, aad):
+        return data[:-16]
 
 
 class HTTPException(Exception):
@@ -48,7 +59,8 @@ def main():
               JSONResponse=Response, FileResponse=FileResponse, Request=Request,
               DATA=data, ready=True, active=None, lock=threading.RLock(),
               slot=threading.Lock(), MAX_UPLOAD=1024, RESERVE=0,
-              log=logging.getLogger('fixture'), cleanup_old=lambda: None)
+              log=logging.getLogger('fixture'), cleanup_old=lambda: None, struct=struct,
+               SPOOL_CIPHER=PassthroughCipher(), RECORD_BYTES=1024)
     ns['snapshot'] = lambda: {'active_job': ns['active']}
 
     def infer(job):
@@ -70,7 +82,7 @@ def main():
     functions = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in (
-                'atomic_json', 'job_dir', 'update', 'public_job', 'submit',
+                'atomic_json', 'job_dir', 'update', 'public_job', 'submit', 'seal_record',
                 'status', 'result', 'acknowledge'):
             node.decorator_list = []
             functions.append(node)

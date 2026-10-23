@@ -163,11 +163,49 @@ func audioFile(t *testing.T) (string, []byte) {
 	must(t, os.WriteFile(p, b, 0600))
 	return p, b
 }
+
+// archiveNew archives through the spool path, which enforces plan and quota.
+func archiveNew(v *Vault, ctx context.Context, user, meeting int64, path string) error {
+	file, e := os.Open(path)
+	if e != nil {
+		return e
+	}
+	defer file.Close()
+	st, e := file.Stat()
+	if e != nil {
+		return e
+	}
+	return v.ArchiveReader(ctx, user, meeting, file, st.Size())
+}
+
+func TestLegacyMigrationArchivesPastQuotaAndPlan(t *testing.T) {
+	v, _, _ := fixture(t)
+	ctx := context.Background()
+	path, plain := audioFile(t)
+	_, e := v.db.Exec(`UPDATE users SET plan_tier='free',plan_active=0 WHERE id=1`)
+	must(t, e)
+	if !errors.Is(archiveNew(v, ctx, 1, 1, path), ErrNotPaid) {
+		t.Fatal("new recording archived without a paid plan")
+	}
+	_, e = v.Usage(ctx, 1)
+	must(t, e)
+	_, e = v.db.Exec(`UPDATE user_cloud_storage SET limit_bytes=1 WHERE user_id=1`)
+	must(t, e)
+	must(t, v.Archive(ctx, 1, 1, path))
+	r, _, e := v.Audio(ctx, 1, 1)
+	must(t, e)
+	b, e := io.ReadAll(r)
+	must(t, e)
+	if !bytes.Equal(b, plain) {
+		t.Fatal("migrated recording not recoverable")
+	}
+}
+
 func TestAudioEncryptedRandomAccessTamperOwnership(t *testing.T) {
 	v, _, objects := fixture(t)
 	ctx := context.Background()
 	path, plain := audioFile(t)
-	must(t, v.Archive(ctx, 1, 1, path))
+	must(t, archiveNew(v, ctx, 1, 1, path))
 	a, e := v.Asset(ctx, 1, 1)
 	must(t, e)
 	if a.State != "ready" || a.CipherBytes <= a.PlainBytes {
@@ -203,7 +241,7 @@ func TestAudioEncryptedRandomAccessTamperOwnership(t *testing.T) {
 	if _, _, e = v.Audio(ctx, 2, 1); !errors.Is(e, ErrNotFound) {
 		t.Fatal("cross-user read")
 	}
-	if e = v.Archive(ctx, 2, 1, path); !errors.Is(e, ErrNotFound) {
+	if e = archiveNew(v, ctx, 2, 1, path); !errors.Is(e, ErrNotFound) {
 		t.Fatal("cross-user archive")
 	}
 	for k, data := range objects.files {
@@ -224,7 +262,7 @@ func TestQuotaFailureRecoveryAndDeletion(t *testing.T) {
 	ctx := context.Background()
 	path, _ := audioFile(t)
 	objects.failPut = true
-	if v.Archive(ctx, 1, 1, path) == nil {
+	if archiveNew(v, ctx, 1, 1, path) == nil {
 		t.Fatal("failed PUT accepted")
 	}
 	u, e := v.Usage(ctx, 1)
@@ -244,7 +282,7 @@ func TestQuotaFailureRecoveryAndDeletion(t *testing.T) {
 	objects.failDelete = false
 	must(t, v.RecoverUploads(ctx))
 	objects.failPut = false
-	must(t, v.Archive(ctx, 1, 1, path))
+	must(t, archiveNew(v, ctx, 1, 1, path))
 	u, e = v.Usage(ctx, 1)
 	must(t, e)
 	if u.Reserved != 0 || u.Used <= 0 {
@@ -252,7 +290,7 @@ func TestQuotaFailureRecoveryAndDeletion(t *testing.T) {
 	}
 	_, e = v.db.Exec(`UPDATE user_cloud_storage SET limit_bytes=? WHERE user_id=1`, u.Used)
 	must(t, e)
-	if !errors.Is(v.Archive(ctx, 1, 2, path), ErrQuota) {
+	if !errors.Is(archiveNew(v, ctx, 1, 2, path), ErrQuota) {
 		t.Fatal("quota not enforced")
 	}
 	must(t, v.DeleteAudio(ctx, 1, 1, false))
@@ -264,7 +302,7 @@ func TestQuotaFailureRecoveryAndDeletion(t *testing.T) {
 	if !v.CloudDeleted(ctx, 1, 1) {
 		t.Fatal("missing tombstone")
 	}
-	if v.Archive(ctx, 1, 1, path) == nil {
+	if archiveNew(v, ctx, 1, 1, path) == nil {
 		t.Fatal("deleted object resurrected")
 	}
 	if _, e = os.Stat(path); e != nil {
@@ -275,7 +313,7 @@ func TestRetentionThreeMonthsAndRenewal(t *testing.T) {
 	v, _, _ := fixture(t)
 	ctx := context.Background()
 	path, _ := audioFile(t)
-	must(t, v.Archive(ctx, 1, 1, path))
+	must(t, archiveNew(v, ctx, 1, 1, path))
 	now := time.Now().UTC()
 	since := now.AddDate(0, -4, 0).Unix()
 	_, e := v.db.Exec(`UPDATE users SET plan_tier='free',plan_active=0 WHERE id=1`)
@@ -286,7 +324,7 @@ func TestRetentionThreeMonthsAndRenewal(t *testing.T) {
 	if _, e = v.Asset(ctx, 1, 1); !errors.Is(e, ErrNotFound) {
 		t.Fatal("expired audio kept")
 	}
-	must(t, v.Archive(ctx, 2, 3, path))
+	must(t, archiveNew(v, ctx, 2, 3, path))
 	if e = v.DeleteAudio(ctx, 2, 3, true); e == nil {
 		t.Fatal("renewed account deleted")
 	}
@@ -334,12 +372,12 @@ func TestAccountDeletionBlocksNewWrites(t *testing.T) {
 	v, _, _ := fixture(t)
 	ctx := context.Background()
 	path, _ := audioFile(t)
-	must(t, v.Archive(ctx, 1, 1, path))
+	must(t, archiveNew(v, ctx, 1, 1, path))
 	must(t, v.BeginAccountDeletion(ctx, 1))
 	if v.SaveFinal(ctx, 1, "b448a06a-5aa5-4953-871f-a705361b12ba", "dictation", "late result") == nil {
 		t.Fatal("write after deletion")
 	}
-	if v.Archive(ctx, 1, 2, path) == nil {
+	if archiveNew(v, ctx, 1, 2, path) == nil {
 		t.Fatal("upload after deletion")
 	}
 }
@@ -356,7 +394,7 @@ func TestConcurrentQuotaReservation(t *testing.T) {
 	results := make(chan error, 2)
 	for _, id := range []int64{1, 2} {
 		wg.Add(1)
-		go func(id int64) { defer wg.Done(); results <- v.Archive(ctx, 1, id, path) }(id)
+		go func(id int64) { defer wg.Done(); results <- archiveNew(v, ctx, 1, id, path) }(id)
 	}
 	wg.Wait()
 	close(results)
@@ -457,7 +495,7 @@ func TestArchivePathsBindOwnerAndManifest(t *testing.T) {
 	}
 }
 
-func TestLegacyStagingPurgedOnlyAfterEncryptedBackupAndCompletion(t *testing.T) {
+func TestLegacyRecordingsMoveToBucketAndLeaveDisk(t *testing.T) {
 	v, _, _ := fixture(t)
 	ctx := context.Background()
 	t.Chdir(t.TempDir())
@@ -474,26 +512,40 @@ func TestLegacyStagingPurgedOnlyAfterEncryptedBackupAndCompletion(t *testing.T) 
 		_, e := v.db.Exec(`UPDATE meetings SET audio_path=?,timestamp=CURRENT_TIMESTAMP WHERE id=?`, p, id)
 		must(t, e)
 	}
-	_, e := v.db.Exec(`UPDATE meetings SET transcript='completed final' WHERE id=1`)
-	must(t, e)
+	stray := []string{"uploads/meetings/meeting_1_123_mic.ogg", "uploads/meetings/meeting_1_123_lb.ogg", "uploads/meetings/meeting_9_999.ogg"}
+	for _, p := range stray {
+		must(t, os.WriteFile(p, plain, 0600))
+	}
 	must(t, v.ArchivePending(ctx))
-	if _, e = os.Stat(first); !os.IsNotExist(e) {
-		t.Fatal("completed legacy staging remained")
+	must(t, v.PurgeStrayRecordings(ctx))
+	for _, p := range append([]string{first, second}, stray...) {
+		if _, e := os.Stat(p); !os.IsNotExist(e) {
+			t.Fatal("plaintext recording remained on disk", p)
+		}
 	}
-	if _, e = os.Stat(second); e != nil {
-		t.Fatal("unfinished recording removed")
+	for _, id := range []int64{1, 2} {
+		r, _, e := v.Audio(ctx, 1, id)
+		must(t, e)
+		b, e := io.ReadAll(r)
+		must(t, e)
+		if !bytes.Equal(b, plain) {
+			t.Fatal("backup was not recoverable after local purge")
+		}
 	}
-	r, _, e := v.Audio(ctx, 1, 1)
+}
+
+func TestLegacyRecordingKeptWhileBucketUnavailable(t *testing.T) {
+	v, _, objects := fixture(t)
+	ctx := context.Background()
+	t.Chdir(t.TempDir())
+	must(t, os.MkdirAll("uploads/meetings", 0700))
+	path := "uploads/meetings/meeting_1_123.ogg"
+	must(t, os.WriteFile(path, []byte("only copy"), 0600))
+	_, e := v.db.Exec(`UPDATE meetings SET audio_path=? WHERE id=1`, path)
 	must(t, e)
-	b, e := io.ReadAll(r)
-	must(t, e)
-	if !bytes.Equal(b, plain) {
-		t.Fatal("backup was not recoverable after staging purge")
-	}
-	_, e = v.db.Exec(`UPDATE meetings SET timestamp=datetime('now','-25 hours') WHERE id=2`)
-	must(t, e)
+	objects.failPut = true
 	must(t, v.ArchivePending(ctx))
-	if _, e = os.Stat(second); !os.IsNotExist(e) {
-		t.Fatal("expired legacy staging remained")
+	if _, e = os.Stat(path); e != nil {
+		t.Fatal("only copy deleted while the bucket was unavailable")
 	}
 }

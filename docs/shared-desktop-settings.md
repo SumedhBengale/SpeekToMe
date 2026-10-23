@@ -60,7 +60,7 @@ From `windows-client`, on either target's development machine:
 
 ```sh
 cargo build --locked
-cargo test --locked -- --skip test_clipboard_lifecycle
+cargo test --locked
 ```
 
 The excluded existing test mutates the system clipboard. Linux dependencies

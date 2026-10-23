@@ -4,30 +4,31 @@ pub fn is_speech(samples: &[i16], sample_rate: u32, channels: u16) -> bool {
     if samples.is_empty() {
         return false;
     }
-    
+
     // 1. Minimum duration: require at least 300ms of recording to consider it speech
-    let total_duration_ms = (samples.len() as f32 / (sample_rate as f32 * channels as f32)) * 1000.0;
+    let total_duration_ms =
+        (samples.len() as f32 / (sample_rate as f32 * channels as f32)) * 1000.0;
     if total_duration_ms < 300.0 {
         return false;
     }
-    
+
     // Remove DC offset (mean) to make the signal immune to microphone static level
     let sum_samples: f64 = samples.iter().map(|&s| s as f64).sum();
     let mean = sum_samples / samples.len() as f64;
-    
+
     // 2. Define frame size of 50ms
     let frame_size = (sample_rate as f32 * channels as f32 * 0.05) as usize;
     if frame_size == 0 {
         return false;
     }
-    
+
     let mut speech_frames = 0;
     let mut i = 0;
-    
+
     while i < samples.len() {
         let end = std::cmp::min(i + frame_size, samples.len());
         let frame = &samples[i..end];
-        
+
         // Calculate RMS of this frame (subtracting mean)
         let mut sum_squares = 0.0;
         for &sample in frame {
@@ -35,15 +36,15 @@ pub fn is_speech(samples: &[i16], sample_rate: u32, channels: u16) -> bool {
             sum_squares += val * val;
         }
         let rms = (sum_squares / frame.len() as f64).sqrt() as f32;
-        
+
         // 0.005 is very sensitive (captures whispers), yet immune to silence noise floor
         if rms >= 0.005 {
             speech_frames += 1;
         }
-        
+
         i += frame_size;
     }
-    
+
     // We require at least 3 active frames (150ms of active sound) to qualify as speech.
     speech_frames >= 3
 }
@@ -58,11 +59,13 @@ pub fn resample_to_16k_mono(samples: &[i16], source_rate: u32, source_channels: 
     let mono_samples: Vec<i16> = if channels == 1 {
         samples.to_vec()
     } else if channels == 2 {
-        samples.chunks_exact(2)
+        samples
+            .chunks_exact(2)
             .map(|chunk| ((chunk[0] as i32 + chunk[1] as i32) / 2) as i16)
             .collect()
     } else {
-        samples.chunks_exact(channels)
+        samples
+            .chunks_exact(channels)
             .map(|chunk| {
                 let sum: i32 = chunk.iter().map(|&s| s as i32).sum();
                 (sum / channels as i32) as i16
@@ -101,11 +104,15 @@ pub fn resample_to_16k_mono(samples: &[i16], source_rate: u32, source_channels: 
     resampled
 }
 
-pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn encode_opus_ogg(
+    samples: &[i16],
+    source_rate: u32,
+    source_channels: u16,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let resampled = resample_to_16k_mono(samples, source_rate, source_channels);
     let mut encoder = opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip)?;
     encoder.set_bitrate(opus::Bitrate::Bits(24000))?;
-    encoder.set_complexity(1)?; 
+    encoder.set_complexity(1)?;
 
     let mut buffer = Vec::new();
     let mut writer = ogg::writing::PacketWriter::new(&mut buffer);
@@ -119,8 +126,13 @@ pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) 
     head.extend_from_slice(&16000u32.to_le_bytes());
     head.extend_from_slice(&0i16.to_le_bytes());
     head.push(0);
-    
-    writer.write_packet(head.into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0)?;
+
+    writer.write_packet(
+        head.into_boxed_slice(),
+        serial,
+        ogg::writing::PacketWriteEndInfo::EndPage,
+        0,
+    )?;
 
     let mut tags = Vec::new();
     tags.extend_from_slice(b"OpusTags");
@@ -128,12 +140,17 @@ pub fn encode_opus_ogg(samples: &[i16], source_rate: u32, source_channels: u16) 
     tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
     tags.extend_from_slice(vendor);
     tags.extend_from_slice(&0u32.to_le_bytes());
-    
-    writer.write_packet(tags.into_boxed_slice(), serial, ogg::writing::PacketWriteEndInfo::EndPage, 0)?;
+
+    writer.write_packet(
+        tags.into_boxed_slice(),
+        serial,
+        ogg::writing::PacketWriteEndInfo::EndPage,
+        0,
+    )?;
 
     // Use exact 20ms frames (320 samples @ 16kHz)
     // 560ms chunk (8,960 samples) divides into exactly 28 frames of 20ms with 0 remainder and 0 padding drift.
-    let chunk_size = 320; 
+    let chunk_size = 320;
     let chunks = resampled.chunks(chunk_size);
     let chunks_len = chunks.len();
     let mut granule_pos: u64 = 0;
@@ -175,36 +192,72 @@ pub struct CaptureResampler {
     position: u64,
 }
 impl CaptureResampler {
-    pub fn new(rate:u32,channels:u16)->Self{Self{rate:rate.max(1) as u64,channels:channels.max(1) as usize,interleaved:Vec::new(),mono:Vec::new(),position:0}}
-    pub fn push(&mut self,input:&[i16])->Vec<i16>{
-        self.interleaved.extend_from_slice(input);
-        let complete=self.interleaved.len()/self.channels*self.channels;
-        self.mono.extend(self.interleaved[..complete].chunks_exact(self.channels).map(|frame|(frame.iter().map(|&s|s as i64).sum::<i64>()/self.channels as i64) as i16));
-        self.interleaved.drain(..complete);
-        let mut output=Vec::new();
-        while self.position/16000+1<self.mono.len() as u64 {
-            let index=(self.position/16000) as usize;let fraction=(self.position%16000) as f64/16000.0;
-            output.push((self.mono[index] as f64+(self.mono[index+1] as f64-self.mono[index] as f64)*fraction).round() as i16);
-            self.position+=self.rate;
+    pub fn new(rate: u32, channels: u16) -> Self {
+        Self {
+            rate: rate.max(1) as u64,
+            channels: channels.max(1) as usize,
+            interleaved: Vec::new(),
+            mono: Vec::new(),
+            position: 0,
         }
-        let consumed=(self.position/16000).min(self.mono.len().saturating_sub(1) as u64) as usize;
-        self.mono.drain(..consumed);self.position-=consumed as u64*16000;
+    }
+    pub fn push(&mut self, input: &[i16]) -> Vec<i16> {
+        self.interleaved.extend_from_slice(input);
+        let complete = self.interleaved.len() / self.channels * self.channels;
+        self.mono.extend(
+            self.interleaved[..complete]
+                .chunks_exact(self.channels)
+                .map(|frame| {
+                    (frame.iter().map(|&s| s as i64).sum::<i64>() / self.channels as i64) as i16
+                }),
+        );
+        self.interleaved.drain(..complete);
+        let mut output = Vec::new();
+        while self.position / 16000 + 1 < self.mono.len() as u64 {
+            let index = (self.position / 16000) as usize;
+            let fraction = (self.position % 16000) as f64 / 16000.0;
+            output.push(
+                (self.mono[index] as f64
+                    + (self.mono[index + 1] as f64 - self.mono[index] as f64) * fraction)
+                    .round() as i16,
+            );
+            self.position += self.rate;
+        }
+        let consumed =
+            (self.position / 16000).min(self.mono.len().saturating_sub(1) as u64) as usize;
+        self.mono.drain(..consumed);
+        self.position -= consumed as u64 * 16000;
         output
     }
-    pub fn finish(&mut self)->Vec<i16>{
-        let mut output=Vec::new();
-        while self.position<self.mono.len() as u64*16000 {
-            output.push(self.mono[(self.position/16000) as usize]);self.position+=self.rate;
+    pub fn finish(&mut self) -> Vec<i16> {
+        let mut output = Vec::new();
+        while self.position < self.mono.len() as u64 * 16000 {
+            output.push(self.mono[(self.position / 16000) as usize]);
+            self.position += self.rate;
         }
-        self.mono.clear();self.interleaved.clear();self.position=0;output
+        self.mono.clear();
+        self.interleaved.clear();
+        self.position = 0;
+        output
     }
 }
-#[cfg(test)]mod capture_resampler_tests{
- use super::*;
- #[test]fn arbitrary_callback_boundaries_preserve_long_audio_clock(){
-  for rate in [16000,44100,48000]{let frames=rate as usize*130;let input=vec![1000i16;frames*2];let mut resampler=CaptureResampler::new(rate,2);let mut count=0;
-   for chunk in input.chunks(1001){count+=resampler.push(chunk).len();assert!(resampler.mono.len()<6);assert!(resampler.interleaved.len()<2);}
-   count+=resampler.finish().len();assert_eq!(count,16000*130);
-  }
- }
+#[cfg(test)]
+mod capture_resampler_tests {
+    use super::*;
+    #[test]
+    fn arbitrary_callback_boundaries_preserve_long_audio_clock() {
+        for rate in [16000, 44100, 48000] {
+            let frames = rate as usize * 130;
+            let input = vec![1000i16; frames * 2];
+            let mut resampler = CaptureResampler::new(rate, 2);
+            let mut count = 0;
+            for chunk in input.chunks(1001) {
+                count += resampler.push(chunk).len();
+                assert!(resampler.mono.len() < 6);
+                assert!(resampler.interleaved.len() < 2);
+            }
+            count += resampler.finish().len();
+            assert_eq!(count, 16000 * 130);
+        }
+    }
 }

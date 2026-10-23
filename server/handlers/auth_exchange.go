@@ -8,12 +8,8 @@ import (
 )
 
 func (a *App) issueAuthCode(code string, user int64, temp int) error {
-	_, e := a.DB.GetDB().Exec(`CREATE TABLE IF NOT EXISTS auth_codes(code_hash TEXT PRIMARY KEY,user_id INTEGER NOT NULL,is_temp INTEGER NOT NULL,expires INTEGER NOT NULL)`)
-	if e != nil {
-		return e
-	}
 	_, _ = a.DB.GetDB().Exec("DELETE FROM auth_codes WHERE expires<?", time.Now().Unix())
-	_, e = a.DB.GetDB().Exec("INSERT INTO auth_codes VALUES(?,?,?,?)", auth.HashSecurityToken(code), user, temp, time.Now().Add(time.Minute).Unix())
+	_, e := a.DB.GetDB().Exec("INSERT INTO auth_codes VALUES(?,?,?,?)", auth.HashSecurityToken(code), user, temp, time.Now().Add(time.Minute).Unix())
 	return e
 }
 func (a *App) HandleAuthExchange(w http.ResponseWriter, r *http.Request) {

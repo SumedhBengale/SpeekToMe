@@ -26,14 +26,19 @@ export default function desktopClientUI() {
     load(id) {
       if (id !== "\0desktop-client-ui") return;
       const htmlPath = fileURLToPath(new URL("index.html", frontend));
-      const cssPath = fileURLToPath(new URL("style.css", frontend));
       this.addWatchFile(htmlPath);
-      this.addWatchFile(cssPath);
       const html = readFileSync(htmlPath, "utf8");
-      const sourceCSS = readFileSync(cssPath, "utf8").replace(
-        /\/\*[\s\S]*?\*\//g,
-        "",
+      // The desktop stylesheet is split across files; read them in the
+      // order the desktop page links them so the cascade is unchanged.
+      const cssPaths = [...html.matchAll(/<link rel="stylesheet" href="([^"]+\.css)">/g)].map(
+        (link) => fileURLToPath(new URL(link[1], frontend)),
       );
+      if (!cssPaths.length) throw new Error("Desktop stylesheets missing");
+      cssPaths.forEach((path) => this.addWatchFile(path));
+      const sourceCSS = cssPaths
+        .map((path) => readFileSync(path, "utf8"))
+        .join("\n")
+        .replace(/\/\*[\s\S]*?\*\//g, "");
       const theme = sourceCSS.match(/:root,[\s\S]*?\{([^}]+)\}/);
       if (!theme) throw new Error("Desktop default theme missing");
       let css = `:host {${theme[1]}}`;

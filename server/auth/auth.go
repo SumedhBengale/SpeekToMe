@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -248,21 +249,27 @@ func DecodeBase32(s string) ([]byte, error) {
 }
 
 func VerifyTOTP(secret string, code string) bool {
+	_, ok := VerifyTOTPAt(secret, code, time.Now())
+	return ok
+}
+
+// VerifyTOTPAt checks a code against the current 30-second step and one step
+// either side. It returns the matching step so callers can refuse its reuse.
+func VerifyTOTPAt(secret string, code string, now time.Time) (int64, bool) {
 	secretBytes, err := DecodeBase32(secret)
 	if err != nil || len(secretBytes) == 0 {
-		return false
+		return 0, false
 	}
 
 	code = strings.TrimSpace(code)
 	if len(code) != 6 {
-		return false
+		return 0, false
 	}
 
-	currentTime := time.Now().Unix()
-	step := currentTime / 30
-
-	for d := -1; d <= 1; d++ {
-		testStep := step + int64(d)
+	step := now.Unix() / 30
+	matched, found := int64(0), 0
+	for d := int64(-1); d <= 1; d++ {
+		testStep := step + d
 		buf := make([]byte, 8)
 		binary.BigEndian.PutUint64(buf, uint64(testStep))
 
@@ -272,13 +279,11 @@ func VerifyTOTP(secret string, code string) bool {
 
 		offset := sum[len(sum)-1] & 0xf
 		binaryVal := binary.BigEndian.Uint32(sum[offset:offset+4]) & 0x7fffffff
-		otp := binaryVal % 1000000
-
-		expectedCode := fmt.Sprintf("%06d", otp)
-		if expectedCode == code {
-			return true
+		expectedCode := fmt.Sprintf("%06d", binaryVal%1000000)
+		// Compare every candidate in constant time; do not stop at a match.
+		if subtle.ConstantTimeCompare([]byte(expectedCode), []byte(code)) == 1 && found == 0 {
+			matched, found = testStep, 1
 		}
 	}
-
-	return false
+	return matched, found == 1
 }

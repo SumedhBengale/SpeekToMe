@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import struct
 import subprocess
 import sys
 import threading
@@ -19,7 +20,7 @@ import time
 import numpy as np
 import onnxruntime as ort
 import psutil
-import soundfile as sf
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
 import uvicorn
@@ -33,6 +34,11 @@ MAX_UPLOAD = int(os.environ.get('DIAR_MAX_UPLOAD_BYTES', str(2*1024**3)))
 MEMORY_BUDGET = int(os.environ.get('DIAR_MEMORY_BUDGET', str(3*1024**3)))
 RESERVE = 512*1024**2
 DATA.mkdir(parents=True, exist_ok=True)
+# Uploaded audio is sealed under a key that exists only in this process.
+# Plaintext audio never reaches disk, and a restart makes any leftover upload
+# unreadable; the coordinator then resubmits from its encrypted spool.
+SPOOL_CIPHER = AESGCM(AESGCM.generate_key(bit_length=256))
+RECORD_BYTES = 1024**2
 sys.path.insert(0, str(ROOT/'models'))
 from diarize import OnnxDiarizer, extract_speaker_dict, segments_to_rttm
 
@@ -59,6 +65,64 @@ def atomic_json(path, value):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+def seal_record(job_id, index, data):
+    nonce = os.urandom(12)
+    sealed = SPOOL_CIPHER.encrypt(nonce, bytes(data), f'{job_id}:{index}'.encode())
+    return struct.pack('>I', len(sealed)) + nonce + sealed
+
+def open_records(path, job_id):
+    """Yield plaintext records of a sealed upload, verifying each one."""
+    with path.open('rb') as sealed:
+        index = 0
+        while header := sealed.read(4):
+            if len(header) != 4:
+                raise ValueError('Sealed upload is truncated')
+            size = struct.unpack('>I', header)[0]
+            nonce, body = sealed.read(12), sealed.read(size)
+            if len(nonce) != 12 or len(body) != size:
+                raise ValueError('Sealed upload is truncated')
+            yield SPOOL_CIPHER.decrypt(nonce, body, f'{job_id}:{index}'.encode())
+            index += 1
+
+def decode_audio(path, job_id, max_seconds, on_progress):
+    """Decode the sealed upload to 16 kHz mono float32 entirely in memory."""
+    # The first Ogg page carries OpusHead; its tenth byte is the channel count.
+    head = next(open_records(path, job_id), b'')
+    marker = head.find(b'OpusHead', 0, 512)
+    if not head.startswith(b'OggS') or marker < 0 or len(head) < marker+10 or head[marker+9] != 1:
+        raise ValueError('Input must contain one mono Opus audio stream')
+    limit = int(max_seconds*16000*4)
+    process = subprocess.Popen(['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
+                                '-ar', '16000', '-ac', '1', '-f', 'f32le', 'pipe:1'],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    feed_error = []
+    def feed():
+        try:
+            for record in open_records(path, job_id):
+                process.stdin.write(record)
+        except (BrokenPipeError, ValueError, OSError) as exc:
+            feed_error.append(exc)
+        except Exception as exc:  # A failed tag check must stop decoding.
+            feed_error.append(exc)
+        finally:
+            with contextlib.suppress(OSError):
+                process.stdin.close()
+    feeder = threading.Thread(target=feed, daemon=True)
+    feeder.start()
+    decoded = bytearray()
+    while chunk := process.stdout.read(1024**2):
+        decoded += chunk
+        if len(decoded) > limit:
+            process.kill()
+            process.wait()
+            feeder.join()
+            raise ValueError('Recording exceeds this worker memory budget; use a larger worker')
+        on_progress(len(decoded)/(16000*4))
+    feeder.join()
+    if process.wait() != 0 or feed_error or len(decoded) < 4:
+        raise ValueError('Opus decoding failed')
+    return np.frombuffer(bytes(decoded[:len(decoded)//4*4]), dtype=np.float32)
 
 def job_dir(job_id):
     if len(job_id) != 32 or any(c not in '0123456789abcdef' for c in job_id):
@@ -123,38 +187,16 @@ def run_job(job):
     original_chunk = model.run_chunk
     original_mel = model.log_mel
     try:
-        update(job, persist=True, status='processing', phase='probing', completed_windows=0)
-        probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries',
-                                'format=duration:stream=codec_name,channels', '-of', 'json', str(path/'input.opus')],
-                               capture_output=True, timeout=60, check=True)
-        info = json.loads(probe.stdout)
-        streams = info.get('streams', [])
-        if len(streams) != 1 or streams[0].get('codec_name') != 'opus' or streams[0].get('channels') != 1:
-            raise ValueError('Input must contain one mono Opus audio stream')
-        duration = float(info['format']['duration'])
+        update(job, persist=True, status='processing', phase='decoding', completed_windows=0)
+        # Bound decoded audio by the same budget the duration estimate used.
+        max_seconds = max(0, (MEMORY_BUDGET-512*1024**2)/(8*1024**2)*60)
+        decode_start = time.monotonic()
+        audio = decode_audio(path/'input.sealed', job['job_id'], max_seconds,
+                             lambda seconds: update(job, decoded_audio_seconds=round(seconds, 1)))
+        sr = 16000
+        duration = len(audio)/sr
         if not math.isfinite(duration) or duration <= 0:
             raise ValueError('Audio duration is invalid')
-        estimate = 512*1024**2 + duration/60*8*1024**2
-        if estimate > MEMORY_BUDGET:
-            raise ValueError('Recording exceeds this worker memory budget; use a larger worker')
-        if shutil.disk_usage(DATA).free < duration*16000*2 + RESERVE:
-            raise ValueError('Insufficient disk space for decoded audio')
-        update(job, phase='decoding', audio_seconds=duration, decode_progress_percent=0)
-        cmd = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', str(path/'input.opus'),
-               '-ar', '16000', '-ac', '1', '-progress', 'pipe:1', str(path/'decoded.wav')]
-        decode_start = time.monotonic()
-        with (path/'decode-error.txt').open('w') as err:
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True)
-            for line in process.stdout:
-                key, _, value = line.strip().partition('=')
-                if key == 'out_time_us':
-                    with contextlib.suppress(ValueError):
-                        update(job, decode_progress_percent=round(min(100, int(value)/1e6/duration*100), 1))
-            if process.wait() != 0:
-                raise ValueError('Opus decoding failed')
-        audio, sr = sf.read(path/'decoded.wav', dtype='float32')
-        (path/'decoded.wav').unlink()
-        duration = len(audio)/sr
         update(job, audio_seconds=duration, decode_seconds=time.monotonic()-decode_start,
                total_windows=math.ceil(math.ceil((len(audio)//160+1)/model.subsampling_factor)/model.chunk_length))
         def features(waveform):
@@ -196,7 +238,7 @@ def run_job(job):
     finally:
         model.run_chunk = original_chunk
         model.log_mel = original_mel
-        for name in ('input.opus', 'decoded.wav', 'decode-error.txt'):
+        for name in ('input.sealed', 'input.opus', 'decoded.wav', 'decode-error.txt'):
             (path/name).unlink(missing_ok=True)
         # Release whole-file arrays; keep the model resident.
         audio = probs = None
@@ -210,33 +252,23 @@ def initialize():
     try:
         cleanup_old()
         model = OnnxDiarizer(onnx_dir=ROOT/'models', threads=2, model_filename='model.int8.onnx')
-        recover = []
         for path in DATA.iterdir():
             if not path.is_dir():
                 continue
             try:
                 job = json.loads((path/'job.json').read_text())
-                if job['status'] in ('uploading', 'uploaded', 'processing'):
-                    if job['status'] == 'uploading' or not (path/'input.opus').exists() or job.get('recovery_attempts', 0) >= 1:
-                        update(job, persist=True, status='failed', phase='failed',
-                               error='Upload interrupted or repeated runtime crash; resubmit from coordinator', finished_at=time.time())
-                        for name in ('input.opus', 'input.part', 'decoded.wav', 'decode-error.txt'):
-                            (path/name).unlink(missing_ok=True)
-                    else:
-                        recover.append(job)
+                interrupted = job['status'] in ('uploading', 'uploaded', 'processing')
             except (OSError, ValueError, KeyError):
-                continue
-        if recover:
-            job = sorted(recover, key=lambda j: j['created_at'])[0]
-            slot.acquire()
-            active = job
-            update(job, persist=True, recovery_attempts=job.get('recovery_attempts', 0)+1)
-            ready = True
-            log.info('runtime ready; recovering job=%s', job['job_id'])
-            run_job(job)
-        else:
-            ready = True
-            log.info('runtime ready CPU INT8 threads=2')
+                interrupted = True
+            # The previous process's key is gone, so an unfinished upload can
+            # never be read. Remove it; the coordinator's next status request
+            # gets 404 and resubmits from its encrypted spool.
+            for name in ('input.part', 'input.sealed', 'input.opus', 'decoded.wav', 'decode-error.txt'):
+                (path/name).unlink(missing_ok=True)
+            if interrupted:
+                shutil.rmtree(path, ignore_errors=True)
+        ready = True
+        log.info('runtime ready CPU INT8 threads=2')
     except Exception:
         log.error('Runtime initialization failed; private details omitted')
         os._exit(1)
@@ -301,9 +333,12 @@ async def submit(request: Request):
             active = job
         update(job, persist=True, expected_upload_bytes=size)
         # Async network chunks are appended in the thread pool; request body is never accumulated in RAM.
+        # Every record is sealed before it is written; plaintext stays in memory.
         out = (path/'input.part').open('wb')
         written = 0
         last_disk_check = 0
+        pending = bytearray()
+        records = 0
         try:
             async for data in request.stream():
                 written += len(data)
@@ -313,16 +348,23 @@ async def submit(request: Request):
                     last_disk_check = written
                     if shutil.disk_usage(DATA).free < RESERVE:
                         raise HTTPException(507, 'Insufficient disk space')
-                await asyncio.to_thread(out.write, data)
+                pending += data
+                while len(pending) >= RECORD_BYTES:
+                    await asyncio.to_thread(out.write, seal_record(job_id, records, pending[:RECORD_BYTES]))
+                    del pending[:RECORD_BYTES]
+                    records += 1
                 update(job, uploaded_bytes=written,
                        upload_progress_percent=round(written/size*100, 1) if size else None)
             if written == 0 or (size is not None and written != size):
                 raise HTTPException(400, 'Incomplete or empty upload')
+            if pending:
+                await asyncio.to_thread(out.write, seal_record(job_id, records, pending))
             await asyncio.to_thread(out.flush)
             await asyncio.to_thread(os.fsync, out.fileno())
         finally:
+            pending[:] = b''
             out.close()
-        (path/'input.part').replace(path/'input.opus')
+        (path/'input.part').replace(path/'input.sealed')
         update(job, persist=True, status='uploaded', phase='uploaded', uploaded_bytes=written)
         threading.Thread(target=run_job, args=(job,), daemon=True).start()
         handed_off = True
@@ -331,7 +373,7 @@ async def submit(request: Request):
     except BaseException:
         if path.exists():
             update(job, persist=True, status='failed', phase='failed', error='Upload failed or interrupted', finished_at=time.time())
-            for name in ('input.part', 'input.opus'):
+            for name in ('input.part', 'input.sealed'):
                 (path/name).unlink(missing_ok=True)
         raise
     finally:

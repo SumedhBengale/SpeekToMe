@@ -50,8 +50,39 @@ local recordings; the meeting's `cloud_audio_status` reports `storage_full`.
 A background worker retries pending archives every minute with per-meeting backoff.
 It records ambiguous upload failures durably and retains reservations until object
 cleanup succeeds. Interrupted upload leases expire after 30 minutes; worker upload
-contexts expire after 20 minutes. Completed processing files are purged from the
-server only after the encrypted mixed recording is ready. Local desktop recordings
+contexts expire after 20 minutes.
+
+## Meeting audio never rests unencrypted
+
+The API server never writes meeting or dictation audio to its own disk in plain
+form:
+
+- **Upload spool.** Each 4 MiB upload chunk is sealed with AES-256-GCM before it
+  is stored (`server/audiospool`). The key is derived from the account key and
+  the job, so deleting an account also makes leftover chunks unreadable. Sealed
+  chunks go to the private bucket under `spool/v1/`; without a bucket (local
+  development only) they go to `MEETING_SPOOL_DIR`, still sealed. Commit checks
+  the SHA-256 and the Ogg Opus duration by streaming the sealed chunks through
+  memory, without ffprobe.
+- **Processing.** GPU and CPU stages receive audio streamed from the spool. The
+  GPU gateway decodes it in memory with ffmpeg pipes. The CPU diarization gateway
+  seals each upload record under a key held only by its process and decodes from
+  those records in memory; a restart discards unfinished uploads and the
+  coordinator resubmits.
+- **Retention.** A completed meeting's mixed recording is archived to the bucket
+  and its spool deleted. Failed meetings keep their sealed spool for retry for at
+  most 24 hours (30 hours while a job is still processing); afterwards the job
+  asks the desktop to upload its local copy again. Orphaned chunks are deleted.
+- **Live transcription.** `/v1/meetings/live` relays the two channels to the
+  streaming ASR for an on-screen preview and stores nothing. The saved
+  transcript and speaker names come from the uploaded job.
+- **Dictation.** Multipart parsing keeps the whole request in memory, so audio is
+  never spilled to temporary files.
+- **Older data.** Plaintext recordings written before these changes are archived
+  to the bucket regardless of plan (quota is not enforced for this one-time move)
+  and then deleted from disk. Recordings that cannot be tied to an account, and
+  the per-channel copies made by the old live-meeting endpoint, are deleted. If
+  the bucket is unavailable the only copy is kept until the upload succeeds. Local desktop recordings
 are unaffected. The desktop can stream a decrypted cloud download directly to its
 Downloads folder without loading the full recording into the webview. Audio retrieval authenticates meeting ownership before decrypting
 R2 byte ranges. Local playback additionally verifies immutable account ownership,

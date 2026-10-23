@@ -12,7 +12,7 @@ and retains its limitations with accents and mixed-language speech.
 
 Client requests send one `language` string:
 
-- `/v1/stream` and `/v1/meetings/live`: initial `start` JSON.
+- `/v1/stream` and `/v1/meetings/live`: initial `start` JSON. Both authenticate with an `Authorization: Bearer` header; `/v1/stream` still accepts `?token=` from older desktop builds.
 - `/generate` and legacy meeting uploads: multipart field.
 - `/v1/meetings/jobs`: upload manifest; the local recording manifest and server
   job retain the value across upload retries and processing restarts.

@@ -25,7 +25,7 @@ extern "C" fn samples(data: *const f32, count: usize) {
                 // Bound native delivery when a suspended consumer falls behind.
                 const MAX_SAMPLES: usize = 48_000 * 2 * 30;
                 if buffer.len() + count > MAX_SAMPLES {
-                    OVERFLOW.store(true,Ordering::Relaxed);
+                    OVERFLOW.store(true, Ordering::Relaxed);
                     return;
                 }
                 buffer.extend(data.iter().map(|x| (x.clamp(-1.0, 1.0) * 32767.0) as i16));
@@ -33,12 +33,14 @@ extern "C" fn samples(data: *const f32, count: usize) {
         }
     });
 }
-pub fn failed()->bool { (unsafe{s2m_audio_failed()}) || OVERFLOW.load(Ordering::Relaxed) }
-static OVERFLOW: std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+pub fn failed() -> bool {
+    (unsafe { s2m_audio_failed() }) || OVERFLOW.load(Ordering::Relaxed)
+}
+static OVERFLOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub struct Capture;
 impl Capture {
     pub fn start(buffer: Buffer) -> Result<Self, String> {
-        OVERFLOW.store(false,Ordering::Relaxed);
+        OVERFLOW.store(false, Ordering::Relaxed);
         *BUFFER
             .get_or_init(|| Mutex::new(None))
             .lock()

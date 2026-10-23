@@ -40,12 +40,18 @@ pub struct LinuxCapabilities {
 pub fn capabilities() -> LinuxCapabilities {
     let shortcut = SHORTCUT_READY.load(Ordering::SeqCst);
     let insertion = INSERTION_READY.load(Ordering::SeqCst);
-    let label = SHORTCUT_LABEL.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let label = SHORTCUT_LABEL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     LinuxCapabilities {
         shortcut,
         insertion,
         detail: if shortcut && insertion {
-            format!("{} and keyboard access granted", label.unwrap_or_else(|| "Shortcut".into()))
+            format!(
+                "{} and keyboard access granted",
+                label.unwrap_or_else(|| "Shortcut".into())
+            )
         } else if !shortcut {
             "Grant the global shortcut in your desktop permission dialog".into()
         } else {
@@ -74,8 +80,17 @@ fn shortcut_id(name: &str) -> String {
         "F9" => "dictate-f9",
         "F12" => "dictate-f12",
         "F8" => "dictate", // Preserve an existing F8 portal grant.
-        _ => return format!("dictate-custom-{}", name.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>()),
-    }.into()
+        _ => {
+            return format!(
+                "dictate-custom-{}",
+                name.as_bytes()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            )
+        }
+    }
+    .into()
 }
 
 pub fn start() {
@@ -186,27 +201,42 @@ async fn run(rebind_rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) -> Result
             Ok(Some(crate::linux_keywatch::Event::Ready)) => {
                 eprintln!("[LINUX KEYWATCH] Modifier shortcut ready: {configured_hotkey}");
             }
-            Ok(_) => return Err("Keyboard helper could not start. Check the desktop authorization prompt.".into()),
+            Ok(_) => {
+                return Err(
+                    "Keyboard helper could not start. Check the desktop authorization prompt."
+                        .into(),
+                )
+            }
             Err(_) => return Err("Timed out waiting for keyboard helper authorization".into()),
         }
         keywatch_events = events;
         _keywatch_guard = Some(guard);
-        *SHORTCUT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{configured_hotkey} (keyboard helper)"));
+        *SHORTCUT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(format!("{configured_hotkey} (keyboard helper)"));
     } else {
-        let shortcut = NewShortcut::new(&id, "Record or stop dictation").preferred_trigger(Some(hotkey.as_str()));
+        let shortcut = NewShortcut::new(&id, "Record or stop dictation")
+            .preferred_trigger(Some(hotkey.as_str()));
         let result = shortcuts
             .bind_shortcuts(&session, &[shortcut], None, BindShortcutsOptions::default())
             .await
             .map_err(|e| e.to_string())?
             .response()
             .map_err(|e| e.to_string())?;
-        let bound = result.shortcuts().iter().find(|shortcut| shortcut.id() == id)
+        let bound = result
+            .shortcuts()
+            .iter()
+            .find(|shortcut| shortcut.id() == id)
             .ok_or("No global shortcut was granted")?;
         if bound.trigger_description().trim().is_empty() {
             return Err(format!("The desktop did not assign a trigger for {configured_hotkey}. Choose a shortcut in your desktop permission dialog."));
         }
-        eprintln!("[LINUX PORTAL] Global shortcut granted: {} ({})", bound.id(), bound.trigger_description());
-        *SHORTCUT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(bound.trigger_description().to_owned());
+        eprintln!(
+            "[LINUX PORTAL] Global shortcut granted: {} ({})",
+            bound.id(),
+            bound.trigger_description()
+        );
+        *SHORTCUT_LABEL.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(bound.trigger_description().to_owned());
     }
     SHORTCUT_READY.store(true, Ordering::SeqCst);
 
@@ -343,7 +373,10 @@ mod hotkey_tests {
         assert_eq!(shortcut_id("F8"), "dictate");
         assert_eq!(shortcut_id("Ctrl + Shift"), "dictate-ctrl-shift");
         assert_ne!(shortcut_id("Ctrl + Alt + K"), shortcut_id("Ctrl + Alt + L"));
-        assert_eq!(supported_hotkey("Ctrl + Win + F12").unwrap(), "CTRL+LOGO+F12");
+        assert_eq!(
+            supported_hotkey("Ctrl + Win + F12").unwrap(),
+            "CTRL+LOGO+F12"
+        );
         assert!(supported_hotkey("invalid").is_err());
     }
 }

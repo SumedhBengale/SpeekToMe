@@ -13,6 +13,7 @@ import (
 	"os"
 	log "speektome-server/privacylog"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
@@ -55,6 +56,9 @@ func NewDatabase(connStr string) (*Database, error) {
 		}
 	}
 
+	if driver == "sqlite" {
+		connStr = withSQLitePragmas(connStr)
+	}
 	dbConn, err := sql.Open(driver, connStr)
 	if err != nil {
 		return nil, err
@@ -64,13 +68,6 @@ func NewDatabase(connStr string) (*Database, error) {
 	dbConn.SetMaxOpenConns(10)
 	dbConn.SetMaxIdleConns(5)
 	dbConn.SetConnMaxLifetime(time.Hour)
-
-	if driver == "sqlite" {
-		// Enable WAL journal mode and busy timeout (Group A Optimization)
-		_, _ = dbConn.Exec("PRAGMA journal_mode=WAL;")
-		_, _ = dbConn.Exec("PRAGMA synchronous=FULL;")
-		_, _ = dbConn.Exec("PRAGMA busy_timeout = 5000;")
-	}
 
 	// Create tables and indices (Group A Optimization)
 	_, err = dbConn.Exec(`
@@ -356,8 +353,26 @@ func NewDatabase(connStr string) (*Database, error) {
 		dbConn.Close()
 		return nil, err
 	}
+	if err = migrate(dbConn); err != nil {
+		dbConn.Close()
+		return nil, err
+	}
 
 	return &Database{db: dbConn}, nil
+}
+
+// withSQLitePragmas applies connection settings through the DSN so every
+// pooled connection gets them. PRAGMA statements run with Exec reach only one
+// connection, leaving the rest without a busy timeout.
+func withSQLitePragmas(path string) string {
+	if strings.Contains(path, "_pragma=") {
+		return path
+	}
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return path + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"
 }
 
 func hashToken(token string) string {
@@ -707,6 +722,17 @@ func (d *Database) GetUserByTempSession(token string) (*UserProfile, string, err
 	return &u, decryptedSecret, nil
 }
 
+// ClaimTOTPStep records a verified two-factor step. It succeeds only for a
+// step later than any used before, so a code cannot be replayed.
+func (d *Database) ClaimTOTPStep(userID, step int64) (bool, error) {
+	result, err := d.db.Exec(`UPDATE users SET totp_last_step=? WHERE id=? AND COALESCE(totp_last_step,0)<?`, step, userID, step)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n == 1, err
+}
+
 func (d *Database) PromoteSession(token string) error {
 	token = sessionHash(token)
 	_, err := d.db.Exec("UPDATE sessions SET is_temp = 0, expires_at = ? WHERE token = ?", time.Now().AddDate(0, 0, 30).Format(time.RFC3339), token)
@@ -1040,6 +1066,18 @@ func (d *Database) CreateEmailUser(email, password, name, verificationToken stri
 }
 
 // AuthenticateEmailUser checks email/password credentials and returns the User ID if valid
+var dummyHash struct {
+	once sync.Once
+	hash []byte
+}
+
+func dummyPasswordHash() []byte {
+	dummyHash.once.Do(func() {
+		dummyHash.hash, _ = bcrypt.GenerateFromPassword([]byte("speektome-timing-equalizer"), bcrypt.DefaultCost)
+	})
+	return dummyHash.hash
+}
+
 func (d *Database) AuthenticateEmailUser(email, password string) (int64, error) {
 	var id int64
 	var hashedPassword string
@@ -1048,6 +1086,9 @@ func (d *Database) AuthenticateEmailUser(email, password string) (int64, error) 
 
 	err := d.db.QueryRow("SELECT id, password_hash, is_verified, is_locked FROM users WHERE email = ? AND password_hash IS NOT NULL", email).Scan(&id, &hashedPassword, &isVerified, &isLocked)
 	if err != nil {
+		// Spend the same bcrypt work as a real check so response time does not
+		// reveal which email addresses have accounts.
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(password))
 		return 0, fmt.Errorf("user not found or invalid login method")
 	}
 

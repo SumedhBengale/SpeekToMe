@@ -18,7 +18,9 @@ with a shared Rust/Tauri client and Go backend.
 
 ```sh
 (cd server && go test ./...)
-(cd windows-client && cargo check --locked)
+(cd deployment/spot-worker/gateway && go test ./...)
+(cd deployment/diarization-server && python3 -m unittest test_gateway_admission test_gateway_sealing)
+(cd windows-client && cargo fmt --check && cargo test --locked)
 (cd website && npm ci && npm run build)
 ```
 

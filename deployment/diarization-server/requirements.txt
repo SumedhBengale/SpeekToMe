@@ -4,6 +4,7 @@ anyio==4.15.1
 cffi==2.1.1
 click==8.5.0
 coloredlogs==15.0.1
+cryptography==50.0.0
 fastapi==0.159.1
 flatbuffers==25.12.19
 h11==0.16.0

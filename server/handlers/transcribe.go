@@ -15,12 +15,16 @@ import (
 
 	"speektome-server/auth"
 	"speektome-server/config"
+	"speektome-server/db"
 	"speektome-server/modelresult"
 	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
 	"speektome-server/utils"
 )
+
+// dictationUploadLimit bounds a whole dictation request body.
+const dictationUploadLimit = 15 << 20
 
 func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	user, vocabTerms, authErr := auth.AuthenticateWithVocab(r, a.DB)
@@ -34,8 +38,10 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 15<<20)
-	err := r.ParseMultipartForm(10 << 20)
+	r.Body = http.MaxBytesReader(w, r.Body, dictationUploadLimit)
+	// Keep every part in memory: the parser spills file parts beyond this limit
+	// to temporary files, and dictation audio must never reach server disk.
+	err := r.ParseMultipartForm(dictationUploadLimit)
 	if err != nil {
 		http.Error(w, "Failed to parse multipart request: file too large (max 15MB)", http.StatusBadRequest)
 		return
@@ -66,56 +72,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	audioSizeBytes := len(audioBytes)
 
 	isPaid := user.PlanActive == 1 && user.PlanTier == "pro"
-
-	var rpmLimit int
-	var monthlyLimitSeconds float64
-
-	cfg := config.ConfigManager.GetRawAll()
-	if isPaid {
-		rpmLimit = 15
-		monthlyLimitSeconds = 180000.0
-		if val, ok := cfg["ratelimit_paid_rpm"]; ok {
-			if limit, err := strconv.Atoi(val); err == nil {
-				rpmLimit = limit
-			}
-		} else if val, ok := cfg["paid_rate_limit_rpm"]; ok {
-			if limit, err := strconv.Atoi(val); err == nil {
-				rpmLimit = limit
-			}
-		}
-
-		if val, ok := cfg["quota_paid_monthly_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		} else if val, ok := cfg["paid_monthly_limit_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		}
-	} else {
-		rpmLimit = 3
-		monthlyLimitSeconds = 3600.0
-		if val, ok := cfg["ratelimit_free_rpm"]; ok {
-			if limit, err := strconv.Atoi(val); err == nil {
-				rpmLimit = limit
-			}
-		} else if val, ok := cfg["free_rate_limit_rpm"]; ok {
-			if limit, err := strconv.Atoi(val); err == nil {
-				rpmLimit = limit
-			}
-		}
-
-		if val, ok := cfg["quota_free_monthly_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		} else if val, ok := cfg["free_monthly_limit_seconds"]; ok {
-			if limit, err := strconv.ParseFloat(val, 64); err == nil {
-				monthlyLimitSeconds = limit
-			}
-		}
-	}
+	rpmLimit, monthlyLimitSeconds := dictationLimits(isPaid)
 
 	if !ratelimit.GlobalUserRateLimiter.Allow(user.ID, rpmLimit) {
 		log.Printf("[RATE LIMIT] Request from %s denied: Exceeded limit (%d requests per minute allowed)", user.Email, rpmLimit)
@@ -228,21 +185,11 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ackToken := auth.GenerateLogAckToken(user.ID, logID)
-
-	log.Println("\n" + strings.Repeat("=", 55))
-	log.Println("                SPEEKTOME ANALYTICS (GO)")
-	log.Println(strings.Repeat("=", 55))
-	log.Printf("User:             %s (ID: %d)\n", user.Email, user.ID)
-	log.Printf("Audio Duration:   %.2f seconds\n", audioDuration)
-	log.Printf("Bandwidth / Size: %s (%d bytes)\n", utils.FormatSize(audioSizeBytes), audioSizeBytes)
-	log.Printf("Ogg Header Parse: %v\n", oggParseDuration)
-	log.Printf("Whisper (%s):     %.3f seconds [Routing: %s]\n", whisperProvider, groqLatency, whisperRouting)
-	if enhance && pctx.LLMProvider != "" {
-		log.Printf("LLM (%s):         %.3f seconds [Routing: %s]\n", pctx.LLMProvider, dsLatency, pctx.LLMRouting)
-	}
-
-	log.Printf("Total Server Latency:       %.3f seconds\n", totalLatency)
-	log.Println(strings.Repeat("=", 55) + "\n")
+	logDictationAnalytics(dictationTimings{
+		user: user, audioDuration: audioDuration, audioSize: audioSizeBytes, oggParse: oggParseDuration,
+		asrProvider: whisperProvider, asrRouting: whisperRouting, asrSeconds: groqLatency,
+		enhanced: enhance, llmSeconds: dsLatency, total: totalLatency, pipeline: pctx,
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -252,6 +199,66 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		"log_id":     logID,
 		"ack_token":  ackToken,
 	})
+}
+
+// dictationLimits returns the per-minute request limit and monthly audio
+// allowance for a plan, preferring current configuration keys over legacy ones.
+func dictationLimits(isPaid bool) (int, float64) {
+	cfg := config.ConfigManager.GetRawAll()
+	rpm, monthly := 3, 3600.0
+	rpmKeys := []string{"ratelimit_free_rpm", "free_rate_limit_rpm"}
+	quotaKeys := []string{"quota_free_monthly_seconds", "free_monthly_limit_seconds"}
+	if isPaid {
+		rpm, monthly = 15, 180000.0
+		rpmKeys = []string{"ratelimit_paid_rpm", "paid_rate_limit_rpm"}
+		quotaKeys = []string{"quota_paid_monthly_seconds", "paid_monthly_limit_seconds"}
+	}
+	// The first key present wins, even when its value does not parse.
+	for _, key := range rpmKeys {
+		if value, ok := cfg[key]; ok {
+			if limit, err := strconv.Atoi(value); err == nil {
+				rpm = limit
+			}
+			break
+		}
+	}
+	for _, key := range quotaKeys {
+		if value, ok := cfg[key]; ok {
+			if limit, err := strconv.ParseFloat(value, 64); err == nil {
+				monthly = limit
+			}
+			break
+		}
+	}
+	return rpm, monthly
+}
+
+type dictationTimings struct {
+	user                    *db.UserProfile
+	audioDuration           float64
+	audioSize               int
+	oggParse                time.Duration
+	asrProvider, asrRouting string
+	asrSeconds, llmSeconds  float64
+	total                   float64
+	enhanced                bool
+	pipeline                *pipeline.PipelineContext
+}
+
+func logDictationAnalytics(t dictationTimings) {
+	log.Println("\n" + strings.Repeat("=", 55))
+	log.Println("                SPEEKTOME ANALYTICS (GO)")
+	log.Println(strings.Repeat("=", 55))
+	log.Printf("User:             %s (ID: %d)\n", t.user.Email, t.user.ID)
+	log.Printf("Audio Duration:   %.2f seconds\n", t.audioDuration)
+	log.Printf("Bandwidth / Size: %s (%d bytes)\n", utils.FormatSize(t.audioSize), t.audioSize)
+	log.Printf("Ogg Header Parse: %v\n", t.oggParse)
+	log.Printf("Whisper (%s):     %.3f seconds [Routing: %s]\n", t.asrProvider, t.asrSeconds, t.asrRouting)
+	if t.enhanced && t.pipeline.LLMProvider != "" {
+		log.Printf("LLM (%s):         %.3f seconds [Routing: %s]\n", t.pipeline.LLMProvider, t.llmSeconds, t.pipeline.LLMRouting)
+	}
+	log.Printf("Total Server Latency:       %.3f seconds\n", t.total)
+	log.Println(strings.Repeat("=", 55) + "\n")
 }
 
 type TranscribeAckRequest struct {

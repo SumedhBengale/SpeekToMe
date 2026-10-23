@@ -293,6 +293,11 @@ func TestCORSAllowedOrigins(t *testing.T) {
 		{"http://127.0.0.1:3000", true},
 		{"https://malicious.com", false},
 		{"https://fakespeekto.me.evil.com", false},
+		{"tauri://localhost", true},
+		{"http://tauri.localhost", true},
+		{"null", false},
+		{"%zz", false},
+		{"", false},
 	}
 
 	for _, tt := range testOrigins {

@@ -80,6 +80,120 @@ func (a *App) HandleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, oauthURL, http.StatusFound)
 }
 
+// oauthTarget is where a completed Google sign-in returns.
+type oauthTarget struct {
+	exchange    bool
+	web         bool
+	port        int
+	redirectTo  string
+	clientState string
+}
+
+// parseOAuthState decodes the state issued by HandleAuthLogin. The caller has
+// already consumed it, so its contents are trusted only after validation.
+func parseOAuthState(state string) (oauthTarget, error) {
+	var target oauthTarget
+	target.exchange = strings.HasPrefix(state, "exchange_")
+	parts := strings.Split(strings.TrimPrefix(state, "exchange_"), "_")
+	if len(parts) < 2 {
+		return target, fmt.Errorf("Bad request: invalid state parameter")
+	}
+	if parts[0] == "web" {
+		decoded, err := hex.DecodeString(parts[1])
+		if err != nil {
+			return target, fmt.Errorf("Bad request: invalid redirect hex")
+		}
+		target.web, target.redirectTo = true, string(decoded)
+		if !auth.IsValidRedirect(target.redirectTo) {
+			return target, fmt.Errorf("Bad request: invalid redirect_to parameter")
+		}
+		if len(parts) >= 4 {
+			target.clientState = parts[3]
+		}
+		return target, nil
+	}
+	port, err := strconv.Atoi(parts[0])
+	if err != nil || port <= 0 || port > 65535 {
+		return target, fmt.Errorf("Bad request: invalid state port value")
+	}
+	target.port = port
+	if len(parts) >= 3 {
+		target.clientState = parts[2]
+	}
+	return target, nil
+}
+
+type googleProfile struct {
+	Sub      string `json:"sub"`
+	Email    string `json:"email"`
+	Verified bool   `json:"email_verified"`
+	Name     string `json:"name"`
+}
+
+// fetchGoogleProfile exchanges an authorization code and returns the
+// account's verified profile.
+func fetchGoogleProfile(code string) (googleProfile, int, error) {
+	var profile googleProfile
+	client := &http.Client{Timeout: 10 * time.Second}
+	vals := url.Values{}
+	vals.Set("code", code)
+	vals.Set("client_id", config.GoogleClientID)
+	vals.Set("client_secret", config.GoogleClientSecret)
+	vals.Set("redirect_uri", fmt.Sprintf("%s/auth/callback", config.BackendURL))
+	vals.Set("grant_type", "authorization_code")
+	resp, err := client.PostForm("https://oauth2.googleapis.com/token", vals)
+	if err != nil {
+		log.Printf("[OAUTH ERROR] Token exchange request failed: %v", err)
+		return profile, http.StatusInternalServerError, fmt.Errorf("Token exchange failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[OAUTH ERROR] Token exchange status %d", resp.StatusCode)
+		return profile, http.StatusInternalServerError, fmt.Errorf("Token exchange failed")
+	}
+	var tokens struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokens); err != nil {
+		return profile, http.StatusInternalServerError, fmt.Errorf("Failed to parse token response")
+	}
+	req, _ := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v3/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	userResp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[OAUTH ERROR] Failed to fetch profile: %v", err)
+		return profile, http.StatusInternalServerError, fmt.Errorf("Failed to fetch user profile")
+	}
+	defer userResp.Body.Close()
+	if err := json.NewDecoder(io.LimitReader(userResp.Body, 1<<20)).Decode(&profile); err != nil {
+		return profile, http.StatusInternalServerError, fmt.Errorf("Failed to parse profile response")
+	}
+	if userResp.StatusCode != 200 || !profile.Verified || profile.Sub == "" || profile.Email == "" {
+		return profile, http.StatusForbidden, fmt.Errorf("A verified Google account is required")
+	}
+	if profile.Name == "" {
+		profile.Name = strings.Split(profile.Email, "@")[0]
+	}
+	return profile, http.StatusOK, nil
+}
+
+// writeAccountNotice renders a small page for sign-in outcomes the browser
+// shows directly. Both strings are fixed text supplied by the server.
+func writeAccountNotice(w http.ResponseWriter, title, message string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>%s</title></head>
+<body style="font-family: sans-serif; background-color: #ffffee; padding: 40px; text-align: center;">
+<div style="background: white; border: 2px solid black; border-radius: 12px; padding: 30px; max-width: 500px; margin: 0 auto; box-shadow: 4px 4px 0px black;">
+<h2 style="color: #c0392b;">🔒 %s</h2>
+<p>%s</p>
+</div>
+</body>
+</html>`, html.EscapeString(title), html.EscapeString(title), html.EscapeString(message))
+}
+
 func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
@@ -90,120 +204,23 @@ func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "no-store")
-	exchange := strings.HasPrefix(state, "exchange_")
-	state = strings.TrimPrefix(state, "exchange_")
-	parts := strings.Split(state, "_")
-	if len(parts) < 2 {
-		http.Error(w, "Bad request: invalid state parameter", http.StatusBadRequest)
-		return
-	}
-
-	var isWeb bool
-	var port int
-	var redirectTo string
-	var clientState string
-
-	if parts[0] == "web" {
-		isWeb = true
-		decodedBytes, err := hex.DecodeString(parts[1])
-		if err != nil {
-			http.Error(w, "Bad request: invalid redirect hex", http.StatusBadRequest)
-			return
-		}
-		redirectTo = string(decodedBytes)
-		if !auth.IsValidRedirect(redirectTo) {
-			http.Error(w, "Bad request: invalid redirect_to parameter", http.StatusBadRequest)
-			return
-		}
-		if len(parts) >= 4 {
-			clientState = parts[3]
-		}
-	} else {
-		var err error
-		port, err = strconv.Atoi(parts[0])
-		if err != nil || port <= 0 || port > 65535 {
-			http.Error(w, "Bad request: invalid state port value", http.StatusBadRequest)
-			return
-		}
-		if len(parts) >= 3 {
-			clientState = parts[2]
-		}
-	}
-
-	var googleID, email, name string
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	tokenURL := "https://oauth2.googleapis.com/token"
-
-	vals := url.Values{}
-	vals.Set("code", code)
-	vals.Set("client_id", config.GoogleClientID)
-	vals.Set("client_secret", config.GoogleClientSecret)
-	vals.Set("redirect_uri", fmt.Sprintf("%s/auth/callback", config.BackendURL))
-	vals.Set("grant_type", "authorization_code")
-
-	resp, err := client.PostForm(tokenURL, vals)
+	target, err := parseOAuthState(state)
 	if err != nil {
-		log.Printf("[OAUTH ERROR] Token exchange request failed: %v", err)
-		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[OAUTH ERROR] Token exchange status %d: %s", resp.StatusCode, string(body))
-		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
-		return
-	}
-
-	var tokens struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
-		http.Error(w, "Failed to parse token response", http.StatusInternalServerError)
-		return
-	}
-
-	req, _ := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v3/userinfo", nil)
-	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
-	userResp, err := client.Do(req)
+	profile, status, err := fetchGoogleProfile(code)
 	if err != nil {
-		log.Printf("[OAUTH ERROR] Failed to fetch profile: %v", err)
-		http.Error(w, "Failed to fetch user profile", http.StatusInternalServerError)
-		return
-	}
-	defer userResp.Body.Close()
-
-	var profile struct {
-		Sub      string `json:"sub"`
-		Email    string `json:"email"`
-		Verified bool   `json:"email_verified"`
-		Name     string `json:"name"`
-	}
-	if err := json.NewDecoder(userResp.Body).Decode(&profile); err != nil {
-		http.Error(w, "Failed to parse profile response", http.StatusInternalServerError)
+		http.Error(w, err.Error(), status)
 		return
 	}
 
-	if userResp.StatusCode != 200 || !profile.Verified || profile.Sub == "" || profile.Email == "" {
-		http.Error(w, "A verified Google account is required", 403)
-		return
-	}
-	googleID = profile.Sub
-	email = profile.Email
-	name = profile.Name
-	if name == "" {
-		name = strings.Split(email, "@")[0]
-	}
-
-	userID, err := a.DB.GetOrCreateUser(googleID, email, name)
+	userID, err := a.DB.GetOrCreateUser(profile.Sub, profile.Email, profile.Name)
 	if err != nil {
 		log.Printf("[DB ERROR] GetOrCreateUser failed: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
-
 	locked, err := a.DB.IsUserLocked(userID)
 	if err != nil {
 		log.Printf("[DB ERROR] IsUserLocked failed: %v", err)
@@ -211,76 +228,50 @@ func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if locked {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`<!DOCTYPE html>
-<html>
-<head><title>Account Locked</title></head>
-<body style="font-family: sans-serif; background-color: #ffffee; padding: 40px; text-align: center;">
-<div style="background: white; border: 2px solid black; border-radius: 12px; padding: 30px; max-width: 500px; margin: 0 auto; box-shadow: 4px 4px 0px black;">
-<h2 style="color: #c0392b;">🔒 Account Locked</h2>
-<p>Your account has been locked. Please contact support for assistance.</p>
-</div>
-</body>
-</html>`))
+		writeAccountNotice(w, "Account Locked", "Your account has been locked. Please contact support for assistance.")
 		return
 	}
-
 	isAdmin, has2FA, err := a.DB.GetUserAdminStatus(userID)
 	if err != nil {
 		log.Printf("[DB ERROR] GetUserAdminStatus failed: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
-
 	if isAdmin && !has2FA {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`<!DOCTYPE html>
-<html>
-<head><title>Access Denied</title></head>
-<body style="font-family: sans-serif; background-color: #ffffee; padding: 40px; text-align: center;">
-<div style="background: white; border: 2px solid black; border-radius: 12px; padding: 30px; max-width: 500px; margin: 0 auto; box-shadow: 4px 4px 0px black;">
-<h2 style="color: #c0392b;">🔒 Access Denied</h2>
-<p>This account is not allowed to login.</p>
-</div>
-</body>
-</html>`))
+		writeAccountNotice(w, "Access Denied", "This account is not allowed to login.")
 		return
 	}
-
-	token := auth.GenerateSessionToken()
 	isTemp := 0
 	if isAdmin {
 		isTemp = 1
 	}
 
-	if exchange {
+	if target.exchange {
 		code := auth.GenerateSessionToken()
 		if e := a.issueAuthCode(code, userID, isTemp); e != nil {
 			http.Error(w, "Sign in unavailable", 503)
 			return
 		}
-		target := redirectTo
-		if !isWeb {
-			target = fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+		destination := target.redirectTo
+		if !target.web {
+			destination = fmt.Sprintf("http://127.0.0.1:%d/callback", target.port)
 		}
-		u, e := url.Parse(target)
+		u, e := url.Parse(destination)
 		if e != nil {
 			http.Error(w, "Invalid return URL", 400)
 			return
 		}
 		q := u.Query()
 		q.Set("code", code)
-		if clientState != "" {
-			q.Set("client_state", clientState)
+		if target.clientState != "" {
+			q.Set("client_state", target.clientState)
 		}
 		u.RawQuery = q.Encode()
 		http.Redirect(w, r, u.String(), 302)
 		return
 	}
-	err = a.DB.CreateSession(token, userID, isTemp)
-	if err != nil {
+	token := auth.GenerateSessionToken()
+	if err = a.DB.CreateSession(token, userID, isTemp); err != nil {
 		log.Printf("[DB ERROR] CreateSession failed: %v", err)
 		http.Error(w, "Database session error", http.StatusInternalServerError)
 		return
@@ -288,16 +279,17 @@ func (a *App) HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Compatibility for installed desktop clients: credentials return only over
 	// the caller's nonce-bound loopback callback. New clients use a one-time code.
-	finalURL := fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&client_state=%s", port, token, url.QueryEscape(clientState))
+	finalURL := fmt.Sprintf("http://127.0.0.1:%d/callback?token=%s&client_state=%s", target.port, token, url.QueryEscape(target.clientState))
 	if isTemp == 1 {
-		finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?temp_token=%s&require_2fa=true&client_state=%s", port, token, url.QueryEscape(clientState))
+		finalURL = fmt.Sprintf("http://127.0.0.1:%d/callback?temp_token=%s&require_2fa=true&client_state=%s", target.port, token, url.QueryEscape(target.clientState))
 	}
-
 	http.Redirect(w, r, finalURL, http.StatusFound)
 }
 
+// HandleAuthMe reads configuration from memory. Admin updates sync it at
+// once (and across instances through Valkey); a background loop catches up
+// every minute, so a database read per desktop poll is unnecessary.
 func (a *App) HandleAuthMe(w http.ResponseWriter, r *http.Request) {
-	config.SyncConfigsFromDB(a.DB, ratelimit.GroqRateLimiter.SetLimit)
 	user, err := auth.Authenticate(r, a.DB)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -675,7 +667,7 @@ func (a *App) HandleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, totpSecret, err := a.DB.GetUserByTempSession(req.TempToken)
+	tempUser, totpSecret, err := a.DB.GetUserByTempSession(req.TempToken)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		if err.Error() == "ACCOUNT_LOCKED" {
@@ -701,7 +693,17 @@ func (a *App) HandleAuth2FAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !auth.VerifyTOTP(totpSecret, req.Code) {
+	step, valid := auth.VerifyTOTPAt(totpSecret, req.Code, time.Now())
+	if valid {
+		claimed, claimErr := a.DB.ClaimTOTPStep(tempUser.ID, step)
+		if claimErr != nil {
+			http.Error(w, "Failed to verify code", http.StatusInternalServerError)
+			return
+		}
+		// An observed code cannot be replayed within its validity window.
+		valid = claimed
+	}
+	if !valid {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(map[string]string{

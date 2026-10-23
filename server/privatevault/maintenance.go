@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -173,7 +174,10 @@ func (v *Vault) ArchivePending(ctx context.Context) error {
 	if e := v.RecoverUploads(ctx); e != nil {
 		return e
 	}
-	rows, e := v.db.QueryContext(ctx, `SELECT m.id,m.user_id,m.audio_path FROM meetings m JOIN users u ON u.id=m.user_id LEFT JOIN meeting_audio_assets a ON a.meeting_id=m.id LEFT JOIN meeting_audio_tombstones t ON t.meeting_id=m.id AND t.user_id=m.user_id LEFT JOIN meeting_archive_status s ON s.meeting_id=m.id WHERE a.id IS NULL AND t.meeting_id IS NULL AND u.plan_tier='pro' AND u.plan_active=1 AND COALESCE(s.next_attempt,0)<=? AND NOT EXISTS(SELECT 1 FROM private_account_deletions d WHERE d.user_id=m.user_id) ORDER BY COALESCE(s.next_attempt,0),m.id DESC LIMIT 10`, time.Now().Unix())
+	// Recordings written before the encrypted spool existed are plaintext on
+	// local disk. Move every one into the bucket, whatever the plan, then delete
+	// the local copy. New recordings never have a local audio_path.
+	rows, e := v.db.QueryContext(ctx, `SELECT m.id,m.user_id,m.audio_path FROM meetings m JOIN users u ON u.id=m.user_id LEFT JOIN meeting_audio_assets a ON a.meeting_id=m.id LEFT JOIN meeting_audio_tombstones t ON t.meeting_id=m.id AND t.user_id=m.user_id LEFT JOIN meeting_archive_status s ON s.meeting_id=m.id WHERE a.id IS NULL AND t.meeting_id IS NULL AND COALESCE(m.audio_path,'')<>'' AND COALESCE(s.processing_purged,0)=0 AND COALESCE(s.next_attempt,0)<=? AND NOT EXISTS(SELECT 1 FROM private_account_deletions d WHERE d.user_id=m.user_id) ORDER BY COALESCE(s.next_attempt,0),m.id DESC LIMIT 10`, time.Now().Unix())
 	if e != nil {
 		return e
 	}
@@ -192,8 +196,9 @@ func (v *Vault) ArchivePending(ctx context.Context) error {
 	}
 	rows.Close()
 	for _, r := range batch {
-		state, next := "ready", time.Now().Add(time.Hour).Unix()
-		if !v.trustedRecording(ctx, r.user, r.id, r.path) {
+		state, next, purge := "ready", time.Now().Add(time.Hour).Unix(), true
+		trusted := v.trustedRecording(ctx, r.user, r.id, r.path)
+		if !trusted {
 			e = ErrNotFound
 		} else {
 			e = v.Archive(ctx, r.user, r.id, r.path)
@@ -203,12 +208,22 @@ func (v *Vault) ArchivePending(ctx context.Context) error {
 			state = "storage_full"
 		case errors.Is(e, ErrNotFound):
 			state = "local_file_unavailable"
-			next = time.Now().Add(24 * time.Hour).Unix()
 		case e != nil:
-			state = "pending"
+			// The bucket is temporarily unavailable; keep the only copy for retry.
+			state, purge = "pending", false
 			next = time.Now().Add(5 * time.Minute).Unix()
 		}
-		if _, err := v.db.ExecContext(ctx, `INSERT INTO meeting_archive_status(meeting_id,user_id,state,next_attempt) VALUES(?,?,?,?) ON CONFLICT(meeting_id) DO UPDATE SET state=excluded.state,next_attempt=excluded.next_attempt`, r.id, r.user, state, next); err != nil {
+		if purge && trusted {
+			if v.PurgeRecording(r.user, r.path) != nil {
+				purge = false
+				next = time.Now().Add(5 * time.Minute).Unix()
+			}
+		}
+		purged := 0
+		if purge {
+			purged = 1
+		}
+		if _, err := v.db.ExecContext(ctx, `INSERT INTO meeting_archive_status(meeting_id,user_id,state,next_attempt,processing_purged) VALUES(?,?,?,?,?) ON CONFLICT(meeting_id) DO UPDATE SET state=excluded.state,next_attempt=excluded.next_attempt,processing_purged=excluded.processing_purged`, r.id, r.user, state, next, purged); err != nil {
 			return ErrUnavailable
 		}
 	}
@@ -244,7 +259,7 @@ func (v *Vault) ArchivePending(ctx context.Context) error {
 		}
 	}
 
-	legacy, e := v.db.QueryContext(ctx, `SELECT m.id,m.user_id,m.audio_path FROM meetings m JOIN meeting_audio_assets a ON a.meeting_id=m.id LEFT JOIN meeting_jobs j ON j.meeting_id=m.id LEFT JOIN meeting_archive_status s ON s.meeting_id=m.id WHERE a.state='ready' AND j.job_key IS NULL AND COALESCE(s.processing_purged,0)=0 AND (COALESCE(m.transcript,'')<>'' OR datetime(m.timestamp)<datetime('now','-24 hours')) LIMIT 100`)
+	legacy, e := v.db.QueryContext(ctx, `SELECT m.id,m.user_id,m.audio_path FROM meetings m JOIN meeting_audio_assets a ON a.meeting_id=m.id LEFT JOIN meeting_jobs j ON j.meeting_id=m.id LEFT JOIN meeting_archive_status s ON s.meeting_id=m.id WHERE a.state='ready' AND j.job_key IS NULL AND COALESCE(s.processing_purged,0)=0 AND COALESCE(m.audio_path,'')<>'' LIMIT 100`)
 	if e != nil {
 		return e
 	}
@@ -349,6 +364,19 @@ func (v *Vault) purgeLegacy(user int64, path string) error {
 		return ErrUnavailable
 	}
 	return nil
+}
+
+// PurgeRecording deletes a trusted legacy plaintext recording: either an old
+// single-file upload or the mixed copy in a pre-spool job directory.
+func (v *Vault) PurgeRecording(user int64, path string) error {
+	if p, ok := legacyPath(user, path); ok {
+		if e := os.Remove(p); e != nil && !os.IsNotExist(e) {
+			return ErrUnavailable
+		}
+		return nil
+	}
+	key := filepath.Base(filepath.Dir(path))
+	return v.purgeProcessing(key)
 }
 
 func (v *Vault) purgeProcessing(key string) error {
@@ -493,6 +521,9 @@ func (v *Vault) Run(ctx context.Context, onError func(string)) {
 			if e := v.Retention(work, time.Now().UTC()); e != nil {
 				onError("cloud audio cleanup pending")
 			}
+			if e := v.PurgeStrayRecordings(work); e != nil {
+				onError("local recording cleanup pending")
+			}
 			cancel()
 			select {
 			case <-ctx.Done():
@@ -501,4 +532,65 @@ func (v *Vault) Run(ctx context.Context, onError func(string)) {
 			}
 		}
 	}()
+}
+
+var strayRecording = regexp.MustCompile(`^meeting_[0-9]+_[0-9]+(_mic|_lb)?\.ogg$`)
+
+// PurgeStrayRecordings removes plaintext audio that no meeting references:
+// per-channel copies written by the retired live-meeting endpoint, orphaned
+// single-file uploads, and pre-spool job directories without a job row.
+func (v *Vault) PurgeStrayRecordings(ctx context.Context) error {
+	referenced := map[string]bool{}
+	rows, e := v.db.QueryContext(ctx, `SELECT COALESCE(audio_path,'') FROM meetings WHERE COALESCE(audio_path,'')<>''`)
+	if e != nil {
+		return e
+	}
+	for rows.Next() {
+		var p string
+		if rows.Scan(&p) == nil {
+			if abs, err := filepath.Abs(p); err == nil {
+				referenced[abs] = true
+			}
+		}
+	}
+	rows.Close()
+	legacyRoot, e := filepath.Abs("uploads/meetings")
+	if e != nil {
+		return e
+	}
+	entries, _ := os.ReadDir(legacyRoot)
+	for _, entry := range entries {
+		name := entry.Name()
+		match := strayRecording.FindStringSubmatch(name)
+		if entry.IsDir() || match == nil {
+			continue
+		}
+		path := filepath.Join(legacyRoot, name)
+		if match[1] != "" || !referenced[path] {
+			if e = os.Remove(path); e != nil && !os.IsNotExist(e) {
+				return ErrUnavailable
+			}
+		}
+	}
+	root := os.Getenv("MEETING_AUDIO_DIR")
+	if root == "" {
+		root = "uploads/meetings/jobs"
+	}
+	jobs, _ := os.ReadDir(root)
+	for _, entry := range jobs {
+		key := entry.Name()
+		if !entry.IsDir() || len(key) != 64 || strings.Trim(key, "0123456789abcdef") != "" {
+			continue
+		}
+		var n int
+		if e = v.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM meeting_jobs WHERE job_key=?`, key).Scan(&n); e != nil {
+			continue
+		}
+		if n == 0 {
+			if e = os.RemoveAll(filepath.Join(root, key)); e != nil {
+				return ErrUnavailable
+			}
+		}
+	}
+	return nil
 }

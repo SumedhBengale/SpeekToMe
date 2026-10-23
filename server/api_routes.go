@@ -55,7 +55,7 @@ func newAPIMux(ctx context.Context, app *handlers.App) (*http.ServeMux, error) {
 	mux.HandleFunc("DELETE /auth/vocabulary", app.HandleDeleteVocabulary)
 	mux.HandleFunc("POST /v1/meetings/session", app.HandleStartMeetingSession)
 	mux.HandleFunc("DELETE /v1/meetings/session/{id}", app.HandleEndMeetingSession)
-	mux.HandleFunc("POST /meetings", app.HandleUploadMeeting)
+	mux.HandleFunc("POST /meetings", handlers.HandleRetiredMeetingUpload)
 	mux.HandleFunc("GET /v1/meetings/live", app.HandleMeetingStream)
 	mux.HandleFunc("GET /meetings", app.HandleGetMeetings)
 	mux.HandleFunc("GET /meetings/{id}", app.HandleGetMeetingDetail)

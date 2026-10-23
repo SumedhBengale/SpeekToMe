@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,7 +31,7 @@ func diarizationFixture(t *testing.T) (*MeetingJobs, *MeetingDiarization) {
 	if err := app.StartMeetingJobs(ctx, http.NewServeMux()); err != nil {
 		t.Fatal(err)
 	}
-	j := &MeetingJobs{app: app, db: database.GetDB(), root: root, client: http.DefaultClient}
+	j := &MeetingJobs{app: app, db: database.GetDB(), spool: testMeetingSpool(t, app), root: root, client: http.DefaultClient}
 	d, err := newMeetingDiarization(j)
 	if err != nil {
 		t.Fatal(err)
@@ -45,12 +44,7 @@ func addDiarizationMeeting(t *testing.T, j *MeetingJobs, key string, created int
 	if _, err := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at,admitted) VALUES(?,?,?,'test','{}','queued',?,1)`, key, created, key, created); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(j.root, key), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(j.root, key, "system.ogg"), []byte("fixture audio"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	spoolAudio(t, j.spool, int64(created), key, map[string][]byte{"system": []byte("fixture audio")})
 }
 func queueTick(t *testing.T, d *MeetingDiarization) {
 	t.Helper()
@@ -319,7 +313,7 @@ func TestCompletedASRReleasesGPUWhileCPUQueued(t *testing.T) {
 	defer fleet.Close()
 	j.fleet = fleet.URL
 	j.token = "01234567890123456789012345678901"
-	os.WriteFile(filepath.Join(j.root, "first", "mic.ogg"), []byte("fixture audio"), 0600)
+	spoolAudio(t, j.spool, 1, "first", map[string][]byte{"mic": []byte("fixture audio")})
 	j.process(context.Background(), "first", "gpu")
 	var status, mic, system string
 	var attempts int

@@ -21,7 +21,9 @@ impl Drop for Starting {
         STARTING.store(false, Ordering::SeqCst);
     }
 }
-pub fn is_starting()->bool {STARTING.load(Ordering::SeqCst)}
+pub fn is_starting() -> bool {
+    STARTING.load(Ordering::SeqCst)
+}
 pub fn begin() -> Result<Starting, String> {
     if STARTING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)

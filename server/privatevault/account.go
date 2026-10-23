@@ -38,6 +38,11 @@ func (v *Vault) BeginAccountDeletion(ctx context.Context, user int64) error {
 			if e = v.purgeProcessing(key); e != nil {
 				return e
 			}
+			if v.Spool != nil {
+				if e = v.Spool.Delete(ctx, key); e != nil {
+					return ErrUnavailable
+				}
+			}
 		}
 	}
 	rows, e := v.db.QueryContext(ctx, `SELECT meeting_id FROM meeting_audio_assets WHERE user_id=?`, user)

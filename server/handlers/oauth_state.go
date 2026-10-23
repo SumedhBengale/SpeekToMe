@@ -13,13 +13,9 @@ import (
 func oauthDigest(s string) string     { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func oauthCookie(state string) string { return "speektome_oauth_" + oauthDigest(state)[:16] }
 func (a *App) issueOAuthState(w http.ResponseWriter, r *http.Request, state string) error {
-	_, e := a.DB.GetDB().Exec(`CREATE TABLE IF NOT EXISTS oauth_states(state_hash TEXT PRIMARY KEY,cookie_hash TEXT NOT NULL,expires INTEGER NOT NULL)`)
-	if e != nil {
-		return e
-	}
 	_, _ = a.DB.GetDB().Exec("DELETE FROM oauth_states WHERE expires<?", time.Now().Unix())
 	verifier := auth.GenerateNonce()
-	_, e = a.DB.GetDB().Exec("INSERT INTO oauth_states VALUES(?,?,?)", oauthDigest(state), oauthDigest(verifier), time.Now().Add(10*time.Minute).Unix())
+	_, e := a.DB.GetDB().Exec("INSERT INTO oauth_states VALUES(?,?,?)", oauthDigest(state), oauthDigest(verifier), time.Now().Add(10*time.Minute).Unix())
 	if e != nil {
 		return e
 	}

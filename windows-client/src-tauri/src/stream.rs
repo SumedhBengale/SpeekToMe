@@ -1,9 +1,9 @@
-use std::sync::mpsc::{Receiver, channel};
 use futures_util::{SinkExt, StreamExt};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::sync::mpsc::{channel, Receiver};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NegotiatedStreamMode {
@@ -56,7 +56,10 @@ pub struct StreamSessionHandle {
 
 impl StreamSessionHandle {
     pub fn interim_text(&self) -> String {
-        self.interim.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.interim
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -82,7 +85,10 @@ pub fn compute_stream_diff(currently_typed: &str, incoming_text: &str) -> (usize
 
     // Find Longest Common Prefix (LCP)
     let mut lcp_len = 0;
-    while lcp_len < cur_chars.len() && lcp_len < inc_chars.len() && cur_chars[lcp_len] == inc_chars[lcp_len] {
+    while lcp_len < cur_chars.len()
+        && lcp_len < inc_chars.len()
+        && cur_chars[lcp_len] == inc_chars[lcp_len]
+    {
         lcp_len += 1;
     }
 
@@ -103,11 +109,11 @@ pub fn pcm_16k_to_wav(pcm_bytes: &[u8]) -> Vec<u8> {
     header.extend_from_slice(b"WAVE");
     header.extend_from_slice(b"fmt ");
     header.extend_from_slice(&16u32.to_le_bytes()); // Subchunk1Size
-    header.extend_from_slice(&1u16.to_le_bytes());  // AudioFormat (PCM = 1)
-    header.extend_from_slice(&1u16.to_le_bytes());  // Channels (1 = Mono)
+    header.extend_from_slice(&1u16.to_le_bytes()); // AudioFormat (PCM = 1)
+    header.extend_from_slice(&1u16.to_le_bytes()); // Channels (1 = Mono)
     header.extend_from_slice(&16000u32.to_le_bytes()); // SampleRate (16000)
     header.extend_from_slice(&32000u32.to_le_bytes()); // ByteRate (16000 * 1 * 2)
-    header.extend_from_slice(&2u16.to_le_bytes());  // BlockAlign (1 * 2)
+    header.extend_from_slice(&2u16.to_le_bytes()); // BlockAlign (1 * 2)
     header.extend_from_slice(&16u16.to_le_bytes()); // BitsPerSample (16)
     header.extend_from_slice(b"data");
     header.extend_from_slice(&data_len.to_le_bytes());
@@ -116,17 +122,33 @@ pub fn pcm_16k_to_wav(pcm_bytes: &[u8]) -> Vec<u8> {
     header
 }
 
-/// Converts HTTP/HTTPS API URL to WS/WSS URL
-pub fn get_stream_ws_url(api_url: &str, token: &str) -> String {
+/// Builds an authenticated WebSocket request for an API path. The session
+/// token travels in the Authorization header, never in the URL, where proxies
+/// and access logs would record it.
+pub fn authorized_ws_request(
+    api_url: &str,
+    path: &str,
+    token: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let base = api_url.trim_end_matches('/');
-    let ws_base = if base.starts_with("https://") {
-        base.replacen("https://", "wss://", 1)
-    } else if base.starts_with("http://") {
-        base.replacen("http://", "ws://", 1)
+    let ws_base = if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{}", rest)
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{}", rest)
+    } else if base.starts_with("wss://") || base.starts_with("ws://") {
+        base.to_string()
     } else {
-        format!("ws://{}", base)
+        format!("wss://{}", base)
     };
-    format!("{}/v1/stream?token={}", ws_base, token)
+    let mut request = format!("{}{}", ws_base, path)
+        .into_client_request()
+        .map_err(|_| "Invalid server address".to_string())?;
+    let value = format!("Bearer {}", token)
+        .parse()
+        .map_err(|_| "Invalid session".to_string())?;
+    request.headers_mut().insert("Authorization", value);
+    Ok(request)
 }
 
 /// Starts an active WebSocket streaming dictation session.
@@ -141,14 +163,21 @@ pub fn start_streaming_session(
     let (final_tx, final_rx) = channel::<Result<StreamFinalResult, String>>();
     let (mode_tx, mode_rx) = channel::<NegotiatedStreamMode>();
 
-    let ws_url = get_stream_ws_url(&api_url, &token);
+    let request = authorized_ws_request(&api_url, "/v1/stream", &token);
 
     let interim = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let interim_reader = interim.clone();
     let task = tauri::async_runtime::spawn(async move {
         let _context = context;
-        println!("[STREAM CLIENT] Connecting to transcription WebSocket (language: {})", language);
-        let ws_stream = match connect_async(&ws_url).await {
+        println!(
+            "[STREAM CLIENT] Connecting to transcription WebSocket (language: {})",
+            language
+        );
+        let connected = match request {
+            Ok(request) => connect_async(request).await.map_err(|e| e.to_string()),
+            Err(error) => Err(error),
+        };
+        let ws_stream = match connected {
             Ok((stream, _)) => {
                 println!("[STREAM CLIENT] WebSocket connection established successfully!");
                 stream
@@ -199,11 +228,15 @@ pub fn start_streaming_session(
                         }
                     }
                     StreamAudioMessage::CommitChunk => {
-                        let _ = write.send(Message::Text(r#"{"type":"commit"}"#.to_string())).await;
+                        let _ = write
+                            .send(Message::Text(r#"{"type":"commit"}"#.to_string()))
+                            .await;
                     }
                     StreamAudioMessage::EndOfStream => {
                         println!("[STREAM CLIENT] Sending end_of_stream message to server.");
-                        let _ = write.send(Message::Text(r#"{"type":"end_of_stream"}"#.to_string())).await;
+                        let _ = write
+                            .send(Message::Text(r#"{"type":"end_of_stream"}"#.to_string()))
+                            .await;
                         break;
                     }
                 }
@@ -222,11 +255,12 @@ pub fn start_streaming_session(
                     Ok(Message::Text(text)) => {
                         if let Ok(event) = serde_json::from_str::<StreamEventResponse>(&text) {
                             if event.event_type == "session_ready" {
-                                let negotiated = if event.mode.as_deref() == Some("continuous_stream") {
-                                    NegotiatedStreamMode::ContinuousStream
-                                } else {
-                                    NegotiatedStreamMode::ChunkedVad
-                                };
+                                let negotiated =
+                                    if event.mode.as_deref() == Some("continuous_stream") {
+                                        NegotiatedStreamMode::ContinuousStream
+                                    } else {
+                                        NegotiatedStreamMode::ChunkedVad
+                                    };
                                 println!("[STREAM CLIENT] Server confirmed session mode: {:?} (provider: {:?})", negotiated, event.provider);
                                 let _ = mode_tx.send(negotiated);
                                 mode_sent = true;
@@ -240,17 +274,23 @@ pub fn start_streaming_session(
 
                             if event.event_type == "interim" {
                                 if !event.text.is_empty() {
-                                    let sent_ms = last_chunk_sent_reader.load(std::sync::atomic::Ordering::Relaxed);
+                                    let sent_ms = last_chunk_sent_reader
+                                        .load(std::sync::atomic::Ordering::Relaxed);
                                     let now_ms = session_start.elapsed().as_millis() as u64;
                                     let rtt_ms = if sent_ms > 0 && now_ms >= sent_ms {
                                         now_ms - sent_ms
                                     } else {
                                         0
                                     };
-                                    let current_chunk = chunk_count_reader.load(std::sync::atomic::Ordering::Relaxed);
-                                    println!("[STREAM E2E LATENCY] Chunk #{} -> Interim Return: {} ms", current_chunk, rtt_ms);
+                                    let current_chunk = chunk_count_reader
+                                        .load(std::sync::atomic::Ordering::Relaxed);
+                                    println!(
+                                        "[STREAM E2E LATENCY] Chunk #{} -> Interim Return: {} ms",
+                                        current_chunk, rtt_ms
+                                    );
                                     crate::win32::set_preview_text(&event.text);
-                                    *interim_reader.lock().unwrap_or_else(|e| e.into_inner()) = event.text;
+                                    *interim_reader.lock().unwrap_or_else(|e| e.into_inner()) =
+                                        event.text;
                                 }
                             } else if event.event_type == "final" {
                                 crate::account_errors::notify_warning(event.warning.as_deref());
@@ -264,7 +304,9 @@ pub fn start_streaming_session(
                                 });
                                 break;
                             } else if event.event_type == "error" {
-                                return Err(event.error.unwrap_or_else(|| "Unknown server streaming error".to_string()));
+                                return Err(event.error.unwrap_or_else(|| {
+                                    "Unknown server streaming error".to_string()
+                                }));
                             }
                         }
                     }
@@ -281,8 +323,13 @@ pub fn start_streaming_session(
         let _ = final_tx.send(read_res);
     });
 
-    let negotiated_mode = mode_rx.recv_timeout(std::time::Duration::from_millis(2500)).unwrap_or(NegotiatedStreamMode::ChunkedVad);
-    println!("[STREAM CLIENT] Active negotiated stream mode: {:?}", negotiated_mode);
+    let negotiated_mode = mode_rx
+        .recv_timeout(std::time::Duration::from_millis(2500))
+        .unwrap_or(NegotiatedStreamMode::ChunkedVad);
+    println!(
+        "[STREAM CLIENT] Active negotiated stream mode: {:?}",
+        negotiated_mode
+    );
 
     Ok(StreamSessionHandle {
         tx: audio_tx,
@@ -328,5 +375,27 @@ mod tests {
         let (bs, to_type) = compute_stream_diff("welcome to the live", "Welcome to the live.");
         assert_eq!(bs, 19);
         assert_eq!(to_type, "Welcome to the live.");
+    }
+}
+
+#[cfg(test)]
+mod websocket_request_tests {
+    use super::authorized_ws_request;
+
+    #[test]
+    fn token_is_sent_as_a_header_not_in_the_url() {
+        let request =
+            authorized_ws_request("https://api.example.test/", "/v1/stream", "secret").unwrap();
+        assert_eq!(
+            request.uri().to_string(),
+            "wss://api.example.test/v1/stream"
+        );
+        assert_eq!(request.headers()["Authorization"], "Bearer secret");
+        let local =
+            authorized_ws_request("http://127.0.0.1:8000", "/v1/meetings/live", "t").unwrap();
+        assert_eq!(
+            local.uri().to_string(),
+            "ws://127.0.0.1:8000/v1/meetings/live"
+        );
     }
 }

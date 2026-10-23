@@ -13,7 +13,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	log "speektome-server/privacylog"
 	"strconv"
@@ -239,12 +238,12 @@ func (d *MeetingDiarization) submit(ctx context.Context, key, remote string) err
 	} else if err != nil {
 		return err
 	}
-	f, err := os.Open(filepath.Join(d.jobs.root, key, "system.ogg"))
+	audio, size, err := d.jobs.openChannel(ctx, key, "system")
 	if err != nil {
 		return d.fail(ctx, key, "system audio unavailable for CPU diarization")
 	}
-	defer f.Close()
-	data, code, headers, err := d.request(ctx, http.MethodPost, "/v1/diarizations", f, remote)
+	defer audio.Close()
+	data, code, headers, err := d.request(ctx, http.MethodPost, "/v1/diarizations", sizedBody{audio, size}, remote)
 	if err != nil {
 		return d.deferItem(ctx, key, "CPU upload response unavailable; reconnecting to saved job ID", 15*time.Second)
 	}
@@ -260,6 +259,13 @@ func (d *MeetingDiarization) submit(ctx context.Context, key, remote string) err
 	return d.deferItem(ctx, key, "", 2*time.Second)
 }
 
+// sizedBody streams decrypted spool audio with a known length, so the gateway
+// can reject oversized uploads before reading them.
+type sizedBody struct {
+	io.Reader
+	size int64
+}
+
 func (d *MeetingDiarization) request(ctx context.Context, method, path string, body io.Reader, remote string) ([]byte, int, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, method, d.url+path, body)
 	if err != nil {
@@ -269,10 +275,8 @@ func (d *MeetingDiarization) request(ctx context.Context, method, path string, b
 	if body != nil {
 		req.Header.Set("Content-Type", "audio/ogg")
 		req.Header.Set("X-SpeekToMe-Job-ID", remote)
-		if file, ok := body.(*os.File); ok {
-			if stat, e := file.Stat(); e == nil {
-				req.ContentLength = stat.Size()
-			}
+		if sized, ok := body.(sizedBody); ok {
+			req.ContentLength = sized.size
 		}
 	}
 	response, err := d.jobs.client.Do(req)

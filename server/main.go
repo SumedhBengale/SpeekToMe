@@ -103,13 +103,14 @@ func main() {
 		log.Fatal("Invalid personal-storage key")
 	}
 	privacy, keyErr := privatevault.New(context.Background(), database.GetDB(), master)
+	if keyErr != nil {
+		clear(master)
+		log.Fatal("Cannot unlock encrypted personal storage")
+	}
 	ackMAC := hmac.New(sha256.New, master)
 	ackMAC.Write([]byte("speektome-ack-signing-v1"))
 	auth.SetAckSecret(ackMAC.Sum(nil))
 	clear(master)
-	if keyErr != nil {
-		log.Fatal("Cannot unlock encrypted personal storage")
-	}
 	database.Privacy = privacy
 	if err := privacy.MigrateMeetingText(context.Background()); err != nil {
 		log.Fatal("Cannot migrate encrypted meeting data")
@@ -244,13 +245,16 @@ func main() {
 	log.Fatal(server.ListenAndServe())
 }
 
+// isAllowedOrigin reports whether a browser origin may read API responses.
+// Opaque ("null") and unparseable origins come from sandboxed or malformed
+// pages and are never trusted.
 func isAllowedOrigin(origin string) bool {
 	if origin == "" || origin == "null" {
-		return true
+		return false
 	}
 	u, err := url.Parse(origin)
-	if err != nil {
-		return true
+	if err != nil || u.Host == "" && u.Scheme != "tauri" {
+		return false
 	}
 	hostname := u.Hostname()
 	if hostname == "localhost" || hostname == "127.0.0.1" ||

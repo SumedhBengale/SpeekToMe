@@ -1,13 +1,16 @@
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU32, Ordering};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use serde::{Serialize, Deserialize};
 #[cfg(target_os = "linux")]
-use libpulse_binding::{sample::{Format as PulseFormat, Spec as PulseSpec}, stream::Direction as PulseDirection};
+use libpulse_binding::{
+    sample::{Format as PulseFormat, Spec as PulseSpec},
+    stream::Direction as PulseDirection,
+};
 #[cfg(target_os = "linux")]
 use libpulse_simple_binding::Simple as PulseSimple;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
-pub use crate::audio_processing::{is_speech, resample_to_16k_mono, encode_opus_ogg};
+pub use crate::audio_processing::{encode_opus_ogg, is_speech, resample_to_16k_mono};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EnergySample {
@@ -17,15 +20,9 @@ pub struct EnergySample {
 }
 
 pub static CURRENT_VOLUME: AtomicU32 = AtomicU32::new(0);
-// A five-second callback queue is drained while capture is running. Batch
-// dictation retains only normalized 16 kHz mono, with a visible 30-minute stop.
-const MAX_DICTATION_SECONDS: u64 = 30 * 60;
-fn take_capture(buffer: &Mutex<Vec<i16>>) -> Vec<i16> {
-    std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()))
-}
-fn capture_notice(message: &str) {
-    crate::win32::show_tray_notification("SpeekTo.Me — Recording", message, crate::win32::NotificationLevel::Error);
-}
+pub use crate::dictation::recording_thread;
+#[cfg(test)]
+use crate::dictation::take_capture;
 
 // Encode samples to WAV in memory
 pub fn write_wav_to_memory(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
@@ -44,884 +41,6 @@ pub fn write_wav_to_memory(samples: &[i16], sample_rate: u32, channels: u16) -> 
     cursor.into_inner()
 }
 
-// Background recording thread routine (manages non-Send WASAPI stream)
-pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::shortcuts::RecordingSession) {
-    let language = crate::speaking_language();
-    let _capture_life = session.keep_alive();
-    // Introduce a short delay so the start chime has time to play before CPAL starts input recording.
-    // This prevents audio driver profile/channel switching conflicts.
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    if session.is_cancelled() { return; }
-
-    let host = cpal::default_host();
-    let device = match host.default_input_device() {
-        Some(d) => d,
-        None => {
-            eprintln!("No input device found!");
-            crate::win32::hide_overlay();
-            crate::win32::hide_preview();
-            crate::win32::show_tray_notification(
-                "SpeekTo.Me — Microphone Not Found",
-                "No active microphone was detected. Please connect a microphone and check your system audio settings.",
-                crate::win32::NotificationLevel::Error,
-            );
-            return;
-        }
-    };
-    
-    let config = match device.default_input_config() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to get default input config: {:?}", e);
-            crate::win32::hide_overlay();
-            crate::win32::hide_preview();
-            crate::win32::show_tray_notification(
-                "SpeekTo.Me — Audio Device Error",
-                "Failed to configure the default microphone. Please check your audio settings.",
-                crate::win32::NotificationLevel::Error,
-            );
-            return;
-        }
-    };
-    
-    let sample_rate = config.sample_rate().0;
-    let channels = config.channels();
-    let sample_format = config.sample_format();
-    
-    let samples_buf = Arc::new(Mutex::new(Vec::new()));
-    let samples_buf_clone = samples_buf.clone();
-    
-    let capture_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let callback_failed = capture_failed.clone();
-    let err_fn = move |_err| { callback_failed.store(true, Ordering::Relaxed); };
-    let queue_limit = sample_rate as usize * channels as usize * 5;
-    let overflow = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let callback_overflow = overflow.clone();
-    
-    let stream_res = match sample_format {
-        cpal::SampleFormat::F32 => {
-            device.build_input_stream(
-                &config.into(),
-                move |data: &[f32], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            sum_squares += sample * sample;
-                        }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        let vol = (rms * 1000.0) as u32;
-                        CURRENT_VOLUME.store(vol, Ordering::Relaxed);
-                    }
-                    if let Ok(mut buf) = samples_buf_clone.lock() {
-                        let remaining = queue_limit.saturating_sub(buf.len());
-                        if data.len() > remaining { callback_overflow.store(true, Ordering::Relaxed); }
-                        for &sample in data.iter().take(remaining) {
-                            let i16_val = (sample * i16::MAX as f32) as i16;
-                            buf.push(i16_val);
-                        }
-                    }
-                },
-                err_fn,
-                None
-            )
-        }
-        cpal::SampleFormat::I16 => {
-            device.build_input_stream(
-                &config.into(),
-                move |data: &[i16], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            let val = sample as f32 / i16::MAX as f32;
-                            sum_squares += val * val;
-                        }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        let vol = (rms * 1000.0) as u32;
-                        CURRENT_VOLUME.store(vol, Ordering::Relaxed);
-                    }
-                    if let Ok(mut buf) = samples_buf_clone.lock() {
-                        let remaining = queue_limit.saturating_sub(buf.len());
-                        if data.len() > remaining { callback_overflow.store(true, Ordering::Relaxed); }
-                        buf.extend_from_slice(&data[..data.len().min(remaining)]);
-                    }
-                },
-                err_fn,
-                None
-            )
-        }
-        cpal::SampleFormat::U16 => {
-            device.build_input_stream(
-                &config.into(),
-                move |data: &[u16], _| {
-                    if !data.is_empty() {
-                        let mut sum_squares = 0.0;
-                        for &sample in data {
-                            let val = (sample as f32 - 32768.0) / 32768.0;
-                            sum_squares += val * val;
-                        }
-                        let rms = (sum_squares / data.len() as f32).sqrt();
-                        let vol = (rms * 1000.0) as u32;
-                        CURRENT_VOLUME.store(vol, Ordering::Relaxed);
-                    }
-                    if let Ok(mut buf) = samples_buf_clone.lock() {
-                        let remaining = queue_limit.saturating_sub(buf.len());
-                        if data.len() > remaining { callback_overflow.store(true, Ordering::Relaxed); }
-                        for &sample in data.iter().take(remaining) {
-                            let i16_val = (sample as i32 - 32768) as i16;
-                            buf.push(i16_val);
-                        }
-                    }
-                },
-                err_fn,
-                None
-            )
-        }
-        _ => {
-            capture_notice("This microphone uses an unsupported audio format. Choose another input device.");
-            crate::win32::hide_overlay(); crate::win32::hide_preview();
-            return;
-        }
-    };
-      match stream_res {
-        Ok(s) => {
-            if let Err(e) = s.play() {
-                eprintln!("[AUDIO ERROR] Failed to play stream: {:?}", e);
-                crate::win32::hide_overlay();
-                crate::win32::hide_preview();
-                crate::win32::show_tray_notification(
-                    "SpeekTo.Me — Audio Error",
-                    "Failed to start recording audio from the microphone.",
-                    crate::win32::NotificationLevel::Error,
-                );
-                return;
-            }
-            let capture_started = std::time::Instant::now();
-            let should_stop = || {
-                if capture_failed.swap(false, Ordering::Relaxed) {
-                    capture_notice("Microphone capture stopped unexpectedly. The captured portion will be processed. Check your input device before recording again.");
-                    true
-                } else if overflow.swap(false, Ordering::Relaxed) {
-                    capture_notice("Audio capture could not keep up. Recording stopped; the captured portion will be processed.");
-                    true
-                } else if capture_started.elapsed().as_secs() >= MAX_DICTATION_SECONDS {
-                    crate::win32::show_tray_notification("SpeekTo.Me — Recording saved", "The 30-minute dictation limit was reached. The captured audio will now be transcribed.", crate::win32::NotificationLevel::Warning);
-                    true
-                } else { false }
-            };
-            println!("[AUDIO] Recording started...");
-            
-            let Some(context) = session.resolve() else {
-                drop(s);
-                CURRENT_VOLUME.store(0, Ordering::Relaxed);
-                return;
-            };
-            let is_cmd = context.is_command_mode;
-            let (is_stream_mode, api_url, token, custom_prompt) = {
-                let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                (
-                    cfg.transcription_mode == "stream" && context.history_identity().1.is_some(),
-                    context.history_identity().2.to_string(),
-                    context.history_identity().1.unwrap_or_default().to_string(),
-                    cfg.custom_prompt.clone(),
-                )
-            };
-            println!(
-                "[AUDIO] Active transcription mode: {} (is_command_mode: {})",
-                if is_stream_mode { "STREAM" } else { "BATCH" },
-                is_cmd
-            );
-
-            if is_stream_mode {
-                let stream_handle = match crate::stream::start_streaming_session(
-                    api_url.clone(),
-                    token.clone(),
-                    custom_prompt.clone(),
-                    language.clone(),
-                    context.clone(),
-                ) {
-                    Ok(handle) => Some(handle),
-                    Err(e) => {
-                        eprintln!("[STREAM INIT ERROR] Failed to start live stream session: {}. Falling back to batch mode.", e);
-                        None
-                    }
-                };
-
-                if let Some(handle) = stream_handle {
-                    let mut resampler=crate::audio_processing::CaptureResampler::new(sample_rate,channels);
-                    let mut vad = crate::vad::SileroVadSession::new().ok();
-                    let mut stream_16k_buf = Vec::<i16>::new();
-                    let mut pre_speech_ring = std::collections::VecDeque::<i16>::with_capacity(4000);
-                    let mut active_phrase_samples = Vec::<i16>::new();
-                    let mut is_in_speech = false;
-                    let mut is_aborted = false;
-
-                    let mut last_sound_time = std::time::Instant::now();
-                    let mut silence_countdown_active = false;
-                    let mut last_countdown_sec: Option<u64> = None;
-                    let mut had_ever_spoken = false;
-
-                    match handle.mode {
-                        crate::stream::NegotiatedStreamMode::ContinuousStream => {
-                            let frame_samples = 8960; // 560ms @ 16kHz (aligned with native real-time ASR acoustic geometry)
-                            loop {
-                                if should_stop() { context.capture_finished(); break; }
-                                match rx.recv_timeout(std::time::Duration::from_millis(20)) {
-                                    Ok(true) => {
-                                        // Hotkey released normally
-                                        break;
-                                    }
-                                    Ok(false) => {
-                                        // Aborted
-                                        is_aborted = true;
-                                        break;
-                                    }
-                                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                        let current_vol = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed);
-                                        let is_active_sound = current_vol >= 6;
-                                        if is_active_sound {
-                                            last_sound_time = std::time::Instant::now();
-                                            had_ever_spoken = true;
-                                            if silence_countdown_active {
-                                                silence_countdown_active = false;
-                                                last_countdown_sec = None;
-                                                let is_cmd = context.is_command_mode;
-                                                if is_cmd {
-                                                    crate::win32::set_preview_text("✨ Command Mode (Listening...)");
-                                                } else {
-                                                    crate::win32::set_preview_text("");
-                                                }
-                                            }
-                                        } else {
-                                            let silence_dur = last_sound_time.elapsed();
-                                            if silence_dur >= std::time::Duration::from_secs(15) {
-                                                println!("[AUDIO STREAM] 15 seconds of silence detected. Auto-stopping recording...");
-                                                context.capture_finished();
-                                                if !had_ever_spoken {
-                                                    is_aborted = true;
-                                                }
-                                                break;
-                                            } else if silence_dur >= std::time::Duration::from_secs(10) {
-                                                let remaining = 15 - silence_dur.as_secs();
-                                                if last_countdown_sec != Some(remaining) && remaining >= 1 {
-                                                    last_countdown_sec = Some(remaining);
-                                                    silence_countdown_active = true;
-                                                    crate::win32::set_preview_text(&format!("Silence detected — stopping in {}s...", remaining));
-                                                }
-                                            }
-                                        }
-
-                                        let new_raw_samples = take_capture(&samples_buf);
-
-                                        if !new_raw_samples.is_empty() {
-                                            let new_16k = resampler.push(&new_raw_samples);
-                                            stream_16k_buf.extend_from_slice(&new_16k);
-                                        }
-
-                                        while stream_16k_buf.len() >= frame_samples {
-                                            let frame_i16: Vec<i16> = stream_16k_buf.drain(..frame_samples).collect();
-                                            if let Ok(ogg_bytes) = encode_opus_ogg(&frame_i16, 16000, 1) {
-                                                let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
-                                            }
-                                        }
-                                    }
-                                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                        is_aborted = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        crate::stream::NegotiatedStreamMode::ChunkedVad => {
-                            loop {
-                                if should_stop() { context.capture_finished(); break; }
-                                match rx.recv_timeout(std::time::Duration::from_millis(32)) {
-                                    Ok(true) => {
-                                        // Hotkey released normally
-                                        break;
-                                    }
-                                    Ok(false) => {
-                                        // Aborted
-                                        is_aborted = true;
-                                        break;
-                                    }
-                                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                        let current_vol = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed);
-                                        let is_active_sound = is_in_speech || current_vol >= 6;
-                                        if is_active_sound {
-                                            last_sound_time = std::time::Instant::now();
-                                            had_ever_spoken = true;
-                                            if silence_countdown_active {
-                                                silence_countdown_active = false;
-                                                last_countdown_sec = None;
-                                                let is_cmd = context.is_command_mode;
-                                                if is_cmd {
-                                                    crate::win32::set_preview_text("✨ Command Mode (Listening...)");
-                                                } else {
-                                                    crate::win32::set_preview_text("");
-                                                }
-                                            }
-                                        } else {
-                                            let silence_dur = last_sound_time.elapsed();
-                                            if silence_dur >= std::time::Duration::from_secs(15) {
-                                                println!("[AUDIO CHUNKED] 15 seconds of silence detected. Auto-stopping recording...");
-                                                context.capture_finished();
-                                                if !had_ever_spoken {
-                                                    is_aborted = true;
-                                                }
-                                                break;
-                                            } else if silence_dur >= std::time::Duration::from_secs(10) {
-                                                let remaining = 15 - silence_dur.as_secs();
-                                                if last_countdown_sec != Some(remaining) && remaining >= 1 {
-                                                    last_countdown_sec = Some(remaining);
-                                                    silence_countdown_active = true;
-                                                    crate::win32::set_preview_text(&format!("Silence detected — stopping in {}s...", remaining));
-                                                }
-                                            }
-                                        }
-
-                                        // Incrementally grab ONLY newly arrived raw samples
-                                        let new_raw_samples = take_capture(&samples_buf);
-
-                                        if !new_raw_samples.is_empty() {
-                                            let new_16k = resampler.push(&new_raw_samples);
-                                            stream_16k_buf.extend_from_slice(&new_16k);
-                                        }
-
-                                        if let Some(ref mut vad_inst) = vad {
-                                            while stream_16k_buf.len() >= 512 {
-                                                let frame_i16: Vec<i16> = stream_16k_buf.drain(..512).collect();
-                                                let frame_f32: Vec<f32> = frame_i16.iter().map(|&s| s as f32 / 32768.0).collect();
-                                                let (_prob, speaking, pause_detected) = vad_inst.process_frame(&frame_f32);
-
-                                                if speaking {
-                                                    if !is_in_speech {
-                                                        is_in_speech = true;
-                                                        // Prepend pre-speech buffer so leading consonants are never clipped
-                                                        active_phrase_samples.extend(pre_speech_ring.drain(..));
-                                                    }
-                                                    active_phrase_samples.extend_from_slice(&frame_i16);
-                                                } else {
-                                                    if is_in_speech {
-                                                        // Keep appending trailing frames until pause is finalized
-                                                        active_phrase_samples.extend_from_slice(&frame_i16);
-                                                    } else {
-                                                        for &s in &frame_i16 {
-                                                            if pre_speech_ring.len() >= 4000 { // ~250ms rolling buffer
-                                                                pre_speech_ring.pop_front();
-                                                            }
-                                                            pre_speech_ring.push_back(s);
-                                                        }
-                                                    }
-                                                }
-
-                                                let should_commit = pause_detected || active_phrase_samples.len() >= 80000; // max 5s chunk
-
-                                                if should_commit && active_phrase_samples.len() >= 4800 { // >= 300ms of audio
-                                                    is_in_speech = false;
-                                                    let t_enc = std::time::Instant::now();
-                                                    match encode_opus_ogg(&active_phrase_samples, 16000, 1) {
-                                                        Ok(ogg_bytes) => {
-                                                            let enc_dur = t_enc.elapsed();
-                                                            let pcm_len = active_phrase_samples.len() * 2;
-                                                            let ogg_len = ogg_bytes.len();
-                                                            let ratio = if ogg_len > 0 { pcm_len as f64 / ogg_len as f64 } else { 1.0 };
-                                                            let audio_sec = active_phrase_samples.len() as f64 / 16000.0;
-                                                            println!("[CLIENT BENCHMARK] Opus Ogg encode: {:.2?} (Audio: {:.2}s | Raw PCM: {} B -> Opus Ogg: {} B | {:.1}x compression)",
-                                                                enc_dur, audio_sec, pcm_len, ogg_len, ratio);
-                                                            let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
-                                                        }
-                                                        Err(e) => {
-                                                            eprintln!("[STREAM ERROR] Failed to encode Opus Ogg: {}", e);
-                                                        }
-                                                    }
-
-                                                    // Retain trailing 200ms (3200 samples) for acoustic continuity
-                                                    let overlap_samples = 3200;
-                                                    let retained = if active_phrase_samples.len() > overlap_samples {
-                                                        active_phrase_samples[active_phrase_samples.len() - overlap_samples..].to_vec()
-                                                    } else {
-                                                        Vec::new()
-                                                    };
-                                                    active_phrase_samples = retained;
-                                                    vad_inst.reset();
-                                                }
-                                            }
-                                        } else {
-                                            // Fallback if VAD failed to init: 2-second periodic chunking
-                                            if stream_16k_buf.len() >= 32000 {
-                                                let chunk: Vec<i16> = stream_16k_buf.drain(..32000).collect();
-                                                let t_enc = std::time::Instant::now();
-                                                if let Ok(ogg_bytes) = encode_opus_ogg(&chunk, 16000, 1) {
-                                                    let enc_dur = t_enc.elapsed();
-                                                    println!("[CLIENT BENCHMARK] Opus Ogg fallback encode: {:.2?}", enc_dur);
-                                                    let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                        is_aborted = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    drop(s);
-                    CURRENT_VOLUME.store(0, Ordering::Relaxed);
-                    println!("Recording stopped.");
-
-                    context.capture_finished();
-                    let is_command_mode = context.is_command_mode;
-                    let selected_text = context.selected_text.clone();
-
-                    if !is_aborted {
-                        crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
-
-                        // Drain any remaining tail audio samples sitting in buffer
-                        let remaining_raw_samples = take_capture(&samples_buf);
-                        if !remaining_raw_samples.is_empty() {
-                            let mut rem_16k = resampler.push(&remaining_raw_samples);
-                            rem_16k.extend(resampler.finish());
-                            stream_16k_buf.extend_from_slice(&rem_16k);
-                        }
-
-                        if handle.mode == crate::stream::NegotiatedStreamMode::ContinuousStream {
-                            if stream_16k_buf.len() >= 480 { // >= 30ms
-                                if let Ok(ogg_bytes) = encode_opus_ogg(&stream_16k_buf, 16000, 1) {
-                                    let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
-                                }
-                            }
-                        } else {
-                            active_phrase_samples.extend(stream_16k_buf.drain(..));
-
-                            // Only send tail phrase if there is genuine audio beyond the retained 200ms silence buffer
-                            let overlap_samples = 3200;
-                            if active_phrase_samples.len() > overlap_samples + 1600 { // at least 100ms of new audio beyond overlap
-                                let t_enc = std::time::Instant::now();
-                                if let Ok(ogg_bytes) = encode_opus_ogg(&active_phrase_samples, 16000, 1) {
-                                    let enc_dur = t_enc.elapsed();
-                                    let pcm_len = active_phrase_samples.len() * 2;
-                                    let ogg_len = ogg_bytes.len();
-                                    let ratio = if ogg_len > 0 { pcm_len as f64 / ogg_len as f64 } else { 1.0 };
-                                    let audio_sec = active_phrase_samples.len() as f64 / 16000.0;
-                                    println!("[CLIENT BENCHMARK] Tail Opus Ogg encode: {:.2?} (Audio: {:.2}s | Raw PCM: {} B -> Opus Ogg: {} B | {:.1}x compression)",
-                                        enc_dur, audio_sec, pcm_len, ogg_len, ratio);
-                                    let _ = handle.tx.send(crate::stream::StreamAudioMessage::AudioChunk(ogg_bytes));
-                                }
-                            }
-                            active_phrase_samples.clear();
-                        }
-
-                        let _ = handle.tx.send(crate::stream::StreamAudioMessage::EndOfStream);
-
-                        let mut stream_error_msg: Option<String> = None;
-                        let mut stream_timed_out = false;
-
-                        let final_text_to_inject = match handle.rx_final.recv_timeout(std::time::Duration::from_secs(15)) {
-                            Ok(Ok(final_result)) => {
-                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                                let trimmed = final_result.text.trim().to_string();
-                                let interim = handle.interim_text();
-                                let interim_trimmed = interim.trim().to_string();
-
-                                let final_words = trimmed.split_whitespace().count();
-                                let interim_words = interim_trimmed.split_whitespace().count();
-
-                                // Truncation guard: if final result dropped more than 40% of interim words (when interim >= 6 words),
-                                // keep the fuller interim transcript to avoid losing sentences.
-                                if interim_words >= 6 && final_words < (interim_words * 6) / 10 {
-                                    println!("[STREAM TRUNCATION GUARD] Final text ({} words) dropped substantial text vs interim ({} words). Keeping interim transcript to prevent loss.",
-                                        final_words, interim_words);
-                                    Some(interim_trimmed)
-                                } else if !trimmed.is_empty() {
-                                    Some(trimmed)
-                                } else if !interim_trimmed.is_empty() {
-                                    Some(interim_trimmed)
-                                } else {
-                                    None
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                eprintln!("[STREAM ERROR] Stream returned error: {}. Falling back to interim preview text.", e);
-                                stream_error_msg = Some(e);
-                                let fallback = handle.interim_text();
-                                let trimmed = fallback.trim().to_string();
-                                if !trimmed.is_empty() { Some(trimmed) } else { None }
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                eprintln!("[STREAM TIMEOUT] Final transcript timed out after 15s. Falling back to interim preview text.");
-                                stream_timed_out = true;
-                                let fallback = handle.interim_text();
-                                let trimmed = fallback.trim().to_string();
-                                if !trimmed.is_empty() { Some(trimmed) } else { None }
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                eprintln!("[STREAM DISCONNECTED] Stream disconnected before final transcript. Falling back to interim preview text.");
-                                let fallback = handle.interim_text();
-                                let trimmed = fallback.trim().to_string();
-                                if !trimmed.is_empty() { Some(trimmed) } else { None }
-                            }
-                        };
-
-
-                        let (api_url, session_token) = {
-                            let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                            (
-                                cfg.api_url.clone().unwrap_or_else(|| "https://api.speekto.me".to_string()),
-                                cfg.session_token.clone().unwrap_or_default(),
-                            )
-                        };
-
-                        if let Some(normalized) = final_text_to_inject {
-                            crate::win32::set_preview_text(&normalized);
-
-                            if is_command_mode {
-                                println!("\n=======================================================");
-                                println!("✨ [COMMAND MODE COMPLETED — EXECUTING LLM TRANSFORMATION]");
-                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                                println!("-------------------------------------------------------");
-                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                                println!("=======================================================\n");
-
-                                // Dynamic word limit check
-                                let max_words = crate::get_transform_word_limit();
-                                if let Some(ref target) = selected_text {
-                                    let word_count = target.split_whitespace().count();
-                                    if word_count > max_words {
-                                        println!("[COMMAND MODE WARNING] Selected text exceeds {} words ({} words).", max_words, word_count);
-                                        crate::win32::set_preview_text(&format!("⚠️ Text exceeds {} words", max_words));
-                                        crate::win32::show_tray_notification(
-                                            "SpeekTo.Me — Text Too Long",
-                                            &format!("Text longer than {} words is not supported at the moment.", max_words),
-                                            crate::win32::NotificationLevel::Warning,
-                                        );
-                                        std::thread::sleep(std::time::Duration::from_millis(1500));
-                                        crate::win32::hide_overlay();
-                                        crate::win32::hide_preview();
-                                        return;
-                                    }
-                                }
-
-                                let target_text = selected_text.unwrap_or_default();
-                                let has_target = !target_text.trim().is_empty();
-
-                                crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
-                                if has_target {
-                                    crate::win32::set_preview_text("✨ Transforming text...");
-                                } else {
-                                    crate::win32::set_preview_text("✨ Generating...");
-                                }
-
-                                let api_url_clone = api_url.clone();
-                                let token_clone = session_token.clone();
-                                let target_clone = target_text;
-                                let cmd_clone = normalized.clone();
-
-                                let transform_context = context.clone();
-                                std::thread::spawn(move || {
-                                    let _context = transform_context;
-                                    let rt = match tokio::runtime::Builder::new_current_thread()
-                                        .enable_all()
-                                        .build()
-                                    {
-                                        Ok(r) => r,
-                                        Err(e) => {
-                                            eprintln!("[TRANSFORM ERROR] Failed to create runtime: {}", e);
-                                            crate::win32::hide_overlay();
-                                            crate::win32::hide_preview();
-                                            return;
-                                        }
-                                    };
-
-                                    let typing_mode = {
-                                        let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                                        cfg.typing_mode
-                                    };
-
-                                    let mut is_first_chunk = true;
-                                    let mut last_ui_update = std::time::Instant::now();
-
-                                    match rt.block_on(crate::api::transform_text_stream(
-                                        &api_url_clone,
-                                        &token_clone,
-                                        &target_clone,
-                                        &cmd_clone,
-                                        move |delta, accumulated| {
-                                            if delta == "[RESET]" {
-                                                println!("[STREAM] Received [RESET], resetting stream UI preview");
-                                                crate::win32::set_preview_text("✨ Retrying with backup AI...");
-                                                is_first_chunk = true;
-                                                return;
-                                            }
-
-                                            if is_first_chunk {
-                                                if has_target && typing_mode {
-                                                    crate::keyboard::simulate_single_key(0x08);
-                                                    std::thread::sleep(std::time::Duration::from_millis(20));
-                                                }
-                                                is_first_chunk = false;
-                                            }
-
-                                            if typing_mode {
-                                                crate::keyboard::simulate_typing(delta);
-                                            }
-
-                                            if last_ui_update.elapsed() >= std::time::Duration::from_millis(80) {
-                                                last_ui_update = std::time::Instant::now();
-                                                let preview_display = if let Some((start_byte, _)) = accumulated.char_indices().rev().nth(31) {
-                                                    let tail = &accumulated[start_byte..];
-                                                    format!("✨ ...{}", tail.trim_start())
-                                                } else {
-                                                    format!("✨ {}", accumulated)
-                                                };
-                                                crate::win32::set_preview_text(&preview_display);
-                                            }
-                                        },
-                                    )) {
-                                        Ok(transformed) => {
-                                            println!("\n=======================================================");
-                                            println!("✨ [COMMAND MODE — LLM TRANSFORMATION COMPLETED]");
-                                            println!("Transformed Output ({} characters):", transformed.len());
-                                            println!("-------------------------------------------------------");
-                                            println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                                            println!("=======================================================\n");
-
-                                            crate::win32::set_preview_text("✨ Done!");
-
-                                            if !typing_mode {
-                                                crate::keyboard::paste_transformed_text(&transformed);
-                                            } else {
-                                                // Permanently leave transformed text in clipboard as a fallback
-                                                if let Ok(mut ctx) = arboard::Clipboard::new() {
-                                                    let _ = ctx.set_text(crate::keyboard::normalize_newlines(&transformed));
-                                                }
-                                            }
-
-                                            let (notify_title, notify_msg) = if has_target {
-                                                (
-                                                    "SpeekTo.Me — Transformed Text Ready",
-                                                    "Transformed text replaced selection and is copied to clipboard.",
-                                                )
-                                            } else {
-                                                (
-                                                    "SpeekTo.Me — AI Response Ready",
-                                                    "AI generated text inserted and is copied to clipboard.",
-                                                )
-                                            };
-
-                                            crate::win32::show_tray_notification(
-                                                notify_title,
-                                                notify_msg,
-                                                crate::win32::NotificationLevel::Info,
-                                            );
-
-                                            crate::api::record_delivered_final(&_context, &transformed);
-                                            if let Some(app) = crate::TAURI_APP.get() {
-                                                use tauri::Emitter;
-                                                let _ = app.emit("command-transformed", transformed);
-                                            }
-
-                                            std::thread::sleep(std::time::Duration::from_millis(800));
-                                            crate::win32::hide_overlay();
-                                            crate::win32::hide_preview();
-                                        }
-                                        Err(err) => {
-                                            eprintln!("[TRANSFORM ERROR] {}", err);
-                                            crate::win32::set_preview_text("⚠️ Transformation failed");
-                                            crate::win32::show_tray_notification(
-                                                "SpeekTo.Me — Transformation Failed",
-                                                &err,
-                                                crate::win32::NotificationLevel::Warning,
-                                            );
-                                            std::thread::sleep(std::time::Duration::from_millis(1500));
-                                            crate::win32::hide_overlay();
-                                            crate::win32::hide_preview();
-                                        }
-                                    }
-                                });
-                            } else {
-                                let typing_mode = {
-                                    let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
-                                    cfg.typing_mode
-                                };
-
-                                println!("[PRIVATE DATA] Result processed; content omitted from logs.");
-                                if typing_mode {
-                                    crate::keyboard::simulate_typing(&normalized);
-                                } else {
-                                    crate::keyboard::paste_text(&normalized);
-                                }
-
-                                crate::api::record_delivered_final(&context, &normalized);
-                                if let Some(app) = crate::TAURI_APP.get() {
-                                    use tauri::Emitter;
-                                    let _ = app.emit("dictation-transcribed", normalized.clone());
-                                }
-                            }
-                        } else {
-                            // If no text could be injected, notify the user if an error occurred
-                            if let Some(err) = stream_error_msg {
-                                let err_lower = err.to_lowercase();
-                                if err_lower.contains("401") || err_lower.contains("unauthorized") || err_lower.contains("invalid token") || err_lower.contains("token expired") {
-                                    crate::handle_session_expired(Some("Your session has expired. Please sign in again to continue dictating."));
-                                } else if err_lower.contains("limit") || err_lower.contains("quota") || err_lower.contains("429") {
-                                    crate::win32::show_tray_notification(
-                                        "SpeekTo.Me — Usage Limit Reached",
-                                        "You have reached your monthly transcription limit. Upgrade your plan in Settings.",
-                                        crate::win32::NotificationLevel::Warning,
-                                    );
-                                    if let Some(app) = crate::TAURI_APP.get() {
-                                        crate::show_or_create_settings_window(app);
-                                    }
-                                } else if err_lower.contains("network") || err_lower.contains("timeout") || err_lower.contains("connection refused") || err_lower.contains("websocket connection failed") {
-                                    crate::win32::show_tray_notification(
-                                        "SpeekTo.Me — Network Error",
-                                        "Could not connect to SpeekTo.Me server. Please check your internet connection.",
-                                        crate::win32::NotificationLevel::Error,
-                                    );
-                                } else {
-                                    crate::win32::show_tray_notification(
-                                        "SpeekTo.Me — Transcription Error",
-                                        &format!("Live streaming error: {}", err),
-                                        crate::win32::NotificationLevel::Error,
-                                    );
-                                }
-                            } else if stream_timed_out {
-                                crate::win32::show_tray_notification(
-                                    "SpeekTo.Me — Server Timeout",
-                                    "Transcription timed out waiting for server response.",
-                                    crate::win32::NotificationLevel::Warning,
-                                );
-                            }
-                        }
-                    } else {
-                        println!("Recording aborted and discarded.");
-                    }
-                    if !is_command_mode {
-                        crate::win32::hide_overlay();
-                        crate::win32::hide_preview();
-                    }
-                    return;
-                }
-            }
-
-            // Fallback / standard batch mode: Wait for key release/abort signal with 15s silence detection
-            let mut last_sound_time = std::time::Instant::now();
-            let mut silence_countdown_active = false;
-            let mut last_countdown_sec: Option<u64> = None;
-            let mut had_ever_spoken = false;
-            let mut batch_aborted = false;
-            let mut batch_samples = Vec::new();
-            let mut resampler=crate::audio_processing::CaptureResampler::new(sample_rate,channels);
-
-            loop {
-                let raw = take_capture(&samples_buf);
-                batch_samples.extend(resampler.push(&raw));
-                if should_stop() { context.capture_finished(); break; }
-                match rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                    Ok(true) => {
-                        // Hotkey released normally
-                        break;
-                    }
-                    Ok(false) => {
-                        batch_aborted = true;
-                        break;
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        let current_vol = CURRENT_VOLUME.load(Ordering::Relaxed);
-                        let is_active_sound = current_vol >= 6;
-                        if is_active_sound {
-                            last_sound_time = std::time::Instant::now();
-                            had_ever_spoken = true;
-                            if silence_countdown_active {
-                                silence_countdown_active = false;
-                                last_countdown_sec = None;
-                                let is_cmd = context.is_command_mode;
-                                if is_cmd {
-                                    crate::win32::set_preview_text("✨ Command Mode (Listening...)");
-                                } else {
-                                    crate::win32::set_preview_text("");
-                                }
-                            }
-                        } else {
-                            let silence_dur = last_sound_time.elapsed();
-                            if silence_dur >= std::time::Duration::from_secs(15) {
-                                println!("[AUDIO BATCH] 15 seconds of silence detected. Auto-stopping recording...");
-                                context.capture_finished();
-                                if !had_ever_spoken {
-                                    batch_aborted = true;
-                                }
-                                break;
-                            } else if silence_dur >= std::time::Duration::from_secs(10) {
-                                let remaining = 15 - silence_dur.as_secs();
-                                if last_countdown_sec != Some(remaining) && remaining >= 1 {
-                                    last_countdown_sec = Some(remaining);
-                                    silence_countdown_active = true;
-                                    crate::win32::set_preview_text(&format!("Silence detected — stopping in {}s...", remaining));
-                                }
-                            }
-                        }
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        batch_aborted = true;
-                        break;
-                    }
-                }
-            }
-
-            if !batch_aborted {
-                // Drop stream to stop recording
-                drop(s);
-                CURRENT_VOLUME.store(0, Ordering::Relaxed);
-                println!("Recording stopped.");
-                crate::win32::set_preview_state(crate::win32::PreviewState::Processing);
-                
-                let raw = take_capture(&samples_buf);
-                batch_samples.extend(resampler.push(&raw));
-                batch_samples.extend(resampler.finish());
-                let samples = batch_samples;
-                if !samples.is_empty() {
-                    // Calculate if there is active speech (VAD Filter)
-                    let has_speech = is_speech(&samples, 16000, 1);
-                    println!("Recording finished. Samples: {}, Speech detected: {}", samples.len(), has_speech);
-                    
-                    if has_speech {
-                        context.capture_finished();
-                        crate::api::process_and_paste(samples, 16000, 1, language, context);
-                    } else {
-                        println!("Silence or keyboard click detected. Transcription request skipped.");
-                        crate::win32::hide_overlay();
-                        crate::win32::hide_preview();
-                    }
-                } else {
-                    crate::win32::hide_overlay();
-                    crate::win32::hide_preview();
-                }
-            } else {
-                drop(s);
-                CURRENT_VOLUME.store(0, Ordering::Relaxed);
-                println!("Recording aborted and discarded.");
-                crate::win32::hide_overlay();
-                crate::win32::hide_preview();
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to build input stream: {:?}", e);
-            crate::win32::hide_overlay();
-            crate::win32::hide_preview();
-            crate::win32::show_tray_notification(
-                "SpeekTo.Me — Audio Error",
-                "Failed to initialize the microphone capture stream.",
-                crate::win32::NotificationLevel::Error,
-            );
-        }
-    }
-}
-
-
-
 pub static MIC_VOLUME: AtomicU32 = AtomicU32::new(0);
 pub static LOOPBACK_VOLUME: AtomicU32 = AtomicU32::new(0);
 
@@ -936,14 +55,15 @@ pub struct MeetingRecordingState {
     #[cfg(target_os = "macos")]
     pub macos_loopback: Option<crate::macos_audio::Capture>,
     pub shutdown_tx: Option<std::sync::mpsc::Sender<()>>,
- pub recording_thread: Option<std::thread::JoinHandle<Result<(),String>>>,
+    pub recording_thread: Option<std::thread::JoinHandle<Result<(), String>>>,
     #[cfg(target_os = "linux")]
     pub pulse_loopback_shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     #[cfg(target_os = "linux")]
     pub pulse_loopback_thread: Option<std::thread::JoinHandle<()>>,
 }
 
-pub static MEETING_STATE: std::sync::OnceLock<Mutex<MeetingRecordingState>> = std::sync::OnceLock::new();
+pub static MEETING_STATE: std::sync::OnceLock<Mutex<MeetingRecordingState>> =
+    std::sync::OnceLock::new();
 
 pub fn get_meeting_state() -> &'static Mutex<MeetingRecordingState> {
     MEETING_STATE.get_or_init(|| {
@@ -963,11 +83,497 @@ pub fn get_meeting_state() -> &'static Mutex<MeetingRecordingState> {
     })
 }
 
-fn create_recording_file(path:&std::path::Path)->std::io::Result<std::fs::File>{
-    let mut options=std::fs::OpenOptions::new();options.write(true).create_new(true);
-    #[cfg(unix)]{use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
+fn create_recording_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
     options.open(path)
 }
+
+/// 60 ms at 16 kHz: one Opus packet.
+const OPUS_FRAME: usize = 960;
+/// 560 ms at 16 kHz: one live-transcription chunk.
+const LIVE_CHUNK: usize = 8960;
+
+/// One mono 16 kHz Ogg Opus file of a meeting recording. Every packet ends a
+/// page, so an interrupted recording loses at most its last 60 ms.
+struct OggOpusChannel {
+    encoder: opus::Encoder,
+    writer: ogg::writing::PacketWriter<std::fs::File>,
+    serial: u32,
+    granule: u64,
+    packet: [u8; 512],
+}
+
+impl OggOpusChannel {
+    fn create(path: &std::path::Path, serial: u32) -> Result<Self, String> {
+        let init =
+            |e: &dyn std::fmt::Debug| format!("Audio recording initialization failed: {:?}", e);
+        let mut encoder = opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip)
+            .map_err(|e| init(&e))?;
+        let _ = encoder.set_bitrate(opus::Bitrate::Bits(24000));
+        let _ = encoder.set_complexity(1);
+        let file = create_recording_file(path).map_err(|e| init(&e))?;
+        let mut channel = Self {
+            encoder,
+            writer: ogg::writing::PacketWriter::new(file),
+            serial,
+            granule: 0,
+            packet: [0; 512],
+        };
+        let mut head = Vec::new();
+        head.extend_from_slice(b"OpusHead");
+        head.push(1); // version
+        head.push(1); // mono
+        head.extend_from_slice(&312u16.to_le_bytes()); // pre-skip
+        head.extend_from_slice(&16000u32.to_le_bytes());
+        head.extend_from_slice(&0i16.to_le_bytes()); // output gain
+        head.push(0); // channel mapping family
+        let vendor = b"speektome-client-meeting";
+        let mut tags = Vec::new();
+        tags.extend_from_slice(b"OpusTags");
+        tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+        tags.extend_from_slice(vendor);
+        tags.extend_from_slice(&0u32.to_le_bytes());
+        for header in [head, tags] {
+            channel
+                .writer
+                .write_packet(
+                    header.into_boxed_slice(),
+                    serial,
+                    ogg::writing::PacketWriteEndInfo::EndPage,
+                    0,
+                )
+                .map_err(|e| format!("Audio recording write failed: {}", e))?;
+        }
+        channel
+            .writer
+            .inner()
+            .sync_all()
+            .map_err(|_| "Cannot save recording header".to_string())?;
+        Ok(channel)
+    }
+
+    /// Encodes one 60 ms frame; `last` ends the Ogg stream.
+    fn write(&mut self, frame: &[i16], last: bool) -> Result<(), String> {
+        self.granule += 2880; // 60 ms at Opus's 48 kHz granule rate
+        let len = self
+            .encoder
+            .encode(frame, &mut self.packet)
+            .map_err(|_| "Audio encoding failed".to_string())?;
+        let end = if last {
+            ogg::writing::PacketWriteEndInfo::EndStream
+        } else {
+            ogg::writing::PacketWriteEndInfo::EndPage
+        };
+        self.writer
+            .write_packet(
+                self.packet[..len].to_vec().into_boxed_slice(),
+                self.serial,
+                end,
+                self.granule,
+            )
+            .map_err(|e| format!("Audio recording write failed: {}", e))
+    }
+}
+
+/// The three files of a meeting: microphone, system audio, and both mixed.
+struct MeetingFiles {
+    mixed: OggOpusChannel,
+    mic: OggOpusChannel,
+    loopback: OggOpusChannel,
+}
+
+impl MeetingFiles {
+    fn create(mixed_path: &std::path::Path) -> Result<Self, String> {
+        Ok(Self {
+            mixed: OggOpusChannel::create(mixed_path, 987654321)?,
+            mic: OggOpusChannel::create(&mixed_path.with_extension("mic.ogg"), 123456789)?,
+            loopback: OggOpusChannel::create(
+                &mixed_path.with_extension("loopback.ogg"),
+                555555555,
+            )?,
+        })
+    }
+
+    /// Writes time-aligned 60 ms frames of both channels and their mix.
+    fn write_frame(&mut self, mic: &[i16], loopback: &[i16], last: bool) -> Result<(), String> {
+        let mut mixed = [0i16; OPUS_FRAME];
+        for (k, sample) in mixed.iter_mut().enumerate() {
+            *sample =
+                (mic[k] as i32 + loopback[k] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        }
+        self.mic.write(mic, last)?;
+        self.loopback.write(loopback, last)?;
+        self.mixed.write(&mixed, last)
+    }
+
+    fn write_frames(&mut self, mic: &[i16], loopback: &[i16]) -> Result<(), String> {
+        for (mic, loopback) in mic
+            .chunks_exact(OPUS_FRAME)
+            .zip(loopback.chunks_exact(OPUS_FRAME))
+        {
+            self.write_frame(mic, loopback, false)?;
+        }
+        Ok(())
+    }
+
+    fn sync_data(&mut self) -> Result<(), String> {
+        for channel in [&mut self.mixed, &mut self.mic, &mut self.loopback] {
+            channel
+                .writer
+                .inner()
+                .sync_data()
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn sync_all(&mut self) -> Result<(), String> {
+        for channel in [&mut self.mixed, &mut self.mic, &mut self.loopback] {
+            channel
+                .writer
+                .inner()
+                .sync_all()
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+/// Sends 560 ms chunks of each channel to the live transcription preview.
+struct LiveFeed {
+    tx: std::sync::mpsc::Sender<crate::meeting_stream::MeetingStreamAudioMessage>,
+    mic: Vec<i16>,
+    loopback: Vec<i16>,
+}
+
+impl LiveFeed {
+    fn send(&self, tag: u8, samples: &[i16]) {
+        if let Ok(bytes) = encode_opus_ogg(samples, 16000, 1) {
+            let _ = self
+                .tx
+                .send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(tag, bytes));
+        }
+    }
+
+    fn push(&mut self, mic: &[i16], loopback: &[i16]) {
+        self.mic.extend_from_slice(mic);
+        self.loopback.extend_from_slice(loopback);
+        while self.mic.len() >= LIVE_CHUNK {
+            let chunk: Vec<i16> = self.mic.drain(..LIVE_CHUNK).collect();
+            self.send(0x01, &chunk);
+        }
+        while self.loopback.len() >= LIVE_CHUNK {
+            let chunk: Vec<i16> = self.loopback.drain(..LIVE_CHUNK).collect();
+            self.send(0x02, &chunk);
+        }
+    }
+
+    fn finish(mut self, mic: &[i16], loopback: &[i16]) {
+        self.mic.extend_from_slice(mic);
+        self.loopback.extend_from_slice(loopback);
+        if !self.mic.is_empty() {
+            self.send(0x01, &self.mic);
+        }
+        if !self.loopback.is_empty() {
+            self.send(0x02, &self.loopback);
+        }
+        let _ = self
+            .tx
+            .send(crate::meeting_stream::MeetingStreamAudioMessage::EndOfMeeting);
+    }
+}
+
+/// Encodes captured meeting audio until `shutdown_rx` fires, then flushes.
+#[allow(clippy::too_many_arguments)]
+fn meeting_writer(
+    output_ogg_path: std::path::PathBuf,
+    mic_buffer: Arc<Mutex<Vec<i16>>>,
+    loopback_buffer: Arc<Mutex<Vec<i16>>>,
+    (mic_rate, mic_channels): (u32, u16),
+    (loopback_rate, loopback_channels): (u32, u16),
+    shutdown_rx: std::sync::mpsc::Receiver<()>,
+    recording_ready_tx: std::sync::mpsc::Sender<()>,
+    stream_tx: Option<std::sync::mpsc::Sender<crate::meeting_stream::MeetingStreamAudioMessage>>,
+) -> Result<(), String> {
+    let mut files = MeetingFiles::create(&output_ogg_path)?;
+    #[cfg(unix)]
+    std::fs::File::open(
+        output_ogg_path
+            .parent()
+            .ok_or("Recording directory unavailable")?,
+    )
+    .and_then(|directory| directory.sync_all())
+    .map_err(|_| "Cannot save recording directory")?;
+    let _ = recording_ready_tx.send(());
+
+    let mut live = stream_tx.map(|tx| LiveFeed {
+        tx,
+        mic: Vec::new(),
+        loopback: Vec::new(),
+    });
+    let mut mic_carry: Vec<i16> = Vec::new();
+    let mut loopback_carry: Vec<i16> = Vec::new();
+    let mut mic_resampler = crate::audio_processing::CaptureResampler::new(mic_rate, mic_channels);
+    let mut loopback_resampler =
+        crate::audio_processing::CaptureResampler::new(loopback_rate, loopback_channels);
+    let mut total_mic_samples = 0;
+    let mut echo_canceller = crate::meeting_echo::MeetingEchoCanceller::new();
+    let mut energy_log = Vec::new();
+    let mut loop_count: u64 = 0;
+
+    loop {
+        if shutdown_rx
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_ok()
+        {
+            break;
+        }
+        loop_count += 1;
+        if loop_count % 20 == 0 {
+            files.sync_data()?;
+        }
+        let mic_16k = mic_resampler.push(&crate::dictation::take_capture(&mic_buffer));
+        let loopback_16k =
+            loopback_resampler.push(&crate::dictation::take_capture(&loopback_buffer));
+        total_mic_samples += mic_16k.len();
+        mic_carry.extend_from_slice(&mic_16k);
+        loopback_carry.extend_from_slice(&loopback_16k);
+
+        // Let independently scheduled capture callbacks catch up. Only pad
+        // a channel after 200 ms without matching audio (e.g. suspended WASAPI).
+        const MAX_CHANNEL_LAG: usize = 3200;
+        if mic_carry.len() > loopback_carry.len() + MAX_CHANNEL_LAG {
+            loopback_carry.resize(mic_carry.len() - MAX_CHANNEL_LAG, 0);
+        } else if loopback_carry.len() > mic_carry.len() + MAX_CHANNEL_LAG {
+            mic_carry.resize(loopback_carry.len() - MAX_CHANNEL_LAG, 0);
+        }
+
+        // Encode and save time-synchronized aligned audio chunks
+        let encode_len = mic_carry.len().min(loopback_carry.len()) / OPUS_FRAME * OPUS_FRAME;
+        if encode_len == 0 {
+            continue;
+        }
+        let mut mic_block = mic_carry[..encode_len].to_vec();
+        let loopback_block = &loopback_carry[..encode_len];
+        echo_canceller.process(&mut mic_block, loopback_block);
+        let rms = (mic_block
+            .iter()
+            .map(|&s| (s as f64 / 32768.0).powi(2))
+            .sum::<f64>()
+            / mic_block.len() as f64)
+            .sqrt();
+        MIC_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
+        if let Some(live) = live.as_mut() {
+            live.push(&mic_block, loopback_block);
+        }
+        if loop_count % 5 == 0 {
+            energy_log.push(EnergySample {
+                time: total_mic_samples as f32 / 16000.0,
+                mic: MIC_VOLUME.load(Ordering::Relaxed),
+                lb: LOOPBACK_VOLUME.load(Ordering::Relaxed),
+            });
+        }
+        files.write_frames(&mic_block, loopback_block)?;
+        mic_carry.drain(..encode_len);
+        loopback_carry.drain(..encode_len);
+    }
+
+    // Final flush at end of recording
+    mic_carry.extend(mic_resampler.push(&crate::dictation::take_capture(&mic_buffer)));
+    mic_carry.extend(mic_resampler.finish());
+    loopback_carry
+        .extend(loopback_resampler.push(&crate::dictation::take_capture(&loopback_buffer)));
+    loopback_carry.extend(loopback_resampler.finish());
+    let length = mic_carry.len().max(loopback_carry.len());
+    mic_carry.resize(length, 0);
+    loopback_carry.resize(length, 0);
+    echo_canceller.process(&mut mic_carry, &loopback_carry);
+    if let Some(live) = live {
+        live.finish(&mic_carry, &loopback_carry);
+    }
+    let whole = length / OPUS_FRAME * OPUS_FRAME;
+    files.write_frames(&mic_carry[..whole], &loopback_carry[..whole])?;
+    // A trailing partial frame is padded with silence and ends each stream.
+    if whole < length {
+        let mut mic_final = mic_carry[whole..].to_vec();
+        let mut loopback_final = loopback_carry[whole..].to_vec();
+        mic_final.resize(OPUS_FRAME, 0);
+        loopback_final.resize(OPUS_FRAME, 0);
+        files.write_frame(&mic_final, &loopback_final, true)?;
+    }
+    files.sync_all()?;
+    if let Ok(json_bytes) = serde_json::to_vec(&energy_log) {
+        let _ = std::fs::write(output_ogg_path.with_extension("energy.json"), json_bytes);
+    }
+    Ok(())
+}
+
+/// Default system output captured through Windows loopback on the output device.
+#[cfg(windows)]
+fn windows_loopback(
+    host: &cpal::Host,
+    buffer: Arc<Mutex<Vec<i16>>>,
+    failed: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<(cpal::Stream, u32, u16), String> {
+    println!("[AUDIO MEETING LOG] Querying default output (loopback) device...");
+    let unavailable =
+        || "System audio capture could not start. Check the output device.".to_string();
+    let device = host.default_output_device().ok_or_else(unavailable)?;
+    let config = device.default_output_config().map_err(|_| unavailable())?;
+    let (rate, channels) = (config.sample_rate().0, config.channels());
+    let sink = crate::capture::CaptureSink {
+        buffer,
+        limit: rate as usize * channels as usize * 5,
+        overflow: failed.clone(),
+        keep_partial: false,
+        level: Some((&LOOPBACK_VOLUME, 2500.0)),
+    };
+    let stream = crate::capture::input_stream(&device, &config, sink, failed).map_err(|e| {
+        eprintln!("[AUDIO MEETING LOG WARNING] Loopback capture unavailable: {e}");
+        unavailable()
+    })?;
+    println!(
+        "[AUDIO MEETING LOG] Windows loopback device '{}', {rate}Hz, {channels} channels",
+        device
+            .name()
+            .unwrap_or_else(|_| "Unknown Output".to_string())
+    );
+    Ok((stream, rate, channels))
+}
+
+/// The default sink's monitor through the PulseAudio protocol, which PipeWire
+/// also provides. Returns its shutdown flag and reader thread.
+#[cfg(target_os = "linux")]
+fn pulse_monitor(
+    buffer: Arc<Mutex<Vec<i16>>>,
+    failed: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<
+    (
+        Arc<std::sync::atomic::AtomicBool>,
+        std::thread::JoinHandle<()>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    // PipeWire provides this PulseAudio protocol source even when the session uses
+    // PipeWire natively. The special name resolves to the monitor of the default sink.
+    let rate = 48_000u32;
+    let channels = 2u8;
+    let spec = PulseSpec {
+        format: PulseFormat::S16NE,
+        channels,
+        rate,
+    };
+    if !spec.is_valid() {
+        return Err("Invalid PulseAudio monitor capture format".into());
+    }
+    let stream = PulseSimple::new(
+        None,
+        "SpeekTo.Me",
+        PulseDirection::Record,
+        Some("@DEFAULT_MONITOR@"),
+        "Meeting output capture",
+        &spec,
+        None,
+        None,
+    )
+    .map_err(|e| {
+        format!("Could not open the default output monitor through PulseAudio/PipeWire: {e}")
+    })?;
+    let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let thread_shutdown = shutdown.clone();
+    let thread = std::thread::Builder::new()
+        .name("speektome-output-monitor".into())
+        .spawn(move || {
+            // Read 10 ms blocks so shutdown is observed promptly and the capture buffer
+            // advances continuously, including during silence, preserving the 48 kHz clock.
+            const FRAMES: usize = 480;
+            let mut bytes = [0u8; FRAMES * 2 * 2];
+            while !thread_shutdown.load(Ordering::Relaxed) {
+                if let Err(e) = stream.read(&mut bytes) {
+                    failed.store(true, Ordering::Relaxed);
+                    eprintln!("[AUDIO MEETING LOG ERROR] Output monitor capture stopped: {e}");
+                    break;
+                }
+                if thread_shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                let rms = bytes
+                    .chunks_exact(2)
+                    .map(|b| {
+                        let x = i16::from_ne_bytes([b[0], b[1]]) as f32 / i16::MAX as f32;
+                        x * x
+                    })
+                    .sum::<f32>()
+                    / (FRAMES * channels as usize) as f32;
+                LOOPBACK_VOLUME.store(
+                    (rms.sqrt() * 2500.0).clamp(0.0, 1000.0) as u32,
+                    Ordering::Relaxed,
+                );
+                if let Ok(mut out) = buffer.lock() {
+                    if out.len() + FRAMES * channels as usize
+                        > rate as usize * channels as usize * 5
+                    {
+                        failed.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    out.extend(
+                        bytes
+                            .chunks_exact(2)
+                            .map(|b| i16::from_ne_bytes([b[0], b[1]])),
+                    );
+                }
+            }
+        })?;
+    println!("[AUDIO MEETING LOG] PulseAudio/PipeWire default sink monitor capture started at {rate}Hz, {channels} channels");
+    Ok((shutdown, thread))
+}
+
+/// Watches a running meeting and stops it if a device, encoder or disk write fails.
+fn watch_meeting(identity: String, failed: Arc<std::sync::atomic::AtomicBool>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let broken = {
+            let state = get_meeting_state()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if state.identity.as_deref() != Some(identity.as_str()) {
+                return;
+            }
+            #[cfg(target_os = "macos")]
+            if crate::macos_audio::failed() {
+                failed.store(true, Ordering::Relaxed);
+            }
+            failed.load(Ordering::Relaxed)
+                || state
+                    .recording_thread
+                    .as_ref()
+                    .is_some_and(|worker| worker.is_finished())
+        };
+        if broken {
+            if crate::ACTIVE_MEETING
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none()
+            {
+                continue;
+            }
+            let _ = tauri::async_runtime::block_on(crate::stop_meeting(None));
+            crate::account_errors::notify("Meetings", "Recording stopped because an audio device, encoder, or disk write failed. Local audio has been retained; check device access and available disk space.");
+            if let Some(app) = crate::TAURI_APP.get() {
+                use tauri::Emitter;
+                let _ = app.emit("meeting-recording-stopped", ());
+            }
+            return;
+        }
+    });
+}
+
 pub fn start_meeting_recording(
     output_ogg_path: std::path::PathBuf,
     stream_tx: Option<std::sync::mpsc::Sender<crate::meeting_stream::MeetingStreamAudioMessage>>,
@@ -975,540 +581,103 @@ pub fn start_meeting_recording(
     println!("[AUDIO MEETING LOG] Querying default input (microphone) device...");
     let host = cpal::default_host();
     let mic_device = host.default_input_device().ok_or("No input device found")?;
-    let mic_name = mic_device.name().unwrap_or_else(|_| "Unknown Mic".to_string());
     let mic_config = mic_device.default_input_config()?;
-    let mic_sample_format = mic_config.sample_format();
     let mic_rate = mic_config.sample_rate().0;
     let mic_channels = mic_config.channels();
-    println!("[AUDIO MEETING LOG] Microphone device: '{}', rate: {}Hz, channels: {}, format: {:?}", mic_name, mic_rate, mic_channels, mic_sample_format);
+    println!(
+        "[AUDIO MEETING LOG] Microphone device: '{}', rate: {}Hz, channels: {}, format: {:?}",
+        mic_device
+            .name()
+            .unwrap_or_else(|_| "Unknown Mic".to_string()),
+        mic_rate,
+        mic_channels,
+        mic_config.sample_format()
+    );
 
     let mic_buffer = Arc::new(Mutex::new(Vec::new()));
-    let mic_buffer_clone = mic_buffer.clone();
-
     let loopback_buffer = Arc::new(Mutex::new(Vec::new()));
-
+    // Any device error or queue overflow stops the meeting with its audio kept.
     let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let mic_failed = failed.clone();
-    let mic_err_fn = move |_err| { mic_failed.store(true,Ordering::Relaxed); };
-    let mic_overflow = failed.clone();
-    let mic_limit = mic_rate as usize * mic_channels as usize * 5;
-    let mic_stream = match mic_sample_format {
-        cpal::SampleFormat::F32 => {
-            mic_device.build_input_stream(
-                &mic_config.clone().into(),
-                move |data: &[f32], _| {
-                    if let Ok(mut buf) = mic_buffer_clone.lock() {
-                        if buf.len()+data.len()>mic_limit {mic_overflow.store(true,Ordering::Relaxed);return;}
-                        for &sample in data {
-                            let i16_val = (sample * i16::MAX as f32) as i16;
-                            buf.push(i16_val);
-                        }
-                    }
-                },
-                mic_err_fn,
-                None
-            )?
-        }
-        cpal::SampleFormat::I16 => {
-            mic_device.build_input_stream(
-                &mic_config.clone().into(),
-                move |data: &[i16], _| {
-                    if let Ok(mut buf) = mic_buffer_clone.lock() {
-                        if buf.len()+data.len()>mic_limit {mic_overflow.store(true,Ordering::Relaxed);return;}
-                        buf.extend_from_slice(data);
-                    }
-                },
-                mic_err_fn,
-                None
-            )?
-        }
-        cpal::SampleFormat::U16 => {
-            mic_device.build_input_stream(
-                &mic_config.clone().into(),
-                move |data: &[u16], _| {
-                    if let Ok(mut buf) = mic_buffer_clone.lock() {
-                        if buf.len()+data.len()>mic_limit {mic_overflow.store(true,Ordering::Relaxed);return;}
-                        for &sample in data {
-                            let i16_val = (sample as i32 - 32768) as i16;
-                            buf.push(i16_val);
-                        }
-                    }
-                },
-                mic_err_fn,
-                None
-            )?
-        }
-        _ => return Err("Unsupported microphone sample format".into()),
+    let mic_sink = crate::capture::CaptureSink {
+        buffer: mic_buffer.clone(),
+        limit: mic_rate as usize * mic_channels as usize * 5,
+        overflow: failed.clone(),
+        keep_partial: false,
+        level: None, // Measured after echo cancellation instead.
     };
+    let mic_stream =
+        crate::capture::input_stream(&mic_device, &mic_config, mic_sink, failed.clone()).map_err(
+            |e| match e {
+                crate::capture::CaptureError::UnsupportedFormat(_) => {
+                    "Unsupported microphone sample format".to_string()
+                }
+                other => other.to_string(),
+            },
+        )?;
 
     #[cfg(windows)]
-    let mut loopback_rate = 48000;
-    #[cfg(windows)]
-    let mut loopback_channels = 2;
-    #[cfg(windows)]
-    let loopback_stream_opt = {
-        println!("[AUDIO MEETING LOG] Querying default output (loopback) device...");
-        let mut stream_opt = None;
-        if let Some(loopback_device) = host.default_output_device() {
-            let out_name = loopback_device.name().unwrap_or_else(|_| "Unknown Output".to_string());
-            if let Ok(config) = loopback_device.default_output_config() {
-                loopback_rate = config.sample_rate().0;
-                loopback_channels = config.channels();
-                let buffer = loopback_buffer.clone();
-                let loopback_failed=failed.clone();
-                let overflow=failed.clone();
-                let limit=loopback_rate as usize*loopback_channels as usize*5;
-                let err = move |_e| {loopback_failed.store(true,Ordering::Relaxed);};
-                stream_opt = match config.sample_format() {
-                    cpal::SampleFormat::F32 => loopback_device.build_input_stream(&config.clone().into(), move |d: &[f32], _| {
-                        let rms = if d.is_empty() { 0.0 } else { (d.iter().map(|x| x*x).sum::<f32>() / d.len() as f32).sqrt() };
-                        LOOPBACK_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
-                        if let Ok(mut b) = buffer.lock() { if b.len()+d.len()>limit{overflow.store(true,Ordering::Relaxed);return;} b.extend(d.iter().map(|x| (x * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16)); }
-                    }, err, None).ok(),
-                    cpal::SampleFormat::I16 => loopback_device.build_input_stream(&config.clone().into(), move |d: &[i16], _| {
-                        let rms = if d.is_empty() { 0.0 } else { (d.iter().map(|x| (*x as f32 / i16::MAX as f32).powi(2)).sum::<f32>() / d.len() as f32).sqrt() };
-                        LOOPBACK_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
-                        if let Ok(mut b) = buffer.lock() { if b.len()+d.len()>limit{overflow.store(true,Ordering::Relaxed);return;} b.extend_from_slice(d); }
-                    }, err, None).ok(),
-                    cpal::SampleFormat::U16 => loopback_device.build_input_stream(&config.clone().into(), move |d: &[u16], _| {
-                        let rms = if d.is_empty() { 0.0 } else { (d.iter().map(|x| ((*x as f32 - 32768.0) / 32768.0).powi(2)).sum::<f32>() / d.len() as f32).sqrt() };
-                        LOOPBACK_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
-                        if let Ok(mut b) = buffer.lock() { if b.len()+d.len()>limit{overflow.store(true,Ordering::Relaxed);return;} b.extend(d.iter().map(|x| (*x as i32 - 32768) as i16)); }
-                    }, err, None).ok(),
-                    other => { eprintln!("[AUDIO MEETING LOG WARNING] Unsupported loopback format: {other:?}"); None }
-                };
-                println!("[AUDIO MEETING LOG] Windows loopback device '{out_name}', {loopback_rate}Hz, {loopback_channels} channels");
-            }
-        }
-        Some(stream_opt.ok_or("System audio capture could not start. Check the output device.")?)
+    let (loopback_stream_opt, loopback_rate, loopback_channels) = {
+        let (stream, rate, channels) =
+            windows_loopback(&host, loopback_buffer.clone(), failed.clone())?;
+        (Some(stream), rate, channels)
     };
-
     #[cfg(target_os = "linux")]
-    let (loopback_rate, loopback_channels, pulse_loopback_shutdown, pulse_loopback_thread) = {
-        // PipeWire provides this PulseAudio protocol source even when the session uses
-        // PipeWire natively. The special name resolves to the monitor of the default sink.
-        let rate = 48_000u32;
-        let channels = 2u8;
-        let spec = PulseSpec { format: PulseFormat::S16NE, channels, rate };
-        if !spec.is_valid() { return Err("Invalid PulseAudio monitor capture format".into()); }
-        let stream = PulseSimple::new(
-            None,
-            "SpeekTo.Me",
-            PulseDirection::Record,
-            Some("@DEFAULT_MONITOR@"),
-            "Meeting output capture",
-            &spec,
-            None,
-            None,
-        ).map_err(|e| format!("Could not open the default output monitor through PulseAudio/PipeWire: {e}"))?;
-        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let thread_shutdown = shutdown.clone();
-        let buffer = loopback_buffer.clone();
-        let output_failed=failed.clone();
-        let thread = std::thread::Builder::new().name("speektome-output-monitor".into()).spawn(move || {
-            // Read 10 ms blocks so shutdown is observed promptly and the capture buffer
-            // advances continuously, including during silence, preserving the 48 kHz clock.
-            const FRAMES: usize = 480;
-            let mut bytes = [0u8; FRAMES * 2 * 2];
-            while !thread_shutdown.load(Ordering::Relaxed) {
-                if let Err(e) = stream.read(&mut bytes) {
-                    output_failed.store(true,Ordering::Relaxed);
-                    eprintln!("[AUDIO MEETING LOG ERROR] Output monitor capture stopped: {e}");
-                    break;
-                }
-                if thread_shutdown.load(Ordering::Relaxed) { break; }
-                let rms = bytes.chunks_exact(2).map(|b| {
-                    let x = i16::from_ne_bytes([b[0], b[1]]) as f32 / i16::MAX as f32;
-                    x * x
-                }).sum::<f32>() / (FRAMES * channels as usize) as f32;
-                LOOPBACK_VOLUME.store((rms.sqrt() * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
-                if let Ok(mut out) = buffer.lock() {
-                    if out.len()+FRAMES*channels as usize>rate as usize*channels as usize*5 {output_failed.store(true,Ordering::Relaxed);break;}
-                    out.extend(bytes.chunks_exact(2).map(|b| i16::from_ne_bytes([b[0], b[1]])));
-                }
-            }
-        })?;
-        println!("[AUDIO MEETING LOG] PulseAudio/PipeWire default sink monitor capture started at {rate}Hz, {channels} channels");
-        (rate, channels as u16, Some(shutdown), Some(thread))
+    let (loopback_rate, loopback_channels) = (48_000u32, 2u16);
+    #[cfg(target_os = "linux")]
+    let (pulse_loopback_shutdown, pulse_loopback_thread) = {
+        let (shutdown, thread) = pulse_monitor(loopback_buffer.clone(), failed.clone())?;
+        (Some(shutdown), Some(thread))
     };
-
     #[cfg(target_os = "macos")]
     let macos_loopback = crate::macos_audio::Capture::start(loopback_buffer.clone())?;
     #[cfg(target_os = "macos")]
     let (loopback_rate, loopback_channels) = (48_000u32, 2u16);
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     let (loopback_rate, loopback_channels) = (48000u32, 2u16);
-    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-    let loopback_stream_opt: Option<cpal::Stream> = None;
-    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
     println!("[AUDIO MEETING LOG] Starting mic stream playback...");
     mic_stream.play()?;
-    println!("[AUDIO MEETING LOG] Mic stream playing!");
-
     #[cfg(windows)]
     if let Some(ref lb) = loopback_stream_opt {
-        println!("[AUDIO MEETING LOG] Starting loopback stream playback...");
-        lb.play().map_err(|_|"System audio capture could not start")?;
+        lb.play()
+            .map_err(|_| "System audio capture could not start")?;
     }
 
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
     let (recording_ready_tx, recording_ready_rx) = std::sync::mpsc::channel();
-    let recording_thread=std::thread::spawn(move || {
-        let mic_path = {
-            let mut p = output_ogg_path.clone();
-            p.set_extension("mic.ogg");
-            p
-        };
-        let loopback_path = {
-            let mut p = output_ogg_path.clone();
-            p.set_extension("loopback.ogg");
-            p
-        };
-
-        let mut encoder_mixed = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
-            Ok(enc) => enc,
-            Err(e) => {
-                eprintln!("Failed to create Opus mixed encoder: {:?}", e);
-                return Err(format!("Audio recording initialization failed: {:?}", e));
-            }
-        };
-        let mut encoder_mic = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
-            Ok(enc) => enc,
-            Err(e) => {
-                eprintln!("Failed to create Opus mic encoder: {:?}", e);
-                return Err(format!("Audio recording initialization failed: {:?}", e));
-            }
-        };
-        let mut encoder_loopback = match opus::Encoder::new(16000, opus::Channels::Mono, opus::Application::Voip) {
-            Ok(enc) => enc,
-            Err(e) => {
-                eprintln!("Failed to create Opus loopback encoder: {:?}", e);
-                return Err(format!("Audio recording initialization failed: {:?}", e));
-            }
-        };
-
-        for enc in [&mut encoder_mixed, &mut encoder_mic, &mut encoder_loopback] {
-            let _ = enc.set_bitrate(opus::Bitrate::Bits(24000));
-            let _ = enc.set_complexity(1);
-        }
-
-        let file_mixed = match create_recording_file(&output_ogg_path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to create mixed Ogg output file: {:?}", e);
-                return Err(format!("Audio recording initialization failed: {:?}", e));
-            }
-        };
-        let file_mic = match create_recording_file(&mic_path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to create mic Ogg output file: {:?}", e);
-                return Err(format!("Audio recording initialization failed: {:?}", e));
-            }
-        };
-        let file_loopback = match create_recording_file(&loopback_path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to create loopback Ogg output file: {:?}", e);
-                return Err(format!("Audio recording initialization failed: {:?}", e));
-            }
-        };
-
-        let mut writer_mixed = ogg::writing::PacketWriter::new(file_mixed);
-        let mut writer_mic = ogg::writing::PacketWriter::new(file_mic);
-        let mut writer_loopback = ogg::writing::PacketWriter::new(file_loopback);
-
-        let serial_mixed = 987654321;
-        let serial_mic = 123456789;
-        let serial_lb = 555555555;
-
-        let mut head = Vec::new();
-        head.extend_from_slice(b"OpusHead");
-        head.push(1);
-        head.push(1);
-        head.extend_from_slice(&312u16.to_le_bytes());
-        head.extend_from_slice(&16000u32.to_le_bytes());
-        head.extend_from_slice(&0i16.to_le_bytes());
-        head.push(0);
-
-        let mut tags = Vec::new();
-        tags.extend_from_slice(b"OpusTags");
-        let vendor = b"speektome-client-meeting";
-        tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
-        tags.extend_from_slice(vendor);
-        tags.extend_from_slice(&0u32.to_le_bytes());
-
-        writer_mixed.write_packet(head.clone().into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
-        writer_mixed.write_packet(tags.clone().into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
-
-        writer_mic.write_packet(head.clone().into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
-        writer_mic.write_packet(tags.clone().into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
-
-        writer_loopback.write_packet(head.clone().into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
-        writer_loopback.write_packet(tags.clone().into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, 0).map_err(|e|format!("Audio recording write failed: {}",e))?;
-
-        writer_mixed.inner().sync_all().map_err(|_|"Cannot save recording header")?;
-        writer_mic.inner().sync_all().map_err(|_|"Cannot save recording header")?;
-        writer_loopback.inner().sync_all().map_err(|_|"Cannot save recording header")?;
-        #[cfg(unix)]
-        std::fs::File::open(output_ogg_path.parent().ok_or("Recording directory unavailable")?).and_then(|directory|directory.sync_all()).map_err(|_|"Cannot save recording directory")?;
-        let _ = recording_ready_tx.send(());
-        let mut mic_stream_buffer: Vec<i16> = Vec::new();
-        let mut loopback_stream_buffer: Vec<i16> = Vec::new();
-
-        let mut mic_carry_encode: Vec<i16> = Vec::new();
-        let mut loopback_carry_encode: Vec<i16> = Vec::new();
-
-        let mut granule_pos_mixed: u64 = 0;
-        let mut granule_pos_mic: u64 = 0;
-        let mut granule_pos_lb: u64 = 0;
-
-        let mut encoded_buf_mixed = [0u8; 512];
-        let mut encoded_buf_mic = [0u8; 512];
-        let mut encoded_buf_lb = [0u8; 512];
-
-        let mut mic_resampler=crate::audio_processing::CaptureResampler::new(mic_rate,mic_channels);
-        let mut loopback_resampler=crate::audio_processing::CaptureResampler::new(loopback_rate,loopback_channels);
-        let mut total_mic_samples = 0;
-        let mut echo_canceller = crate::meeting_echo::MeetingEchoCanceller::new();
-        let mut energy_log = Vec::new();
-        let mut loop_count: u64 = 0;
-        const CHUNK_560MS: usize = 8960; // 560ms @ 16kHz mono
-        const CHUNK_60MS: usize = 960;   // 60ms @ 16kHz mono (Opus standard frame)
-
-        loop {
-            if shutdown_rx.recv_timeout(std::time::Duration::from_millis(50)).is_ok() {
-                break;
-            }
-            loop_count += 1;
-            if loop_count % 20 == 0 {
-             writer_mixed.inner().sync_data().map_err(|e|e.to_string())?;
-             writer_mic.inner().sync_data().map_err(|e|e.to_string())?;
-             writer_loopback.inner().sync_data().map_err(|e|e.to_string())?;
-            }
-
-            let mic_raw = {
-                let mut lock = mic_buffer.lock().unwrap();
-                std::mem::take(&mut *lock)
-            };
-            let loopback_raw = {
-                let mut lock = loopback_buffer.lock().unwrap();
-                std::mem::take(&mut *lock)
-            };
-
-            let mic_16k = mic_resampler.push(&mic_raw);
-            let loopback_16k = loopback_resampler.push(&loopback_raw);
-
-            total_mic_samples += mic_16k.len();
-            mic_carry_encode.extend_from_slice(&mic_16k);
-            loopback_carry_encode.extend_from_slice(&loopback_16k);
-
-            // Let independently scheduled capture callbacks catch up. Only pad
-            // a channel after 200 ms without matching audio (e.g. suspended WASAPI).
-            const MAX_CHANNEL_LAG: usize = 3200;
-            if mic_carry_encode.len() > loopback_carry_encode.len() + MAX_CHANNEL_LAG {
-                loopback_carry_encode.resize(mic_carry_encode.len() - MAX_CHANNEL_LAG, 0);
-            } else if loopback_carry_encode.len() > mic_carry_encode.len() + MAX_CHANNEL_LAG {
-                mic_carry_encode.resize(loopback_carry_encode.len() - MAX_CHANNEL_LAG, 0);
-            }
-
-            // Encode and save time-synchronized aligned audio chunks
-            let available = mic_carry_encode.len().min(loopback_carry_encode.len());
-            let num_chunks = available / CHUNK_60MS;
-            let encode_len = num_chunks * CHUNK_60MS;
-
-            if encode_len > 0 {
-                let mut mic_block = mic_carry_encode[..encode_len].to_vec();
-                let lb_block = &loopback_carry_encode[..encode_len];
-                echo_canceller.process(&mut mic_block, lb_block);
-                let rms = (mic_block.iter().map(|&s| (s as f64 / 32768.0).powi(2)).sum::<f64>() / mic_block.len() as f64).sqrt();
-                MIC_VOLUME.store((rms * 2500.0).clamp(0.0, 1000.0) as u32, Ordering::Relaxed);
-                if let Some(ref tx) = stream_tx {
-                    mic_stream_buffer.extend_from_slice(&mic_block);
-                    loopback_stream_buffer.extend_from_slice(lb_block);
-                    while mic_stream_buffer.len() >= CHUNK_560MS {
-                        let chunk: Vec<i16> = mic_stream_buffer.drain(..CHUNK_560MS).collect();
-                        if let Ok(bytes) = encode_opus_ogg(&chunk, 16000, 1) {
-                            let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, bytes));
-                        }
-                    }
-                    while loopback_stream_buffer.len() >= CHUNK_560MS {
-                        let chunk: Vec<i16> = loopback_stream_buffer.drain(..CHUNK_560MS).collect();
-                        if let Ok(bytes) = encode_opus_ogg(&chunk, 16000, 1) {
-                            let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x02, bytes));
-                        }
-                    }
-                }
-                if loop_count % 5 == 0 {
-                    energy_log.push(EnergySample { time: total_mic_samples as f32 / 16000.0,
-                        mic: MIC_VOLUME.load(Ordering::Relaxed), lb: LOOPBACK_VOLUME.load(Ordering::Relaxed) });
-                }
-
-                // Encode Mic Opus packets
-                for c_idx in 0..num_chunks {
-                    let start = c_idx * CHUNK_60MS;
-                    let end = start + CHUNK_60MS;
-                    granule_pos_mic += 2880;
-                    { let len = encoder_mic.encode(&mic_block[start..end], &mut encoded_buf_mic).map_err(|_|"Audio encoding failed".to_string())?;
-                        let packet = encoded_buf_mic[..len].to_vec();
-                        writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, granule_pos_mic).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                    }
-                }
-
-                // Encode Loopback Opus packets
-                for c_idx in 0..num_chunks {
-                    let start = c_idx * CHUNK_60MS;
-                    let end = start + CHUNK_60MS;
-                    granule_pos_lb += 2880;
-                    { let len = encoder_loopback.encode(&lb_block[start..end], &mut encoded_buf_lb).map_err(|_|"Audio encoding failed".to_string())?;
-                        let packet = encoded_buf_lb[..len].to_vec();
-                        writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, granule_pos_lb).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                    }
-                }
-
-                // Encode Mixed Opus packets
-                for c_idx in 0..num_chunks {
-                    let start = c_idx * CHUNK_60MS;
-                    let mut mixed_frame = [0i16; CHUNK_60MS];
-                    for k in 0..CHUNK_60MS {
-                        mixed_frame[k] = (mic_block[start + k] as i32 + lb_block[start + k] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-                    }
-                    granule_pos_mixed += 2880;
-                    { let len = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed).map_err(|_|"Audio encoding failed".to_string())?;
-                        let packet = encoded_buf_mixed[..len].to_vec();
-                        writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, granule_pos_mixed).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                    }
-                }
-
-                mic_carry_encode = mic_carry_encode[encode_len..].to_vec();
-                loopback_carry_encode = loopback_carry_encode[encode_len..].to_vec();
-            }
-        }
-
-        // Final flush at end of recording
-        let mic_raw = {
-            let mut lock = mic_buffer.lock().unwrap();
-            std::mem::take(&mut *lock)
-        };
-        let loopback_raw = {
-            let mut lock = loopback_buffer.lock().unwrap();
-            std::mem::take(&mut *lock)
-        };
-        let mic_16k = mic_resampler.push(&mic_raw);
-        let loopback_16k = loopback_resampler.push(&loopback_raw);
-
-        mic_carry_encode.extend_from_slice(&mic_16k);
-        mic_carry_encode.extend(mic_resampler.finish());
-        loopback_carry_encode.extend_from_slice(&loopback_16k);
-        loopback_carry_encode.extend(loopback_resampler.finish());
-
-        // Align remaining lengths
-        if loopback_carry_encode.len() < mic_carry_encode.len() {
-            loopback_carry_encode.resize(mic_carry_encode.len(), 0);
-        } else if mic_carry_encode.len() < loopback_carry_encode.len() {
-            mic_carry_encode.resize(loopback_carry_encode.len(), 0);
-        }
-
-        echo_canceller.process(&mut mic_carry_encode, &loopback_carry_encode);
-        if let Some(ref tx) = stream_tx {
-            mic_stream_buffer.extend_from_slice(&mic_carry_encode);
-            loopback_stream_buffer.extend_from_slice(&loopback_carry_encode);
-            if !mic_stream_buffer.is_empty() {
-                if let Ok(bytes) = encode_opus_ogg(&mic_stream_buffer, 16000, 1) {
-                    let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x01, bytes));
-                }
-            }
-            if !loopback_stream_buffer.is_empty() {
-                if let Ok(bytes) = encode_opus_ogg(&loopback_stream_buffer, 16000, 1) {
-                    let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::ChannelChunk(0x02, bytes));
-                }
-            }
-            let _ = tx.send(crate::meeting_stream::MeetingStreamAudioMessage::EndOfMeeting);
-        }
-
-        let flush_len = mic_carry_encode.len();
-        if flush_len > 0 {
-            // Flush Opus chunks
-            let num_flush_chunks = flush_len / CHUNK_60MS;
-            for c_idx in 0..num_flush_chunks {
-                let start = c_idx * CHUNK_60MS;
-                let end = start + CHUNK_60MS;
-
-                granule_pos_mic += 2880;
-                { let len = encoder_mic.encode(&mic_carry_encode[start..end], &mut encoded_buf_mic).map_err(|_|"Audio encoding failed".to_string())?;
-                    let packet = encoded_buf_mic[..len].to_vec();
-                    writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndPage, granule_pos_mic).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                }
-
-                granule_pos_lb += 2880;
-                { let len = encoder_loopback.encode(&loopback_carry_encode[start..end], &mut encoded_buf_lb).map_err(|_|"Audio encoding failed".to_string())?;
-                    let packet = encoded_buf_lb[..len].to_vec();
-                    writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndPage, granule_pos_lb).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                }
-
-                let mut mixed_frame = [0i16; CHUNK_60MS];
-                for k in 0..CHUNK_60MS {
-                    mixed_frame[k] = (mic_carry_encode[start + k] as i32 + loopback_carry_encode[start + k] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-                }
-                granule_pos_mixed += 2880;
-                { let len = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed).map_err(|_|"Audio encoding failed".to_string())?;
-                    let packet = encoded_buf_mixed[..len].to_vec();
-                    writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndPage, granule_pos_mixed).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                }
-            }
-
-            // Handle trailing partial frame if any
-            let rem_start = num_flush_chunks * CHUNK_60MS;
-            if rem_start < flush_len {
-                let mut mic_final = mic_carry_encode[rem_start..].to_vec();
-                let mut lb_final = loopback_carry_encode[rem_start..].to_vec();
-                mic_final.resize(CHUNK_60MS, 0);
-                lb_final.resize(CHUNK_60MS, 0);
-
-                granule_pos_mic += 2880;
-                { let len = encoder_mic.encode(&mic_final, &mut encoded_buf_mic).map_err(|_|"Audio encoding failed".to_string())?;
-                    let packet = encoded_buf_mic[..len].to_vec();
-                    writer_mic.write_packet(packet.into_boxed_slice(), serial_mic, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mic).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                }
-
-                granule_pos_lb += 2880;
-                { let len = encoder_loopback.encode(&lb_final, &mut encoded_buf_lb).map_err(|_|"Audio encoding failed".to_string())?;
-                    let packet = encoded_buf_lb[..len].to_vec();
-                    writer_loopback.write_packet(packet.into_boxed_slice(), serial_lb, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_lb).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                }
-
-                let mut mixed_frame = [0i16; CHUNK_60MS];
-                for k in 0..CHUNK_60MS {
-                    mixed_frame[k] = (mic_final[k] as i32 + lb_final[k] as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-                }
-                granule_pos_mixed += 2880;
-                { let len = encoder_mixed.encode(&mixed_frame, &mut encoded_buf_mixed).map_err(|_|"Audio encoding failed".to_string())?;
-                    let packet = encoded_buf_mixed[..len].to_vec();
-                    writer_mixed.write_packet(packet.into_boxed_slice(), serial_mixed, ogg::writing::PacketWriteEndInfo::EndStream, granule_pos_mixed).map_err(|e|format!("Audio recording write failed: {}",e))?;
-                }
-            }
-        }
-
-        writer_mixed.inner().sync_all().map_err(|e|e.to_string())?;
-        writer_mic.inner().sync_all().map_err(|e|e.to_string())?;
-        writer_loopback.inner().sync_all().map_err(|e|e.to_string())?;
-        let energy_path = output_ogg_path.with_extension("energy.json");
-        if let Ok(json_bytes) = serde_json::to_vec(&energy_log) {
-            let _ = std::fs::write(energy_path, json_bytes);
-        }
-        Ok(())
+    let writer_mic_buffer = mic_buffer.clone();
+    let writer_loopback_buffer = loopback_buffer.clone();
+    let recording_thread = std::thread::spawn(move || {
+        meeting_writer(
+            output_ogg_path,
+            writer_mic_buffer,
+            writer_loopback_buffer,
+            (mic_rate, mic_channels),
+            (loopback_rate, loopback_channels),
+            shutdown_rx,
+            recording_ready_tx,
+            stream_tx,
+        )
     });
 
-    let mut state = get_meeting_state().lock().unwrap_or_else(|e| e.into_inner());
-    let identity=uuid::Uuid::new_v4().to_string();
-    state.identity=Some(identity.clone());
+    let mut state = get_meeting_state()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let identity = uuid::Uuid::new_v4().to_string();
+    state.identity = Some(identity.clone());
     state.mic_stream = Some(SendStream(mic_stream));
     #[cfg(target_os = "macos")]
-    { state.macos_loopback = Some(macos_loopback); }
+    {
+        state.macos_loopback = Some(macos_loopback);
+    }
     #[cfg(windows)]
-    { state.loopback_stream = loopback_stream_opt.map(SendStream); }
+    {
+        state.loopback_stream = loopback_stream_opt.map(SendStream);
+    }
     #[cfg(not(windows))]
-    { state.loopback_stream = None; }
+    {
+        state.loopback_stream = None;
+    }
     #[cfg(target_os = "linux")]
     {
         state.pulse_loopback_shutdown = pulse_loopback_shutdown;
@@ -1517,37 +686,25 @@ pub fn start_meeting_recording(
     state.shutdown_tx = Some(shutdown_tx);
     state.recording_thread = Some(recording_thread);
     drop(state);
-    if recording_ready_rx.recv_timeout(std::time::Duration::from_secs(5)).is_err() {
-        let error = stop_meeting_recording().err().unwrap_or_else(|| "Recording storage initialization timed out".to_string());
+    if recording_ready_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .is_err()
+    {
+        let error = stop_meeting_recording()
+            .err()
+            .unwrap_or_else(|| "Recording storage initialization timed out".to_string());
         return Err(error.into());
     }
-
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            let broken={
-                let state=get_meeting_state().lock().unwrap_or_else(|e|e.into_inner());
-                if state.identity.as_deref()!=Some(identity.as_str()){return;}
-                #[cfg(target_os="macos")]
-                if crate::macos_audio::failed(){failed.store(true,Ordering::Relaxed);}
-                failed.load(Ordering::Relaxed)||state.recording_thread.as_ref().is_some_and(|worker|worker.is_finished())
-            };
-            if broken {
-                if crate::ACTIVE_MEETING.lock().unwrap_or_else(|e|e.into_inner()).is_none(){continue;}
-                let _=tauri::async_runtime::block_on(crate::stop_meeting(None));
-                crate::account_errors::notify("Meetings", "Recording stopped because an audio device, encoder, or disk write failed. Local audio has been retained; check device access and available disk space.");
-                if let Some(app)=crate::TAURI_APP.get(){use tauri::Emitter;let _=app.emit("meeting-recording-stopped",());}
-                return;
-            }
-        }
-    });
+    watch_meeting(identity, failed);
     Ok(())
 }
 
-pub fn stop_meeting_recording() -> Result<(),String> {
-    let mut state = get_meeting_state().lock().unwrap_or_else(|e| e.into_inner());
+pub fn stop_meeting_recording() -> Result<(), String> {
+    let mut state = get_meeting_state()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
-    state.identity=None;
+    state.identity = None;
     if let Some(tx) = state.shutdown_tx.take() {
         let _ = tx.send(());
     }
@@ -1555,7 +712,9 @@ pub fn stop_meeting_recording() -> Result<(),String> {
     state.mic_stream = None;
     state.loopback_stream = None;
     #[cfg(target_os = "macos")]
-    { state.macos_loopback = None; }
+    {
+        state.macos_loopback = None;
+    }
     #[cfg(target_os = "linux")]
     {
         if let Some(stop) = state.pulse_loopback_shutdown.take() {
@@ -1570,21 +729,58 @@ pub fn stop_meeting_recording() -> Result<(),String> {
 
     MIC_VOLUME.store(0, Ordering::Relaxed);
     LOOPBACK_VOLUME.store(0, Ordering::Relaxed);
- let writer=state.recording_thread.take();drop(state);
- if let Some(writer)=writer {writer.join().map_err(|_|"Meeting audio finalization failed".to_string())??;}
- Ok(())
+    let writer = state.recording_thread.take();
+    drop(state);
+    if let Some(writer) = writer {
+        writer
+            .join()
+            .map_err(|_| "Meeting audio finalization failed".to_string())??;
+    }
+    Ok(())
 }
 
-#[cfg(test)] mod capture_tests {
+#[cfg(test)]
+mod capture_tests {
     use super::*;
-    #[test] fn stereo_capture_continues_past_the_old_125_second_limit() {
-        let queue=Mutex::new(Vec::new());let chunk=vec![1000i16;4800];let mut batch=Vec::new();
+    #[test]
+    fn meeting_files_write_aligned_ogg_opus_streams() {
+        let directory =
+            std::env::temp_dir().join(format!("speektome-meeting-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mixed = directory.join("meeting.ogg");
+        let mut files = MeetingFiles::create(&mixed).unwrap();
+        let tone: Vec<i16> = (0..OPUS_FRAME * 5)
+            .map(|i| ((i as f32 / 8.0).sin() * 8000.0) as i16)
+            .collect();
+        files.write_frames(&tone, &tone).unwrap();
+        files
+            .write_frame(&tone[..OPUS_FRAME], &tone[..OPUS_FRAME], true)
+            .unwrap();
+        files.sync_all().unwrap();
+        for path in [
+            mixed.clone(),
+            mixed.with_extension("mic.ogg"),
+            mixed.with_extension("loopback.ogg"),
+        ] {
+            let data = std::fs::read(&path).unwrap();
+            assert!(data.starts_with(b"OggS"));
+            let pages = data.windows(4).filter(|w| w == b"OggS").count();
+            assert_eq!(pages, 2 + 6, "{}", path.display());
+            assert!(data.windows(8).any(|w| w == b"OpusHead"));
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn stereo_capture_continues_past_the_old_125_second_limit() {
+        let queue = Mutex::new(Vec::new());
+        let chunk = vec![1000i16; 4800];
+        let mut batch = Vec::new();
         for _ in 0..3000 {
             queue.lock().unwrap().extend_from_slice(&chunk);
-            batch.extend(resample_to_16k_mono(&take_capture(&queue),48000,2));
+            batch.extend(resample_to_16k_mono(&take_capture(&queue), 48000, 2));
             assert!(queue.lock().unwrap().is_empty());
         }
-        assert_eq!(batch.len(),16000*150);
+        assert_eq!(batch.len(), 16000 * 150);
     }
 }
 
