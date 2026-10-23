@@ -157,12 +157,12 @@ export default function DashboardPage({ view }) {
               </div>
             </div>
 
-            <div className="card" style={{ background: 'var(--color-btn-accent)', marginBottom: 0 }}>
-              <h3 className="card-title" style={{ borderBottomColor: 'var(--border-color)', display: 'flex', alignItems: 'center' }}>
+            <div className="card card-accent" style={{ marginBottom: 0 }}>
+              <h3 className="card-title" style={{ display: 'flex', alignItems: 'center' }}>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ marginRight: '6px' }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
                 Plan Tier: {user.plan_tier.toUpperCase()}
               </h3>
-              <p style={{ fontSize: '14px', marginBottom: '16px', fontWeight: '500' }}>
+              <p style={{ fontSize: '14.5px', marginBottom: '20px', color: 'rgba(36, 10, 18, 0.7)' }}>
                 {user.plan_active
                   ? `Active since ${formatDate(user.plan_activated_at)}`
                   : 'No active paid subscription.'}
@@ -173,17 +173,16 @@ export default function DashboardPage({ view }) {
                   Upgrade to Pro ($2.00/mo)
                 </button>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <button onClick={() => setRoute('billing')} className="btn" style={{ width: '100%', justifyContent: 'center', background: '#fff' }}>
+                <div className="card-actions">
+                  <button onClick={() => setRoute('billing')} className="btn">
                     Manage Billing Details
                   </button>
                   <button
                     onClick={() => setShowCancelModal(true)}
                     className="btn btn-danger"
-                    style={{ width: '100%', justifyContent: 'center' }}
                     disabled={loading}
                   >
-                    ❌ Cancel Subscription
+                    Cancel Subscription
                   </button>
                 </div>
               )}
@@ -204,11 +203,11 @@ export default function DashboardPage({ view }) {
                 <table className="logs-table">
                   <thead>
                     <tr>
-                      <th style={{ width: '15%' }}>Date & Time</th>
-                      <th style={{ width: '10%' }}>Audio Duration</th>
-                      <th style={{ width: '15%' }}>Processing</th>
-                      <th style={{ width: '50%' }}>Final Transcription</th>
-                      <th style={{ width: '10%', textAlign: 'center' }}>Status</th>
+                      <th>Date & Time</th>
+                      <th>Audio</th>
+                      <th>Processing</th>
+                      <th>Final Transcription</th>
+                      <th className="col-status">Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -228,8 +227,8 @@ export default function DashboardPage({ view }) {
                                 {log.total_time ? `${log.total_time.toFixed(2)}s` : 'N/A'}
                               </span>
                               <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                                {log.enhance_enabled && (
-                                  <span className="badge-pill badge-pill-accent">✨ Enhanced</span>
+                                {Boolean(log.enhance_enabled) && (
+                                  <span className="badge-pill badge-pill-accent">Enhanced</span>
                                 )}
                                 {log.transcription_provider && (
                                   <span className="badge-pill">{log.transcription_provider}</span>
@@ -260,12 +259,12 @@ export default function DashboardPage({ view }) {
                                 > Copy</button>
                               </div>
                             ) : (
-                              <span style={{ color: 'rgba(36, 10, 18, 0.4)', italic: 'true', fontSize: '13px' }}>
+                              <span style={{ color: 'rgba(36, 10, 18, 0.4)', fontStyle: 'italic', fontSize: '13px' }}>
                                 No transcript
                               </span>
                             )}
                           </td>
-                          <td style={{ textAlign: 'center' }}>
+                          <td className="col-status">
                             <span className={`badge-status ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
                               {log.status === 'success' ? 'Success' : 'Failed'}
                             </span>
@@ -360,20 +359,19 @@ export default function DashboardPage({ view }) {
           </p>
 
           {authError && <div className="auth-error" style={{ marginBottom: '16px' }}>{authError}</div>}
-          {successMessage && <div className="auth-success" style={{ marginBottom: '16px', background: '#d1fae5', color: '#065f46', padding: '10px 14px', borderRadius: '12px', border: 'var(--border-flat)', boxShadow: 'var(--shadow-flat-small)' }}>{successMessage}</div>}
+          {successMessage && <div className="auth-success">{successMessage}</div>}
 
-          <div style={{ marginBottom: '24px' }}>
-            <label style={{ fontSize: '13px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--color-text-dark)', display: 'block', marginBottom: '10px' }}>
-              Currently Selected Languages ({userLanguages.length}/5):
-            </label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+          <div className="language-selected">
+            <span className="field-label">
+              Currently selected ({userLanguages.length}/5)
+            </span>
+            <div className="language-selected-list">
               {userLanguages.map(code => (
                 <button
                   key={code}
                   type="button"
                   onClick={() => handleToggleLanguage(code)}
-                  className="btn btn-primary"
-                  style={{ padding: '6px 14px', fontSize: '13px' }}
+                  className="btn btn-primary language-chip is-selected is-selected-removable"
                   title="Click to remove"
                   disabled={savingLangs}
                 >
@@ -383,11 +381,11 @@ export default function DashboardPage({ view }) {
             </div>
           </div>
 
-          <div style={{ borderTop: 'var(--border-flat)', paddingTop: '20px' }}>
-            <label style={{ fontSize: '13px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--color-text-dark)', display: 'block', marginBottom: '14px' }}>
-              All 99 Supported Whisper Languages (Click to toggle):
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', maxHeight: '380px', overflowY: 'auto', paddingRight: '4px', padingTop: '10px', paddingBottom: '20px' }}>
+          <div className="language-all">
+            <span className="field-label">
+              All 99 supported languages (click to toggle)
+            </span>
+            <div className="language-grid">
               {SUPPORTED_LANGUAGES.map(lang => {
                 const selected = userLanguages.includes(lang.code);
                 return (
@@ -396,14 +394,8 @@ export default function DashboardPage({ view }) {
                     type="button"
                     onClick={() => handleToggleLanguage(lang.code)}
                     disabled={savingLangs}
-                    className={`btn ${selected ? 'btn-primary' : ''}`}
-                    style={{
-                      padding: '10px 14px',
-                      fontSize: '13px',
-                      fontWeight: selected ? '700' : '600',
-                      justifyContent: 'center',
-                      textAlign: 'center'
-                    }}
+                    className={`btn language-chip ${selected ? 'is-selected' : ''}`}
+                    aria-pressed={selected}
                   >
                     {lang.name}
                   </button>
@@ -425,7 +417,7 @@ export default function DashboardPage({ view }) {
                     className="btn btn-sm"
                     style={{ marginBottom: '12px' }}
                   >
-                    ⬅ Back to Meetings List
+                    ← Back to Meetings
                   </button>
                   <h2 className="meeting-detail-title">{activeMeeting.title}</h2>
                   <span className="meeting-card-date">Recorded on {formatDate(activeMeeting.timestamp)}</span>
@@ -773,8 +765,8 @@ export default function DashboardPage({ view }) {
             </div>
 
             {/* Current Monthly Quota meter */}
-            <div style={{ marginTop: '8px', background: 'var(--bg-canvas)', border: '1.5px solid var(--border-color)', borderRadius: '12px', padding: '18px 20px' }}>
-              <div className="usage-stats" style={{ marginBottom: '8px' }}>
+            <div className="quota-meter">
+              <div className="usage-stats">
                 <span>Current Month Usage Quota</span>
                 {(() => {
                   const isPaid = Boolean(user.plan_active && user.plan_tier === 'pro');
@@ -820,13 +812,13 @@ export default function DashboardPage({ view }) {
             </p>
 
             {resetEmailSuccess && (
-              <div style={{ background: '#d1fae5', border: '1.5px solid #065f46', color: '#065f46', padding: '12px 16px', borderRadius: '10px', fontSize: '13.5px', fontWeight: '600', marginBottom: '16px' }}>
+              <div className="notice-success">
                 {resetEmailSuccess}
               </div>
             )}
 
             {resetEmailError && (
-              <div style={{ background: '#fee2e2', border: '1.5px solid #991b1b', color: '#991b1b', padding: '12px 16px', borderRadius: '10px', fontSize: '13.5px', fontWeight: '600', marginBottom: '16px' }}>
+              <div className="notice-error">
                 {resetEmailError}
               </div>
             )}
@@ -872,7 +864,7 @@ export default function DashboardPage({ view }) {
       {/* 2-Step Delete Account Modal */}
       {showDeleteModal && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ border: '2px solid #991b1b' }}>
+          <div className="modal-content modal-danger">
             <h3 className="modal-title" style={{ color: '#991b1b', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
               Permanently Delete Account
@@ -884,7 +876,7 @@ export default function DashboardPage({ view }) {
               <strong>Confirmation 1 of 2:</strong> You are about to permanently delete your account (<strong>{user.email}</strong>). All meetings, audio recordings, custom vocabulary, and history will be wiped out immediately.
             </p>
 
-            <div style={{ marginTop: '16px', background: 'var(--bg-canvas)', border: '1.5px solid rgba(153, 27, 27, 0.3)', padding: '14px', borderRadius: '10px' }}>
+            <div className="modal-confirm">
               <label style={{ display: 'block', fontSize: '12.5px', fontWeight: '700', marginBottom: '8px', color: '#991b1b' }}>
                 Confirmation 2 of 2: To proceed, type DELETE in capital letters below:
               </label>
