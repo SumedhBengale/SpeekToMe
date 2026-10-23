@@ -257,12 +257,13 @@ fn draw_overlay(cr: &gtk::cairo::Context) {
                 overlay.frame,
             );
         }
-        cr.set_source_rgb(wave.0, wave.1, wave.2);
+        let logo = crate::native_overlay::color(crate::native_overlay::LOGO_COLOR);
+        cr.set_source_rgb(logo.0, logo.1, logo.2);
         let level = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed) as f64;
         overlay.smoothed = crate::native_overlay::smooth_volume(overlay.smoothed, level);
         let processing = OVERLAY_STATE.load(Ordering::SeqCst) == 2;
         for bar in crate::native_overlay::bars(x, y, overlay.frame, overlay.smoothed, processing) {
-            rounded_rect(cr, bar.x, bar.y, bar.width, bar.height, 1.2);
+            rounded_rect(cr, bar.x, bar.y, bar.width, bar.height, bar.width / 2.0);
             let _ = cr.fill();
         }
         if overlay.has_preview {

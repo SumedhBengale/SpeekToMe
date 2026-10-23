@@ -53,3 +53,20 @@ Tests use local SQLite, an isolated Valkey-compatible test server, and mocked in
 `GET /auth/me` returns `command_usage` from durable per-account counters: input/output used, limits and remaining tokens, remaining percentage, period start, reset time, entitlement, and renewal-pending state. The percentage is the smaller of the two remaining fractions. In-flight reservations are included; unavailable accounting returns null rather than an invented zero. Desktop Account shows the usage percentage, meter and reset status without an input/output token breakdown. The website's usage/pricing presentation is a separate frontend change; the backend fields alone do not update a deployed dashboard. Public `/config` exposes configured monthly token limits.
 
 Paid transcription usage is reset by `ApplySuccessfulSubscriptionPayment`; free transcription resets on calendar-month maintenance. Successful payments also initialize a fresh Command Mode billing-period row in the same transaction. If a new invoice/payment webhook omits subscription dates, it fetches the subscription from Razorpay before recording the payment; reconciliation failures leave the event retryable. Duplicates do not require another provider fetch. Old rows and attempt records remain, so late settlements affect only their original period. An existing period is never cleared by a repeated notification. Non-payment subscription events preserve confirmed billing boundaries; expired confirmed periods remain in place until payment confirms renewal. The same period resolver drives enforcement and both displays. Without known provider billing dates, the existing activation-anniversary/month fallback applies.
+
+## Transcription and vocabulary plans
+
+The server hardcodes Free transcription to batch Whisper Large v3 Turbo. It filters
+configured enabled batch candidates to that model's provider identifiers; if no
+allowed candidate succeeds, it returns an error rather than using another model.
+Pro retains configured batch routing and streaming. Only active Pro accounts run
+the grammar enhancement LLM, regardless of client `enhance` or `model` fields.
+Vocabulary matching and TypeSafe Jev decisions remain in both pipelines.
+
+Free accounts can save 20 vocabulary terms; active Pro accounts can save 1,000.
+The database enforces additions atomically against current entitlement and count.
+Downgrades never delete terms: management APIs list the entire saved dictionary,
+while transcription uses only the first 20 terms alphabetically on Free, or the
+first 1,000 on Pro. An upgrade restores the larger active snapshot automatically.
+Accounts above their limit can delete or re-add existing terms, but cannot add a
+new term until below the limit. The existing 48-hour subscription grace applies.

@@ -133,7 +133,6 @@ pub fn get_stream_ws_url(api_url: &str, token: &str) -> String {
 pub fn start_streaming_session(
     api_url: String,
     token: String,
-    enhance: bool,
     custom_prompt: String,
     language: String,
     context: crate::shortcuts::RecordingContext,
@@ -169,7 +168,6 @@ pub fn start_streaming_session(
             "format": "ogg_opus",
             "sample_rate": 16000,
             "channels": 1,
-            "enhance": enhance,
             "prompt": custom_prompt,
             "language": language,
             "capabilities": ["continuous_stream", "chunked_vad"]

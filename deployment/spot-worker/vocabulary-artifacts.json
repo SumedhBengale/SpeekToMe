@@ -1,7 +1,7 @@
 {
   "manifest": {
-    "key": "deployment/fleet-v1/911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad/fleet-manifest.json",
-    "sha256": "911f21a71027667375056b572bd27d031963bceb0e635fb9f42d60c100d235ad"
+    "key": "deployment/fleet-v1/dae721f3a84227e3cfcfa8efb8add77bbc1bb48a2c2f2b8a1447c50779bbcc37/fleet-manifest.json",
+    "sha256": "dae721f3a84227e3cfcfa8efb8add77bbc1bb48a2c2f2b8a1447c50779bbcc37"
   },
   "bootstrap": {
     "key": "deployment/fleet-v1/3280c246f40020ab6e19edb2aab71b8409ec69d9ad198fbd2d01f663788d7ab7/bootstrap.sh",
@@ -10,27 +10,27 @@
   "regional_user_data": [
     {
       "region": "us-east-1",
-      "key": "deployment/launch-configs/us-east-1/7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a/user-data.sh",
-      "sha256": "7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a"
+      "key": "deployment/launch-configs/us-east-1/2493f0e46fbaa9a11188da06e1adc89d8b6bf1176b6c5074eac61d58a85ba92b/user-data.sh",
+      "sha256": "2493f0e46fbaa9a11188da06e1adc89d8b6bf1176b6c5074eac61d58a85ba92b"
     },
     {
       "region": "us-east-2",
-      "key": "deployment/launch-configs/us-east-2/7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a/user-data.sh",
-      "sha256": "7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a"
+      "key": "deployment/launch-configs/us-east-2/2493f0e46fbaa9a11188da06e1adc89d8b6bf1176b6c5074eac61d58a85ba92b/user-data.sh",
+      "sha256": "2493f0e46fbaa9a11188da06e1adc89d8b6bf1176b6c5074eac61d58a85ba92b"
     },
     {
       "region": "us-west-2",
-      "key": "deployment/launch-configs/us-west-2/7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a/user-data.sh",
-      "sha256": "7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a"
+      "key": "deployment/launch-configs/us-west-2/2493f0e46fbaa9a11188da06e1adc89d8b6bf1176b6c5074eac61d58a85ba92b/user-data.sh",
+      "sha256": "2493f0e46fbaa9a11188da06e1adc89d8b6bf1176b6c5074eac61d58a85ba92b"
     },
     {
       "region": "ca-central-1",
-      "key": "deployment/launch-configs/ca-central-1/7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a/user-data.sh",
-      "sha256": "7ce8cef1f974a59cfc486d626b228f32b48bc412a69109a8a325da9ee41db93a"
+      "key": "deployment/launch-configs/ca-central-1/2493f0e46fbaa9a11188da06e1adc89d8b6bf1176b6c5074eac61d58a85ba92b/user-data.sh",
+      "sha256": "2493f0e46fbaa9a11188da06e1adc89d8b6bf1176b6c5074eac61d58a85ba92b"
     }
   ],
   "fleet_config": {
-    "key": "deployment/fleet-config/6b1f412acdf36e5515612dacbb67eaecb9e73111aa69b719b94a96c89c943acd/fleet.json",
-    "sha256": "6b1f412acdf36e5515612dacbb67eaecb9e73111aa69b719b94a96c89c943acd"
+    "key": "deployment/fleet-config/34fd7ed4fd22b18bd70a15a37e9ca475e6d0593a6fb77f7c39b822565e8ad089/fleet.json",
+    "sha256": "34fd7ed4fd22b18bd70a15a37e9ca475e6d0593a6fb77f7c39b822565e8ad089"
   }
 }

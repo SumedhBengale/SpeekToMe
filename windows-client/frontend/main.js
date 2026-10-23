@@ -348,7 +348,6 @@ const hotkeyModeSelect = document.getElementById('hotkey-mode-select');
 const autostartCheck = document.getElementById('autostart-check');
 const typingModeCheck = document.getElementById('typing-mode-check');
 const soundFeedbackCheck = document.getElementById('sound-feedback-check');
-const modelSelect = document.getElementById('model-select');
 const streamingModeCheck = document.getElementById('streaming-mode-check');
 const streamingProHint = document.getElementById('streaming-pro-hint');
 const commandModeCheck = document.getElementById('command-mode-check');
@@ -415,7 +414,6 @@ const onboardAutostartCheck = document.getElementById('onboard-autostart-check')
 const onboardStreamingModeCheck = document.getElementById('onboard-streaming-mode-check');
 const onboardTypingModeCheck = document.getElementById('onboard-typing-mode-check');
 const onboardSoundFeedbackCheck = document.getElementById('onboard-sound-feedback-check');
-const onboardModelSelect = document.getElementById('onboard-model-select');
 const onboardThemeSelect = document.getElementById('onboard-theme-select');
 
 // ==========================================
@@ -858,7 +856,6 @@ async function init() {
     pillPredefinedSelect,
     pillCustomX,
     pillCustomY,
-    modelSelect,
     streamingModeCheck,
     commandModeCheck
   ];
@@ -1338,7 +1335,6 @@ function checkIfConfigDirty(a, b) {
   if (Boolean(a.typing_mode) !== Boolean(b.typing_mode)) return true;
   if (Boolean(a.sound_feedback) !== Boolean(b.sound_feedback)) return true;
   if (a.theme !== b.theme) return true;
-  if (a.model !== b.model) return true;
   if (a.transcription_mode !== b.transcription_mode) return true;
   const aCmd = a.command_mode !== undefined ? Boolean(a.command_mode) : true;
   const bCmd = b.command_mode !== undefined ? Boolean(b.command_mode) : true;
@@ -1398,7 +1394,6 @@ function applyConfigToUI(config) {
   if (autostartCheck) autostartCheck.checked = Boolean(config.autostart);
   if (typingModeCheck) typingModeCheck.checked = Boolean(config.typing_mode);
   if (soundFeedbackCheck) soundFeedbackCheck.checked = Boolean(config.sound_feedback);
-  if (modelSelect) modelSelect.value = config.model || 'whisper-large-v3-turbo';
   if (streamingModeCheck) {
     streamingModeCheck.checked = (config.transcription_mode === 'stream');
   }
@@ -1438,7 +1433,6 @@ function applyConfigToUI(config) {
   }
   if (onboardTypingModeCheck) onboardTypingModeCheck.checked = Boolean(config.typing_mode);
   if (onboardSoundFeedbackCheck) onboardSoundFeedbackCheck.checked = Boolean(config.sound_feedback);
-  if (onboardModelSelect) onboardModelSelect.value = config.model || 'whisper-large-v3-turbo';
   if (onboardThemeSelect) onboardThemeSelect.value = config.theme || 'forest';
 
   // Apply theme class to document
@@ -1713,8 +1707,6 @@ function gatherConfigFromUI(isOnboarding) {
     autostart: checked('autostart-check', false),
     typing_mode: checked('typing-mode-check', false),
     sound_feedback: checked('sound-feedback-check', saved.sound_feedback ?? true),
-    model: value('model-select', 'whisper-large-v3-turbo'),
-    enhance: saved.enhance ?? true,
     transcription_mode: checked('streaming-mode-check', false) ? 'stream' : 'batch',
     command_mode: checked('command-mode-check', saved.command_mode !== false),
     custom_prompt: saved.custom_prompt ?? '',
@@ -2624,6 +2616,13 @@ async function loadVocabulary() {
 
   try {
     const terms = await invoke('get_vocabulary');
+    const limit = isUserPro(currentUserInfo) ? 1000 : 20;
+    if (vocabWarning) {
+      const count = terms?.length || 0;
+      vocabWarning.textContent = `${Math.min(count, limit)} of ${limit} terms active on your plan.` +
+        (count > limit ? ` All ${count} saved terms are preserved; only the first ${limit} alphabetically are active.` : '');
+      vocabWarning.classList.remove('hidden');
+    }
     hideVocabLoading();
     vocabList.innerHTML = '';
 
@@ -2634,7 +2633,6 @@ async function loadVocabulary() {
       }
       vocabList.classList.add('hidden');
       vocabList.style.display = 'none';
-      if (vocabWarning) vocabWarning.classList.add('hidden');
       return;
     }
 
@@ -2645,15 +2643,7 @@ async function loadVocabulary() {
     vocabList.classList.remove('hidden');
     vocabList.style.display = 'flex';
 
-    if (vocabWarning) {
-      if (terms.length > 1000) {
-        vocabWarning.classList.remove('hidden');
-      } else {
-        vocabWarning.classList.add('hidden');
-      }
-    }
-
-    terms.forEach(term => {
+    terms.forEach((term, index) => {
       const li = document.createElement('li');
       li.className = 'vocab-item';
 
@@ -2666,7 +2656,7 @@ async function loadVocabulary() {
 
       const normSpan = document.createElement('span');
       normSpan.className = 'vocab-term-normalized';
-      normSpan.textContent = `(${term.normalized_term})`;
+      normSpan.textContent = index >= limit ? "Saved; inactive on this plan" : `(${term.normalized_term})`;
 
       textSpan.appendChild(termName);
       textSpan.appendChild(normSpan);

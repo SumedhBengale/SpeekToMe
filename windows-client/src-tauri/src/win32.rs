@@ -726,7 +726,6 @@ mod win32_impl {
             }
 
             let bg_color = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed);
-            let wave_color = crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed);
 
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
             let margin=if state==PreviewState::Meeting{0.0}else{4.0};
@@ -770,7 +769,7 @@ mod win32_impl {
                 }
             }
 
-            static SMOOTHED_VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            static SMOOTHED_VOLUME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let raw_vol = if state == PreviewState::Meeting {
                 let mic = crate::audio::MIC_VOLUME.load(Ordering::Relaxed);
                 let lb = crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed);
@@ -778,9 +777,10 @@ mod win32_impl {
             } else {
                 crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed)
             };
-            let mut smoothed = SMOOTHED_VOLUME.load(Ordering::Relaxed);
-            smoothed = ((smoothed as f32 * 0.8) + (raw_vol as f32 * 0.2)) as u32;
-            SMOOTHED_VOLUME.store(smoothed, Ordering::Relaxed);
+            let smoothed = crate::native_overlay::smooth_volume(
+                f64::from_bits(SMOOTHED_VOLUME.load(Ordering::Relaxed)), raw_vol as f64,
+            );
+            SMOOTHED_VOLUME.store(smoothed.to_bits(), Ordering::Relaxed);
 
             static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -792,37 +792,29 @@ mod win32_impl {
                     pixel_slice[(y*width+x)as usize]=crate::native_overlay::processing_pixel(x as f64+0.5,y as f64+0.5,bounds,12.0,frame as u64,background);
                 }}
             }
-            let bar_r = (wave_color & 0xFF) as u32;
-            let bar_g = ((wave_color >> 8) & 0xFF) as u32;
-            let bar_b = ((wave_color >> 16) & 0xFF) as u32;
-
-            let center_y = height as f32 / 2.0;
-            let bar_width = 2.5;
-            let gap = 2.0;
-            let total_width = 5.0 * bar_width + 4.0 * gap;
-            let start_x = if state == PreviewState::Meeting {
-                14.0
-            } else {
-                (width as f32 - total_width) / 2.0
+            let logo_color = crate::native_overlay::LOGO_COLOR;
+            let bar_r = logo_color & 0xFF;
+            let bar_g = (logo_color >> 8) & 0xFF;
+            let bar_b = (logo_color >> 16) & 0xFF;
+            // Keep the meeting indicator beside its timer; center normal dictation.
+            let logo_x = if state == PreviewState::Meeting { -7.0 } else {
+                (width as f64 - crate::native_overlay::PILL_WIDTH) / 2.0
             };
-
-            let is_processing = state == PreviewState::Processing;
-
-            for i in 0..5 {
-                let bar_height = crate::native_overlay::bar_height(
-                    frame as u64, i, smoothed as f64, is_processing,
-                ) as f32;
-
-                let x_center = start_x + (i as f32) * (bar_width + gap) + bar_width / 2.0;
-                let y_start = center_y - bar_height + 0.8;
-                let y_end = center_y + bar_height - 0.8;
+            let logo_y = (height as f64 - crate::native_overlay::PILL_HEIGHT) / 2.0;
+            for bar in crate::native_overlay::bars(
+                logo_x, logo_y, frame as u64, smoothed, state == PreviewState::Processing,
+            ) {
+                let radius = (bar.width / 2.0) as f32;
+                let x_center = (bar.x + bar.width / 2.0) as f32;
+                let y_start = bar.y as f32 + radius;
+                let y_end = (bar.y + bar.height) as f32 - radius;
 
                 for y in 0..height {
                     for x in 0..width {
                         let px = x as f32 + 0.5;
                         let py = y as f32 + 0.5;
 
-                        if (px - x_center).abs() > 2.0 {
+                        if (px - x_center).abs() > radius + 0.5 {
                             continue;
                         }
 
@@ -834,13 +826,7 @@ mod win32_impl {
                             (px - x_center).abs()
                         };
 
-                        let bar_alpha = if d <= 0.8 {
-                            255
-                        } else if d >= 1.8 {
-                            0
-                        } else {
-                            ((1.8 - d) * 255.0) as u32
-                        };
+                        let bar_alpha = ((radius + 0.5 - d).clamp(0.0, 1.0) * 255.0) as u32;
 
                         if bar_alpha > 0 {
                             let idx = (y * width + x) as usize;

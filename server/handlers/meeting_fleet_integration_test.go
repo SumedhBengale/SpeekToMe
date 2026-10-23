@@ -41,7 +41,7 @@ func TestRealFleetDurableMeeting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	if _, err = database.GetDB().Exec(`INSERT INTO users(id,email,name) VALUES(1,'acceptance@example.invalid','Local speaker')`); err != nil {
+	if _, err = database.GetDB().Exec(`INSERT INTO users(id,email,name,plan_tier,plan_active) VALUES(1,'acceptance@example.invalid','Local speaker','pro',1)`); err != nil {
 		t.Fatal(err)
 	}
 	if err = database.CreateSession("acceptance-session", 1, 0); err != nil {

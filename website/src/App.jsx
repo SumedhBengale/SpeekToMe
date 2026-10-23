@@ -1603,6 +1603,11 @@ export default function App() {
 
               {authError && <div className="auth-error" style={{ marginBottom: '20px' }}>{authError}</div>}
 
+              <p className="setting-hint">
+                {Math.min(vocabTerms.length, user.plan_active && user.plan_tier === 'pro' ? 1000 : 20)} of {user.plan_active && user.plan_tier === 'pro' ? '1,000' : '20'} terms active on your plan.
+                {vocabTerms.length > (user.plan_active && user.plan_tier === 'pro' ? 1000 : 20) && ' All saved terms are preserved; only the first terms alphabetically within your plan limit are active.'}
+              </p>
+
               <form onSubmit={handleAddVocab} className="vocab-form">
                 <input
                   type="text"

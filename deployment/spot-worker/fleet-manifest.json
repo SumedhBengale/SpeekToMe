@@ -22,13 +22,13 @@
   },
   "gateways": {
     "amd64": {
-      "key": "gateway/a395d658e4a5bc577ed00433a89f347b8b82bf484e4e44884baa696c3f79d0ae/speektome-gateway-amd64.gz",
-      "sha256": "a395d658e4a5bc577ed00433a89f347b8b82bf484e4e44884baa696c3f79d0ae",
+      "key": "gateway/52b83f446902db2ac61d5672ca70f4bd5c3c71b678b65e3024c4ea9f097a0bd9/speektome-gateway-amd64.gz",
+      "sha256": "52b83f446902db2ac61d5672ca70f4bd5c3c71b678b65e3024c4ea9f097a0bd9",
       "compression": "gzip"
     },
     "arm64": {
-      "key": "gateway/7693ea07469350d42e2f5a89a2a3f5c60b6414d364e7109928034abca0bbfedb/speektome-gateway-arm64.gz",
-      "sha256": "7693ea07469350d42e2f5a89a2a3f5c60b6414d364e7109928034abca0bbfedb",
+      "key": "gateway/02a7b165e476098e4332091e827cdfc08033b638a31ebe0895a2301ebcb3bfeb/speektome-gateway-arm64.gz",
+      "sha256": "02a7b165e476098e4332091e827cdfc08033b638a31ebe0895a2301ebcb3bfeb",
       "compression": "gzip"
     }
   },

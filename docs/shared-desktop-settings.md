@@ -36,7 +36,8 @@ The running process and its saved preferences were left untouched.
   reservations and register the selected shortcut.
 - Both settings and onboarding use `gatherConfigFromUI`. Fields without a
   control on the current screen retain their saved values, including custom
-  prompts, enhancement preferences, and onboarding's existing overlay position.
+  prompts and onboarding's existing overlay position. Enhancement is enforced
+  by the server from the authenticated plan; it is not a saved preference.
   Coordinates of zero and negative coordinates survive saving.
 - Launch at sign-in uses the user's Windows `Run` registry entry or the Linux
   XDG autostart entry. The common toggle controls either implementation.

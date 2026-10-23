@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Publish a content-addressed gateway release. Does not change live fleet state."""
-import argparse,base64,gzip,hashlib,json,pathlib,subprocess
+import argparse,base64,gzip,hashlib,json,pathlib,re,subprocess
 BASE=pathlib.Path(__file__).resolve().parent
 BUCKET='speektome-inference-ACCOUNT_ID-us-east-1'
 def publish(data,name,prefix):
@@ -11,10 +11,17 @@ def publish(data,name,prefix):
     assert head['ChecksumSHA256']==base64.b64encode(bytes.fromhex(sha)).decode()
     path.unlink();return {'key':key,'sha256':sha}
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--fleet-config',required=True);p.add_argument('--output',required=True);a=p.parse_args()
-    m=json.loads((BASE/'manifest.json').read_text())
+    p=argparse.ArgumentParser();p.add_argument('--fleet-config',required=True);p.add_argument('--output',required=True);p.add_argument('--manifest',type=pathlib.Path,default=BASE/'manifest.json');a=p.parse_args()
+    m=json.loads(a.manifest.read_text())
     for arch in ['amd64','arm64']:
-        data=pathlib.Path('/tmp/speektome-gateway-'+arch).read_bytes()
+        binary=pathlib.Path('/tmp/speektome-gateway-'+arch)
+        info=subprocess.check_output(['go','version','-m',str(binary)],text=True)
+        version=re.search(r': go(\d+)\.(\d+)\.(\d+)',info.splitlines()[0])
+        if not version:raise SystemExit('Missing Go build version: '+str(binary))
+        major,minor,patch=map(int,version.groups())
+        if not (major>1 or major==1 and (minor>27 or minor==27 and patch>=3 or minor==26 and patch>=10)):
+            raise SystemExit('Gateway predates eMudhra fix: '+info.splitlines()[0])
+        data=binary.read_bytes()
         m['gateways'][arch]=dict(publish(gzip.compress(data,mtime=0),'speektome-gateway-'+arch+'.gz','gateway'),compression='gzip')
     m['helpers']['ready']=publish((BASE/'check-ready.sh').read_bytes(),'check-ready.sh','deployment/helpers')
     m['capabilities']=sorted(set(m.get('capabilities',[])+['final_vocabulary_matching_v1']))
@@ -23,7 +30,6 @@ def main():
     fleet=json.loads(pathlib.Path(a.fleet_config).read_text());regions=[]
     for region in fleet['regions']:
         data=region['user_data']
-        import re
         data=re.sub(r'MANIFEST_KEY=[^\s]+',"MANIFEST_KEY="+artifacts['manifest']['key'],data)
         data=re.sub(r'MANIFEST_SHA=[^\s]+',"MANIFEST_SHA="+artifacts['manifest']['sha256'],data)
         data=re.sub(r'deployment/fleet-v1/[a-f0-9]+/bootstrap.sh',artifacts['bootstrap']['key'],data)

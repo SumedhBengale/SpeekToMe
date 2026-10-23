@@ -578,7 +578,7 @@ func (d *Database) GetUserAndVocabularyBySession(token string) (*UserProfile, []
 		return nil, nil, err
 	}
 
-	terms, err := d.GetVocabularyTerms(u.ID)
+	terms, err := d.GetActiveVocabularyTerms(u.ID)
 	if err != nil {
 		return u, nil, nil
 	}
@@ -1148,20 +1148,6 @@ func (d *Database) GetUserUsageLogs(userID int64) ([]UsageLog, error) {
 type VocabularyTerm struct {
 	Canonical  string `json:"canonical_term"`
 	Normalized string `json:"normalized_term"`
-}
-
-func (d *Database) AddVocabularyTerm(userID int64, canonical, normalized string) (int64, error) {
-	res, err := d.db.Exec(`
-		INSERT INTO vocabulary (user_id, canonical_term, normalized_term)
-		VALUES (?, ?, ?)
-		ON CONFLICT(user_id, canonical_term) DO UPDATE SET
-			normalized_term = excluded.normalized_term,
-			updated_at = CURRENT_TIMESTAMP
-	`, userID, canonical, normalized)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
 }
 
 func (d *Database) GetVocabularyTerms(userID int64) ([]VocabularyTerm, error) {

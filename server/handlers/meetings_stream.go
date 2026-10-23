@@ -311,7 +311,7 @@ func (a *App) HandleMeetingStream(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "Unauthorized")
 		return
 	}
-	if a.DB.Privacy != nil && (user.PlanTier != "pro" || user.PlanActive != 1) {
+	if user.PlanTier != "pro" || user.PlanActive != 1 {
 		_ = writeMeetingEventJSON(ctx, conn, MeetingStreamEventMessage{Type: "error", Error: "Meeting recording requires an active Pro subscription"})
 		return
 	}

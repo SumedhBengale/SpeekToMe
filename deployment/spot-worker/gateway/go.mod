@@ -1,6 +1,6 @@
 module speektome/spot-worker-gateway
 
-go 1.24.0
+go 1.26.10
 
 require (
 	github.com/gorilla/websocket v1.5.3
@@ -8,4 +8,5 @@ require (
 )
 
 require speektome/vocabulary v0.0.0
+
 replace speektome/vocabulary => ../../../shared/vocabulary

@@ -322,7 +322,6 @@
 </label></div><p class="setup-tip">The app waits in your system tray or menu bar. Closing Settings releases its UI; dictation stays available.</p></section><div class="onboarding-step" id="onboard-step-9">
 <h2>Spoken Languages</h2>
 <p class="step-desc">Add up to 5 languages. Star the language you want to use for transcription.</p>
-<input id="onboard-model-select" type="hidden" value="whisper-large-v3-turbo"/>
 <div class="settings-card compact-card">
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
 <label class="setting-title">Languages I Speak</label>
@@ -501,7 +500,6 @@
           <p class="section-desc">Configure core keyboard shortcuts, spoken languages, and app behavior.</p>
         </div>
 
-        <input type="hidden" id="model-select" value="whisper-large-v3-turbo">
 
         <!-- Trigger & Activation Card -->
         <div class="settings-card">
@@ -852,15 +850,7 @@
             <button type="button" id="vocab-add-btn" class="vocab-add-btn">Add Word</button>
           </div>
 
-          <!-- 1,000+ Term Latency Warning -->
-          <div class="vocab-warning hidden" id="vocab-warning">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-              <line x1="12" y1="9" x2="12" y2="13"></line>
-              <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
-            <span>Warning: Having more than 1,000 terms may slightly affect latency.</span>
-          </div>
+          <p class="setting-hint" id="vocab-warning" aria-live="polite"></p>
 
           <!-- Vocabulary Items Container -->
           <div class="vocab-list-wrapper">

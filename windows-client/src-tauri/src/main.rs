@@ -695,8 +695,18 @@ fn run_native_overlay_diagnostic() {
         let handle = app.handle().clone();
         let _ = TAURI_APP.set(handle.clone());
         linux_desktop::setup(&handle)?;
-        win32::set_preview_text(&"Native Rust preview. नमस्ते दुनिया. Processing glow with no webview.\n".repeat(16));
-        win32::set_preview_state(win32::PreviewState::Processing);
+        // Synthetic levels exercise the production recording renderer without capture.
+        win32::set_preview_state(win32::PreviewState::Listening);
+        audio::CURRENT_VOLUME.store(0, Ordering::Relaxed);
+        for (millis, level) in [(800, 12), (1600, 120), (2400, 0)] {
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(millis), move || {
+                audio::CURRENT_VOLUME.store(level, Ordering::Relaxed);
+            });
+        }
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(3600), || {
+            win32::set_preview_text(&"Native Rust preview. नमस्ते दुनिया. Processing glow with no webview.\n".repeat(16));
+            win32::set_preview_state(win32::PreviewState::Processing);
+        });
         gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(7), move || lifecycle::quit(&handle));
         Ok(())
     }).build(desktop_context()).expect("native overlay diagnostic");
@@ -776,7 +786,6 @@ fn main() {
         AttachConsole(ATTACH_PARENT_PROCESS);
     }
 
-    if std::env::args().nth(1).as_deref()==Some("--diagnose-playback"){playback::run_diagnostic();return;}
 
     // Read-only policy diagnostic: no preferences, microphone or app instance.
     if std::env::args().nth(1).as_deref() == Some("--check-shortcut") {

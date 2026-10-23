@@ -115,7 +115,7 @@ impl RecordingSession {
 
     // Called after the microphone starts: its buffer preserves the initial
     // audio while the single/double decision is pending. The WS handshake only
-    // follows a final route, so spoken commands never get dictation enhancement.
+    // follows a final route, so Command Mode is resolved before audio is sent.
     pub fn resolve(self) -> Option<RecordingContext> {
         self.resolve_with(crate::keyboard::get_selected_text)
     }
@@ -388,7 +388,7 @@ mod tests {
                     let (tcp, _) = listener.accept().await.unwrap();
                     let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
                     let start = ws.next().await.unwrap().unwrap();
-                    assert!(start.into_text().unwrap().contains("\"enhance\":false"));
+                    assert!(serde_json::from_str::<serde_json::Value>(&start.into_text().unwrap()).unwrap().get("enhance").is_none());
                     ws.send(Message::Text(
                         r#"{"type":"session_ready","mode":"continuous_stream"}"#.into(),
                     ))
@@ -410,7 +410,6 @@ mod tests {
         let handle = crate::stream::start_streaming_session(
             format!("http://{address}"),
             "local-test".into(),
-            false,
             String::new(),
             "en".into(),
             context,

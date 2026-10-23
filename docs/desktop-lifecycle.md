@@ -53,8 +53,9 @@ across the transition so a helper cannot outlive a parent that exits meanwhile.
   build, Windows cross-check, and strict C helper compilation passed.
 
 A bounded rendering diagnostic uses the production native renderer, exits after
-seven seconds, and does not start capture, portals, uploads or server calls. Quit
-the regular instance before running it:
+seven seconds, and does not start capture, portals, uploads or server calls. It
+shows silence, soft speech, loud speech, and silence using synthetic microphone
+levels, then the processing preview. Quit the regular instance before running it:
 
 ```
 speektome --diagnose-native-overlay
@@ -80,3 +81,19 @@ Previous teardown-policy validation on 2026-10-19 (before minimize was changed t
 Updated minimize-policy validation: the Tahoe lifecycle diagnostic retained one live Settings webview after both app and native minimize, then released it on explicit dismissal. Close/Hide and rapid reopen checks passed. Linux and Windows GNU compile checks passed; the updated normal Tahoe client was restarted.
 
 Revalidated from master on 2026-10-20: a one-shot cleanup occasionally ran before delayed native release completed. Bounded idle retries now cover that timing. Two consecutive Tahoe lifecycle runs passed all 18 snapshots each, retaining exactly one live view while minimized and no views/data stores/process pools after Close/Hide. Independently sampled owned WebKit helpers were absent in final idle. Native preview/permission checks, 56 macOS Rust tests, Intel/ARM builds, native shortcut tests and development-signing identity checks passed. Linux passed 60 Rust tests and lifecycle checks; Windows GNU compile and shared Settings parity checks passed. The normal Linux and Tahoe clients were left running with account state intact. No live speech/transcription or ARM/Windows runtime test was performed.
+
+## Audio-reactive recording logo
+
+The native pill uses the five rounded bars from the SpeekToMe SVG, in #FA5388.
+`native_overlay.rs` owns their coordinates and amplitude mapping for Windows,
+Linux, and macOS. Capture publishes RMS × 1000; a two-unit noise floor and
+square-root response keep silence still and soft speech visible. Levels reach
+full height at 120 (RMS 0.12), with a fast attack and slower release at the native
+30 Hz drawing rate. The SVG's original height ratios are retained at full level.
+Processing uses a gentle pulse because capture has stopped. Theme colors still
+control the pill background and transcription preview. No webview is involved.
+
+Validated on 2026-10-21: eight shared overlay tests, Linux release build,
+Windows GNU compile check, and the native Linux diagnostic on Wayland. Visual
+captures confirmed the quiet, loud, release, and multilingual processing states.
+Windows and macOS runtime validation remains pending.

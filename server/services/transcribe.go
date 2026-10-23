@@ -774,10 +774,33 @@ func RunBedrockVoxtralTranscribe(ctx context.Context, audioBytes []byte, baseURL
 }
 
 func RunWhisperTranscribeWithModel(ctx context.Context, audioBytes []byte, model string, userLanguages []string) (string, []WhisperSegment, string, string, error) {
+	return runBatchTranscription(ctx, audioBytes, model, userLanguages, false)
+}
+
+// Free accounts cannot fall through to a different, potentially more costly ASR model.
+func RunFreeBatchTranscribe(ctx context.Context, audioBytes []byte, userLanguages []string) (string, []WhisperSegment, string, string, error) {
+	return runBatchTranscription(ctx, audioBytes, "whisper-large-v3-turbo", userLanguages, true)
+}
+
+func freeBatchCandidates(candidates []config.STTModelSpec) []config.STTModelSpec {
+	var allowed []config.STTModelSpec
+	for _, candidate := range candidates {
+		switch candidate.Model {
+		case "whisper-large-v3-turbo", "openai/whisper-large-v3-turbo", "@cf/openai/whisper-large-v3-turbo":
+			allowed = append(allowed, candidate)
+		}
+	}
+	return allowed
+}
+
+func runBatchTranscription(ctx context.Context, audioBytes []byte, model string, userLanguages []string, freeOnly bool) (string, []WhisperSegment, string, string, error) {
 	cfg := config.ConfigManager.Get()
 	langParam, promptStr := BuildWhisperPrompt(userLanguages)
 
 	activeCandidates := cfg.GetActiveBatchSTTModels()
+	if freeOnly {
+		activeCandidates = freeBatchCandidates(activeCandidates)
+	}
 	if len(activeCandidates) == 0 {
 		return "", nil, "", "", fmt.Errorf("no batch transcription models are enabled or configured")
 	}

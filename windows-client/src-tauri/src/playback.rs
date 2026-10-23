@@ -356,66 +356,6 @@ mod tests {
     }
 }
 
-/// No microphone, network, or user recording: exercise the actual WebKit/
-/// WebView2 protocol with synthetic audio, including a seek and teardown.
-pub fn run_diagnostic() {
-    let app = tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![diagnostic_result])
-        .setup(|app| {
-            let handle = app.handle().clone();
-            let _ = crate::TAURI_APP.set(handle.clone());
-            let token = crate::get_active_config()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .session_token
-                .clone()
-                .ok_or("Playback diagnostic requires an existing sign-in")?;
-            let source = std::env::temp_dir()
-                .join(format!("speektome-synthetic-{}.ogg", uuid::Uuid::new_v4()));
-            let samples: Vec<i16> = (0..16000 * 90)
-                .map(|i| ((i as f64 * 0.08).sin() * 1000.0) as i16)
-                .collect();
-            std::fs::write(
-                &source,
-                crate::audio_processing::encode_opus_ogg(&samples, 16000, 1)
-                    .map_err(|_| "Cannot encode diagnostic")?,
-            )?;
-            clear();
-            let result = prepare(Some(source.clone()), "", 0, token, generation());
-            let _ = std::fs::remove_file(source);
-            let ticket = result?;
-            tauri::WebviewWindowBuilder::new(
-                app,
-                "playback-check",
-                tauri::WebviewUrl::App("playback-check.html".into()),
-            )
-            .title("SpeekTo.Me playback check")
-            .inner_size(400.0, 180.0)
-            .initialization_script(format!(
-                "window.playbackTicket={};",
-                serde_json::to_string(&ticket)?
-            ))
-            .build()?;
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(12));
-                let _ = std::fs::write("/tmp/speektome-playback-check-timeout", b"timeout");
-                crate::lifecycle::quit(&handle);
-            });
-            Ok(())
-        })
-        .build(crate::desktop_context())
-        .expect("Playback diagnostic setup failed");
-    app.run(|_, _| {});
-}
-#[tauri::command]
-fn diagnostic_result(app: tauri::AppHandle, passed: bool, duration: f64, seek: f64) {
-    let report = serde_json::json!({"passed":passed,"duration":duration,"seek":seek,"read_buffer_bytes":65536});
-    let path = std::env::temp_dir().join("speektome-playback-check.json");
-    let _ = std::fs::write(path, report.to_string());
-    clear();
-    crate::lifecycle::quit(&app);
-}
-
 // HTTP is understood by each platform's native media stack. No settings data,
 // filesystem paths, API bearer token, or arbitrary file routes are exposed.
 fn serve(listener: std::net::TcpListener, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {

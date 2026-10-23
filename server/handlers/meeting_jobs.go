@@ -156,7 +156,7 @@ func (j *MeetingJobs) identity(w http.ResponseWriter, r *http.Request) (int64, s
 		http.Error(w, "unauthorized", 401)
 		return 0, "", false
 	}
-	if r.Method != "GET" && j.app.DB.Privacy != nil && (u.PlanTier != "pro" || u.PlanActive != 1) {
+	if r.Method != "GET" && (u.PlanTier != "pro" || u.PlanActive != 1) {
 		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
 		return 0, "", false
 	}
@@ -187,7 +187,7 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", 401)
 		return
 	}
-	if j.app.DB.Privacy != nil && (user.PlanTier != "pro" || user.PlanActive != 1) {
+	if user.PlanTier != "pro" || user.PlanActive != 1 {
 		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
 		return
 	}
@@ -909,7 +909,7 @@ func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
 		lines = append(lines, turn.SpeakerName+": "+turn.Text)
 	}
 	transcript := strings.Join(lines, "\n")
-	terms, err := j.app.DB.GetVocabularyTerms(userID)
+	terms, err := j.app.DB.GetActiveVocabularyTerms(userID)
 	if err != nil {
 		return err
 	}

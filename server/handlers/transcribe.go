@@ -147,7 +147,8 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enhance := r.FormValue("enhance") != "false"
+	// Enhancement is a paid pipeline stage, independent of client-supplied flags.
+	enhance := isPaid
 
 	model := "whisper-large-v3-turbo"
 
@@ -165,7 +166,11 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var whisperRouting string
-	rawText, _, whisperProvider, whisperRouting, whisperErr = services.RunWhisperTranscribeWithModel(ctx, audioBytes, model, user.Languages)
+	if isPaid {
+		rawText, _, whisperProvider, whisperRouting, whisperErr = services.RunWhisperTranscribeWithModel(ctx, audioBytes, model, user.Languages)
+	} else {
+		rawText, _, whisperProvider, whisperRouting, whisperErr = services.RunFreeBatchTranscribe(ctx, audioBytes, user.Languages)
+	}
 	if whisperErr == nil {
 		groqLatency = time.Since(whisperStart).Seconds()
 	} else {

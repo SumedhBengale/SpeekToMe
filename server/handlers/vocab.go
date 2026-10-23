@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
-	log "speektome-server/privacylog"
+	"errors"
+	"fmt"
 	"net/http"
+	"speektome-server/db"
+	log "speektome-server/privacylog"
 	"strings"
 
 	"speektome-server/auth"
@@ -44,14 +47,20 @@ func (a *App) HandleAddVocabulary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	canonical := strings.TrimSpace(req.Canonical)
-	if canonical == "" {
-		http.Error(w, "Bad request: term cannot be empty", http.StatusBadRequest)
+	if canonical == "" || len(canonical) > 256 {
+		http.Error(w, "Bad request: term must contain 1 to 256 bytes", http.StatusBadRequest)
 		return
 	}
 
 	normalized := strings.ToLower(canonical)
 
 	_, err = a.DB.AddVocabularyTerm(user.ID, canonical, normalized)
+	if errors.Is(err, db.ErrVocabularyLimit) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": "vocabulary_limit", "error": fmt.Sprintf("Your plan allows %d vocabulary terms. Existing terms are preserved; remove terms or upgrade before adding more.", user.VocabularyLimit()), "limit": user.VocabularyLimit()})
+		return
+	}
 	if err != nil {
 		log.Printf("[DB ERROR] Failed to add vocabulary term for user %d: %v", user.ID, err)
 		http.Error(w, "Failed to add vocabulary term", http.StatusInternalServerError)

@@ -216,20 +216,18 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::sho
                 return;
             };
             let is_cmd = context.is_command_mode;
-            let (is_stream_mode, api_url, token, enhance, custom_prompt) = {
+            let (is_stream_mode, api_url, token, custom_prompt) = {
                 let cfg = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
                 (
                     cfg.transcription_mode == "stream" && context.history_identity().1.is_some(),
                     context.history_identity().2.to_string(),
                     context.history_identity().1.unwrap_or_default().to_string(),
-                    if is_cmd { false } else { cfg.enhance },
                     cfg.custom_prompt.clone(),
                 )
             };
             println!(
-                "[AUDIO] Active transcription mode: {} (enhance: {}, is_command_mode: {})",
+                "[AUDIO] Active transcription mode: {} (is_command_mode: {})",
                 if is_stream_mode { "STREAM" } else { "BATCH" },
-                enhance,
                 is_cmd
             );
 
@@ -237,7 +235,6 @@ pub fn recording_thread(rx: std::sync::mpsc::Receiver<bool>, session: crate::sho
                 let stream_handle = match crate::stream::start_streaming_session(
                     api_url.clone(),
                     token.clone(),
-                    enhance,
                     custom_prompt.clone(),
                     language.clone(),
                     context.clone(),

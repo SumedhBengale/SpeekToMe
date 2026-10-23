@@ -89,29 +89,40 @@ pub fn placement_with_height(
     }
 }
 
-pub fn smooth_volume(previous: f64, raw: f64) -> f64 {
-    previous * 0.8 + raw * 0.2
-}
+// The supplied logo uses #FA5388; settings colors elsewhere use COLORREF order.
+pub const LOGO_COLOR: u32 = 0x8853FA;
 
-pub fn bar_height(frame: u64, index: usize, volume: f64, processing: bool) -> f64 {
-    if processing {
-        let phase = frame as f64 * 0.12 + index as f64 * 0.75;
-        2.2 + 2.5 * ((phase.sin() + 1.0) / 2.0)
-    } else {
-        let gain = (if volume > 2.0 { 5.0 } else { 2.5 }) + (volume / 4.0).min(2.5);
-        let phase = frame as f64 * 0.1 + index as f64 * 0.7;
-        (gain * (0.35 + 0.65 * phase.sin().abs())).clamp(2.0, 8.0)
-    }
+pub fn smooth_volume(previous: f64, raw: f64) -> f64 {
+    // Capture publishes RMS * 1000. Bound loud transients before smoothing so
+    // clipping cannot leave the logo stuck at full height. Renderers tick at 30 Hz.
+    let target = raw.clamp(0.0, 120.0);
+    let previous = previous.clamp(0.0, 120.0);
+    let response = if target > previous { 0.6 } else { 0.16 };
+    previous + (target - previous) * response
 }
 
 pub fn bars(x: f64, y: f64, frame: u64, volume: f64, processing: bool) -> [Rect; 5] {
+    // Preserve the SVG's coordinates and rounded capsules, fitting its tallest
+    // bar into 18 logical pixels. All recording movement comes from real audio.
+    let scale = 18.0 / 316.0;
+    let activity = if processing {
+        // Processing has no microphone input; a gentle pulse marks that state.
+        0.55 + 0.15 * (frame as f64 * 0.12).sin()
+    } else {
+        // Suppress the noise floor; a square-root curve keeps soft speech visible.
+        let level = ((volume - 2.0) / 118.0).clamp(0.0, 1.0).sqrt();
+        0.2 + 0.8 * level
+    };
+    let positions = [108.0, 173.0, 236.0, 301.0, 364.0];
+    let heights = [120.0, 208.0, 316.0, 208.0, 120.0];
     std::array::from_fn(|i| {
-        let height = bar_height(frame, i, volume, processing);
+        let width = 40.0 * scale;
+        let height = width + (heights[i] * scale - width) * activity;
         Rect {
-            x: x + 20.75 + i as f64 * 4.5,
-            y: y + 12.0 - height + 0.8,
-            width: 2.5,
-            height: height * 2.0 - 1.6,
+            x: x + PILL_WIDTH / 2.0 + (positions[i] - 256.0) * scale,
+            y: y + PILL_HEIGHT / 2.0 - height / 2.0,
+            width,
+            height,
         }
     })
 }
@@ -178,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn waveform_responds_to_audio_and_processing_animates_without_audio() {
+    fn logo_responds_to_audio_and_processing_animates_without_audio() {
         let quiet = bars(179.0, 0.0, 10, 0.0, false);
         let speech = bars(179.0, 0.0, 10, 30.0, false);
         assert!(speech.iter().zip(quiet).any(|(a, b)| a.height > b.height));
@@ -187,6 +198,34 @@ mod tests {
             assert!(rect.x >= 179.0 && rect.x + rect.width <= 179.0 + PILL_WIDTH);
             assert!(rect.y >= 0.0 && rect.y + rect.height <= PILL_HEIGHT);
         }
+    }
+
+    #[test]
+    fn recording_logo_is_still_in_silence_and_preserves_svg_at_full_volume() {
+        assert_eq!(bars(0.0, 0.0, 0, 0.0, false), bars(0.0, 0.0, 500, 0.0, false));
+        assert_eq!(bars(0.0, 0.0, 0, 0.0, false), bars(0.0, 0.0, 0, 2.0, false));
+        let loud = bars(0.0, 0.0, 0, 120.0, false);
+        for (bar, original) in loud.iter().zip([120.0, 208.0, 316.0, 208.0, 120.0]) {
+            assert!((bar.height / bar.width - original / 40.0).abs() < 1e-10);
+            assert!((bar.y + bar.height / 2.0 - 12.0).abs() < 1e-10);
+        }
+        for volume in [0.0, 2.0, 10.0, 30.0, 60.0, 120.0, 1000.0] {
+            let shape = bars(0.0, 0.0, 0, volume, false);
+            assert_eq!(shape[0].height, shape[4].height);
+            assert_eq!(shape[1].height, shape[3].height);
+            assert!(shape[0].height < shape[1].height && shape[1].height < shape[2].height);
+            assert!(shape.iter().zip(loud).all(|(a, b)| a.height <= b.height));
+        }
+        assert_eq!(color(LOGO_COLOR), (250.0 / 255.0, 83.0 / 255.0, 136.0 / 255.0));
+    }
+
+    #[test]
+    fn envelope_attacks_quickly_and_releases_without_a_clipping_tail() {
+        assert_eq!(smooth_volume(0.0, 1000.0), smooth_volume(0.0, 120.0));
+        assert!(smooth_volume(0.0, 100.0) > 100.0 - smooth_volume(100.0, 0.0));
+        let mut level = 120.0;
+        for _ in 0..30 { level = smooth_volume(level, 0.0); }
+        assert!(level < 2.0, "one second of silence should reach the resting shape");
     }
 
     #[test]

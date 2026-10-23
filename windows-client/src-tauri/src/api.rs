@@ -226,13 +226,10 @@ pub fn listen_for_token(attempt: u64) -> Option<String> {
     None
 }
 pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, language: String, context: crate::shortcuts::RecordingContext) {
-    let is_cmd = context.is_command_mode;
-    let (token_opt, model, enhance, custom_prompt, transcription_mode, api_url) = {
+    let (token_opt, custom_prompt, transcription_mode, api_url) = {
         let config = crate::get_active_config().lock().unwrap_or_else(|e| e.into_inner());
         (
             context.history_identity().1.map(str::to_owned),
-            config.model.clone(),
-            if is_cmd { false } else { config.enhance },
             config.custom_prompt.clone(),
             config.transcription_mode.clone(),
             context.history_identity().2.to_string(),
@@ -275,15 +272,15 @@ pub fn process_and_paste(samples: Vec<i16>, sample_rate: u32, channels: u16, lan
     tauri::async_runtime::spawn(async move {
         let context = context; // Keep the session lease through the complete async operation.
         let transcript_result = if transcription_mode == "stream" {
-            match stream_transcribe_audio(&api_url, &token, ogg_opus_bytes.clone(), enhance, &custom_prompt, &language).await {
+            match stream_transcribe_audio(&api_url, &token, ogg_opus_bytes.clone(), &custom_prompt, &language).await {
                 Ok(res) => Ok(res),
                 Err(err) => {
                     println!("[STREAM WARNING] Streaming transcription failed ({}), falling back to batch API...", err);
-                    transcribe_audio(&api_url, &token, ogg_opus_bytes, &model, enhance, &custom_prompt, &language).await
+                    transcribe_audio(&api_url, &token, ogg_opus_bytes, &custom_prompt, &language).await
                 }
             }
         } else {
-            transcribe_audio(&api_url, &token, ogg_opus_bytes, &model, enhance, &custom_prompt, &language).await
+            transcribe_audio(&api_url, &token, ogg_opus_bytes, &custom_prompt, &language).await
         };
 
         match transcript_result {
@@ -488,7 +485,6 @@ pub async fn stream_transcribe_audio(
     api_url: &str,
     token: &str,
     ogg_opus_bytes: Vec<u8>,
-    enhance: bool,
     custom_prompt: &str,
     language: &str,
 ) -> Result<TranscribeResult, String> {
@@ -507,7 +503,6 @@ pub async fn stream_transcribe_audio(
         "format": "opus",
         "sample_rate": 16000,
         "channels": 1,
-        "enhance": enhance,
         "prompt": custom_prompt,
         "language": language,
     });
@@ -706,7 +701,7 @@ pub async fn add_vocab_term(api_url: &str, token: &str, term: &str) -> Result<()
         crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
         Err("Session expired. Please sign in again.".to_string())
     } else {
-        Err(format!("Failed to add vocabulary term: {}", body_text))
+        Err(crate::account_errors::message(status.as_u16(), &body_text))
     }
 }
 
@@ -760,8 +755,6 @@ pub async fn transcribe_audio(
     api_url: &str,
     token: &str,
     ogg_opus_bytes: Vec<u8>,
-    model: &str,
-    enhance: bool,
     custom_prompt: &str,
     language: &str,
 ) -> Result<TranscribeResult, String> {
@@ -774,8 +767,6 @@ pub async fn transcribe_audio(
     let form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("language", language.to_string())
-        .text("model", model.to_string())
-        .text("enhance", enhance.to_string())
         .text("prompt", custom_prompt.to_string());
 
     let res = client.post(format!("{}/generate", api_url))

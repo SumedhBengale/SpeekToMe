@@ -37,7 +37,7 @@ export default function PricingPage() {
               </li>
               <li style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                 <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>✓</span>
-                <span>Fast AI voice dictation</span>
+                <span>Batch voice dictation</span>
               </li>
               <li style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                 <span style={{ color: 'var(--color-success)', fontWeight: 'bold' }}>✓</span>
@@ -135,8 +135,13 @@ export default function PricingPage() {
                 </tr>
                 <tr style={{ borderBottom: '1px solid #eee' }}>
                   <td style={{ padding: '16px' }}><strong>AI Enhancement & Formatting</strong></td>
-                  <td style={{ padding: '16px' }}>Basic cleanup</td>
+                  <td style={{ padding: '16px' }}>Not included</td>
                   <td style={{ padding: '16px', color: 'var(--color-success)', fontWeight: 'bold' }}>✓ Advanced AI Enhancement</td>
+                </tr>
+                <tr style={{ borderBottom: '1px solid #eee' }}>
+                  <td style={{ padding: '16px' }}><strong>Custom Vocabulary</strong></td>
+                  <td style={{ padding: '16px' }}>20 active terms</td>
+                  <td style={{ padding: '16px' }}>1,000 active terms</td>
                 </tr>
                 <tr style={{ borderBottom: '1px solid #eee' }}>
                   <td style={{ padding: '16px' }}><strong>Transcription Speed</strong></td>

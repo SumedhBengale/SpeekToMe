@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	log "speektome-server/privacylog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"time"
@@ -36,7 +36,7 @@ func (a *App) HandleUploadMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if a.DB.Privacy != nil && (user.PlanTier != "pro" || user.PlanActive != 1) {
+	if user.PlanTier != "pro" || user.PlanActive != 1 {
 		http.Error(w, "Meeting recording requires an active Pro subscription", 403)
 		return
 	}

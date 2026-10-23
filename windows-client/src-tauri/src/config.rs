@@ -20,7 +20,7 @@ fn default_pill_wave_color() -> u32 {
 }
 
 fn default_transcription_mode() -> String {
-    "stream".to_string()
+    "batch".to_string()
 }
 fn default_hotkey() -> String {
     "Ctrl + Win".to_string()
@@ -50,8 +50,6 @@ pub struct AppConfig {
     #[serde(default = "default_command_mode")]
     pub command_mode: bool,   // true/false - AI transformation command mode
 
-    pub model: String,        // "whisper-large-v3-turbo", "whisper-large-v3"
-    pub enhance: bool,        // true/false
     pub typing_mode: bool,    // true/false
     pub sound_feedback: bool, // true/false
     pub custom_prompt: String,// String prompt instructions
@@ -117,8 +115,6 @@ impl Default for AppConfig {
             hotkey: default_hotkey(),
             hotkey_mode: default_hotkey_mode(),
             command_mode: default_command_mode(),
-            model: "whisper-large-v3-turbo".to_string(),
-            enhance: true,
             typing_mode: false,
             sound_feedback: true,
             custom_prompt: "".to_string(),

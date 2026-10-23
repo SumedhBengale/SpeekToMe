@@ -22,13 +22,13 @@
   },
   "gateways": {
     "amd64": {
-      "key": "gateway/a395d658e4a5bc577ed00433a89f347b8b82bf484e4e44884baa696c3f79d0ae/speektome-gateway-amd64.gz",
-      "sha256": "a395d658e4a5bc577ed00433a89f347b8b82bf484e4e44884baa696c3f79d0ae",
+      "key": "gateway/52b83f446902db2ac61d5672ca70f4bd5c3c71b678b65e3024c4ea9f097a0bd9/speektome-gateway-amd64.gz",
+      "sha256": "52b83f446902db2ac61d5672ca70f4bd5c3c71b678b65e3024c4ea9f097a0bd9",
       "compression": "gzip"
     },
     "arm64": {
-      "key": "gateway/7693ea07469350d42e2f5a89a2a3f5c60b6414d364e7109928034abca0bbfedb/speektome-gateway-arm64.gz",
-      "sha256": "7693ea07469350d42e2f5a89a2a3f5c60b6414d364e7109928034abca0bbfedb",
+      "key": "gateway/02a7b165e476098e4332091e827cdfc08033b638a31ebe0895a2301ebcb3bfeb/speektome-gateway-arm64.gz",
+      "sha256": "02a7b165e476098e4332091e827cdfc08033b638a31ebe0895a2301ebcb3bfeb",
       "compression": "gzip"
     }
   },
@@ -46,8 +46,8 @@
       "sha256": "21fae6b6fc10cf9b8ef0bf019ba63f3117df73fd3a5b692fb9b32ba4b1eace59"
     },
     "ready": {
-      "key": "deployment/helpers/55c65f873e36909c10f3c57593e03885dcf596773301334bd76262b7bbf190ef/check-ready.sh",
-      "sha256": "55c65f873e36909c10f3c57593e03885dcf596773301334bd76262b7bbf190ef"
+      "key": "deployment/helpers/cf4e01c2e03af5b6791a8c2f19991ec74ed1e5118ac0cf99ef4ef69170294ea5/check-ready.sh",
+      "sha256": "cf4e01c2e03af5b6791a8c2f19991ec74ed1e5118ac0cf99ef4ef69170294ea5"
     },
     "watcher": {
       "key": "deployment/helpers/65ff1f6bab5cb0e7a24ae05cd942736314e01d4752ceaa7541e051b96abbf02b/spot-watcher.py",
@@ -55,7 +55,8 @@
     }
   },
   "capabilities": [
-    "streaming_transcription",
-    "meeting_transcription"
+    "final_vocabulary_matching_v1",
+    "meeting_transcription",
+    "streaming_transcription"
   ]
 }

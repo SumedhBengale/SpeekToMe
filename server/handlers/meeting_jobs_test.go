@@ -25,7 +25,7 @@ func TestMeetingJobPersistsStagesAndCompletesWithoutClient(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer database.Close()
-	_, e = database.GetDB().Exec(`INSERT INTO users(id,email,name) VALUES(1,'owner@example.com','Owner')`)
+	_, e = database.GetDB().Exec(`INSERT INTO users(id,email,name,plan_tier,plan_active) VALUES(1,'owner@example.com','Owner','pro',1)`)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -160,7 +160,7 @@ func TestMeetingUploadResumesAndIsolatesUsers(t *testing.T) {
 	}
 	defer database.Close()
 	for _, id := range []int{1, 2} {
-		if _, err := database.GetDB().Exec(`INSERT INTO users(id,email,name) VALUES(?,?,?)`, id, fmt.Sprintf("user%d@example.com", id), "Test"); err != nil {
+		if _, err := database.GetDB().Exec(`INSERT INTO users(id,email,name,plan_tier,plan_active) VALUES(?,?,?,'pro',1)`, id, fmt.Sprintf("user%d@example.com", id), "Test"); err != nil {
 			t.Fatal(err)
 		}
 	}
