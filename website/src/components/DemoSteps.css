@@ -1,0 +1,11 @@
+.demo-checklist { list-style: none; padding: 0; margin: 0; display: grid; gap: 11px; }
+.demo-checklist li { display: flex; align-items: flex-start; gap: 9px; color: #74747d; font: 400 12px/1.6 var(--font-body); }
+.demo-checklist-box { display: grid; place-items: center; width: 15px; height: 15px; flex: 0 0 15px; margin-top: 2px; border: 1px solid #d9d9df; border-radius: 4px; color: #fff; background: #fff; }
+.demo-checklist li[data-state="current"] { color: #29292f; }
+.demo-checklist li[data-state="current"] .demo-checklist-box { border-color: var(--color-brand); box-shadow: inset 0 0 0 3px #fff; background: #f7b4cf; }
+.demo-checklist li[data-state="complete"] { color: #50505a; }
+.demo-checklist li[data-state="complete"] .demo-checklist-box { background: var(--color-brand); border-color: var(--color-brand); }
+.demo-checklist-compact { display: flex; flex-wrap: wrap; gap: 10px 20px; }
+.demo-checklist-compact li { font-size: 10px; gap: 6px; }
+.demo-checklist-compact .demo-checklist-box { width: 12px; height: 12px; flex-basis: 12px; }
+.demo-checklist-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }

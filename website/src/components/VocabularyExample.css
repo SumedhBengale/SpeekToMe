@@ -1,0 +1,46 @@
+.vocabulary-section { background: #fafafa; border-bottom: 1px solid #eaeaec; }
+.vocabulary-container { max-width: 960px; }
+.vocabulary-section .vocabulary-eyebrow { color: var(--color-brand); font-size: 10px; font-weight: 600; letter-spacing: .13em; margin-bottom: 16px; }
+.vocabulary-demo { position: relative; border: 1px solid #e5e5e9; border-radius: 18px; background: #fff; overflow: hidden; }
+.vocabulary-saved { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 20px 28px; border-bottom: 1px solid #eeeef0; }
+.vocabulary-saved-label { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #73737d; }
+.vocabulary-saved-label svg { color: #9999a3; }
+.vocabulary-term { display: inline-flex; gap: 16px; align-items: center; padding: 7px 12px; border: 1px solid #f7c5d8; border-radius: 7px; background: #fff8fb; color: #b61550; font-size: 13px; font-weight: 600; }
+.vocabulary-term > span:last-child { font-size: 11px; }
+.vocabulary-input { display: flex; align-items: center; gap: 12px; padding: 20px 28px 0; }
+.vocabulary-input > span { font-size: 11px; color: #73737d; }
+.vocabulary-output { padding: 24px 28px; min-height: 174px; }
+.vocabulary-output p { font: 450 23px/1.65 var(--font-display); letter-spacing: -.02em; color: #29292f; }
+.vocabulary-match { white-space: nowrap; background: #fff0f6; color: #d31b61; border-radius: 4px; padding: 1px 3px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.vocabulary-ordinary { white-space: nowrap; text-decoration: underline; text-decoration-color: #b9b9c2; text-decoration-thickness: 1px; text-underline-offset: 5px; }
+.vocabulary-output .vocabulary-glow { color: transparent; background: linear-gradient(100deg,#29292f 15%,#9b3cf5 32%,#ec4899 42%,#f59e0b 49%,#06b6d4 56%,#29292f 74%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; animation: vocabulary-polish .75s ease both; }
+.vocabulary-footer { padding: 12px 28px; border-top: 1px solid #eeeef0; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.vocabulary-footer p { font-size: 11px; color: #73737d; margin: 0; }
+.vocabulary-footer button { min-height: 44px; padding: 8px 12px; flex-shrink: 0; font: inherit; font-size: 12px; color: #606069; background: #fff; border: 1px solid #e9e9ed; border-radius: 7px; cursor: pointer; }
+.vocabulary-footer button:hover { border-color: #e9a8c0; }
+.vocabulary-footer button:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 3px; }
+.vocabulary-footer button:disabled { opacity: .4; cursor: default; }
+@keyframes vocabulary-polish { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+@media (max-width: 600px) {
+  .vocabulary-saved { padding: 18px 20px; }
+  .vocabulary-output { padding: 22px 20px; }
+  .vocabulary-input { padding: 18px 20px 0; }
+  .vocabulary-output { min-height: 240px; }
+  .vocabulary-output p { font-size: 21px; line-height: 1.6; }
+  .vocabulary-footer { padding-inline: 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .vocabulary-glow { animation: none; } }
+
+.vocabulary-pointer { position: absolute; pointer-events: none; z-index: 3; transition: left .55s cubic-bezier(.22,.61,.36,1), top .55s cubic-bezier(.22,.61,.36,1); filter: drop-shadow(0 2px 2px #e91e6333); }
+.vocabulary-selection { background: linear-gradient(90deg, #f7c8db var(--selection-progress), transparent var(--selection-progress)); color: #80163c; border-radius: 3px; }
+.vocabulary-pointer.is-selecting { transition: left 50ms linear, top 50ms linear; }
+.vocabulary-demo[data-phase="pressing"] .vocabulary-mic { transform: scale(.88); background: var(--color-brand); color: #fff; }
+.vocabulary-demo[data-phase="speaking"] .vocabulary-mic[aria-pressed="true"] { background: var(--color-brand); color: #fff; box-shadow: 0 0 0 5px #fce5ee; }
+.vocabulary-explanation { display: flex; align-items: flex-start; gap: 9px; margin: 0 28px 22px; padding-top: 16px; border-top: 1px solid #eeeef0; min-height: 55px; color: #606069; font-size: 12px; line-height: 1.6; }
+.vocabulary-explanation > span { color: var(--color-brand); }
+.vocabulary-playback { display: flex; gap: 8px; margin-left: auto; }
+.vocabulary-demo[data-paused="true"] .vocabulary-glow { animation-play-state: paused; }
+@media (max-width: 600px) { .vocabulary-explanation { margin-inline: 20px; min-height: 74px; } .vocabulary-footer { flex-wrap: wrap; gap: 6px; } .vocabulary-playback { margin-left: auto; } }
+@media (prefers-reduced-motion: reduce) { .vocabulary-pointer { display: none; } }
+
+.vocabulary-explanation { display: block; min-height: 0; padding-top: 20px; }

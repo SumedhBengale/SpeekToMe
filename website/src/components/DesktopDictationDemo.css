@@ -1,5 +1,18 @@
 /* Stage surrounding the original desktop cards; isolated inside Shadow DOM. */
 :host {
+  --bg-app: #fafafa;
+  --bg-card-subtle: #fafafa;
+  --bg-content: #ffffff;
+  --bg-card: #ffffff;
+  --text-primary: #171719;
+  --text-secondary: #606069;
+  --text-muted: #71717a;
+  --accent-color: #e91e63;
+  --accent-hover: #cf1454;
+  --accent-soft: #f52d78;
+  --accent-tint: #fff0f5;
+  --border-color: #e7e7ea;
+  --border-subtle: #eeeef0;
   display: block;
   width: 100%;
   min-width: 0;
@@ -25,7 +38,7 @@ button:disabled {
 }
 button:focus-visible,
 .toggle-switch:has(input:focus-visible) {
-  outline: 3px solid #a5325d;
+  outline: 3px solid #d81b60;
   outline-offset: 3px;
 }
 .desktop-demo {
@@ -35,7 +48,7 @@ button:focus-visible,
   border-radius: 18px;
   overflow: hidden;
   box-shadow:
-    0 24px 64px -24px rgba(64, 16, 29, 0.25),
+    0 20px 50px -20px rgba(23, 23, 25, 0.16),
     0 2px 8px rgba(36, 10, 18, 0.04);
 }
 .demo-window-bar {
@@ -139,7 +152,7 @@ button:focus-visible,
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 13px 16px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border-color);
   font-size: 12px;
   font-weight: 600;
@@ -200,7 +213,7 @@ button:focus-visible,
   align-items: center;
   gap: 8px;
   padding: 14px 18px 18px;
-  background: linear-gradient(180deg, #fff, #faf6f7);
+  background: #fafafa;
   border-top: 1px solid var(--border-subtle);
 }
 /* Match the native Win32 pill's 62x24 geometry and five 2.5px bars. */
@@ -211,8 +224,8 @@ button:focus-visible,
   width: 62px;
   height: 24px;
   border-radius: 12px;
-  background: #fff9fa;
-  color: #240a12;
+  background: #ffffff;
+  color: #171719;
   border: 1px solid rgba(36, 10, 18, 0.12);
   box-shadow: 0 3px 10px rgba(36, 10, 18, 0.12);
 }
@@ -226,7 +239,7 @@ button:focus-visible,
   width: 2.5px;
   height: 4px;
   border-radius: 2px;
-  background: #240a12;
+  background: #171719;
 }
 .phase-1 .demo-pill-wave i {
   height: 14px;
@@ -285,10 +298,14 @@ button:focus-visible,
   color: var(--text-muted);
 }
 .demo-steps i {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--border-focus);
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-focus);
+  border-radius: 3px;
+  color: #fff;
+  background: transparent;
 }
 .demo-steps .current {
   color: var(--text-primary);
@@ -298,7 +315,8 @@ button:focus-visible,
   background: var(--accent-color);
 }
 .demo-steps .finished i {
-  background: #16803c;
+  border-color: var(--accent-color);
+  background: var(--accent-color);
 }
 .demo-playback-actions {
   display: flex;
@@ -411,19 +429,19 @@ button:focus-visible,
   margin-bottom: 12px;
 }
 .demo-editor-meta {
-  row-gap: 5px;
-  padding-top: 12px;
+  row-gap: 3px;
+  padding-top: 8px;
 }
 .demo-editor-body {
-  height: 164px;
-  padding-top: 12px;
+  height: 124px;
+  padding-top: 8px;
 }
 .demo-overlay {
   padding: 10px 14px 12px;
   gap: 6px;
 }
 .demo-voice-preview {
-  min-height: 66px;
+  min-height: 70px;
   padding: 8px 10px;
 }
 .demo-preview-speech {
@@ -450,7 +468,7 @@ button:focus-visible,
 }
 @media (max-width: 400px) {
   .client-feature .dictation-feature-card {
-    min-height: 164px;
+    min-height: 124px;
   }
   .demo-editor-body {
     height: 184px;
@@ -464,7 +482,7 @@ button:focus-visible,
 .demo-selection-pointer { position: absolute; left: var(--pointer-x); top: var(--pointer-y); pointer-events: none; transition: left 100ms linear, top 100ms linear; filter: drop-shadow(0 2px 2px #40101d33); }
 .demo-editor-body[data-selecting="true"] .demo-selection-pointer { animation: demo-pointer-approach .5s ease-out both; }
 @keyframes demo-pointer-approach { from { transform: translate(100px,55px); opacity: 0; } to { transform: translate(0,0); opacity: 1; } }
-.demo-voice-preview { min-height: 110px; }
+.demo-voice-preview { min-height: 70px; }
 .demo-mode-tabs { flex-wrap: wrap; }
 .demo-mode-tabs button { flex-basis: 130px; }
 @media (max-width: 400px) { .demo-voice-preview { min-height: 140px; } .demo-mode-tabs button { flex-basis: 100px; } }

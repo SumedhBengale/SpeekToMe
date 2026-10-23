@@ -262,10 +262,10 @@ function Demo() {
               <span
                 key={label}
                 className={
-                  stage === index ? "current" : stage > index ? "finished" : ""
+                  stage > index || stage === stages.length - 1 ? "finished" : stage === index ? "current" : ""
                 }
               >
-                <i />
+                <i aria-hidden="true">{(stage > index || stage === stages.length - 1) && <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m2.5 6 2.2 2.2L9.5 3.5" /></svg>}</i>
                 {label}
               </span>
             ))}

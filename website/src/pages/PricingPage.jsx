@@ -62,7 +62,7 @@ export default function PricingPage() {
 
           {/* Pro Plan Card */}
           <section className="flat-pricing-card reveal stagger-2" style={{ background: '#fff', border: 'var(--border-flat)', borderRadius: '20px', padding: '28px 24px', width: '100%', maxWidth: '350px', textAlign: 'left', boxShadow: 'var(--shadow-lg)', position: 'relative' }}>
-            <span className="pricing-badge" style={{ background: 'var(--bg-dark)', color: 'var(--color-text-light)', padding: '4px 12px', borderRadius: '12px', fontSize: '11px', fontWeight: '600' }}>Most Popular</span>
+            <span className="pricing-badge" style={{ background: 'var(--color-btn-primary)', color: 'var(--color-text-light)', padding: '4px 12px', borderRadius: '12px', fontSize: '11px', fontWeight: '600' }}>Most Popular</span>
             <h2 style={{ fontSize: '22px', marginTop: '12px', marginBottom: '6px' }}>Pro</h2>
 
 
@@ -121,7 +121,7 @@ export default function PricingPage() {
           <div style={{ overflowX: 'auto', background: '#fff', border: 'var(--border-flat)', borderRadius: '24px', padding: '24px' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #240a12' }}>
+                <tr style={{ borderBottom: 'var(--border-light)' }}>
                   <th style={{ padding: '16px' }}>Feature</th>
                   <th style={{ padding: '16px' }}>Starter</th>
                   <th style={{ padding: '16px' }}>Pro ($2/mo)</th>
@@ -172,8 +172,8 @@ export default function PricingPage() {
               const isOpen = activeFaq === idx;
               return (
                 <div key={idx} className={`faq-item-advanced ${isOpen ? 'open' : ''}`}>
-                  <button 
-                    className="faq-header-button" 
+                  <button
+                    className="faq-header-button"
                     onClick={() => setActiveFaq(isOpen ? null : idx)}
                     aria-expanded={isOpen}
                   >
@@ -201,26 +201,26 @@ export default function PricingPage() {
 
 
       {/* 5. BOTTOM CTA — HIGH CONTRAST UNIQUE CARD */}
-      <section className="cta-banner" style={{ padding: '80px 6%', background: 'var(--bg-canvas)', borderBottom: '2px solid #240a12' }}>
-        <div 
-          className="container text-center" 
-          style={{ 
-            maxWidth: '840px', 
-            margin: '0 auto', 
-            background: '#ffffff', 
-            border: '3px solid #240a12', 
-            borderRadius: '28px', 
+      <section className="cta-banner" style={{ padding: '80px 6%', background: 'var(--bg-canvas)', borderBottom: 'var(--border-light)' }}>
+        <div
+          className="container text-center"
+          style={{
+            maxWidth: '840px',
+            margin: '0 auto',
+            background: '#ffffff',
+            border: 'var(--border-light)',
+            borderRadius: '28px',
             padding: '56px 36px',
-            boxShadow: '6px 6px 0px #240a12'
+            boxShadow: 'var(--shadow-sm)'
           }}
         >
           <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: '800', color: '#065f46', background: '#d1fae5', padding: '6px 16px', borderRadius: '20px', border: '1.5px solid #a7f3d0', display: 'inline-block', marginBottom: '20px' }}>
             ⚡ SPEEKTO.ME PRO UNLIMITED
           </span>
-          <h2 style={{ fontSize: '38px', fontWeight: '800', color: '#240a12', marginBottom: '16px', letterSpacing: '-0.5px' }}>
+          <h2 style={{ fontSize: '38px', fontWeight: '800', color: 'var(--color-text-dark)', marginBottom: '16px', letterSpacing: '-0.5px' }}>
             Transform the way you write.
           </h2>
-          <p style={{ fontSize: '17px', color: 'rgba(36, 10, 18, 0.75)', lineHeight: '1.6', maxWidth: '600px', margin: '0 auto 32px' }}>
+          <p style={{ fontSize: '17px', color: 'rgba(23, 23, 25, 0.75)', lineHeight: '1.6', maxWidth: '600px', margin: '0 auto 32px' }}>
             Unlock unlimited high-speed AI dictation across all your desktop & web apps for just $2/month. Cancel anytime.
           </p>
           <Link to="/dashboard" className="btn btn-primary btn-lg" style={{ fontSize: '16px', padding: '14px 32px' }}>

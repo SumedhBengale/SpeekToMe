@@ -1,10 +1,10 @@
 /* Shared layout contract for public pages and account screens. */
-:root { --section-padding: clamp(56px, 7vw, 96px); --color-success: #16803c; --shadow-flat: 0 4px 18px rgba(36,10,18,.07); --shadow-hover: 0 8px 24px rgba(36,10,18,.12); }
+:root { --section-padding: clamp(56px, 7vw, 96px); --color-success: #16803c; --shadow-flat: 0 2px 8px rgba(23,23,25,.03); --shadow-hover: 0 5px 16px rgba(23,23,25,.06); }
 html { scroll-padding-top: 100px; }
 body { overflow-x: clip; }
 #root { min-width: 0; }
 button, input, select, textarea { font: inherit; }
-:focus-visible { outline: 3px solid #a5325d; outline-offset: 4px; }
+:focus-visible { outline: 3px solid #d81b60; outline-offset: 4px; }
 .btn { min-height: 44px; box-shadow: var(--shadow-flat); text-align: center; }
 .btn:hover:not(:disabled) { box-shadow: var(--shadow-hover); }
 .btn:disabled { transform: none; }
@@ -33,7 +33,7 @@ button, input, select, textarea { font: inherit; }
 .platform-cards { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
 .platform-cards > div { gap: 16px; flex-wrap: wrap; }
 .platform-cards > div > span { white-space: nowrap; }
-.section-bordered { border-width: 1px; border-color: rgba(36,10,18,.12); }
+.section-bordered { border-width: 1px; border-color: rgba(23,23,25,.12); }
 .section[style] > .container { padding-inline: 0; }
 .about-hero { padding-top: 72px !important; }
 .about-hero h1, .pricing-wrapper h1 { font-size: clamp(36px,4.5vw,60px) !important; line-height: 1.12; font-weight: 600 !important; letter-spacing: -1.5px !important; }
@@ -89,8 +89,6 @@ button, input, select, textarea { font: inherit; }
   .section > .container { padding-inline: 20px; }
   .section[style] > .container { padding-inline: 0; }
   .split-section { flex-direction: column; gap: 32px !important; align-items: stretch !important; }
-  .keyboard-key-container { padding: 32px 16px; max-width: 100%; }
-  .key-3d-button { width: min(240px,100%); }
   .about-hero { padding: 48px 20px !important; }
   .about-hero .container { padding: 0; }
   .about-grid-3, .about-grid-4 { gap: 16px; }
@@ -126,6 +124,5 @@ button, input, select, textarea { font: inherit; }
   box-shadow: var(--shadow-flat) !important;
   border-radius: 18px !important;
 }
-.keyboard-key-container { border: var(--border-light); box-shadow: var(--shadow-flat); }
 .nav-hamburger { align-items: center; justify-content: center; }
 .nav-hamburger span { flex-shrink: 0; }

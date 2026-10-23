@@ -9,7 +9,7 @@ export default function Footer() {
           <div className="footer-brand" style={{ maxWidth: '360px' }}>
             <Link to="/" className="nav-logo" style={{ marginBottom: '16px', display: 'inline-flex' }}>
               <img src="/assets/logo.svg" alt="SpeekTo.Me Logo" className="brand-logo-icon" />
-              SpeekTo<span className="logo-dot">.</span>Me
+              <span>SpeekTo.<span className="brand-accent">Me</span></span>
             </Link>
             <p className="text-muted" style={{ fontSize: '14px', lineHeight: '1.6' }}>
               The fastest, smartest way to type with your voice. Built with ultra-low latency audio streaming and AI formatting.
@@ -39,7 +39,7 @@ export default function Footer() {
           </div>
         </div>
 
-        <div className="footer-bottom" style={{ marginTop: '48px', paddingTop: '24px', borderTop: '1px solid rgba(36, 10, 18, 0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', fontSize: '13px', color: 'var(--color-text-muted)' }}>
+        <div className="footer-bottom" style={{ marginTop: '48px', paddingTop: '24px', borderTop: '1px solid rgba(23, 23, 25, 0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', fontSize: '13px', color: 'var(--color-text-muted)' }}>
           <p>© {new Date().getFullYear()} SpeekTo.Me — Built by Synaptican. All rights reserved.</p>
           <p>Speech-to-Text Ultra Low Latency Dictation</p>
         </div>

@@ -11,6 +11,7 @@ import RefundPage from './pages/RefundPage';
 import TermsPage from './pages/TermsPage';
 import ScrollToTop from './components/ScrollToTop';
 import TurnstileWidget from './components/TurnstileWidget';
+import DashboardLoader from './components/DashboardLoader';
 import logoSvg from '/logo.svg';
 
 
@@ -29,6 +30,9 @@ export default function App() {
   const [userLanguages, setUserLanguages] = useState(['en']);
   const [savingLangs, setSavingLangs] = useState(false);
   const [logs, setLogs] = useState([]);
+  const [savedTranscripts, setSavedTranscripts] = useState([]);
+  const [transcriptsLoading, setTranscriptsLoading] = useState(false);
+  const [transcriptsError, setTranscriptsError] = useState('');
   const [route, setRoute] = useState('loading');
   const [loading, setLoading] = useState(false);
   const [authError, setAuthError] = useState('');
@@ -60,6 +64,9 @@ export default function App() {
   const [vocabTerms, setVocabTerms] = useState([]);
   const [meetings, setMeetings] = useState([]);
   const [activeMeeting, setActiveMeeting] = useState(null);
+  const [meetingDetailsLoading, setMeetingDetailsLoading] = useState(false);
+  const [meetingAudioUrl, setMeetingAudioUrl] = useState('');
+  const [meetingAudioError, setMeetingAudioError] = useState('');
   const [newVocabTerm, setNewVocabTerm] = useState('');
   const [activeSubTab, setActiveSubTab] = useState('stats');
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -177,6 +184,7 @@ export default function App() {
         }
         setRoute('dashboard');
         fetchUsageLogs();
+        fetchSavedTranscripts();
         fetchVocabulary();
         fetchMeetings();
         fetchProfileSummary();
@@ -266,6 +274,25 @@ export default function App() {
     }
   };
 
+  const fetchSavedTranscripts = async () => {
+    if (!token) return;
+    setTranscriptsLoading(true);
+    setTranscriptsError('');
+    try {
+      const res = await fetch(`${API_BASE}/v1/transcriptions/history`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        cache: 'no-store'
+      });
+      if (!res.ok) throw new Error((await res.text()) || 'Saved transcript history is unavailable.');
+      const data = await res.json();
+      setSavedTranscripts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setTranscriptsError(err.message || 'Could not load saved transcript history.');
+    } finally {
+      setTranscriptsLoading(false);
+    }
+  };
+
   const fetchVocabulary = async () => {
     if (!token) return;
     try {
@@ -352,6 +379,53 @@ export default function App() {
     }
   };
 
+  const openMeeting = (meeting) => {
+    setActiveMeeting(meeting);
+    setMeetingDetailsLoading(true);
+    setMeetingAudioUrl('');
+    setMeetingAudioError('');
+  };
+
+  useEffect(() => {
+    if (!token || !activeMeeting?.id) return undefined;
+    let disposed = false;
+    const loadMeeting = async () => {
+      setMeetingDetailsLoading(true);
+      setMeetingAudioError('');
+      const headers = { 'Authorization': `Bearer ${token}` };
+      const [detailResult, audioResult] = await Promise.allSettled([
+        fetch(`${API_BASE}/meetings/${activeMeeting.id}`, { headers, cache: 'no-store' }),
+        fetch(`${API_BASE}/meetings/${activeMeeting.id}/audio`, { headers, cache: 'no-store' })
+      ]);
+      if (disposed) return;
+      if (detailResult.status === 'fulfilled' && detailResult.value.ok) {
+        const detail = await detailResult.value.json();
+        if (!disposed) setActiveMeeting(detail);
+      }
+      if (audioResult.status === 'fulfilled' && audioResult.value.ok) {
+        const objectUrl = URL.createObjectURL(await audioResult.value.blob());
+        if (disposed) URL.revokeObjectURL(objectUrl);
+        else setMeetingAudioUrl(objectUrl);
+      } else if (!disposed) {
+        const response = audioResult.status === 'fulfilled' ? audioResult.value : null;
+        const message = response ? await response.text() : '';
+        if (!disposed) setMeetingAudioError(message || 'Meeting audio is not available on the server yet.');
+      }
+      if (!disposed) setMeetingDetailsLoading(false);
+    };
+    loadMeeting().catch(() => {
+      if (!disposed) {
+        setMeetingAudioError('Could not load this meeting from the server.');
+        setMeetingDetailsLoading(false);
+      }
+    });
+    return () => { disposed = true; };
+  }, [token, activeMeeting?.id]);
+
+  useEffect(() => () => {
+    if (meetingAudioUrl) URL.revokeObjectURL(meetingAudioUrl);
+  }, [meetingAudioUrl]);
+
   const handleDeleteMeeting = async (id) => {
     if (!token) return;
     if (!window.confirm("Are you sure you want to delete this meeting notes record? This will permanently delete the audio and summaries.")) return;
@@ -365,6 +439,7 @@ export default function App() {
       });
       if (res.ok) {
         setActiveMeeting(null);
+        setMeetingAudioUrl('');
         fetchMeetings();
       } else {
         const errText = await res.text();
@@ -382,9 +457,11 @@ export default function App() {
     setToken('');
     setUser(null);
     setLogs([]);
+    setSavedTranscripts([]);
     setVocabTerms([]);
     setMeetings([]);
     setActiveMeeting(null);
+    setMeetingAudioUrl('');
     setRoute('login');
     setActiveSubTab('stats');
   };
@@ -981,12 +1058,7 @@ export default function App() {
 
   if (route === 'loading' || loading && !user) {
     return (
-      <div className="dashboard-container">
-        <div className="loading-container">
-          <div className="spinner"></div>
-          <h2>Loading SpeekTo.Me Dashboard...</h2>
-        </div>
-      </div>
+      <DashboardLoader />
     );
   }
 
@@ -1461,8 +1533,8 @@ export default function App() {
 
                     <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.5)', marginTop: '8px' }}>
                       {user.plan_tier === 'free'
-                        ? 'Upgrade to SpeekTo.Me Pro to get unlimited dictation and access to Advanced AI Enhancement.'
-                        : 'Your Pro plan subscription is active and will renew monthly.'}
+                        ? 'Upgrade to SpeekTo.Me Pro for unlimited dictation with fair use and access to Advanced AI Enhancement.'
+                        : 'Your Pro plan is active.'}
                     </p>
                   </div>
                 </div>
@@ -1505,9 +1577,26 @@ export default function App() {
                 <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg> Recent Transcriptions
                 </h3>
+                <p className="transcription-history-note">Saved text is encrypted on the server and shown separately from processing details.</p>
+                {transcriptsLoading && <div className="saved-transcripts-state"><div className="spinner" aria-hidden="true" />Loading your saved transcripts…</div>}
+                {transcriptsError && <p className="saved-transcripts-state saved-transcripts-error" role="alert">{transcriptsError}</p>}
+                {!transcriptsLoading && !transcriptsError && savedTranscripts.length > 0 && (
+                  <div className="saved-transcripts-list">
+                    {savedTranscripts.map((transcript) => (
+                      <article className="saved-transcript" key={transcript.id}>
+                        <div className="saved-transcript-meta">
+                          <time>{new Date(transcript.created_at * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</time>
+                          <span className="saved-transcript-mode">{transcript.mode === 'command' ? 'Voice command' : 'Dictation'}</span>
+                        </div>
+                        <p>{transcript.text}</p>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                <h4 className="transcription-subheading">Processing activity</h4>
                 {logs.length === 0 ? (
                   <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
-                    No recent dictations found. Open SpeekTo.Me on your desktop to make your first transcription!
+                    No processing records found yet.
                   </p>
                 ) : (
                   <div className="logs-table-container">
@@ -1571,7 +1660,7 @@ export default function App() {
                                   </div>
                                 ) : (
                                   <span style={{ color: 'rgba(36, 10, 18, 0.4)', italic: 'true', fontSize: '13px' }}>
-                                    No transcript
+                                    {savedTranscripts.length ? 'Text hidden for privacy' : 'No transcript attached'}
                                   </span>
                                 )}
                               </td>
@@ -1726,7 +1815,7 @@ export default function App() {
                   <div className="meeting-detail-header">
                     <div>
                       <button
-                        onClick={() => setActiveMeeting(null)}
+                        onClick={() => { setActiveMeeting(null); setMeetingAudioUrl(''); setMeetingAudioError(''); }}
                         className="btn btn-sm"
                         style={{ marginBottom: '12px' }}
                       >
@@ -1755,6 +1844,19 @@ export default function App() {
                   <div className="meeting-detail-grid">
                     {/* Left Column: AI Summary & Action Items */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <div className="meeting-panel-card">
+                        <h3 className="meeting-section-title">Meeting audio</h3>
+                        {meetingAudioUrl ? (
+                          <audio className="meeting-audio-player" controls preload="metadata" src={meetingAudioUrl} aria-label={`Audio recording: ${activeMeeting.title}`} />
+                        ) : (
+                          <p className="meeting-audio-note" role={meetingAudioError ? 'status' : undefined}>
+                            {meetingDetailsLoading ? 'Loading the recording…' : meetingAudioError || 'No audio recording is attached to this meeting.'}
+                          </p>
+                        )}
+                        {activeMeeting.cloud_audio_status && (
+                          <p className="meeting-cloud-status">{({ ready: 'Encrypted server backup available', pending: 'Encrypted server backup is still processing', storage_full: 'Server storage is full; this recording may only be available locally', local_file_unavailable: 'Server could not find an audio file for backup', deleted: 'Server backup was deleted', unavailable: 'Server audio backup is unavailable' })[activeMeeting.cloud_audio_status] || 'Meeting audio status unavailable'}</p>
+                        )}
+                      </div>
                       <div className="meeting-panel-card">
                         <h3 className="meeting-section-title">Summary & Takeaways</h3>
                         <div className="meeting-text-box" style={{ maxHeight: '280px' }}>
@@ -1922,7 +2024,11 @@ export default function App() {
                       {meetings.map((meeting) => (
                         <div
                           key={meeting.id}
-                          onClick={() => setActiveMeeting(meeting)}
+                          onClick={() => openMeeting(meeting)}
+                          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openMeeting(meeting); } }}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Open meeting ${meeting.title}`}
                           className="card meeting-card"
                         >
                           <div className="meeting-card-top">
