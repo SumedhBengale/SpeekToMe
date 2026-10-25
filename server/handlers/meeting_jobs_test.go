@@ -13,101 +13,12 @@ import (
 	"path/filepath"
 	"speektome-server/audiospool"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"speektome-server/db"
 )
 
-func TestMeetingJobPersistsStagesAndCompletesWithoutClient(t *testing.T) {
-	database, e := db.NewDatabase(filepath.Join(t.TempDir(), "test.db"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer database.Close()
-	_, e = database.GetDB().Exec(`INSERT INTO users(id,email,name,plan_tier,plan_active) VALUES(1,'owner@example.com','Owner','pro',1)`)
-	if e != nil {
-		t.Fatal(e)
-	}
-	token := filepath.Join(t.TempDir(), "token")
-	os.WriteFile(token, []byte("01234567890123456789012345678901"), 0600)
-	t.Setenv("SPEEKTOME_WORKER_TOKEN_FILE", token)
-	root := t.TempDir()
-	t.Setenv("MEETING_AUDIO_DIR", root)
-	var mu sync.Mutex
-	calls := map[string]int{}
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer 01234567890123456789012345678901" {
-			t.Error("missing worker authentication")
-		}
-		if r.URL.Path == "/fleet/meetings/acquire" || r.URL.Path == "/fleet/meetings/release" {
-			w.WriteHeader(204)
-			return
-		}
-		stage := filepath.Base(r.URL.Path)
-		mu.Lock()
-		calls[stage]++
-		mu.Unlock()
-		if stage == "diar" {
-			w.Write([]byte(`{"segments":[{"start":0,"end":2,"speaker":2}]}`))
-			return
-		}
-		w.Write([]byte(`{"text":"hello","words":[{"word":"hello","start":0.2,"end":0.8}]}`))
-	}))
-	defer worker.Close()
-	t.Setenv("SPEEKTOME_FLEET_URL", worker.URL)
-	app := &App{DB: database}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	mux := http.NewServeMux()
-	initContext, stopInit := context.WithCancel(context.Background())
-	stopInit()
-	if e = app.StartMeetingJobs(initContext, mux); e != nil {
-		t.Fatal(e)
-	}
-	key := jobKey(1, "persistent-meeting")
-	spool := testMeetingSpool(t, app)
-	spoolAudio(t, spool, 1, key, map[string][]byte{"mic": []byte("fake-audio"), "system": []byte("fake-audio")})
-	id, e := database.CreateMeeting(1, "meeting", 1, "")
-	if e != nil {
-		t.Fatal(e)
-	}
-	// Microphone stage already succeeded on an earlier worker; only other stages
-	// should execute after restart/retry.
-	_, e = database.GetDB().Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,meeting_id,created_at,attempt,diar_result,mic_result) VALUES(?,1,'persistent-meeting','meeting','{}','processing',?,0,'attempt','{"segments":[{"start":0,"end":2,"speaker":2}]}',?)`, key, id, `{"words":[{"word":"local","start":0.1,"end":0.5}]}`)
-	if e != nil {
-		t.Fatal(e)
-	}
-	processor := &MeetingJobs{app: app, db: database.GetDB(), spool: spool, root: root, fleet: worker.URL, token: "01234567890123456789012345678901", client: worker.Client()}
-	processor.process(ctx, key, "attempt")
-	var status string
-	database.GetDB().QueryRow(`SELECT status FROM meeting_jobs WHERE job_key=?`, key).Scan(&status)
-	if status != "completed" {
-		t.Fatal(status)
-	}
-	meeting, e := database.GetMeeting(id)
-	if e != nil {
-		t.Fatal(e)
-	}
-	var segments []MeetingSegment
-	if json.Unmarshal([]byte(meeting.SegmentsJSON), &segments) != nil || len(segments) != 2 {
-		t.Fatal(meeting)
-	}
-	for _, segment := range segments {
-		if segment.Channel == "" || segment.SpeakerID == "" {
-			t.Fatalf("speaker identity lost on save: %+v", segment)
-		}
-		if segment.Channel == "mic" && segment.SpeakerID != "speaker_local" {
-			t.Fatal(segment)
-		}
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if calls["mic"] != 0 || calls["system"] != 1 || calls["diar"] != 0 {
-		t.Fatal(calls)
-	}
-}
 func TestMergeMeetingKeepsChannelsAndUnknownSpeakers(t *testing.T) {
 	mic := jobTranscript{Words: []jobWord{{"me", 0, 1}}}
 	system := jobTranscript{Words: []jobWord{{"them", 0, 1}, {"unknown", 3, 4}}}
@@ -349,5 +260,84 @@ func TestMeetingUploadIsSealedAndCommitVerifiesOgg(t *testing.T) {
 	jobs.maintainSpool(context.Background())
 	if jobs.spool.Has(context.Background(), jobKey(1, "sealed")) {
 		t.Fatal("completed meeting kept spooled audio")
+	}
+}
+
+func TestMeetingUploadAcceptsTheSignedTranscriptFile(t *testing.T) {
+	database, err := db.NewDatabase(filepath.Join(t.TempDir(), "transcript.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err = database.GetDB().Exec(`INSERT INTO users(id,email,name,plan_tier,plan_active) VALUES(1,'owner@example.com','Owner','pro',1)`); err != nil {
+		t.Fatal(err)
+	}
+	database.CreateSession("owner", 1, 0)
+	t.Setenv("MEETING_AUDIO_DIR", t.TempDir())
+	t.Setenv("MEETING_SPOOL_DIR", t.TempDir())
+	t.Setenv("SPEEKTOME_WORKER_TOKEN_FILE", filepath.Join(t.TempDir(), "absent"))
+	app := &App{DB: database}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mux := http.NewServeMux()
+	if err := app.StartMeetingJobs(ctx, mux); err != nil {
+		t.Fatal(err)
+	}
+	send := func(method, path, offset string, data []byte) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, bytes.NewReader(data))
+		r.Header.Set("Authorization", "Bearer owner")
+		if offset != "" {
+			r.Header.Set("Upload-Offset", offset)
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	audio := audiospool.SyntheticOggOpus(10)
+	transcript := []byte(`{"type":"words","batch":{},"sig":""}` + "\n")
+	describe := func(data []byte) MeetingFile {
+		sum := sha256.Sum256(data)
+		return MeetingFile{Size: int64(len(data)), SHA: hex.EncodeToString(sum[:])}
+	}
+	// The transcript is optional and can never replace a recording.
+	missingMixed, _ := json.Marshal(MeetingUpload{ID: "bad", Files: map[string]MeetingFile{"mic": describe(audio), "system": describe(audio), "transcript": describe(transcript)}})
+	if w := send("POST", "/v1/meetings/jobs", "", missingMixed); w.Code != 400 {
+		t.Fatal("accepted a meeting without its mixed recording", w.Code)
+	}
+	files := map[string]MeetingFile{"mic": describe(audio), "system": describe(audio), "mixed": describe(audio), "transcript": describe(transcript)}
+	long, _ := json.Marshal(MeetingUpload{ID: "long", Title: "Test", Description: strings.Repeat("é", meetingDescriptionLimit+1), Files: files})
+	if w := send("POST", "/v1/meetings/jobs", "", long); w.Code != 400 {
+		t.Fatal("accepted an oversized description", w.Code)
+	}
+	manifest, _ := json.Marshal(MeetingUpload{ID: "with-transcript", Title: "Test", Description: "Weekly sync", Files: files, Language: "en"})
+	if w := send("POST", "/v1/meetings/jobs", "", manifest); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for _, channel := range []string{"mic", "system", "mixed"} {
+		if w := send("PUT", "/v1/meetings/jobs/with-transcript/audio/"+channel, "0", audio); w.Code != 204 {
+			t.Fatal(channel, w.Code, w.Body.String())
+		}
+	}
+	// A transcript altered after the manifest was declared fails the checksum.
+	if w := send("PUT", "/v1/meetings/jobs/with-transcript/audio/transcript", "0", bytes.ToUpper(transcript)); w.Code != 204 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var stored string
+	if err := database.GetDB().QueryRow(`SELECT description FROM meeting_jobs WHERE client_id='with-transcript'`).Scan(&stored); err != nil || stored != "Weekly sync" {
+		t.Fatal("description not stored on the job", stored, err)
+	}
+	if w := send("POST", "/v1/meetings/jobs/with-transcript/commit", "", nil); w.Code != 422 {
+		t.Fatal("transcript checksum not enforced", w.Code, w.Body.String())
+	}
+	// The same flow with the declared transcript commits.
+	files2 := map[string]MeetingFile{"mic": describe(audio), "system": describe(audio), "mixed": describe(audio), "transcript": describe(transcript)}
+	manifest2, _ := json.Marshal(MeetingUpload{ID: "with-transcript-2", Title: "Test", Files: files2, Language: "en"})
+	send("POST", "/v1/meetings/jobs", "", manifest2)
+	for _, channel := range []string{"mic", "system", "mixed"} {
+		send("PUT", "/v1/meetings/jobs/with-transcript-2/audio/"+channel, "0", audio)
+	}
+	send("PUT", "/v1/meetings/jobs/with-transcript-2/audio/transcript", "0", transcript)
+	if w := send("POST", "/v1/meetings/jobs/with-transcript-2/commit", "", nil); w.Code != 202 {
+		t.Fatal(w.Code, w.Body.String())
 	}
 }

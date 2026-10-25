@@ -3,9 +3,6 @@ package handlers
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,16 +12,15 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// MeetingDiarization owns a durable FIFO independent of GPU attempts. A SQL
-// lease serializes coordinators. Remote identity is persisted BEFORE upload so
-// an ambiguous response/restart can reattach to the same job instead of
-// submitting duplicate work.
+// MeetingDiarization runs one meeting's diarization as a direct call: submit
+// the system audio, poll, read the result. Nothing is persisted; after a
+// restart the meeting's pipeline simply submits again, and the abandoned
+// remote job's result is never read.
 //
 // Two backends share one HTTP job contract. The dedicated CPU gateway runs one
 // job at a time over the private network. When a diarizer public key is
@@ -38,28 +34,12 @@ type MeetingDiarization struct {
 	proxyKey, proxySecret string
 	limit                 int
 	label                 string
+	slots                 chan struct{}
+	poll                  time.Duration
+	maxWait               time.Duration // caps a retry wait; tests shorten it
 }
 
 func newMeetingDiarization(j *MeetingJobs) (*MeetingDiarization, error) {
-	_, err := j.db.Exec(`CREATE TABLE IF NOT EXISTS meeting_diarization_queue (
- position INTEGER PRIMARY KEY AUTOINCREMENT,job_key TEXT NOT NULL UNIQUE,created_at INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'queued',
- remote_id TEXT NOT NULL DEFAULT '',generation INTEGER NOT NULL DEFAULT 0,
- acknowledged INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '');
- CREATE INDEX IF NOT EXISTS idx_meeting_diarization_queue ON meeting_diarization_queue(status,created_at);
- DROP INDEX IF EXISTS idx_meeting_diarization_single_running;
- CREATE TABLE IF NOT EXISTS meeting_diarization_lock (id INTEGER PRIMARY KEY CHECK(id=1),owner TEXT NOT NULL DEFAULT '',expires INTEGER NOT NULL DEFAULT 0);
- INSERT OR IGNORE INTO meeting_diarization_lock(id) VALUES(1);`)
-	if err != nil {
-		return nil, err
-	}
-	// Account-sealed response key of the job's current envelope (empty for CPU jobs).
-	var responseKeyColumn int
-	_ = j.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('meeting_diarization_queue') WHERE name='response_key'").Scan(&responseKeyColumn)
-	if responseKeyColumn == 0 {
-		if _, err = j.db.Exec("ALTER TABLE meeting_diarization_queue ADD COLUMN response_key TEXT NOT NULL DEFAULT ''"); err != nil {
-			return nil, err
-		}
-	}
 	endpoint := strings.TrimRight(os.Getenv("SPEEKTOME_DIARIZATION_URL"), "/")
 	if endpoint == "" {
 		endpoint = "http://DIARIZATION_PRIVATE_IP:8081"
@@ -70,11 +50,12 @@ func newMeetingDiarization(j *MeetingJobs) (*MeetingDiarization, error) {
 		if tokenPath == "" {
 			tokenPath = "/etc/speektome-diarization/token"
 		}
-		data, _ := os.ReadFile(tokenPath) // Queue persists while credentials are unavailable.
+		data, _ := os.ReadFile(tokenPath) // Meetings wait while credentials are unavailable.
 		token = string(data)
 	}
-	d := &MeetingDiarization{jobs: j, url: endpoint, token: strings.TrimSpace(token), limit: 1, label: "CPU diarization",
+	d := &MeetingDiarization{jobs: j, url: endpoint, token: strings.TrimSpace(token), limit: 1, label: "CPU diarization", poll: 2 * time.Second, maxWait: 5 * time.Minute,
 		proxyKey: os.Getenv("SPEEKTOME_DIARIZATION_MODAL_KEY"), proxySecret: os.Getenv("SPEEKTOME_DIARIZATION_MODAL_SECRET")}
+	var err error
 	if encoded := strings.TrimSpace(os.Getenv("SPEEKTOME_DIARIZATION_PUBLIC_KEY")); encoded != "" {
 		if d.recipient, err = parseDiarizationRecipient(encoded); err != nil {
 			return nil, fmt.Errorf("SPEEKTOME_DIARIZATION_PUBLIC_KEY: %w", err)
@@ -84,279 +65,156 @@ func newMeetingDiarization(j *MeetingJobs) (*MeetingDiarization, error) {
 	if n, err := strconv.Atoi(os.Getenv("SPEEKTOME_DIARIZATION_CONCURRENCY")); err == nil && n > 0 {
 		d.limit = n
 	}
+	d.slots = make(chan struct{}, max(d.limit, 1))
 	return d, nil
 }
 
-func (d *MeetingDiarization) loop(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for ctx.Err() == nil {
-		if os.Getenv("MEETING_PROCESSING_ENABLED") != "false" {
-			if err := d.tick(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("[MEETINGS] %s queue unavailable: %v", d.label, err)
-			}
+// Transient failures (busy, unreachable, lost jobs) are retried this many times
+// before the meeting attempt fails and goes back to the job queue.
+const diarizationAttempts = 3
+
+// run diarizes the meeting's system audio and returns its speaker segments.
+func (d *MeetingDiarization) run(ctx context.Context, key string) ([]jobSpeaker, error) {
+	if len(d.token) < 24 {
+		return nil, errors.New("waiting for " + d.label + " credentials")
+	}
+	select {
+	case d.slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-d.slots }()
+	var last error
+	for attempt := 0; attempt < diarizationAttempts; attempt++ {
+		speakers, wait, err := d.once(ctx, key)
+		if err == nil {
+			return speakers, nil
 		}
+		var failure *meetingError
+		if errors.As(err, &failure) && failure.permanent || ctx.Err() != nil {
+			return nil, err
+		}
+		last = err
 		select {
 		case <-ctx.Done():
-			return
-		case <-ticker.C:
+			return nil, ctx.Err()
+		case <-time.After(min(wait, d.maxWait)):
 		}
 	}
+	return nil, last
 }
 
-func (d *MeetingDiarization) tick(parent context.Context) error {
-	if parent.Err() != nil {
-		return parent.Err()
+// once submits one remote job and waits for it. On failure it also returns how
+// long to wait before trying again.
+func (d *MeetingDiarization) once(ctx context.Context, key string) ([]jobSpeaker, time.Duration, error) {
+	id := make([]byte, 16)
+	if _, err := rand.Read(id); err != nil {
+		return nil, 0, err
 	}
-	// Bound each upload/status/result operation below the database lease lifetime.
-	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
-	defer cancel()
-	claim := make([]byte, 16)
-	if _, err := rand.Read(claim); err != nil {
-		return err
-	}
-	owner := hex.EncodeToString(claim)
-	now := time.Now().Unix()
-	res, err := d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_lock SET owner=?,expires=? WHERE id=1 AND expires<?`, owner, now+120, now)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil || n != 1 {
-		return err
-	}
-	defer func() {
-		release, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = d.jobs.db.ExecContext(release, `UPDATE meeting_diarization_lock SET owner='',expires=0 WHERE id=1 AND owner=?`, owner)
-	}()
-
-	// Reconcile committed jobs, including uploads committed before this deployment.
-	_, err = d.jobs.db.ExecContext(ctx, `INSERT OR IGNORE INTO meeting_diarization_queue(job_key,created_at)
- SELECT job_key,created_at FROM meeting_jobs WHERE admitted=1 AND status IN ('queued','processing') AND diar_result='' ORDER BY created_at,job_key`)
-	if err != nil {
-		return err
-	}
-	// Retry a previously failed stage only on explicit meeting retry. Delay reset
-	// until its old remote result has been acknowledged, retaining crash recovery.
-	_, err = d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_queue SET status='queued',generation=generation+1,remote_id='',response_key='',error='',next_attempt=0,acknowledged=0
- WHERE status IN ('failed','cancelled') AND acknowledged=1 AND job_key IN (SELECT job_key FROM meeting_jobs WHERE status IN ('queued','processing') AND diar_result='')`)
-	if err != nil {
-		return err
-	}
-	_, err = d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_queue SET status='cancelled',acknowledged=1 WHERE status='queued'
- AND NOT EXISTS (SELECT 1 FROM meeting_jobs j WHERE j.job_key=meeting_diarization_queue.job_key AND j.status IN ('queued','processing'))`)
-	if err != nil {
-		return err
-	}
-	if len(d.token) < 24 {
-		return nil
-	}
-	// Terminal results are acknowledged only after their outcome is durable.
-	var cleanupKey, cleanupID string
-	err = d.jobs.db.QueryRowContext(ctx, `SELECT job_key,remote_id FROM meeting_diarization_queue WHERE status IN ('completed','failed','cancelled') AND acknowledged=0 AND next_attempt<=? ORDER BY position LIMIT 1`, now).Scan(&cleanupKey, &cleanupID)
-	if err == nil {
-		if cleanupID == "" {
-			_, err = d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_queue SET acknowledged=1 WHERE job_key=?`, cleanupKey)
-			return err
-		}
-		_, code, _, requestErr := d.request(ctx, http.MethodDelete, "/v1/diarizations/"+cleanupID, nil, "")
-		if requestErr == nil && (code == 200 || code == 404) {
-			_, err = d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_queue SET acknowledged=1,response_key='' WHERE job_key=?`, cleanupKey)
-			return err
-		}
-		return d.deferItem(ctx, cleanupKey, "waiting to acknowledge "+d.label, 15*time.Second)
-	}
-	if err != sql.ErrNoRows {
-		return err
-	}
-	// Running entries (including uncertain uploads and pending retry timers) hold
-	// their slot, so at most `limit` remote jobs exist at once; the CPU gateway's
-	// limit of one preserves strict FIFO.
-	type runningJob struct {
-		key, remote string
-		next        int64
-	}
-	rows, err := d.jobs.db.QueryContext(ctx, `SELECT job_key,remote_id,next_attempt FROM meeting_diarization_queue WHERE status='running' ORDER BY position`)
-	if err != nil {
-		return err
-	}
-	var running []runningJob
-	for rows.Next() {
-		var r runningJob
-		if err = rows.Scan(&r.key, &r.remote, &r.next); err != nil {
-			rows.Close()
-			return err
-		}
-		running = append(running, r)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return err
-	}
-	var first error
-	for _, r := range running {
-		if r.next <= now {
-			if err := d.advance(ctx, r.key, r.remote); err != nil && first == nil {
-				first = err
-			}
-		}
-	}
-	for active := len(running); active < max(d.limit, 1) && ctx.Err() == nil; active++ {
-		var key string
-		var generation int
-		err = d.jobs.db.QueryRowContext(ctx, `SELECT job_key,generation FROM meeting_diarization_queue WHERE status='queued' AND job_key IN (SELECT job_key FROM meeting_jobs WHERE admitted=1) ORDER BY position LIMIT 1`).Scan(&key, &generation)
-		if err == sql.ErrNoRows {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		sum := sha256.Sum256([]byte(fmt.Sprintf("meeting-diarization/%s/%d", key, generation)))
-		remote := hex.EncodeToString(sum[:16])
-		if _, err = d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_queue SET status='running',remote_id=?,acknowledged=0 WHERE job_key=? AND status='queued'`, remote, key); err != nil {
-			return err
-		}
-		if err := d.advance(ctx, key, remote); err != nil && first == nil {
-			first = err
-		}
-	}
-	return first
-}
-
-// advance polls one running remote job, submitting it when the remote has no
-// record of it and saving its result before acknowledgment.
-func (d *MeetingDiarization) advance(ctx context.Context, key, remote string) error {
-	data, code, headers, err := d.request(ctx, http.MethodGet, "/v1/diarizations/"+remote, nil, "")
-	if err != nil {
-		return d.deferItem(ctx, key, d.label+" connection unavailable", 15*time.Second)
-	}
-	if code == 404 {
-		return d.submit(ctx, key, remote)
-	}
-	if code != 200 {
-		return d.httpFailure(ctx, key, code, headers)
-	}
-	var state struct {
-		Status string `json:"status"`
-		Error  string `json:"error"`
-	}
-	if json.Unmarshal(data, &state) != nil {
-		return d.deferItem(ctx, key, "invalid "+d.label+" status", 15*time.Second)
-	}
-	switch state.Status {
-	case "uploading", "uploaded", "processing":
-		return d.deferItem(ctx, key, "", 2*time.Second)
-	case "failed":
-		return d.fail(ctx, key, d.label+" failed: "+state.Error)
-	case "completed":
-		data, code, headers, err = d.request(ctx, http.MethodGet, "/v1/diarizations/"+remote+"/result", nil, "")
-		if err != nil {
-			return d.deferItem(ctx, key, d.label+" result unavailable", 15*time.Second)
-		}
-		if code != 200 {
-			return d.httpFailure(ctx, key, code, headers)
-		}
-		if d.recipient != nil {
-			if data, err = d.openResult(ctx, key, remote, data); err != nil {
-				return d.fail(ctx, key, "unreadable "+d.label+" result")
-			}
-		}
-		normalized, err := normalizeDiarizationResult(data)
-		if err != nil {
-			return d.fail(ctx, key, "invalid "+d.label+" result: "+err.Error())
-		}
-		sealed, err := d.jobs.sealStage(ctx, key, "diar_result", string(normalized))
-		if err != nil {
-			return err
-		}
-		tx, err := d.jobs.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		saved, err := tx.ExecContext(ctx, `UPDATE meeting_jobs SET diar_result=?,error='',next_attempt=0 WHERE job_key=? AND status IN ('queued','processing')`, sealed, key)
-		if err != nil {
-			return err
-		}
-		count, err := saved.RowsAffected()
-		if err != nil {
-			return err
-		}
-		status := "completed"
-		if count == 0 {
-			status = "cancelled"
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE meeting_diarization_queue SET status=?,error='',next_attempt=0 WHERE job_key=?`, status, key)
-		if err != nil {
-			return err
-		}
-		return tx.Commit()
-	default:
-		return d.deferItem(ctx, key, "unrecognized "+d.label+" status", 15*time.Second)
-	}
-}
-
-func (d *MeetingDiarization) submit(ctx context.Context, key, remote string) error {
-	var status string
-	if err := d.jobs.db.QueryRowContext(ctx, `SELECT status FROM meeting_jobs WHERE job_key=?`, key).Scan(&status); err == sql.ErrNoRows || (err == nil && status != "queued" && status != "processing") {
-		_, err = d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_queue SET status='cancelled',acknowledged=1 WHERE job_key=?`, key)
-		return err
-	} else if err != nil {
-		return err
-	}
+	remote := hex.EncodeToString(id)
 	audio, size, err := d.jobs.openChannel(ctx, key, "system")
 	if err != nil {
-		return d.fail(ctx, key, "system audio unavailable for "+d.label)
+		return nil, 0, permanentError("system audio unavailable for " + d.label)
 	}
 	defer audio.Close()
 	var body io.Reader = sizedBody{audio, size}
+	var responseKey []byte
 	if d.recipient != nil {
-		sealed, responseKey, err := sealDiarizationRequest(audio, size, d.recipient, remote, time.Now(), nil)
+		body, responseKey, err = sealDiarizationRequest(audio, size, d.recipient, remote, time.Now(), nil)
 		if err != nil {
-			return d.fail(ctx, key, "cannot seal audio for "+d.label)
+			return nil, 0, permanentError("cannot seal audio for " + d.label)
 		}
-		// Persisted before upload: a lost 202 or a restart must still be able to open
-		// the result of the envelope the remote may already hold.
-		stored, err := d.jobs.sealStage(ctx, key, "diar_response_key", base64.StdEncoding.EncodeToString(responseKey))
-		if err != nil {
-			return err
-		}
-		if _, err = d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_queue SET response_key=? WHERE job_key=?`, stored, key); err != nil {
-			return err
-		}
-		body = sealed
 	}
 	data, code, headers, err := d.request(ctx, http.MethodPost, "/v1/diarizations", body, remote)
 	if err != nil {
-		return d.deferItem(ctx, key, d.label+" upload response unavailable; reconnecting to saved job ID", 15*time.Second)
+		return nil, 15 * time.Second, fmt.Errorf("%s unavailable", d.label)
 	}
 	if code != 202 {
-		return d.httpFailure(ctx, key, code, headers)
+		return nil, retryAfter(headers), d.httpFailure(code)
 	}
 	var accepted struct {
 		JobID string `json:"job_id"`
 	}
 	if json.Unmarshal(data, &accepted) != nil || accepted.JobID != remote {
-		return d.fail(ctx, key, d.label+" must support coordinator job identities")
+		return nil, 0, permanentError(d.label + " must support coordinator job identities")
 	}
-	return d.deferItem(ctx, key, "", 2*time.Second)
+	// Free the remote copy once this call is done with it, whatever the outcome.
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stop()
+		_, _, _, _ = d.request(cleanup, http.MethodDelete, "/v1/diarizations/"+remote, nil, "")
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		case <-time.After(d.poll):
+		}
+		data, code, headers, err = d.request(ctx, http.MethodGet, "/v1/diarizations/"+remote, nil, "")
+		if err != nil {
+			continue // Polling survives brief network loss; the 6-hour job bound still applies.
+		}
+		if code == 404 {
+			return nil, 5 * time.Second, fmt.Errorf("%s lost the job", d.label)
+		}
+		if code != 200 {
+			return nil, retryAfter(headers), d.httpFailure(code)
+		}
+		var state struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		}
+		if json.Unmarshal(data, &state) != nil {
+			return nil, 15 * time.Second, fmt.Errorf("invalid %s status", d.label)
+		}
+		switch state.Status {
+		case "uploading", "uploaded", "processing":
+			continue
+		case "failed":
+			return nil, 15 * time.Second, fmt.Errorf("%s failed: %s", d.label, state.Error)
+		case "completed":
+		default:
+			return nil, 15 * time.Second, fmt.Errorf("unrecognized %s status", d.label)
+		}
+		data, code, headers, err = d.request(ctx, http.MethodGet, "/v1/diarizations/"+remote+"/result", nil, "")
+		if err != nil {
+			return nil, 15 * time.Second, fmt.Errorf("%s result unavailable", d.label)
+		}
+		if code != 200 {
+			return nil, retryAfter(headers), d.httpFailure(code)
+		}
+		if d.recipient != nil {
+			if data, err = openDiarizationResponse(data, responseKey, remote); err != nil {
+				return nil, 0, permanentError("unreadable " + d.label + " result")
+			}
+		}
+		normalized, err := normalizeDiarizationResult(data)
+		if err != nil {
+			return nil, 0, permanentError("invalid " + d.label + " result: " + err.Error())
+		}
+		var result struct {
+			Segments []jobSpeaker `json:"segments"`
+		}
+		if err = json.Unmarshal(normalized, &result); err != nil {
+			return nil, 0, err
+		}
+		return result.Segments, 0, nil
+	}
 }
 
-func (d *MeetingDiarization) openResult(ctx context.Context, key, remote string, data []byte) ([]byte, error) {
-	var stored string
-	if err := d.jobs.db.QueryRowContext(ctx, `SELECT response_key FROM meeting_diarization_queue WHERE job_key=?`, key).Scan(&stored); err != nil || stored == "" {
-		return nil, errEnvelope
+func retryAfter(headers http.Header) time.Duration {
+	if seconds, err := strconv.Atoi(headers.Get("Retry-After")); err == nil && seconds > 0 {
+		return time.Duration(min(seconds, 300)) * time.Second
 	}
-	encoded, err := d.jobs.openStage(ctx, key, "diar_response_key", stored)
-	if err != nil {
-		return nil, err
+	return 15 * time.Second
+}
+
+func (d *MeetingDiarization) httpFailure(code int) error {
+	message := fmt.Sprintf("%s HTTP %d", d.label, code)
+	if code == 400 || code == 401 || code == 403 || code == 413 || code == 422 {
+		return permanentError(message)
 	}
-	responseKey, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, err
-	}
-	return openDiarizationResponse(data, responseKey, remote)
+	return errors.New("waiting for " + message)
 }
 
 // sizedBody streams decrypted spool audio with a known length, so the gateway
@@ -398,46 +256,6 @@ func (d *MeetingDiarization) request(ctx context.Context, method, path string, b
 		return nil, response.StatusCode, response.Header, errors.New(d.label + " response exceeds limit")
 	}
 	return data, response.StatusCode, response.Header, err
-}
-
-func (d *MeetingDiarization) deferItem(ctx context.Context, key, message string, delay time.Duration) error {
-	_, err := d.jobs.db.ExecContext(ctx, `UPDATE meeting_diarization_queue SET next_attempt=?,error=? WHERE job_key=?`, time.Now().Add(delay).Unix(), message, key)
-	return err
-}
-func (d *MeetingDiarization) httpFailure(ctx context.Context, key string, code int, headers http.Header) error {
-	if code == 400 || code == 401 || code == 403 || code == 413 || code == 422 {
-		return d.fail(ctx, key, fmt.Sprintf("%s HTTP %d", d.label, code))
-	}
-	delay := 15 * time.Second
-	if seconds, err := strconv.Atoi(headers.Get("Retry-After")); err == nil && seconds > 0 {
-		delay = time.Duration(min(seconds, 300)) * time.Second
-	}
-	return d.deferItem(ctx, key, fmt.Sprintf("waiting for %s (HTTP %d)", d.label, code), delay)
-}
-func (d *MeetingDiarization) fail(ctx context.Context, key, message string) error {
-	if len(message) > 512 {
-		message = message[:512]
-	}
-	tx, err := d.jobs.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE meeting_diarization_queue SET status='failed',error=?,next_attempt=0 WHERE job_key=?`, message, key)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE meeting_jobs SET admitted=CASE WHEN status='processing' THEN admitted ELSE 0 END,status='failed',error=? WHERE job_key=? AND status IN ('queued','processing')`, message, key)
-	if err != nil {
-		return err
-	}
-	if err = tx.Commit(); err == nil {
-		var admitted int
-		if d.jobs.db.QueryRow("SELECT admitted FROM meeting_jobs WHERE job_key=?", key).Scan(&admitted) == nil && admitted == 0 {
-			d.jobs.releaseProcessing(key)
-		}
-	}
-	return err
 }
 
 var cpuSpeakerPattern = regexp.MustCompile(`^(?:speaker[_ -]?)?(\d+)$`)

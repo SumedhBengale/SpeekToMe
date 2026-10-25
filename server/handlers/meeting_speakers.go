@@ -184,6 +184,9 @@ func (a *App) HandleSaveMeetingSpeakers(w http.ResponseWriter, r *http.Request) 
 	var request struct {
 		Names    map[string]string `json:"speaker_names"`
 		Previous map[string]string `json:"previous_names"`
+		// Reviewed marks the first-view naming prompt as answered. Every save
+		// does that; skipping sends the unchanged names with this set.
+		Reviewed bool `json:"reviewed"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	decoder.DisallowUnknownFields()
@@ -228,6 +231,7 @@ func (a *App) HandleSaveMeetingSpeakers(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	meeting.SpeakerNames = request.Names
+	meeting.SpeakersReviewed = true
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(prepareMeetingSpeakerView(*meeting, user.Name))
 }

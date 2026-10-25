@@ -325,3 +325,97 @@ func TestFleetForwardsOneExplicitSpeakingLanguage(t *testing.T) {
 		})
 	}
 }
+
+func TestMeetingSessionConfirmsContiguousWordsOnRecordingTimeline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		ctx := r.Context()
+		if _, _, err = conn.Read(ctx); err != nil {
+			return
+		}
+		audio := 0
+		for {
+			kind, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			if kind == websocket.MessageBinary {
+				audio++
+				if audio == 1 {
+					conn.Write(ctx, websocket.MessageText, []byte(`{"type":"conversation.item.input_audio_transcription.completed","transcript":"hello","words":[{"word":"hello","start":0.1,"end":0.4}]}`))
+					conn.Write(ctx, websocket.MessageText, []byte(`{"type":"conversation.item.input_audio_transcription.completed","transcript":"","words":[],"audio_processed":0.5}`))
+				}
+				continue
+			}
+			var control map[string]any
+			json.Unmarshal(data, &control)
+			if control["type"] == "input_audio_buffer.commit" {
+				conn.Write(ctx, websocket.MessageText, []byte(`{"type":"conversation.item.input_audio_transcription.completed","transcript":"world","words":[{"word":"world","start":0.7,"end":0.9}]}`))
+				conn.Write(ctx, websocket.MessageText, []byte(`{"type":"input_audio_buffer.committed"}`))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	t.Setenv("SPEEKTOME_FLEET_URL", server.URL)
+	token := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(token, []byte("01234567890123456789012345678901"), 0600)
+	t.Setenv("SPEEKTOME_WORKER_TOKEN_FILE", token)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Resuming at chunk 10 puts the stream's audio at 5.6 s of the recording.
+	session, err := CreateMeetingStreamingSession(ctx, "self_hosted_nemotron_3_5", []string{"en"}, nil, 5.6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(websocket.StatusNormalClosure, "")
+	var batches []WordBatch
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for batch := range session.Words {
+			batches = append(batches, batch)
+		}
+	}()
+	go func() {
+		for range session.TextChan {
+		}
+	}()
+	for range 2 {
+		if err = session.SendAudio(ctx, journalFrame()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = session.SendControl(ctx, map[string]interface{}{"type": "stop"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = session.AwaitFinal(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	near := func(a, b float64) bool { return a-b < 1e-6 && b-a < 1e-6 }
+	want := []WordBatch{
+		{From: 5.6, To: 6.0, Words: []TimedWord{{"hello", 5.7, 6.0}}},
+		{From: 6.0, To: 6.1}, // silence
+		{From: 6.1, To: 6.5, Words: []TimedWord{{"world", 6.3, 6.5}}},
+		{From: 6.5, To: 6.72}, // trailing silence, confirmed by the commit
+	}
+	if len(batches) != len(want) {
+		t.Fatalf("%+v", batches)
+	}
+	for i, b := range batches {
+		w := want[i]
+		if !near(b.From, w.From) || !near(b.To, w.To) || len(b.Words) != len(w.Words) {
+			t.Fatalf("batch %d: %+v, want %+v", i, b, w)
+		}
+		for k, word := range b.Words {
+			if word.Word != w.Words[k].Word || !near(word.Start, w.Words[k].Start) || !near(word.End, w.Words[k].End) {
+				t.Fatalf("batch %d word %d: %+v", i, k, word)
+			}
+		}
+	}
+}

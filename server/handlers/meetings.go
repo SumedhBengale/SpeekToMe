@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"speektome-server/auth"
-	"speektome-server/pipeline"
 )
 
 // HandleRetiredMeetingUpload answers the old single-request upload, which
@@ -192,70 +191,6 @@ func (a *App) HandleGetMeetingAudio(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "audio/ogg")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, "recording.ogg", time.Time{}, reader)
-}
-
-func generateMeetingAIAnalysis(ctx context.Context, transcript string, pctx *pipeline.PipelineContext) (polished string, summary string, actionItems string, err error) {
-	systemPrompt := `You are an expert meeting assistant. Analyze the provided meeting transcript.
-The transcript contains speaker labels in square brackets (e.g. "[John Doe]: ...", "[Remote Speaker]: ...").
-You must format the "polished_transcript" output as a clean dialogue script where each line is prefixed with the speaker's name (e.g. "John Doe: ...", "Remote Speaker: ...").
-Polish all speech for punctuation, grammar, and typos, while keeping all original meaning.
-
-You must return your response in JSON format with exactly three fields:
-- "polished_transcript": The polished transcript formatted as dialogue script.
-- "summary": A concise, professional markdown summary of the meeting, including key discussion points.
-- "action_items": A markdown list of action items, tasks, and owners.
-Use each speaker label from the input exactly when attributing owners or mentioning speakers in the summary; never abbreviate, renumber, or invent speaker labels.
-
-Return ONLY the JSON object. Do not include any markdown fences (like ` + "```" + `json) or conversational text outside the JSON structure.`
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	content, err := pipeline.RunDeepSeekChatCompletion(ctx, client, "", systemPrompt, transcript, pctx)
-	if err != nil {
-		return transcript, "", "", err
-	}
-
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-
-	var analysis struct {
-		PolishedTranscript string      `json:"polished_transcript"`
-		Summary            string      `json:"summary"`
-		ActionItems        interface{} `json:"action_items"`
-	}
-	if err := json.Unmarshal([]byte(content), &analysis); err != nil {
-		log.Printf("[MEETING AI WARNING] Failed to unmarshal JSON analysis: %v. Raw content: %s", err, content)
-		return transcript, content, "No action items extracted.", nil
-	}
-
-	actionItemsStr := "No action items extracted."
-	if analysis.ActionItems != nil {
-		switch v := analysis.ActionItems.(type) {
-		case string:
-			actionItemsStr = v
-		case []interface{}:
-			var items []string
-			for _, item := range v {
-				if s, ok := item.(string); ok {
-					items = append(items, s)
-				}
-			}
-			actionItemsStr = strings.Join(items, "\n")
-		}
-	}
-
-	polishedStr := analysis.PolishedTranscript
-	if polishedStr == "" {
-		polishedStr = transcript
-	}
-
-	summaryStr := analysis.Summary
-	if summaryStr == "" {
-		summaryStr = "AI Summary not available."
-	}
-
-	return polishedStr, summaryStr, actionItemsStr, nil
 }
 
 type MeetingSegment struct {

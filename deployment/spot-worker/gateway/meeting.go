@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,25 +115,15 @@ func (g *gateway) meeting(w http.ResponseWriter, r *http.Request) {
 		w.Write(result)
 		return
 	}
-	result := meetingASR{Words: []meetingWord{}, Duration: duration}
-	// 30-second ownership windows with context on both sides. Word midpoints
-	// belong to exactly one window; timestamps remain on the original timeline.
-	for start := 0.0; start < duration; start += 30 {
-		from := math.Max(0, start-4.48)
-		to := math.Min(duration, start+30+4.48)
-		section, e := g.meetingStreamingASR(ctx, bytes.NewReader(pcmSection(pcm, from, to)), r.URL.Query().Get("language"), contexts)
-		if e != nil {
-			http.Error(w, "transcription failed: "+e.Error(), 502)
-			return
-		}
-		for _, word := range section.Words {
-			word.Start += from
-			word.End += from
-			mid := (word.Start + word.End) / 2
-			if mid >= start && mid < math.Min(duration, start+30) {
-				result.Words = append(result.Words, word)
-			}
-		}
+	ranges, e := parseMeetingRanges(r.URL.Query().Get("ranges"), duration)
+	if e != nil {
+		http.Error(w, e.Error(), 400)
+		return
+	}
+	result, e := g.transcribeRanges(ctx, pcm, duration, ranges, r.URL.Query().Get("language"), contexts)
+	if e != nil {
+		http.Error(w, "transcription failed: "+e.Error(), 502)
+		return
 	}
 	var words []string
 	for _, word := range result.Words {
@@ -142,6 +133,68 @@ func (g *gateway) meeting(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
+
+type meetingRange struct{ start, end float64 }
+
+// transcribeRanges runs recorded ASR over the given ranges of the decoded
+// audio, in 30-second ownership windows with context on both sides. Word
+// midpoints belong to exactly one window, and timestamps stay on the
+// recording's timeline. A meeting whose live transcript already covers most
+// of the recording asks only for its gaps, so only those reach the GPU.
+func (g *gateway) transcribeRanges(ctx context.Context, pcm []byte, duration float64, ranges []meetingRange, language string, contexts []speechContext) (meetingASR, error) {
+	result := meetingASR{Words: []meetingWord{}, Duration: duration}
+	for _, span := range ranges {
+		for start := span.start; start < span.end; start += 30 {
+			end := math.Min(span.end, start+30)
+			from := math.Max(0, start-4.48)
+			to := math.Min(duration, end+4.48)
+			section, e := g.meetingStreamingASR(ctx, bytes.NewReader(pcmSection(pcm, from, to)), language, contexts)
+			if e != nil {
+				return meetingASR{}, e
+			}
+			for _, word := range section.Words {
+				word.Start += from
+				word.End += from
+				if mid := (word.Start + word.End) / 2; mid >= start && mid < end {
+					result.Words = append(result.Words, word)
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+// maxMeetingRanges matches the coordinator's bound on one gap request.
+const maxMeetingRanges = 512
+
+// parseMeetingRanges reads the optional ranges parameter, "12.40-75.10,…" in
+// seconds: sorted, non-overlapping, and within the recording (a range may end
+// up to a second past it; it is clipped). Without it, the whole recording is
+// one range.
+func parseMeetingRanges(raw string, duration float64) ([]meetingRange, error) {
+	if raw == "" {
+		return []meetingRange{{0, duration}}, nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > maxMeetingRanges {
+		return nil, errors.New("too many ranges")
+	}
+	ranges := make([]meetingRange, 0, len(parts))
+	previous := 0.0
+	for _, part := range parts {
+		a, b, ok := strings.Cut(part, "-")
+		start, startErr := strconv.ParseFloat(a, 64)
+		end, endErr := strconv.ParseFloat(b, 64)
+		if !ok || startErr != nil || endErr != nil || math.IsNaN(start) || math.IsNaN(end) || math.IsInf(end, 0) ||
+			start < previous || end <= start || end > duration+1 {
+			return nil, errors.New("invalid ranges")
+		}
+		ranges = append(ranges, meetingRange{start, math.Min(end, duration)})
+		previous = end
+	}
+	return ranges, nil
+}
+
 func (g *gateway) meetingBackend(ctx context.Context, path string, pcm []byte, fields map[string]string) ([]byte, error) {
 	input := io.MultiReader(bytes.NewReader(wavHeader(len(pcm))), bytes.NewReader(pcm))
 	reader, writer := io.Pipe()

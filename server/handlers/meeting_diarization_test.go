@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"speektome-server/db"
 )
@@ -36,33 +38,29 @@ func diarizationFixture(t *testing.T) (*MeetingJobs, *MeetingDiarization) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.token = "01234567890123456789012345678901"
+	d.token, d.poll, d.maxWait = "01234567890123456789012345678901", 5*time.Millisecond, 10*time.Millisecond
+	j.diarization = d
 	return j, d
 }
 func addDiarizationMeeting(t *testing.T, j *MeetingJobs, key string, created int) {
 	t.Helper()
-	if _, err := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at,admitted) VALUES(?,?,?,'test','{}','queued',?,1)`, key, created, key, created); err != nil {
+	if _, err := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at,admitted) VALUES(?,?,?,'test','{}','processing',?,1)`, key, created, key, created); err != nil {
 		t.Fatal(err)
 	}
 	spoolAudio(t, j.spool, int64(created), key, map[string][]byte{"system": []byte("fixture audio")})
 }
-func queueTick(t *testing.T, d *MeetingDiarization) {
-	t.Helper()
-	if _, err := d.jobs.db.Exec(`UPDATE meeting_diarization_queue SET next_attempt=0`); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.tick(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
 
+// fakeCPU is the dedicated diarization gateway's job contract. Jobs complete on
+// their second status poll.
 type fakeCPU struct {
 	mu                     sync.Mutex
-	jobs                   map[string]string
-	submissions            []string
+	jobs                   map[string]int
+	submissions, deleted   []string
 	active, maxActive      int
 	busyOnce, loseResponse bool
-	database               *MeetingJobs
+	rejectAll              bool
+	audio                  string        // the system audio every submission must carry
+	hold                   chan struct{} // when set, uploads wait for it to close
 	t                      *testing.T
 }
 
@@ -73,30 +71,32 @@ func (f *fakeCPU) serve(w http.ResponseWriter, r *http.Request) {
 		f.t.Error("missing CPU authentication")
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/v1/diarizations/")
-	if r.Method == "POST" {
+	switch {
+	case r.Method == "POST":
+		if f.rejectAll {
+			w.WriteHeader(422)
+			return
+		}
 		if f.busyOnce {
 			f.busyOnce = false
-			w.Header().Set("Retry-After", "15")
+			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(429)
 			return
 		}
+		if f.hold != nil {
+			<-f.hold
+		}
 		id = r.Header.Get("X-SpeekToMe-Job-ID")
 		if len(id) != 32 {
-			f.t.Error("missing durable identity")
+			f.t.Error("missing job identity")
 		}
-		if _, ok := f.jobs[id]; !ok {
-			if f.active != 0 {
-				f.t.Error("overlapping CPU submission")
-			}
-			f.active++
-			f.maxActive = max(f.maxActive, f.active)
-			f.jobs[id] = "processing"
-			f.submissions = append(f.submissions, id)
-		}
-		body, _ := io.ReadAll(r.Body)
-		if string(body) != "fixture audio" {
+		if body, _ := io.ReadAll(r.Body); string(body) != f.audio {
 			f.t.Error("wrong audio channel")
 		}
+		f.jobs[id] = 0
+		f.submissions = append(f.submissions, id)
+		f.active++
+		f.maxActive = max(f.maxActive, f.active)
 		if f.loseResponse {
 			f.loseResponse = false
 			conn, _, _ := w.(http.Hijacker).Hijack()
@@ -105,172 +105,103 @@ func (f *fakeCPU) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(202)
 		fmt.Fprintf(w, `{"job_id":%q}`, id)
-		return
-	}
-	if r.Method == "DELETE" {
-		if _, ok := f.jobs[id]; !ok {
+	case r.Method == "DELETE":
+		if _, ok := f.jobs[id]; ok {
+			delete(f.jobs, id)
+			f.active--
+		}
+		f.deleted = append(f.deleted, id)
+		w.Write([]byte(`{}`))
+	case strings.HasSuffix(id, "/result"):
+		w.Write([]byte(`{"segments":[{"Start":0.25,"End":2.5,"Speaker":3}]}`))
+	default:
+		polls, ok := f.jobs[id]
+		if !ok {
 			w.WriteHeader(404)
 			return
 		}
-		var saved string
-		f.database.db.QueryRow(`SELECT j.diar_result FROM meeting_jobs j JOIN meeting_diarization_queue q ON j.job_key=q.job_key WHERE q.remote_id=?`, id).Scan(&saved)
-		if f.jobs[id] == "completed" && saved == "" {
-			f.t.Error("remote deleted before result saved")
+		f.jobs[id] = polls + 1
+		status := "processing"
+		if polls > 0 {
+			status = "completed"
 		}
-		delete(f.jobs, id)
-		w.Write([]byte(`{}`))
-		return
-	}
-	if strings.HasSuffix(id, "/result") {
-		w.Write([]byte(`{"segments":[{"Start":0.25,"End":2.5,"Speaker":3}]}`))
-		return
-	}
-	status, ok := f.jobs[id]
-	if !ok {
-		w.WriteHeader(404)
-		return
-	}
-	fmt.Fprintf(w, `{"status":%q,"error":"test failure"}`, status)
-}
-func (f *fakeCPU) complete() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for id, status := range f.jobs {
-		if status == "processing" {
-			f.jobs[id] = "completed"
-			f.active--
-		}
+		fmt.Fprintf(w, `{"status":%q,"error":""}`, status)
 	}
 }
-func fakeCPUServer(t *testing.T, j *MeetingJobs, d *MeetingDiarization) *fakeCPU {
+func fakeCPUServer(t *testing.T, d *MeetingDiarization) *fakeCPU {
 	t.Helper()
-	f := &fakeCPU{jobs: map[string]string{}, database: j, t: t}
+	f := &fakeCPU{jobs: map[string]int{}, audio: "fixture audio", t: t}
 	server := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(server.Close)
 	d.url = server.URL
 	return f
 }
 
-func TestDiarizationFIFOOneActiveAndSaveBeforeAcknowledgment(t *testing.T) {
+func TestDiarizationReturnsSpeakersAndDeletesTheRemoteJob(t *testing.T) {
 	j, d := diarizationFixture(t)
-	f := fakeCPUServer(t, j, d)
+	f := fakeCPUServer(t, d)
 	addDiarizationMeeting(t, j, "first", 1)
-	addDiarizationMeeting(t, j, "second", 2)
-	queueTick(t, d)
-	for range 3 {
-		queueTick(t, d)
+	speakers, err := d.run(context.Background(), "first")
+	if err != nil || len(speakers) != 1 || speakers[0] != (jobSpeaker{0.25, 2.5, 3}) {
+		t.Fatal(speakers, err)
 	}
-	f.mu.Lock()
-	if len(f.submissions) != 1 || f.maxActive != 1 {
-		t.Fatal(f.submissions, f.maxActive)
-	}
-	first := f.submissions[0]
-	f.mu.Unlock()
-	var remote, status string
-	j.db.QueryRow(`SELECT remote_id,status FROM meeting_diarization_queue WHERE job_key='first'`).Scan(&remote, &status)
-	if remote != first || status != "running" {
-		t.Fatal(remote, status)
-	}
-	f.complete()
-	queueTick(t, d) // Save result.
-	var result string
-	j.db.QueryRow(`SELECT diar_result FROM meeting_jobs WHERE job_key='first'`).Scan(&result)
-	if !strings.Contains(result, `"speaker":3`) {
-		t.Fatal(result)
-	}
-	queueTick(t, d) // Acknowledge after durable save.
-	queueTick(t, d) // Start second.
-	f.complete()
-	queueTick(t, d)
-	queueTick(t, d)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.submissions) != 2 || f.maxActive != 1 || len(f.jobs) != 0 {
-		t.Fatal(f.submissions, f.maxActive, f.jobs)
+	if len(f.submissions) != 1 || len(f.deleted) != 1 || f.deleted[0] != f.submissions[0] {
+		t.Fatal("remote job not cleaned up", f.submissions, f.deleted)
 	}
 }
 
-func TestDiarizationBusyPreservesFIFOAndLostResponseRecoversAfterRestart(t *testing.T) {
+func TestDiarizationRetriesBusyAndLostResponses(t *testing.T) {
 	j, d := diarizationFixture(t)
-	f := fakeCPUServer(t, j, d)
-	f.busyOnce = true
-	f.loseResponse = true
+	f := fakeCPUServer(t, d)
+	f.busyOnce, f.loseResponse = true, true
 	addDiarizationMeeting(t, j, "first", 1)
-	addDiarizationMeeting(t, j, "second", 2)
-	queueTick(t, d) // External worker busy: first stays head.
-	if len(f.submissions) != 0 {
-		t.Fatal("busy response lost queue")
+	speakers, err := d.run(context.Background(), "first")
+	if err != nil || len(speakers) != 1 {
+		t.Fatal(speakers, err)
 	}
-	queueTick(t, d) // Remote accepts, connection closes before 202.
-	restarted := &MeetingDiarization{jobs: j, url: d.url, token: d.token}
-	queueTick(t, restarted) // Reattach to persisted identity, no second POST.
 	f.mu.Lock()
-	if len(f.submissions) != 1 {
+	defer f.mu.Unlock()
+	// The lost response's job is abandoned under its own identity; the retry
+	// submits a fresh one.
+	if len(f.submissions) != 2 || f.submissions[0] == f.submissions[1] {
 		t.Fatal(f.submissions)
 	}
-	f.mu.Unlock()
-	f.complete()
-	queueTick(t, restarted)
-	queueTick(t, restarted)
-	queueTick(t, restarted)
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.submissions) != 2 || f.maxActive != 1 {
-		t.Fatal(f.submissions, f.maxActive)
+}
+
+func TestDiarizationRejectionIsPermanent(t *testing.T) {
+	j, d := diarizationFixture(t)
+	f := fakeCPUServer(t, d)
+	f.rejectAll = true
+	addDiarizationMeeting(t, j, "first", 1)
+	_, err := d.run(context.Background(), "first")
+	var failure *meetingError
+	if err == nil || !errorsAs(err, &failure) || !failure.permanent {
+		t.Fatal("a rejected recording must not be retried", err)
 	}
 }
 
-func TestDiarizationSQLLeaseSerializesCoordinators(t *testing.T) {
+func TestDiarizationLimitBoundsConcurrentJobs(t *testing.T) {
 	j, d := diarizationFixture(t)
-	addDiarizationMeeting(t, j, "first", 1)
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(entered); <-release; w.WriteHeader(503) }))
-	defer server.Close()
-	d.url = server.URL
-	done := make(chan error, 1)
-	go func() { done <- d.tick(context.Background()) }()
-	<-entered
-	second := &MeetingDiarization{jobs: j, url: d.url, token: d.token}
-	if err := second.tick(context.Background()); err != nil {
-		t.Fatal(err)
+	f := fakeCPUServer(t, d)
+	d.slots = make(chan struct{}, 1) // the CPU gateway runs one job at a time
+	var wg sync.WaitGroup
+	for i, key := range []string{"first", "second", "third"} {
+		addDiarizationMeeting(t, j, key, i+1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := d.run(context.Background(), key); err != nil {
+				t.Error(key, err)
+			}
+		}()
 	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestDiarizationFailureRequiresExplicitRetryAndKeepsASR(t *testing.T) {
-	j, d := diarizationFixture(t)
-	f := fakeCPUServer(t, j, d)
-	addDiarizationMeeting(t, j, "first", 1)
-	j.db.Exec(`UPDATE meeting_jobs SET mic_result='saved mic',system_result='saved system'`)
-	queueTick(t, d)
-	f.mu.Lock()
-	for id := range f.jobs {
-		f.jobs[id] = "failed"
-		f.active--
-	}
-	oldID := f.submissions[0]
-	f.mu.Unlock()
-	queueTick(t, d)
-	queueTick(t, d)
-	queueTick(t, d)
-	var status, mic string
-	j.db.QueryRow(`SELECT status,mic_result FROM meeting_jobs WHERE job_key='first'`).Scan(&status, &mic)
-	if status != "failed" || mic != "saved mic" {
-		t.Fatal(status, mic)
-	}
-	if len(f.submissions) != 1 {
-		t.Fatal("auto retried failed input")
-	}
-	j.db.Exec(`UPDATE meeting_jobs SET status='queued',admitted=1 WHERE job_key='first'`) // Explicit retry handler transition.
-	queueTick(t, d)
+	wg.Wait()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.submissions) != 2 || f.submissions[1] == oldID {
-		t.Fatal(f.submissions)
+	if len(f.submissions) != 3 || f.maxActive != 1 {
+		t.Fatal("overlapping CPU jobs", f.submissions, f.maxActive)
 	}
 }
 
@@ -288,44 +219,4 @@ func TestNormalizeCPUDiarizationRejectsMalformedAndAcceptsEmpty(t *testing.T) {
 	}
 }
 
-func TestCompletedASRReleasesGPUWhileCPUQueued(t *testing.T) {
-	j, _ := diarizationFixture(t)
-	addDiarizationMeeting(t, j, "first", 1)
-	if _, err := j.db.Exec(`UPDATE meeting_jobs SET status='processing',attempt='gpu',attempts=12`); err != nil {
-		t.Fatal(err)
-	}
-	var mu sync.Mutex
-	releases, stages := 0, 0
-	fleet := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		if r.URL.Path == "/fleet/meetings/release" {
-			releases++
-			w.WriteHeader(204)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/diar") {
-			t.Error("diarization sent to GPU")
-		}
-		stages++
-		w.Write([]byte(`{"words":[]}`))
-	}))
-	defer fleet.Close()
-	j.fleet = fleet.URL
-	j.token = "01234567890123456789012345678901"
-	spoolAudio(t, j.spool, 1, "first", map[string][]byte{"mic": []byte("fixture audio")})
-	j.process(context.Background(), "first", "gpu")
-	var status, mic, system string
-	var attempts int
-	if err := j.db.QueryRow(`SELECT status,mic_result,system_result,attempts FROM meeting_jobs WHERE job_key='first'`).Scan(&status, &mic, &system, &attempts); err != nil {
-		t.Fatal(err)
-	}
-	if status != "queued" || mic == "" || system == "" || attempts != 11 {
-		t.Fatal(status, mic, system, attempts)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if releases != 1 || stages != 2 {
-		t.Fatal(releases, stages)
-	}
-}
+func errorsAs(err error, target **meetingError) bool { return errors.As(err, target) }

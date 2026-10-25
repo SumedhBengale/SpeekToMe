@@ -1069,6 +1069,7 @@ type UpstreamStreamingSession struct {
 	Provider         string
 	CancelFunc       context.CancelFunc
 	TextChan         chan string
+	Words            chan WordBatch // confirmed timed words, meeting sessions only
 	ErrChan          chan error
 	DoneChan         chan struct{}
 }

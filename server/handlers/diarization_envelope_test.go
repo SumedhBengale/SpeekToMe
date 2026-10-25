@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/sha256"
 	"encoding/base64"
@@ -169,6 +170,7 @@ type fakeGPU struct {
 	keys        map[string][]byte
 	done        map[string]bool
 	submissions []string
+	maxLive     int
 	t           *testing.T
 }
 
@@ -193,6 +195,7 @@ func (f *fakeGPU) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.keys[job], f.done[job] = responseKey, false
 		f.submissions = append(f.submissions, job)
+		f.maxLive = max(f.maxLive, len(f.keys))
 		w.WriteHeader(202)
 		fmt.Fprintf(w, `{"job_id":%q}`, job)
 	case r.Method == "DELETE":
@@ -207,10 +210,12 @@ func (f *fakeGPU) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(404)
 			return
 		}
+		// Each job completes on its second status poll.
 		status := "processing"
 		if done {
 			status = "completed"
 		}
+		f.done[id] = true
 		fmt.Fprintf(w, `{"status":%q,"error":""}`, status)
 	}
 }
@@ -221,42 +226,27 @@ func TestGPUDiarizationRunsConcurrentlyAndOpensSealedResults(t *testing.T) {
 	f := &fakeGPU{recipient: recipient, keys: map[string][]byte{}, done: map[string]bool{}, t: t}
 	server := httptest.NewServer(http.HandlerFunc(f.serve))
 	defer server.Close()
-	d.url, d.recipient, d.limit, d.label, d.proxyKey, d.proxySecret = server.URL, to, 2, "GPU diarization", "wk-test", "ws-test"
+	d.url, d.recipient, d.label, d.proxyKey, d.proxySecret = server.URL, to, "GPU diarization", "wk-test", "ws-test"
+	d.slots = make(chan struct{}, 2)
+	var wg sync.WaitGroup
 	for i, key := range []string{"first", "second", "third"} {
 		addDiarizationMeeting(t, j, key, i+1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			speakers, err := d.run(context.Background(), key)
+			if err != nil || len(speakers) != 1 || speakers[0].Speaker != 3 {
+				t.Error(key, speakers, err)
+			}
+		}()
 	}
-	queueTick(t, d)
-	f.mu.Lock()
-	if len(f.submissions) != 2 {
-		t.Fatalf("expected two concurrent jobs, got %v", f.submissions)
-	}
-	for id := range f.done {
-		f.done[id] = true
-	}
-	f.mu.Unlock()
-	var stored string
-	j.db.QueryRow(`SELECT response_key FROM meeting_diarization_queue WHERE job_key='first'`).Scan(&stored)
-	if stored == "" {
-		t.Fatal("response key not persisted before upload")
-	}
-	queueTick(t, d) // Save both results; the third waits for a free slot.
-	for _, key := range []string{"first", "second"} {
-		var result string
-		j.db.QueryRow(`SELECT diar_result FROM meeting_jobs WHERE job_key=?`, key).Scan(&result)
-		if !strings.Contains(result, `"speaker":3`) {
-			t.Fatal(key, result)
-		}
-	}
-	queueTick(t, d) // Acknowledge first.
-	queueTick(t, d) // Acknowledge second.
-	queueTick(t, d) // Third gets a slot.
+	wg.Wait()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.submissions) != 3 {
-		t.Fatal(f.submissions)
+	if len(f.submissions) != 3 || f.maxLive != 2 {
+		t.Fatalf("expected three jobs, at most two at once: %v, %d", f.submissions, f.maxLive)
 	}
-	j.db.QueryRow(`SELECT response_key FROM meeting_diarization_queue WHERE job_key='first'`).Scan(&stored)
-	if stored != "" {
-		t.Fatal("response key kept after acknowledgment")
+	if len(f.keys) != 0 {
+		t.Fatal("remote jobs not deleted after their results were read")
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -161,5 +163,78 @@ func TestDecodeMeetingAudioStaysInMemory(t *testing.T) {
 	}
 	if _, err = decodeMeetingAudio(context.Background(), bytes.NewReader([]byte("not audio"))); err == nil {
 		t.Fatal("decoded invalid audio")
+	}
+}
+
+func TestParseMeetingRanges(t *testing.T) {
+	if got, err := parseMeetingRanges("", 90); err != nil || len(got) != 1 || got[0] != (meetingRange{0, 90}) {
+		t.Fatal("no ranges means the whole recording", got, err)
+	}
+	got, err := parseMeetingRanges("12.40-75.10,80-90.5", 90)
+	if err != nil || len(got) != 2 || got[0] != (meetingRange{12.4, 75.1}) || got[1] != (meetingRange{80, 90}) {
+		t.Fatal("a range may end just past the recording and is clipped", got, err)
+	}
+	for _, invalid := range []string{"10", "5-5", "9-3", "-1-4", "1-4,3-6", "20-30,1-4", "1-95", "a-b", "NaN-4", "1-Inf"} {
+		if _, err := parseMeetingRanges(invalid, 90); err == nil {
+			t.Error("accepted", invalid)
+		}
+	}
+	many := strings.TrimSuffix(strings.Repeat("1-2,", maxMeetingRanges+1), ",")
+	if _, err := parseMeetingRanges(many, 90); err == nil {
+		t.Error("accepted more than the coordinator ever sends")
+	}
+}
+
+// Only gap audio, plus its context, reaches the model, and only words inside
+// the requested range come back.
+func TestTranscribeRangesSendsOnlyTheGapAudio(t *testing.T) {
+	var mu sync.Mutex
+	var sessions []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var settings map[string]interface{}
+		conn.ReadJSON(&settings)
+		received := 0
+		for {
+			kind, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if kind == websocket.BinaryMessage {
+				received += len(data)
+				continue
+			}
+			break
+		}
+		mu.Lock()
+		sessions = append(sessions, received)
+		mu.Unlock()
+		// Relative to the section: 1 s in lies in the leading context, 6 s in
+		// lies inside the gap.
+		conn.WriteJSON(map[string]interface{}{"type": "conversation.item.input_audio_transcription.completed", "transcript": "context gap", "words": []meetingWord{{Word: "context", Start: 1, End: 1.4}, {Word: "gap", Start: 6, End: 6.4}}})
+		conn.WriteJSON(map[string]string{"type": "input_audio_buffer.committed"})
+	}))
+	defer server.Close()
+	upstream, _ := url.Parse(server.URL)
+	duration := 120.0
+	pcm := make([]byte, int(duration*pcmBytesPerSecond))
+	result, err := (&gateway{upstream: upstream}).transcribeRanges(context.Background(), pcm, duration, []meetingRange{{40, 50}}, "en", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// One window: the 10-second gap plus 4.48 s of context on each side.
+	gapStart, gapEnd, pad := 40.0, 50.0, 4.48 // variables: the same runtime float arithmetic as the gateway
+	want := len(pcmSection(pcm, gapStart-pad, gapEnd+pad))
+	if len(sessions) != 1 || sessions[0] != want {
+		t.Fatalf("sent %v bytes, want one session of %d", sessions, want)
+	}
+	if len(result.Words) != 1 || result.Words[0].Word != "gap" || result.Words[0].Start < 41.5 || result.Words[0].Start > 41.53 {
+		t.Fatalf("%+v", result.Words)
 	}
 }

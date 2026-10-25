@@ -154,3 +154,40 @@ func TestMeetingSpeakerReplacementDoesNotCascadeOrMatchSubstrings(t *testing.T) 
 		t.Fatal("ambiguous label was attributed", view)
 	}
 }
+
+func TestSkippingSpeakerNamesMarksTheMeetingReviewed(t *testing.T) {
+	database, err := db.NewDatabase(filepath.Join(t.TempDir(), "reviewed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	owner, err := database.GetOrCreateUser("owner", "owner@example.invalid", "Meeting Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	database.CreateSession("owner-token", owner, 0)
+	id, err := database.CreateMeeting(owner, "Review test", 20, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	segments := `[{"speaker":"Speaker 2","channel":"system","speaker_id":"spk_2","start":0,"end":1,"text":"hi"}]`
+	if err = database.UpdateMeetingResult(id, "Speaker 2: hi", "", "", segments); err != nil {
+		t.Fatal(err)
+	}
+	if meeting, _ := database.GetMeeting(id); meeting.SpeakersReviewed {
+		t.Fatal("a new meeting starts unreviewed")
+	}
+	app := &App{DB: database}
+	r := httptest.NewRequest("PUT", fmt.Sprintf("/meetings/%d/speakers", id), strings.NewReader(`{"speaker_names":{},"previous_names":{},"reviewed":true}`))
+	r.SetPathValue("id", fmt.Sprint(id))
+	r.Header.Set("Authorization", "Bearer owner-token")
+	w := httptest.NewRecorder()
+	app.HandleSaveMeetingSpeakers(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"speakers_reviewed":true`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	meeting, err := database.GetMeeting(id)
+	if err != nil || !meeting.SpeakersReviewed || len(meeting.SpeakerNames) != 0 {
+		t.Fatal("skipping must mark the review without naming anyone", meeting, err)
+	}
+}

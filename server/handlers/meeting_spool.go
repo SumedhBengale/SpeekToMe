@@ -90,8 +90,9 @@ func (j *MeetingJobs) verifyChannel(ctx context.Context, user int64, key, channe
 	hash := sha256.New()
 	verifyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	done := make(chan struct{})
+	done, stopped := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(stopped)
 		select {
 		case <-verifyCtx.Done():
 			reader.Close()
@@ -100,6 +101,7 @@ func (j *MeetingJobs) verifyChannel(ctx context.Context, user int64, key, channe
 	}()
 	seconds, err := audiospool.OggOpusDuration(io.TeeReader(reader, hash))
 	close(done)
+	<-stopped // the watcher must not close the reader alongside the deferred Close
 	if errors.Is(err, audiospool.ErrInvalidAudio) {
 		// Distinguish a damaged spool from a client that uploaded non-Opus data.
 		if _, drainErr := io.Copy(io.Discard, reader); drainErr != nil {
@@ -110,6 +112,44 @@ func (j *MeetingJobs) verifyChannel(ctx context.Context, user int64, key, channe
 		return 0, 0, "", err
 	}
 	return seconds, size, hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// checksumChannel streams one sealed file that is not audio, such as the live
+// transcript, and returns its size and checksum.
+func (j *MeetingJobs) checksumChannel(ctx context.Context, user int64, key, channel string) (int64, string, error) {
+	reader, size, err := j.spool.Open(ctx, user, key, channel)
+	if err != nil {
+		return 0, "", err
+	}
+	defer reader.Close()
+	hash := sha256.New()
+	if _, err = io.Copy(hash, reader); err != nil {
+		return 0, "", audiospool.ErrCorrupt
+	}
+	return size, hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// readChannel opens one sealed file into memory, up to limit bytes.
+func (j *MeetingJobs) readChannel(ctx context.Context, key, channel string, limit int64) ([]byte, error) {
+	reader, size, err := j.openChannel(ctx, key, channel)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	if size > limit {
+		return nil, audiospool.ErrCorrupt
+	}
+	return io.ReadAll(io.LimitReader(reader, limit))
+}
+
+// channelDuration reads one sealed recording's duration from its Ogg pages.
+func (j *MeetingJobs) channelDuration(ctx context.Context, key, channel string) (float64, error) {
+	reader, _, err := j.openChannel(ctx, key, channel)
+	if err != nil {
+		return 0, err
+	}
+	defer reader.Close()
+	return audiospool.OggOpusDuration(reader)
 }
 
 // maintainSpool archives finished recordings to the bucket and deletes every

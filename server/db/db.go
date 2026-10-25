@@ -230,6 +230,8 @@ func NewDatabase(connStr string) (*Database, error) {
 	_, _ = dbConn.Exec("ALTER TABLE usage_logs ADD COLUMN vocabulary_audit TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE meetings ADD COLUMN vocabulary_audit TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE meetings ADD COLUMN speaker_names TEXT NOT NULL DEFAULT '{}'")
+	_, _ = dbConn.Exec("ALTER TABLE meetings ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+	_, _ = dbConn.Exec("ALTER TABLE meetings ADD COLUMN speakers_reviewed INTEGER NOT NULL DEFAULT 0")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_id TEXT")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_subscription_status TEXT DEFAULT ''")
 	_, _ = dbConn.Exec("ALTER TABLE users ADD COLUMN razorpay_current_start INTEGER DEFAULT 0")
@@ -1265,6 +1267,8 @@ type Meeting struct {
 	ID               int64             `json:"id"`
 	UserID           int64             `json:"user_id"`
 	Title            string            `json:"title"`
+	Description      string            `json:"description"`
+	SpeakersReviewed bool              `json:"speakers_reviewed"`
 	Timestamp        string            `json:"timestamp"`
 	Duration         float64           `json:"duration"`
 	AudioPath        string            `json:"audio_path"`
@@ -1317,7 +1321,7 @@ func (d *Database) UpdateMeetingResult(meetingID int64, transcript string, summa
 
 func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 	rows, err := d.db.Query(`
-		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, ''), COALESCE(speaker_names, '{}')
+		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, ''), COALESCE(speaker_names, '{}'), COALESCE(description, ''), COALESCE(speakers_reviewed, 0) != 0
 		FROM meetings
 		WHERE user_id = ?
 		ORDER BY timestamp DESC
@@ -1332,7 +1336,7 @@ func (d *Database) GetUserMeetings(userID int64) ([]Meeting, error) {
 		var m Meeting
 		var audit string
 		var names string
-		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names)
+		err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names, &m.Description, &m.SpeakersReviewed)
 		if err == nil {
 			if err = d.openMeeting(&m, &audit, &names); err != nil {
 				return nil, err
@@ -1359,10 +1363,10 @@ func (d *Database) GetMeeting(meetingID int64) (*Meeting, error) {
 	var audit string
 	var names string
 	err := d.db.QueryRow(`
-		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, ''), COALESCE(speaker_names, '{}')
+		SELECT id, user_id, title, timestamp, duration, audio_path, transcript, summary, action_items, segments_json, COALESCE(vocabulary_audit, ''), COALESCE(speaker_names, '{}'), COALESCE(description, ''), COALESCE(speakers_reviewed, 0) != 0
 		FROM meetings
 		WHERE id = ?
-	`, meetingID).Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names)
+	`, meetingID).Scan(&m.ID, &m.UserID, &m.Title, &m.Timestamp, &m.Duration, &m.AudioPath, &m.Transcript, &m.Summary, &m.ActionItems, &m.SegmentsJSON, &audit, &names, &m.Description, &m.SpeakersReviewed)
 	if err != nil {
 		return nil, err
 	}
@@ -1399,7 +1403,9 @@ func (d *Database) SaveMeetingSpeakerNames(meetingID, userID int64, names, previ
 		}
 		previous = raw
 	}
-	res, err := d.db.Exec(`UPDATE meetings SET speaker_names=? WHERE id=? AND user_id=? AND COALESCE(speaker_names,'{}')=?`, names, meetingID, userID, previous)
+	// Any save, including one that only skips naming, completes the review, so
+	// the desktop does not ask about this meeting's speakers again.
+	res, err := d.db.Exec(`UPDATE meetings SET speaker_names=?,speakers_reviewed=1 WHERE id=? AND user_id=? AND COALESCE(speaker_names,'{}')=?`, names, meetingID, userID, previous)
 	if err != nil {
 		return false, err
 	}
@@ -1981,10 +1987,11 @@ func (d *Database) openMeeting(m *Meeting, audit, names *string) error {
 	if d.Privacy == nil {
 		return nil
 	}
-	fields := map[string]string{"transcript": m.Transcript, "summary": m.Summary, "action_items": m.ActionItems, "segments_json": m.SegmentsJSON, "vocabulary_audit": *audit, "speaker_names": *names}
+	fields := map[string]string{"transcript": m.Transcript, "summary": m.Summary, "action_items": m.ActionItems, "segments_json": m.SegmentsJSON, "vocabulary_audit": *audit, "speaker_names": *names, "description": m.Description}
 	if e := d.Privacy.MeetingFields(context.Background(), m.UserID, m.ID, fields, false); e != nil {
 		return e
 	}
+	m.Description = fields["description"]
 	m.Transcript = fields["transcript"]
 	m.Summary = fields["summary"]
 	m.ActionItems = fields["action_items"]

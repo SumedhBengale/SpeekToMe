@@ -260,6 +260,17 @@ func TestSecuritySessionHashesAndMeetingEncryption(t *testing.T) {
 	if ok, err := d.SaveMeetingSpeakerNames(id, 1, `{"s0":"Private speaker"}`, "{}"); err != nil || !ok {
 		t.Fatal("speaker names save", err)
 	}
+	// The meeting pipeline seals the description exactly like this in its final write.
+	fields := map[string]string{"description": "private description"}
+	if e = vault.MeetingFields(context.Background(), 1, id, fields, true); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = d.GetDB().Exec("UPDATE meetings SET description=? WHERE id=?", fields["description"], id); e != nil {
+		t.Fatal(e)
+	}
+	if m, err := d.GetMeeting(id); err != nil || m.Description != "private description" {
+		t.Fatal("description does not decrypt on read", err)
+	}
 	for _, column := range privatevault.MeetingTextColumns {
 		var ciphertext string
 		if err := d.GetDB().QueryRow("SELECT "+column+" FROM meetings WHERE id=?", id).Scan(&ciphertext); err != nil {

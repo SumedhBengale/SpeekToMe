@@ -16,9 +16,10 @@ import (
 	"time"
 )
 
-// Opt-in acceptance test: real workers, isolated local database, no production
-// accounts. Its client disconnects after durable commit; a restarted processor
-// completes and saves the result independently.
+// Opt-in acceptance test: real workers and the real diarization endpoint (via
+// SPEEKTOME_DIARIZATION_* in the environment), isolated local database, no
+// production accounts. Its client disconnects after durable commit; a restarted
+// processor completes and saves the result independently.
 func TestRealFleetDurableMeeting(t *testing.T) {
 	fleet := os.Getenv("SPEEKTOME_REAL_FLEET_URL")
 	if fleet == "" {
@@ -97,10 +98,10 @@ func TestRealFleetDurableMeeting(t *testing.T) {
 	}
 	key := jobKey(1, "real-acceptance")
 	deadline := time.Now().Add(90 * time.Second)
-	var status, lastError, mic, system, diar string
+	var status, lastError string
 	var meetingID int64
 	for time.Now().Before(deadline) {
-		err = database.GetDB().QueryRow(`SELECT status,error,meeting_id,mic_result,system_result,diar_result FROM meeting_jobs WHERE job_key=?`, key).Scan(&status, &lastError, &meetingID, &mic, &system, &diar)
+		err = database.GetDB().QueryRow(`SELECT status,error,meeting_id FROM meeting_jobs WHERE job_key=?`, key).Scan(&status, &lastError, &meetingID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,74 +117,8 @@ func TestRealFleetDurableMeeting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meeting.Transcript == "" || meeting.SegmentsJSON == "[]" || mic == "" || system == "" || diar == "" {
+	if meeting.Transcript == "" || meeting.SegmentsJSON == "[]" {
 		t.Fatalf("missing persisted output: %+v", meeting)
 	}
-	t.Logf("real worker completed mic/system ASR and diarization; saved meeting %d after upload client disconnected", meetingID)
-}
-
-// Real CPU admission with an isolated coordinator database and two simultaneous
-// committed meetings. Neither production users nor their job rows are touched.
-func TestRealCPUQueueSerial(t *testing.T) {
-	if os.Getenv("SPEEKTOME_REAL_FLEET_URL") == "" {
-		t.Skip("requires real CPU server")
-	}
-	audio, err := os.ReadFile(os.Getenv("SPEEKTOME_REAL_AUDIO"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	j, d := diarizationFixture(t)
-	credential, err := os.ReadFile(os.Getenv("SPEEKTOME_REAL_TOKEN_FILE"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.token = string(bytes.TrimSpace(credential))
-	for i, key := range []string{"real-first", "real-second"} {
-		addDiarizationMeeting(t, j, key, i)
-		if err := j.spool.Delete(context.Background(), key); err != nil {
-			t.Fatal(err)
-		}
-		spoolAudio(t, j.spool, int64(i), key, map[string][]byte{"system": audio})
-	}
-	deadline := time.Now().Add(120 * time.Second)
-	observedQueued := false
-	for time.Now().Before(deadline) {
-		if err := d.tick(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		var running, waiting, done int
-		if err := j.db.QueryRow(`SELECT SUM(status='running'),SUM(status='queued'),SUM(status='completed' AND acknowledged=1) FROM meeting_diarization_queue`).Scan(&running, &waiting, &done); err != nil {
-			t.Fatal(err)
-		}
-		if running > 1 {
-			t.Fatal("more than one active diarization")
-		}
-		if running == 1 && waiting == 1 {
-			observedQueued = true
-		}
-		if done == 2 {
-			if !observedQueued {
-				t.Fatal("did not observe second item queued")
-			}
-			rows, err := j.db.Query(`SELECT q.position,q.job_key,q.remote_id,length(j.diar_result) FROM meeting_diarization_queue q JOIN meeting_jobs j ON j.job_key=q.job_key ORDER BY q.position`)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var position, length int
-				var key, id string
-				if err := rows.Scan(&position, &key, &id, &length); err != nil {
-					t.Fatal(err)
-				}
-				if length < 20 {
-					t.Fatal("missing result")
-				}
-				t.Logf("position=%d job=%s remote=%s persisted_result_bytes=%d", position, key, id, length)
-			}
-			return
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	t.Fatal("real diarization queue did not drain within two minutes")
+	t.Logf("real fleet transcribed the whole meeting (no live transcript) and diarization finished; saved meeting %d after the upload client disconnected", meetingID)
 }
