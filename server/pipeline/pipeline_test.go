@@ -620,3 +620,34 @@ func TestGrammarPromptCannotBeOverriddenByModelConfiguration(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestTaskPromptCannotBeOverriddenByModelConfiguration(t *testing.T) {
+	orig := config.ConfigManager.Get()
+	raw := config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(orig, raw)
+	key := config.CerebrasAPIKey
+	config.CerebrasAPIKey = "mock"
+	defer func() { config.CerebrasAPIKey = key }()
+	GlobalCircuitBreaker.Reset()
+	defer GlobalCircuitBreaker.Reset()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&p)
+		// Production configures a dictation prompt on every enhancement model.
+		if len(p.Messages) < 2 || !strings.Contains(p.Messages[0].Content, "Summarize this meeting") || strings.Contains(p.Messages[0].Content, "Clean up dictation") {
+			t.Error("a model-level prompt replaced the task's instructions")
+		}
+		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"summary":"ok","action_items":[]}`}}}})
+	}))
+	defer srv.Close()
+	cfg := orig
+	cfg.Models.EnhancementModels = []config.ModelSpec{{Provider: config.ProviderCerebras, Model: "gpt-oss-120b", Enabled: true, EndpointOverride: srv.URL, TimeoutMs: 2000, SystemPrompt: "Clean up dictation"}}
+	config.ConfigManager.Set(cfg, raw)
+	if _, e := RunTaskCompletion(context.Background(), nil, "Summarize this meeting.", "transcript", nil); e != nil {
+		t.Fatal(e)
+	}
+}

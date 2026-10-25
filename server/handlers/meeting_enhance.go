@@ -99,7 +99,7 @@ func mergeMeeting(mic, system jobTranscript, speakers []jobSpeaker, name string)
 // Tests replace it.
 var meetingLLM = func(ctx context.Context, user int64, system, prompt string) (string, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
-	return pipeline.RunDeepSeekChatCompletion(ctx, client, "", system, prompt, pipeline.NewPipelineContext(user))
+	return pipeline.RunTaskCompletion(ctx, client, system, prompt, pipeline.NewPipelineContext(user))
 }
 
 const (
@@ -410,7 +410,8 @@ func (r *meetingRun) summarize(ctx context.Context, turns []*pipelineTurn) (stri
 	}
 	r.participants = "Participants:\n" + strings.Join(participants, "\n")
 	if words <= summaryWordLimit {
-		summary, actions, _ := r.summaryCall(ctx, summaryPrompt, r.withDescription("Transcript", strings.Join(lines, "\n")))
+		summary, actions, err := r.summaryCall(ctx, summaryPrompt, r.withDescription("Transcript", strings.Join(lines, "\n")))
+		r.summaryErr = err
 		return summary, actions
 	}
 	var sections [][]string
@@ -448,9 +449,11 @@ func (r *meetingRun) summarize(ctx context.Context, turns []*pipelineTurn) (stri
 		}
 	}
 	if len(parts) == 0 {
+		r.summaryErr = errors.New("every section summary failed")
 		return "", ""
 	}
-	summary, actions, _ := r.summaryCall(ctx, combinePrompt, r.withDescription("Notes of each part", strings.Join(parts, "\n\n")))
+	summary, actions, err := r.summaryCall(ctx, combinePrompt, r.withDescription("Notes of each part", strings.Join(parts, "\n\n")))
+	r.summaryErr = err
 	return summary, actions
 }
 

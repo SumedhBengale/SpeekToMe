@@ -504,6 +504,14 @@ func executeModelAttempt(
 	return res, routing, err
 }
 
+// RunTaskCompletion runs a task with its own system prompt, such as meeting
+// enhancement or summaries, on the enhancement models. A model's configured
+// system prompt is dictation clean-up; it must never replace a task's
+// instructions, or the task gets dictation output instead of its format.
+func RunTaskCompletion(ctx context.Context, client *http.Client, systemPrompt, userPrompt string, pctx *PipelineContext) (string, error) {
+	return RunDeepSeekChatCompletion(context.WithValue(ctx, grammarPromptKey{}, true), client, "", systemPrompt, userPrompt, pctx)
+}
+
 // RunDeepSeekChatCompletion executes chat completions using the decoupled enhancement_models priority list.
 func RunDeepSeekChatCompletion(ctx context.Context, client *http.Client, model, systemPrompt, userPrompt string, pctx *PipelineContext) (string, error) {
 	if client == nil {
