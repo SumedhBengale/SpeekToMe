@@ -56,9 +56,38 @@ func (f *fleetReplay) send(ctx context.Context, command replayCommand) error {
 	}
 }
 
+// TimedWord is one finalized word on the stream's audio timeline, in seconds.
+type TimedWord struct {
+	Word       string
+	Start, End float64
+}
+
+// WordBatch confirms the audio range [From, To]. Consecutive batches of one
+// stream are contiguous; a batch with no words confirms silence.
+type WordBatch struct {
+	From, To float64
+	Words    []TimedWord
+}
+
+// CreateMeetingStreamingSession opens a streaming session whose timeline starts
+// at offset seconds, publishing confirmed words on Words. Only the fleet emits
+// timestamped finals; any other provider returns a session with nil Words.
+func CreateMeetingStreamingSession(ctx context.Context, provider string, languages []string, terms []db.VocabularyTerm, offset float64) (*UpstreamStreamingSession, error) {
+	if provider == "self_hosted_nemotron_3_5" && os.Getenv("SPEEKTOME_FLEET_URL") != "" {
+		return createFleetSession(ctx, provider, languages, terms, offset, true)
+	}
+	return CreateUpstreamStreamingSession(ctx, provider, languages, "", terms)
+}
+
 // Journal audio through finalized word positions, retaining acoustic overlap.
 // Replay recreates a fresh model state; it never claims exact decoder migration.
 func createFleetStreamingSession(parent context.Context, provider string, languages []string, prompt string, terms []db.VocabularyTerm) (*UpstreamStreamingSession, error) {
+	// User prompts belong to the grammar LLM, never decoder bias.
+	_ = prompt
+	return createFleetSession(parent, provider, languages, terms, 0, false)
+}
+
+func createFleetSession(parent context.Context, provider string, languages []string, terms []db.VocabularyTerm, offset float64, words bool) (*UpstreamStreamingSession, error) {
 	tokenPath := os.Getenv("SPEEKTOME_WORKER_TOKEN_FILE")
 	if tokenPath == "" {
 		tokenPath = "/etc/speektome-fleet/worker.token"
@@ -75,11 +104,10 @@ func createFleetStreamingSession(parent context.Context, provider string, langua
 	ctx, cancel := context.WithCancel(parent)
 	stream := &UpstreamStreamingSession{Provider: provider, CancelFunc: cancel, TextChan: make(chan string, 100), ErrChan: make(chan error, 1), DoneChan: make(chan struct{})}
 	stream.replay = &fleetReplay{commands: make(chan replayCommand, 32), cancel: cancel, done: ctx.Done()}
-	session := map[string]any{"sample_rate": 16000, "language": utils.ResolveNemotronLanguage(languages), "word_timestamps": true, "speaker_diarization": false, "endpointing_ms": 1200}
-	if prompt != "" {
-		// User prompts belong to the grammar LLM, never decoder bias.
-		_ = prompt
+	if words {
+		stream.Words = make(chan WordBatch, 64)
 	}
+	session := map[string]any{"sample_rate": 16000, "language": utils.ResolveNemotronLanguage(languages), "word_timestamps": true, "speaker_diarization": false, "endpointing_ms": 1200}
 	var phrases []string
 	for _, term := range terms {
 		phrases = append(phrases, term.Canonical)
@@ -118,6 +146,9 @@ func createFleetStreamingSession(parent context.Context, provider string, langua
 	go func() {
 		defer close(stream.DoneChan)
 		defer close(stream.TextChan)
+		if stream.Words != nil {
+			defer close(stream.Words)
+		}
 		defer cancel()
 		defer func() {
 			if connection != nil {
@@ -153,7 +184,7 @@ func createFleetStreamingSession(parent context.Context, provider string, langua
 			overlap = configured
 		}
 		var journal []replayChunk
-		total, confirmed, baseOffset := 0.0, 0.0, 0.0
+		total, confirmed, baseOffset := offset, offset, offset
 		history := ""
 		partial := ""
 		suppressReplayPreview := false
@@ -171,6 +202,15 @@ func createFleetStreamingSession(parent context.Context, provider string, langua
 		publish := func(text string) {
 			select {
 			case stream.TextChan <- text:
+			case <-ctx.Done():
+			}
+		}
+		confirm := func(from float64, words []TimedWord) {
+			if stream.Words == nil || (confirmed <= from && len(words) == 0) {
+				return
+			}
+			select {
+			case stream.Words <- WordBatch{From: from, To: confirmed, Words: words}:
 			case <-ctx.Done():
 			}
 		}
@@ -272,11 +312,14 @@ func createFleetStreamingSession(parent context.Context, provider string, langua
 				if strings.HasSuffix(payload.Type, ".completed") {
 					partial = ""
 					var fresh []string
+					var timed []TimedWord
+					from := confirmed
 					last := confirmed
 					for _, word := range payload.Words {
 						start, end := word.Start+baseOffset, word.End+baseOffset
 						if (start+end)/2 > confirmed {
 							fresh = append(fresh, word.Word)
+							timed = append(timed, TimedWord{word.Word, start, end})
 							if end > last {
 								last = end
 							}
@@ -300,6 +343,7 @@ func createFleetStreamingSession(parent context.Context, provider string, langua
 					if payload.Transcript == "" && len(payload.Words) == 0 && payload.AudioProcessed > 0 {
 						confirmed = max(confirmed, payload.AudioProcessed+baseOffset)
 					}
+					confirm(from, timed)
 					cut := 0
 					for cut < len(journal) && journal[cut].end < confirmed-overlap {
 						cut++
@@ -307,6 +351,12 @@ func createFleetStreamingSession(parent context.Context, provider string, langua
 					journal = journal[cut:]
 				}
 				if payload.Type == "input_audio_buffer.committed" && committing {
+					// The worker has finalized everything it was sent, so the
+					// trailing silence after the last word is confirmed too.
+					if from := confirmed; total > confirmed {
+						confirmed = total
+						confirm(from, nil)
+					}
 					if len(phrases) > 0 {
 						vocabularyDeadline = time.After(1500 * time.Millisecond)
 					} else {

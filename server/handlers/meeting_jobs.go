@@ -12,20 +12,18 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"speektome-server/audiospool"
 	"speektome-server/config"
-	"speektome-server/pipeline"
 	log "speektome-server/privacylog"
 	"speektome-server/utils"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"speektome-server/accountlimits"
 	"speektome-server/auth"
@@ -36,10 +34,13 @@ type MeetingFile struct {
 	SHA  string `json:"sha256"`
 }
 type MeetingUpload struct {
-	Language string                 `json:"language,omitempty"`
-	ID       string                 `json:"id"`
-	Title    string                 `json:"title"`
-	Files    map[string]MeetingFile `json:"files"`
+	Language string `json:"language,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	// Description is the organiser's note about the meeting, used only as
+	// background for the summary.
+	Description string                 `json:"description,omitempty"`
+	Files       map[string]MeetingFile `json:"files"`
 }
 type MeetingJobs struct {
 	app   *App
@@ -60,6 +61,22 @@ const meetingSpoolRetention = 24 * time.Hour
 const meetingSpoolHardLimit = meetingSpoolRetention + 6*time.Hour
 
 var clientMeetingID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,96}$`)
+
+// meetingDescriptionLimit keeps the manifest well inside its 8 KB read limit.
+const meetingDescriptionLimit = 2000
+
+// A four-hour meeting's signed live transcript is about 3-5 MB.
+const meetingTranscriptLimit = 16 << 20
+
+// meetingAttempts bounds automatic attempts before a meeting shows as failed.
+const meetingAttempts = 4
+
+// meetingChannel lists the uploaded files: three recordings and the optional
+// signed live transcript.
+func meetingChannel(channel string) bool {
+	return channel == "mic" || channel == "system" || channel == "mixed" || channel == "transcript"
+}
+
 var jobKeyPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
@@ -136,6 +153,14 @@ func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
 			return e
 		}
 	}
+	// Account-sealed, like every other meeting text field.
+	var descriptionColumn int
+	_ = jobs.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('meeting_jobs') WHERE name='description'").Scan(&descriptionColumn)
+	if descriptionColumn == 0 {
+		if _, e = jobs.db.Exec("ALTER TABLE meeting_jobs ADD COLUMN description TEXT NOT NULL DEFAULT ''"); e != nil {
+			return e
+		}
+	}
 	if jobs.spool, e = newMeetingSpool(a); e != nil {
 		return e
 	}
@@ -143,7 +168,6 @@ func (a *App) StartMeetingJobs(ctx context.Context, mux *http.ServeMux) error {
 	if e != nil {
 		return e
 	}
-	go jobs.diarization.loop(ctx)
 	mux.HandleFunc("POST /v1/meetings/jobs", jobs.create)
 	mux.HandleFunc("GET /v1/meetings/jobs/{clientID}", jobs.status)
 	mux.HandleFunc("PUT /v1/meetings/jobs/{clientID}/audio/{channel}", jobs.upload)
@@ -223,6 +247,11 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid meeting manifest", 400)
 		return
 	}
+	req.Description = strings.TrimSpace(req.Description)
+	if !utf8.ValidString(req.Description) || utf8.RuneCountInString(req.Description) > meetingDescriptionLimit {
+		http.Error(w, "meeting description is too long", 400)
+		return
+	}
 	language, languageErr := utils.ResolveSpeakingLanguage(req.Language, user.Languages)
 	if languageErr != nil {
 		http.Error(w, languageErr.Error(), 400)
@@ -231,14 +260,21 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 	if req.Title == "" {
 		req.Title = "Meeting"
 	}
-	if len(req.Files) != 3 {
+	_, hasTranscript := req.Files["transcript"]
+	_, hasMic := req.Files["mic"]
+	_, hasSystem := req.Files["system"]
+	_, hasMixed := req.Files["mixed"]
+	if !hasMic || !hasSystem || !hasMixed || (len(req.Files) != 3 && !(len(req.Files) == 4 && hasTranscript)) {
 		http.Error(w, "mic, system, and mixed files required", 400)
 		return
 	}
-	for _, channel := range []string{"mic", "system", "mixed"} {
-		f, ok := req.Files[channel]
+	for channel, f := range req.Files {
+		limit := int64(512 << 20)
+		if channel == "transcript" {
+			limit = meetingTranscriptLimit
+		}
 		digest, e := hex.DecodeString(f.SHA)
-		if !ok || e != nil || len(digest) != 32 || f.Size < 1 || f.Size > 512<<20 {
+		if !meetingChannel(channel) || e != nil || len(digest) != 32 || f.Size < 1 || f.Size > limit {
 			http.Error(w, "invalid audio manifest", 400)
 			return
 		}
@@ -263,9 +299,16 @@ func (j *MeetingJobs) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	description := req.Description
+	if description != "" && j.app.DB.Privacy != nil {
+		if description, e = j.app.DB.Privacy.SealStored(r.Context(), user.ID, "job-description", key, description); e != nil {
+			accountlimits.Write(w, accountlimits.Unavailable())
+			return
+		}
+	}
 	unlock := j.lock(key)
 	defer unlock()
-	_, e = j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,created_at,language) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM meeting_jobs WHERE user_id=? AND admitted=0 AND status IN ('uploading','queued'))<3 ON CONFLICT(user_id,client_id) DO NOTHING`, key, user.ID, req.ID, req.Title, string(data), time.Now().Unix(), language, user.ID)
+	_, e = j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,created_at,language,description) SELECT ?,?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM meeting_jobs WHERE user_id=? AND admitted=0 AND status IN ('uploading','queued'))<3 ON CONFLICT(user_id,client_id) DO NOTHING`, key, user.ID, req.ID, req.Title, string(data), time.Now().Unix(), language, description, user.ID)
 	if e != nil {
 		http.Error(w, "database unavailable", 503)
 		return
@@ -299,10 +342,6 @@ func (j *MeetingJobs) respond(w http.ResponseWriter, key string) {
 		offsets[channel], _ = j.spool.Size(context.Background(), key, channel)
 	}
 	response := map[string]any{"status": status, "offsets": offsets, "error": lastError, "meeting_id": meeting.Int64}
-	var diarStatus, diarError string
-	if j.db.QueryRow(`SELECT status,error FROM meeting_diarization_queue WHERE job_key=?`, key).Scan(&diarStatus, &diarError) == nil {
-		response["diarization"] = map[string]string{"status": diarStatus, "error": diarError}
-	}
 	if meeting.Valid && status == "completed" {
 		if result, e := j.app.DB.GetMeeting(meeting.Int64); e == nil {
 			response["meeting"] = result
@@ -325,7 +364,7 @@ func (j *MeetingJobs) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	channel := r.PathValue("channel")
-	if channel != "mic" && channel != "system" && channel != "mixed" {
+	if !meetingChannel(channel) {
 		http.Error(w, "invalid channel", 400)
 		return
 	}
@@ -354,7 +393,7 @@ func (j *MeetingJobs) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	var manifest map[string]MeetingFile
 	json.Unmarshal([]byte(files), &manifest)
-	if offset+int64(len(data)) > manifest[channel].Size {
+	if _, listed := manifest[channel]; !listed || offset+int64(len(data)) > manifest[channel].Size {
 		http.Error(w, "invalid upload chunk", 413)
 		return
 	}
@@ -416,6 +455,21 @@ func (j *MeetingJobs) commit(w http.ResponseWriter, r *http.Request) {
 		}
 		if seconds > duration {
 			duration = seconds
+		}
+	}
+	if expected, ok := manifest["transcript"]; ok {
+		size, sum, e := j.checksumChannel(r.Context(), userID, key, "transcript")
+		if errors.Is(e, audiospool.ErrCorrupt) || (e == nil && size != expected.Size) {
+			http.Error(w, "upload incomplete", 409)
+			return
+		}
+		if e != nil {
+			http.Error(w, "storage unavailable", 503)
+			return
+		}
+		if sum != expected.SHA {
+			http.Error(w, "transcript checksum mismatch", 422)
+			return
 		}
 	}
 	var existingMeeting sql.NullInt64
@@ -603,7 +657,7 @@ func (j *MeetingJobs) dispatch(ctx context.Context) {
 			_, _ = j.app.limits().AcquireOwner(ctx, job.user, "meeting processing", job.key, 6*time.Hour+5*time.Minute)
 		}
 	}
-	rows, e := j.db.QueryContext(ctx, `SELECT job_key FROM meeting_jobs WHERE ((status='queued' AND next_attempt<=?) OR (status IN ('processing','analyzing') AND lease_until<?)) AND (admitted=0 OR mic_result='' OR system_result='' OR diar_result<>'') AND NOT EXISTS (SELECT 1 FROM meeting_jobs other WHERE other.user_id=meeting_jobs.user_id AND other.admitted=1 AND other.job_key<>meeting_jobs.job_key) ORDER BY admitted DESC,created_at LIMIT 16`, time.Now().Unix(), time.Now().Unix())
+	rows, e := j.db.QueryContext(ctx, `SELECT job_key FROM meeting_jobs WHERE ((status='queued' AND next_attempt<=?) OR (status IN ('processing','analyzing') AND lease_until<?)) AND NOT EXISTS (SELECT 1 FROM meeting_jobs other WHERE other.user_id=meeting_jobs.user_id AND other.admitted=1 AND other.job_key<>meeting_jobs.job_key) ORDER BY admitted DESC,created_at LIMIT 16`, time.Now().Unix(), time.Now().Unix())
 	if e != nil {
 		return
 	}
@@ -635,22 +689,6 @@ func (j *MeetingJobs) dispatch(ctx context.Context) {
 		if n != 1 {
 			continue
 		}
-		var mic, system string
-		if e = j.db.QueryRowContext(ctx, `SELECT mic_result,system_result FROM meeting_jobs WHERE job_key=? AND attempt=?`, key, attempt).Scan(&mic, &system); e != nil {
-			continue
-		}
-		if mic != "" && system != "" {
-			go j.process(ctx, key, attempt)
-			continue
-		}
-		leaseCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		e = j.fleetCall(leaseCtx, "/fleet/meetings/acquire", map[string]string{"id": key + "_" + attempt})
-		cancel()
-		if e != nil {
-			j.retry(key, attempt, "waiting for meeting capacity", false)
-			j.db.ExecContext(ctx, `UPDATE meeting_jobs SET attempts=MAX(0,attempts-1) WHERE job_key=? AND attempt=?`, key, attempt)
-			continue
-		}
 		go j.process(ctx, key, attempt)
 	}
 }
@@ -664,167 +702,17 @@ func (j *MeetingJobs) retry(key, attempt, message string, permanent bool) {
 	status := "queued"
 	var attempts int
 	j.db.QueryRow(`SELECT attempts FROM meeting_jobs WHERE job_key=? AND attempt=?`, key, attempt).Scan(&attempts)
-	if permanent || attempts >= 12 {
+	// Every attempt re-runs the whole in-memory pipeline, including the LLM steps.
+	if permanent || attempts >= meetingAttempts {
 		status = "failed"
 	}
-	result, err := j.db.Exec(`UPDATE meeting_jobs SET admitted=CASE WHEN ?='failed' THEN 0 ELSE admitted END,status=?,error=?,lease_until=0,next_attempt=? WHERE job_key=? AND attempt=? AND status='processing'`, status, status, message, time.Now().Add(30*time.Second).Unix(), key, attempt)
+	result, err := j.db.Exec(`UPDATE meeting_jobs SET admitted=CASE WHEN ?='failed' THEN 0 ELSE admitted END,status=?,error=?,lease_until=0,next_attempt=? WHERE job_key=? AND attempt=? AND status IN ('processing','analyzing')`, status, status, message, time.Now().Add(30*time.Second).Unix(), key, attempt)
 	if err == nil && status == "failed" {
 		if n, _ := result.RowsAffected(); n == 1 {
 			j.releaseProcessing(key)
 		}
 	}
 
-}
-func (j *MeetingJobs) process(parent context.Context, key, attempt string) {
-	ctx, cancel := context.WithTimeout(parent, 6*time.Hour)
-	defer cancel()
-	defer func() {
-		result, err := j.db.Exec(`UPDATE meeting_jobs SET admitted=0 WHERE job_key=? AND status IN ('failed','cancelled')`, key)
-		if err == nil {
-			if n, _ := result.RowsAffected(); n > 0 {
-				j.releaseProcessing(key)
-			}
-		}
-	}()
-
-	defer func() {
-		releaseCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stop()
-		j.fleetCall(releaseCtx, "/fleet/meetings/release", map[string]string{"id": key + "_" + attempt})
-	}()
-	var mic, system, diar string
-	if j.db.QueryRow(`SELECT mic_result,system_result,diar_result FROM meeting_jobs WHERE job_key=? AND attempt=?`, key, attempt).Scan(&mic, &system, &diar) != nil {
-		return
-	}
-	var needsGPU = mic == "" || system == ""
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		ticker := time.NewTicker(20 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				var status string
-				if j.db.QueryRowContext(ctx, `SELECT status FROM meeting_jobs WHERE job_key=? AND attempt=?`, key, attempt).Scan(&status) == nil && status == "completed" {
-					return
-				}
-				if needsGPU {
-					renewCtx, stop := context.WithTimeout(ctx, 10*time.Second)
-					e := j.fleetCall(renewCtx, "/fleet/meetings/acquire", map[string]string{"id": key + "_" + attempt})
-					stop()
-					if e != nil {
-						cancel()
-						return
-					}
-				}
-				res, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET lease_until=? WHERE job_key=? AND attempt=? AND status IN ('processing','analyzing')`, time.Now().Add(90*time.Second).Unix(), key, attempt)
-				if e != nil {
-					cancel()
-					return
-				}
-				n, _ := res.RowsAffected()
-				if n != 1 {
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-	var wg sync.WaitGroup
-	var resultMu sync.Mutex
-	var failure error
-	permanent := false
-	for stage, result := range map[string]string{"mic": mic, "system": system} {
-		if result != "" {
-			continue
-		}
-		wg.Add(1)
-		go func(stage string) {
-			defer wg.Done()
-			data, isPermanent, e := j.stage(ctx, key, attempt, stage)
-			if e == nil {
-				column := stage + "_result"
-				sealed, sealErr := j.sealStage(ctx, key, column, string(data))
-				if sealErr != nil {
-					resultMu.Lock()
-					failure = sealErr
-					resultMu.Unlock()
-					return
-				}
-				res, saveErr := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET `+column+`=? WHERE job_key=? AND attempt=? AND status='processing'`, sealed, key, attempt)
-				e = saveErr
-				if e == nil {
-					n, _ := res.RowsAffected()
-					if n != 1 {
-						e = errors.New("job lease lost")
-					}
-				}
-			}
-			if e != nil {
-				resultMu.Lock()
-				if failure == nil {
-					failure = e
-				}
-				permanent = permanent || isPermanent
-				resultMu.Unlock()
-			}
-		}(stage)
-	}
-	wg.Wait()
-	if failure != nil {
-		j.retry(key, attempt, failure.Error(), permanent)
-		return
-	}
-	if e := j.db.QueryRowContext(ctx, `SELECT diar_result FROM meeting_jobs WHERE job_key=?`, key).Scan(&diar); e != nil {
-		j.retry(key, attempt, e.Error(), false)
-		return
-	}
-	if diar == "" {
-		_, _ = j.db.ExecContext(ctx, `UPDATE meeting_jobs SET status='queued',error='waiting for diarization',lease_until=0,next_attempt=0,attempts=MAX(0,attempts-1) WHERE job_key=? AND attempt=? AND status='processing'`, key, attempt)
-		return
-	}
-	if e := j.finish(ctx, key, attempt); e != nil {
-		j.retry(key, attempt, e.Error(), false)
-	}
-}
-func (j *MeetingJobs) stage(ctx context.Context, key, attempt, stage string) ([]byte, bool, error) {
-	if stage != "mic" && stage != "system" {
-		return nil, true, errors.New("GPU stage must be mic or system")
-	}
-	audio, size, e := j.openChannel(ctx, key, stage)
-	if e != nil {
-		return nil, errors.Is(e, audiospool.ErrCorrupt), e
-	}
-	defer audio.Close()
-	request, e := http.NewRequestWithContext(ctx, "POST", j.fleet+"/v1/meeting/"+stage+"?language="+url.QueryEscape(j.language(key)), audio)
-	if e != nil {
-		return nil, true, e
-	}
-	request.ContentLength = size
-	request.Header.Set("Content-Type", "audio/ogg")
-	request.Header.Set("Authorization", "Bearer "+j.token)
-	request.Header.Set("X-SpeekToMe-Meeting-ID", key+"_"+attempt)
-	response, e := j.client.Do(request)
-	if e != nil {
-		return nil, false, e
-	}
-	defer response.Body.Close()
-	data, e := io.ReadAll(io.LimitReader(response.Body, 32<<20))
-	if e != nil {
-		return nil, false, e
-	}
-	if response.StatusCode != 200 {
-		return nil, response.StatusCode == 400 || response.StatusCode == 401 || response.StatusCode == 403 || response.StatusCode == 413 || response.StatusCode == 422, fmt.Errorf("%s stage returned HTTP %d", stage, response.StatusCode)
-	}
-	if !json.Valid(data) {
-		return nil, false, errors.New("invalid worker output")
-	}
-	return data, false, nil
 }
 
 type jobWord struct {
@@ -840,146 +728,6 @@ type jobSpeaker struct {
 	Start   float64 `json:"start"`
 	End     float64 `json:"end"`
 	Speaker int     `json:"speaker"`
-}
-
-func mergeMeeting(mic, system jobTranscript, speakers []jobSpeaker, name string) []ClientMeetingTurn {
-	if name == "" {
-		name = "You"
-	}
-	turns := []ClientMeetingTurn{}
-	for channel, transcript := range map[string]jobTranscript{"mic": mic, "system": system} {
-		var previous *ClientMeetingTurn
-		for _, word := range transcript.Words {
-			speakerID, speakerName := "speaker_local", name
-			if channel == "system" {
-				speakerID, speakerName = "unknown", "Unknown speaker"
-				best := 0.0
-				for _, speaker := range speakers {
-					overlap := min(word.End, speaker.End) - max(word.Start, speaker.Start)
-					if overlap > best {
-						best = overlap
-						speakerID = fmt.Sprintf("spk_%d", speaker.Speaker)
-						speakerName = fmt.Sprintf("Speaker %d", speaker.Speaker)
-					}
-				}
-			}
-			if previous != nil && previous.SpeakerID == speakerID && word.Start-previous.EndTime < 1.0 {
-				previous.Text += " " + word.Word
-				previous.EndTime = word.End
-				turns[len(turns)-1] = *previous
-			} else {
-				turn := ClientMeetingTurn{Channel: channel, SpeakerID: speakerID, SpeakerName: speakerName, StartTime: word.Start, EndTime: word.End, Text: word.Word, IsFinal: true}
-				turns = append(turns, turn)
-				previous = &turn
-			}
-		}
-	}
-	sort.SliceStable(turns, func(a, b int) bool { return turns[a].StartTime < turns[b].StartTime })
-	for index := range turns {
-		turns[index].ID = fmt.Sprintf("turn-%d", index)
-	}
-	return turns
-}
-func (j *MeetingJobs) finish(ctx context.Context, key, attempt string) error {
-	var micData, systemData, diarData, name string
-	var meeting, userID int64
-	if e := j.db.QueryRowContext(ctx, `SELECT j.mic_result,j.system_result,j.diar_result,j.meeting_id,j.user_id,COALESCE(u.name,'') FROM meeting_jobs j JOIN users u ON u.id=j.user_id WHERE j.job_key=? AND j.attempt=? AND j.status='processing'`, key, attempt).Scan(&micData, &systemData, &diarData, &meeting, &userID, &name); e != nil {
-		return e
-	}
-	if j.app.DB.Privacy != nil {
-		for col, p := range map[string]*string{"mic_result": &micData, "system_result": &systemData, "diar_result": &diarData} {
-			value, e := j.app.DB.Privacy.OpenStored(ctx, userID, "job-"+col, key, *p)
-			if e != nil {
-				return e
-			}
-			*p = value
-		}
-	}
-	var mic, system jobTranscript
-	var diar struct {
-		Segments []jobSpeaker `json:"segments"`
-	}
-	if json.Unmarshal([]byte(micData), &mic) != nil || json.Unmarshal([]byte(systemData), &system) != nil || json.Unmarshal([]byte(diarData), &diar) != nil {
-		return errors.New("invalid persisted stage output")
-	}
-	turns := mergeMeeting(mic, system, diar.Segments, name)
-	segments := []MeetingSegment{}
-	var lines []string
-	for _, turn := range turns {
-		segments = append(segments, MeetingSegment{Start: turn.StartTime, End: turn.EndTime, Text: turn.Text, Speaker: turn.SpeakerName, SpeakerID: turn.SpeakerID, Channel: turn.Channel})
-		lines = append(lines, turn.SpeakerName+": "+turn.Text)
-	}
-	transcript := strings.Join(lines, "\n")
-	terms, err := j.app.DB.GetActiveVocabularyTerms(userID)
-	if err != nil {
-		return err
-	}
-	audit := finalizeVocabulary(ctx, transcript, terms, nil)
-	transcript = audit.Resolved
-	resolvedLines := strings.Split(transcript, "\n")
-	if len(resolvedLines) == len(segments) {
-		for i, line := range resolvedLines {
-			parts := strings.SplitN(line, ": ", 2)
-			if len(parts) == 2 {
-				segments[i].Speaker = parts[0]
-				segments[i].Text = parts[1]
-			}
-		}
-	}
-	grammarInput, restore := audit.Protect()
-	data, _ := json.Marshal(segments)
-	fields := map[string]string{"transcript": transcript, "segments_json": string(data), "vocabulary_audit": auditJSON(audit)}
-	if j.app.DB.Privacy != nil {
-		if e := j.app.DB.Privacy.MeetingFields(ctx, userID, meeting, fields, true); e != nil {
-			return e
-		}
-	}
-	tx, e := j.db.BeginTx(ctx, nil)
-	if e != nil {
-		return e
-	}
-	defer tx.Rollback()
-	res, e := tx.ExecContext(ctx, `UPDATE meeting_jobs SET status='analyzing',error='' WHERE job_key=? AND attempt=? AND status='processing'`, key, attempt)
-	if e != nil {
-		return e
-	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return errors.New("job ownership changed")
-	}
-	_, e = tx.ExecContext(ctx, `UPDATE meetings SET transcript=?,segments_json=?,summary=?,action_items=?,vocabulary_audit=? WHERE id=? AND user_id=?`, fields["transcript"], fields["segments_json"], "", "", fields["vocabulary_audit"], meeting, userID)
-	if e != nil {
-		return e
-	}
-	if e = tx.Commit(); e != nil {
-		return e
-	}
-	// GPU work is complete. Do not hold a worker while the optional external
-	// summary model runs on the main server. Releasing this attempt is idempotent.
-	releaseCtx, releaseCancel := context.WithTimeout(ctx, 10*time.Second)
-	_ = j.fleetCall(releaseCtx, "/fleet/meetings/release", map[string]string{"id": key + "_" + attempt})
-	releaseCancel()
-	if transcript != "" {
-		analysisCtx, stop := context.WithTimeout(ctx, 3*time.Minute)
-		defer stop()
-		polished, summary, actions, analysisErr := generateMeetingAIAnalysis(analysisCtx, grammarInput, pipeline.NewPipelineContext(userID))
-		if analysisErr == nil {
-			e = j.app.DB.UpdateMeetingResult(meeting, restore(polished), audit.RestoreMentions(summary), audit.RestoreMentions(actions), fieldsPlainSegments(data), auditJSON(audit))
-			if e != nil {
-				log.Printf("[MEETINGS] summary persistence failed for %d: %v", meeting, e)
-			}
-		}
-	}
-	completed, e := j.db.ExecContext(ctx, `UPDATE meeting_jobs SET status='completed',admitted=0,lease_until=0,mic_result='',system_result='',diar_result='' WHERE job_key=? AND attempt=? AND status='analyzing'`, key, attempt)
-	if e != nil {
-		return e
-	}
-	n, _ = completed.RowsAffected()
-	if n != 1 {
-		return errors.New("meeting ownership changed before completion")
-	}
-	j.releaseProcessing(key)
-	return nil
 }
 
 func (j *MeetingJobs) language(key string) string {
@@ -1016,35 +764,9 @@ func (j *MeetingJobs) retryHandler(w http.ResponseWriter, r *http.Request) {
 		accountlimits.Write(w, accountlimits.Denied("meeting_retry_unavailable", "This meeting cannot be retried yet. Your account may already have three queued meetings.", 30))
 		return
 	}
-	// Successful checkpoints are retained. A failed CPU job gets a new remote
-	// identity only after the previous terminal job has been acknowledged.
-	_, _ = j.db.ExecContext(r.Context(), `UPDATE meeting_diarization_queue SET status='queued',generation=generation+1,remote_id='',error='',next_attempt=0 WHERE job_key=? AND status IN ('failed','cancelled') AND acknowledged=1`, key)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(202)
 	j.respond(w, key)
-}
-
-func fieldsPlainSegments(data []byte) string { return string(data) }
-func (j *MeetingJobs) sealStage(ctx context.Context, key, col, text string) (string, error) {
-	if j.app.DB.Privacy == nil {
-		return text, nil
-	}
-	var user int64
-	if e := j.db.QueryRowContext(ctx, "SELECT user_id FROM meeting_jobs WHERE job_key=?", key).Scan(&user); e != nil {
-		return "", e
-	}
-	return j.app.DB.Privacy.SealStored(ctx, user, "job-"+col, key, text)
-}
-
-func (j *MeetingJobs) openStage(ctx context.Context, key, col, text string) (string, error) {
-	if j.app.DB.Privacy == nil {
-		return text, nil
-	}
-	var user int64
-	if e := j.db.QueryRowContext(ctx, "SELECT user_id FROM meeting_jobs WHERE job_key=?", key).Scan(&user); e != nil {
-		return "", e
-	}
-	return j.app.DB.Privacy.OpenStored(ctx, user, "job-"+col, key, text)
 }
 
 func (j *MeetingJobs) accountDeleting(ctx context.Context, user int64) bool {

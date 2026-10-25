@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,42 +72,24 @@ func TestRealGPUDiarizationEncryptedConcurrent(t *testing.T) {
 		}
 		spoolAudio(t, j.spool, int64(i+1), key, map[string][]byte{"system": audio})
 	}
-	started, deadline := time.Now(), time.Now().Add(10*time.Minute)
-	peak := 0
-	for time.Now().Before(deadline) {
-		if err := d.tick(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		var running, done int
-		if err := j.db.QueryRow(`SELECT COALESCE(SUM(status='running'),0),COALESCE(SUM(status='completed' AND acknowledged=1),0) FROM meeting_diarization_queue`).Scan(&running, &done); err != nil {
-			t.Fatal(err)
-		}
-		peak = max(peak, running)
-		var failed string
-		if j.db.QueryRow(`SELECT error FROM meeting_diarization_queue WHERE status='failed'`).Scan(&failed) == nil {
-			t.Fatal("remote job failed:", failed)
-		}
-		if done == len(keys) {
-			for _, key := range keys {
-				var result string
-				j.db.QueryRow(`SELECT diar_result FROM meeting_jobs WHERE job_key=?`, key).Scan(&result)
-				if !strings.Contains(result, `"speaker"`) {
-					t.Fatal(key, "missing segments")
-				}
-				t.Logf("%s: %d bytes of segments saved", key, len(result))
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, key := range keys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			speakers, err := d.run(ctx, key)
+			if err != nil || len(speakers) == 0 {
+				t.Error(key, "diarization failed:", err)
+				return
 			}
-			if peak < 2 {
-				t.Fatal("jobs did not run concurrently")
-			}
-			t.Logf("%d meetings diarized, up to %d at once, in %.1fs", len(keys), peak, time.Since(started).Seconds())
-			return
-		}
-		if _, err := j.db.Exec(`UPDATE meeting_diarization_queue SET next_attempt=0`); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(time.Second)
+			t.Logf("%s: %d speaker segments", key, len(speakers))
+		}()
 	}
-	t.Fatal("GPU diarization did not finish within ten minutes")
+	wg.Wait()
+	t.Logf("%d meetings diarized concurrently in %.1fs", len(keys), time.Since(started).Seconds())
 }
 
 // The front endpoint rejects stale or mismatched envelopes before spawning a GPU job.

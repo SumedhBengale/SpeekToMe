@@ -274,7 +274,7 @@ func TestAbandonedUploadsExpireWithoutDeletingCommittedJobs(t *testing.T) {
 	}
 }
 
-func TestAdmissionSurvivesCPUWaitAndRecoversPreexistingCheckpoints(t *testing.T) {
+func TestAccountProcessesOneMeetingAtATime(t *testing.T) {
 	a := limitApp(t)
 	root := t.TempDir()
 	t.Setenv("MEETING_AUDIO_DIR", root)
@@ -284,33 +284,25 @@ func TestAdmissionSurvivesCPUWaitAndRecoversPreexistingCheckpoints(t *testing.T)
 		t.Fatal(e)
 	}
 	j := &MeetingJobs{app: a, db: a.DB.GetDB(), spool: testMeetingSpool(t, a), root: root, token: strings.Repeat("x", 32), client: http.DefaultClient}
-	for i, key := range []string{"old-checkpoint", "next-meeting"} {
-		_, e := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at,mic_result,system_result) VALUES(?,1,?,'test','{}','queued',?,'{"words":[]}','{"words":[]}')`, key, key, i)
-		if e != nil {
-			t.Fatal(e)
-		}
+	// One meeting is mid-pipeline (waiting on diarization, say) under a live lease.
+	if _, e := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at,admitted,attempt,lease_until) VALUES('in-flight',1,'in-flight','test','{}','analyzing',0,1,'a',?)`, time.Now().Add(time.Minute).Unix()); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := j.db.Exec(`INSERT INTO meeting_jobs(job_key,user_id,client_id,title,files_json,status,created_at) VALUES('next-meeting',1,'next-meeting','test','{}','queued',1)`); e != nil {
+		t.Fatal(e)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	j.dispatch(ctx)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		var status string
-		var admitted int
-		j.db.QueryRow("SELECT status,admitted FROM meeting_jobs WHERE job_key='old-checkpoint'").Scan(&status, &admitted)
-		if admitted == 1 && status == "queued" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("checkpoint was never admitted for CPU recovery", status, admitted)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	j.dispatch(ctx)
+	var status string
 	var admitted int
-	j.db.QueryRow("SELECT admitted FROM meeting_jobs WHERE job_key='next-meeting'").Scan(&admitted)
-	if admitted != 0 {
-		t.Fatal("second meeting bypassed account admission during CPU wait")
+	j.db.QueryRow("SELECT status,admitted FROM meeting_jobs WHERE job_key='next-meeting'").Scan(&status, &admitted)
+	if admitted != 0 || status != "queued" {
+		t.Fatal("second meeting bypassed account admission", status, admitted)
+	}
+	j.db.QueryRow("SELECT status,admitted FROM meeting_jobs WHERE job_key='in-flight'").Scan(&status, &admitted)
+	if admitted != 1 || status != "analyzing" {
+		t.Fatal("in-flight meeting was disturbed", status, admitted)
 	}
 }
 func TestRecordingPermitCanRecoverAnUnacknowledgedStart(t *testing.T) {

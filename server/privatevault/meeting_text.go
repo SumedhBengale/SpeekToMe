@@ -26,7 +26,7 @@ func (v *Vault) OpenStored(ctx context.Context, user int64, kind, id, text strin
 	return v.DecryptText(ctx, user, kind, id, strings.TrimPrefix(text, storedPrefix))
 }
 
-var MeetingTextColumns = []string{"transcript", "summary", "action_items", "segments_json", "vocabulary_audit", "speaker_names"}
+var MeetingTextColumns = []string{"transcript", "summary", "action_items", "segments_json", "vocabulary_audit", "speaker_names", "description"}
 
 // Every field has a distinct authenticated context, preventing row/column/account substitution.
 func (v *Vault) MeetingFields(ctx context.Context, user, id int64, values map[string]string, seal bool) error {
