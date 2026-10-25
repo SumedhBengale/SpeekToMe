@@ -627,24 +627,12 @@
 .inspector-table td {
   padding: 8px 12px;
   color: var(--text-primary);
-  vertical-align: middle;
+  vertical-align: top;
   white-space: nowrap;
 }
 
 .inspector-table td:last-child {
   white-space: normal;
-}
-
-.inspector-start-badge {
-  display: inline-block;
-  padding: 2px 7px;
-  border-radius: 5px;
-  font-family: monospace;
-  font-size: 11px;
-  font-weight: 600;
-  background: var(--accent-tint);
-  color: var(--accent-color);
-  white-space: nowrap;
 }
 
 .inspector-speaker-pill {
@@ -658,21 +646,29 @@
   white-space: nowrap;
 }
 
-.mini-timeline-bar {
-  width: 60px;
-  height: 5px;
-  background: var(--progress-bg);
-  border-radius: 3px;
-  overflow: hidden;
-  position: relative;
+/* Each turn's full text, wrapping onto as many lines as it needs. */
+.inspector-table td.inspector-transcript {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 
-.mini-timeline-fill {
-  height: 100%;
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  border-radius: 2px;
+.inspector-row-tooltip {
+  position: fixed;
+  z-index: 50;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--text-primary);
+  color: var(--bg-card);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.inspector-row-tooltip[hidden] {
+  display: none;
 }
 
 

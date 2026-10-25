@@ -1059,6 +1059,32 @@ function renderMeetingSpeakerEditor(meeting, onSaved) {
   };
 }
 
+// A turn's start, as m:ss or h:mm:ss.
+function formatTurnTime(seconds) {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+// The segment table's hover details follow the pointer, kept inside the window.
+function showInspectorTooltip(text, event) {
+  const tip = document.getElementById('inspector-row-tooltip');
+  if (!tip) return;
+  tip.textContent = text;
+  tip.hidden = false;
+  const x = Math.min(event.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+  const y = Math.min(event.clientY + 16, window.innerHeight - tip.offsetHeight - 8);
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+}
+
+function hideInspectorTooltip() {
+  const tip = document.getElementById('inspector-row-tooltip');
+  if (tip) tip.hidden = true;
+}
+
 // Dedicated High-Precision Visualizer & Timeline Renderer
 function renderMeetingTimeline(segments, totalDuration, player, currentUserName) {
   const legendContainer = document.getElementById('timeline-speaker-legend');
@@ -1078,6 +1104,7 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
   rulerTrack.innerHTML = '';
   if (legendContainer) legendContainer.innerHTML = '';
   if (inspectorTbody) inspectorTbody.innerHTML = '';
+  hideInspectorTooltip();
   lanesBody.innerHTML = `
     <div class="timeline-playhead" id="timeline-playhead">
       <div class="timeline-playhead-line"></div>
@@ -1274,8 +1301,6 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       };
 
       const duration = Math.max(0, seg.end - seg.start);
-      const leftPct = (seg.start / totalDuration) * 100;
-      const widthPct = Math.max((duration / totalDuration) * 100, 1.5);
 
       const tr = document.createElement('tr');
       tr.className = 'turn-table-row';
@@ -1293,20 +1318,16 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
             ${escapeHtml(theme.label)}
           </span>
         </td>
-        <td>
-          <span class="inspector-start-badge">${seg.start.toFixed(2)}s</span>
-        </td>
-        <td style="font-family: monospace; color: var(--text-muted);">${seg.end.toFixed(2)}s</td>
-        <td style="font-family: monospace; color: var(--text-secondary); font-weight: 600;">${duration.toFixed(2)}s</td>
-        <td>
-          <div class="mini-timeline-bar">
-            <div class="mini-timeline-fill" style="left: ${leftPct}%; width: ${widthPct}%; background-color: ${theme.color};"></div>
-          </div>
-        </td>
-        <td style="color: var(--text-primary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(seg.text || '')}">
+        <td class="inspector-transcript">
           ${seg.text ? escapeHtml(seg.text) : '<span style="color: var(--text-muted); font-style: italic;">(No speech text)</span>'}
         </td>
       `;
+
+      // Start and duration appear on hover instead of taking columns.
+      const details = `Start ${formatTurnTime(seg.start)} · Duration ${duration.toFixed(1)}s`;
+      tr.onmouseenter = (event) => showInspectorTooltip(details, event);
+      tr.onmousemove = (event) => showInspectorTooltip(details, event);
+      tr.onmouseleave = hideInspectorTooltip;
 
       tr.onclick = () => {
         player.currentTime = seg.start;
