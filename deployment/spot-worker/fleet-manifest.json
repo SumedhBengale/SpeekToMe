@@ -22,13 +22,13 @@
   },
   "gateways": {
     "amd64": {
-      "key": "gateway/52b83f446902db2ac61d5672ca70f4bd5c3c71b678b65e3024c4ea9f097a0bd9/speektome-gateway-amd64.gz",
-      "sha256": "52b83f446902db2ac61d5672ca70f4bd5c3c71b678b65e3024c4ea9f097a0bd9",
+      "key": "gateway/07d31ff1a46f276461ab28be22396ca269fc1372ddc0509518ce2085a3f087dc/speektome-gateway-amd64.gz",
+      "sha256": "07d31ff1a46f276461ab28be22396ca269fc1372ddc0509518ce2085a3f087dc",
       "compression": "gzip"
     },
     "arm64": {
-      "key": "gateway/02a7b165e476098e4332091e827cdfc08033b638a31ebe0895a2301ebcb3bfeb/speektome-gateway-arm64.gz",
-      "sha256": "02a7b165e476098e4332091e827cdfc08033b638a31ebe0895a2301ebcb3bfeb",
+      "key": "gateway/bce9908f2f29b3dd0d90df51b52f19e77bb3b30ea9c33825187d45a133ae9f5d/speektome-gateway-arm64.gz",
+      "sha256": "bce9908f2f29b3dd0d90df51b52f19e77bb3b30ea9c33825187d45a133ae9f5d",
       "compression": "gzip"
     }
   },
@@ -57,6 +57,7 @@
   "capabilities": [
     "final_vocabulary_matching_v1",
     "meeting_transcription",
-    "streaming_transcription"
+    "streaming_transcription",
+    "transport_encryption_v1"
   ]
 }
