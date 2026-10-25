@@ -785,7 +785,7 @@ func (j *MeetingJobs) process(parent context.Context, key, attempt string) {
 		return
 	}
 	if diar == "" {
-		_, _ = j.db.ExecContext(ctx, `UPDATE meeting_jobs SET status='queued',error='waiting for CPU diarization',lease_until=0,next_attempt=0,attempts=MAX(0,attempts-1) WHERE job_key=? AND attempt=? AND status='processing'`, key, attempt)
+		_, _ = j.db.ExecContext(ctx, `UPDATE meeting_jobs SET status='queued',error='waiting for diarization',lease_until=0,next_attempt=0,attempts=MAX(0,attempts-1) WHERE job_key=? AND attempt=? AND status='processing'`, key, attempt)
 		return
 	}
 	if e := j.finish(ctx, key, attempt); e != nil {
@@ -1034,6 +1034,17 @@ func (j *MeetingJobs) sealStage(ctx context.Context, key, col, text string) (str
 		return "", e
 	}
 	return j.app.DB.Privacy.SealStored(ctx, user, "job-"+col, key, text)
+}
+
+func (j *MeetingJobs) openStage(ctx context.Context, key, col, text string) (string, error) {
+	if j.app.DB.Privacy == nil {
+		return text, nil
+	}
+	var user int64
+	if e := j.db.QueryRowContext(ctx, "SELECT user_id FROM meeting_jobs WHERE job_key=?", key).Scan(&user); e != nil {
+		return "", e
+	}
+	return j.app.DB.Privacy.OpenStored(ctx, user, "job-"+col, key, text)
 }
 
 func (j *MeetingJobs) accountDeleting(ctx context.Context, user int64) bool {
