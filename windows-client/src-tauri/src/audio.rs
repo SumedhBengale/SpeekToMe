@@ -416,7 +416,7 @@ fn meeting_writer(
 
 /// Default system output captured through Windows loopback on the output device.
 #[cfg(windows)]
-fn windows_loopback(
+pub(crate) fn windows_loopback(
     host: &cpal::Host,
     buffer: Arc<Mutex<Vec<i16>>>,
     failed: Arc<std::sync::atomic::AtomicBool>,
@@ -450,7 +450,7 @@ fn windows_loopback(
 /// The default sink's monitor through the PulseAudio protocol, which PipeWire
 /// also provides. Returns its shutdown flag and reader thread.
 #[cfg(target_os = "linux")]
-fn pulse_monitor(
+pub(crate) fn pulse_monitor(
     buffer: Arc<Mutex<Vec<i16>>>,
     failed: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<

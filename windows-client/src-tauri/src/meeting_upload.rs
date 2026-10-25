@@ -158,7 +158,7 @@ pub fn upload(filepath: &str) -> Result<String, String> {
             client
                 .post(format!("{}/v1/meetings/jobs", base))
                 .bearer_auth(&token)
-                .json(&json!({"id":record.id,"title":record.title,"files":manifest,"language":record.language}))
+                .json(&json!({"id":record.id,"title":record.title,"description":record.description,"files":manifest,"language":record.language}))
                 .send()
                 .map_err(|e| e.to_string())?,
             filepath,

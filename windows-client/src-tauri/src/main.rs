@@ -46,6 +46,7 @@ mod macos_desktop;
 #[cfg(target_os = "macos")]
 mod macos_overlay;
 pub mod meeting_echo;
+mod meeting_setup;
 pub mod meeting_stream;
 #[allow(dead_code)]
 mod native_overlay;
@@ -728,6 +729,10 @@ pub struct LocalMeetingRecord {
     pub language: Option<String>,
     pub id: String,
     pub title: String,
+    /// What the organiser wrote about the meeting before recording; it gives
+    /// the server's summary background.
+    #[serde(default)]
+    pub description: Option<String>,
     pub created_at: u64,
     pub filepath: String,
     pub status: String, // "recording" | "recorded" | "uploaded" | "failed"
@@ -902,6 +907,9 @@ fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
         set_active_language,
         get_supported_languages,
         start_meeting,
+        start_meeting_preview,
+        stop_meeting_preview,
+        play_meeting_test_sound,
         stop_meeting,
         cancel_meeting,
         get_active_meeting,
@@ -1134,8 +1142,52 @@ fn get_active_meeting() -> Option<ActiveMeetingInfo> {
     }
 }
 
+/// Opens the setup page's live microphone and system-audio meters.
 #[tauri::command]
-async fn start_meeting(title: String) -> Result<String, String> {
+async fn start_meeting_preview() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(meeting_setup::start)
+        .await
+        .map_err(|_| "Audio preview could not start.".to_string())?
+}
+
+/// The server's limits for a meeting's name and description.
+const MEETING_TITLE_LIMIT: usize = 512;
+const MEETING_DESCRIPTION_LIMIT: usize = 2000;
+
+/// Closes the setup page's meters. It waits for the devices to be released, so
+/// it runs off the UI thread.
+#[tauri::command]
+async fn stop_meeting_preview() {
+    let _ = tauri::async_runtime::spawn_blocking(meeting_setup::stop).await;
+}
+
+/// Plays the setup page's test chime through the default output.
+#[tauri::command]
+async fn play_meeting_test_sound() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(meeting_setup::play_test_sound)
+        .await
+        .map_err(|_| "The test sound could not play.".to_string())?
+}
+
+/// Starts recording. The setup page has already asked for the meeting's name
+/// and optional description; nothing is recorded before this.
+#[tauri::command]
+async fn start_meeting(title: String, description: Option<String>) -> Result<String, String> {
+    // The preview holds the same devices; recording takes them over.
+    meeting_setup::stop();
+    let title = title.trim().to_string();
+    if title.is_empty() || title.chars().count() > MEETING_TITLE_LIMIT {
+        return Err("Enter a meeting name of at most 512 characters.".into());
+    }
+    let description = description
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
+    if description
+        .as_ref()
+        .is_some_and(|d| d.chars().count() > MEETING_DESCRIPTION_LIMIT)
+    {
+        return Err("Keep the description to 2,000 characters.".into());
+    }
     let _starting = crate::meeting_session::begin()?;
     println!(
         "[MEETING LOG] >>> start_meeting command called with title: '{}'",
@@ -1222,6 +1274,7 @@ async fn start_meeting(title: String) -> Result<String, String> {
         language: Some(recording_language),
         id: uuid::Uuid::new_v4().to_string(),
         title: title.clone(),
+        description,
         created_at: start_unix,
         filepath: path_str.clone(),
         status: "recording".to_string(),

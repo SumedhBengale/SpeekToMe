@@ -58,6 +58,7 @@ mod tests {
             token_fingerprint: None,
             language: None,
             title: "Meeting".into(),
+            description: None,
             created_at: 100,
             filepath: String::new(),
             status: "recorded".into(),
