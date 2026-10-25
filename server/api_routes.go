@@ -60,6 +60,7 @@ func newAPIMux(ctx context.Context, app *handlers.App) (*http.ServeMux, error) {
 	mux.HandleFunc("GET /meetings", app.HandleGetMeetings)
 	mux.HandleFunc("GET /meetings/{id}", app.HandleGetMeetingDetail)
 	mux.HandleFunc("PUT /meetings/{id}/speakers", app.HandleSaveMeetingSpeakers)
+	mux.HandleFunc("PUT /meetings/{id}/title", app.HandleRenameMeeting)
 	mux.HandleFunc("DELETE /meetings/{id}", app.HandleDeleteMeeting)
 	mux.HandleFunc("GET /meetings/{id}/audio", app.HandleGetMeetingAudio)
 	mux.HandleFunc("POST /billing/create-subscription", app.HandleCreateSubscription)

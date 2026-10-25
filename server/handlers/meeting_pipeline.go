@@ -49,8 +49,10 @@ type meetingRun struct {
 	name, description       string
 	user, meeting           int64
 	manifest                map[string]MeetingFile
-	llmSlots                chan struct{} // LLM calls this meeting may run at once
-	gpu                     atomic.Bool   // holds a fleet meeting lease for gap ASR
+	llmSlots                chan struct{}   // LLM calls this meeting may run at once
+	speakerTokens           map[string]bool // participant tokens the summary may use
+	participants            string          // the summary prompt's participant list
+	gpu                     atomic.Bool     // holds a fleet meeting lease for gap ASR
 	gapSeconds, asrRequests atomic.Int64
 	jevCalls, llmRetries    atomic.Int64
 	llmFallbacks            atomic.Int64

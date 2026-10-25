@@ -1413,6 +1413,17 @@ func (d *Database) SaveMeetingSpeakerNames(meetingID, userID int64, names, previ
 	return count == 1, err
 }
 
+// RenameMeeting changes a meeting's title. It reports false when the meeting
+// does not exist or belongs to another user.
+func (d *Database) RenameMeeting(meetingID, userID int64, title string) (bool, error) {
+	res, err := d.db.Exec(`UPDATE meetings SET title=? WHERE id=? AND user_id=?`, title, meetingID, userID)
+	if err != nil {
+		return false, err
+	}
+	count, err := res.RowsAffected()
+	return count == 1, err
+}
+
 func (d *Database) DeleteMeeting(meetingID int64) error {
 	_, err := d.db.Exec("DELETE FROM meetings WHERE id = ?", meetingID)
 	return err

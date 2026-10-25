@@ -259,8 +259,11 @@ func TestMeetingDescriptionInformsOnlyTheSummary(t *testing.T) {
 		return inner(ctx, user, system, prompt)
 	}
 	p.run(t)
-	if len(summaryInputs) != 1 || !strings.HasPrefix(summaryInputs[0], "Meeting description (written by the organiser before the meeting; background only):\nQ4 planning with the design team\n\nTranscript:\n") {
-		t.Fatal(summaryInputs)
+	want := "Meeting description (written by the organiser before the meeting; background only):\nQ4 planning with the design team\n\n" +
+		"Participants:\n[[mic:speaker_local]] is Owner, who recorded the meeting\n[[system:spk_3]] is a participant\n\n" +
+		"Transcript:\n[[mic:speaker_local]]: "
+	if len(summaryInputs) != 1 || !strings.HasPrefix(summaryInputs[0], want) {
+		t.Fatalf("%q", summaryInputs)
 	}
 	for _, input := range enhanceInputs {
 		if strings.Contains(input, "Q4 planning") {
