@@ -48,10 +48,11 @@ type fakeProbe struct {
 	ready  bool
 	active int
 	err    error
+	keys   map[string]string // instance ID -> advertised transport key
 }
 
 func (p *fakeProbe) Metadata(_ context.Context, w SpotWorker) (WorkerMetadata, float64, error) {
-	return WorkerMetadata{Schema: 2, InstanceID: w.InstanceID, Region: w.Region, Ready: p.ready, Active: p.active, Max: 8}, 1, p.err
+	return WorkerMetadata{Schema: 2, InstanceID: w.InstanceID, Region: w.Region, Ready: p.ready, Active: p.active, Max: 8, TransportKey: p.keys[w.InstanceID]}, 1, p.err
 }
 func (p *fakeProbe) Drain(context.Context, SpotWorker) error { return nil }
 func testConfig(t *testing.T) FleetConfig {
@@ -61,6 +62,8 @@ func testConfig(t *testing.T) FleetConfig {
 	os.WriteFile(token, []byte("012345678901234567890123456789012345"), 0600)
 	c := FleetConfig{FleetID: "test", AccountID: "123", StateFile: filepath.Join(dir, "state.json"), TokenFile: token, InstanceProfile: "profile", Regions: []RegionConfig{{Region: "us-west-2", AMI: "ami-test", SecurityGroup: "sg-test", Subnets: map[string]string{"us-west-2d": "subnet-1"}, ArtifactBucket: "bucket", ArtifactRegion: "us-east-1", UserData: "boot"}, {Region: "us-east-1", AMI: "ami-test", SecurityGroup: "sg-test", Subnets: map[string]string{"us-east-1d": "subnet-2"}, ArtifactBucket: "bucket", ArtifactRegion: "us-east-1", UserData: "boot"}}}
 	c.defaults()
+	// Fleet and routing tests use keyless fake workers; transport_test.go covers "required".
+	c.TranscriptionEncryption = "preferred"
 	return c
 }
 func TestTwoWorkersPreferDifferentRegionsAndNoDemandScaling(t *testing.T) {

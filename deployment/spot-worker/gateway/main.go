@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/opus"
+	"speektome/transport"
 )
 
 type gateway struct {
@@ -37,6 +39,10 @@ type gateway struct {
 	meetingExclusive bool
 	drainFile        string
 	spotFile         string
+	// transport is this process's in-memory key pair; with transportRequired,
+	// /v1/ requests that are not sealed to it are refused.
+	transport         *transport.Identity
+	transportRequired bool
 }
 
 func (g *gateway) authorized(r *http.Request) bool {
@@ -92,6 +98,12 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m["instance_id"] = os.Getenv("INSTANCE_ID")
 		m["region"] = os.Getenv("AWS_REGION")
 		m["profile"] = os.Getenv("WORKER_PROFILE")
+		if g.transport != nil {
+			m["transport_schema"] = transport.Schema
+			m["transport_key"] = g.transport.PublicKey()
+			m["transport_key_id"] = g.transport.KeyID()
+			m["transport_required"] = g.transportRequired
+		}
 		m["spot_signal"] = nil
 		if data, err := os.ReadFile(g.spotFile); err == nil {
 			var signal any
@@ -120,6 +132,15 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, "/v1/") {
 		http.NotFound(w, r)
 		return
+	}
+	session, ok := g.openTransport(w, r)
+	if !ok {
+		return
+	}
+	if session != nil && !websocket.IsWebSocketUpgrade(r) {
+		sealed := newSealedResponse(w, session)
+		defer sealed.finish()
+		w = sealed
 	}
 	if g.readyFile != "" {
 		if _, err := os.Stat(g.readyFile); err != nil {
@@ -198,7 +219,7 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		g.stream(w, r, stat, reserveDiar)
+		g.stream(w, r, stat, reserveDiar, streamCodec{session})
 		return
 	}
 	if r.URL.Path == "/v1/vocabulary/final" {
@@ -210,7 +231,7 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.proxy.ServeHTTP(w, r)
 }
 
-func (g *gateway) stream(w http.ResponseWriter, r *http.Request, stat *streamStats, reserveDiar func() bool) {
+func (g *gateway) stream(w http.ResponseWriter, r *http.Request, stat *streamStats, reserveDiar func() bool, codec streamCodec) {
 	contexts, err := queryContexts(r.URL.Query())
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -245,7 +266,7 @@ func (g *gateway) stream(w http.ResponseWriter, r *http.Request, stat *streamSta
 	writeFront := func(kind int, data []byte) error {
 		frontWriter.Lock()
 		defer frontWriter.Unlock()
-		return front.WriteMessage(kind, data)
+		return codec.write(front, kind, data)
 	}
 	done := make(chan struct{}, 1)
 	go func() {
@@ -289,7 +310,11 @@ func (g *gateway) stream(w http.ResponseWriter, r *http.Request, stat *streamSta
 		return err
 	}
 	for {
-		kind, data, err := front.ReadMessage()
+		kind, data, err := codec.read(front)
+		if errors.Is(err, transport.ErrRejected) {
+			front.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(1008, "transport message rejected"), time.Now().Add(time.Second))
+			break
+		}
 		if err != nil {
 			break
 		}
@@ -475,6 +500,7 @@ func main() {
 	exclusive := flag.Bool("meeting-exclusive", false, "require idle worker for meetings and reject live work until meeting stages finish")
 	limit := flag.Int("max-streams", 20, "concurrent inference request limit; benchmark before raising")
 	tokenFile := flag.String("token-file", "/etc/speektome/worker.token", "bearer token file")
+	transportRequired := flag.Bool("transport-required", true, "refuse /v1/ requests that are not sealed to this process's transport key")
 	ready := flag.String("ready-file", "/run/speektome/ready", "GPU smoke-test readiness marker")
 	smoke := flag.String("smoke-wav", "", "Run local ASR+diarization streaming smoke test and exit")
 	smokeDiarization := flag.Bool("smoke-diarization", true, "Require diarization in the streaming smoke test; disable for ASR-only workers")
@@ -497,6 +523,10 @@ func main() {
 		log.Fatal("invalid upstream")
 	}
 	g := &gateway{tokenHash: sha256.Sum256([]byte(strings.TrimSpace(string(token)))), upstream: u, slots: make(chan struct{}, *limit), readyFile: *ready, proxy: httputil.NewSingleHostReverseProxy(u), diarSlots: make(chan struct{}, *diarLimit), drainFile: *drainFile, spotFile: *spotFile, meetingExclusive: *exclusive}
+	if g.transport, err = transport.NewIdentity(); err != nil {
+		log.Fatal("transport key unavailable")
+	}
+	g.transportRequired = *transportRequired
 	g.proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) { http.Error(w, "inference unavailable", 502) }
 	server := http.Server{Addr: *listen, Handler: g, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32 << 10}
 	log.Print("Authenticated worker gateway listening")

@@ -30,7 +30,7 @@ func (o *Controller) acquireMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 	if lease, ok := o.meetingLeases[request.ID]; ok && lease.Expires.After(o.now()) {
 		worker := o.state.Workers[lease.Worker]
-		if worker.State == StateActive && worker.Metadata.Ready && !worker.Metadata.Draining {
+		if worker.State == StateActive && worker.Metadata.Ready && !worker.Metadata.Draining && o.encryptionOK(worker) {
 			lease.Expires = o.now().Add(90 * time.Second)
 			o.meetingLeases[request.ID] = lease
 			json.NewEncoder(w).Encode(lease)
@@ -49,7 +49,7 @@ func (o *Controller) acquireMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 	var chosen SpotWorker
 	for _, worker := range o.state.Workers {
-		if (!o.cfg.MeetingRequireIdle || max(worker.Metadata.Active, o.reservations[worker.InstanceID]) == 0) && !occupied[worker.InstanceID] && worker.Metadata.Batch == 0 && worker.State == StateActive && worker.Metadata.Ready && !worker.Metadata.Draining && o.now().Sub(worker.LastHealthy) < 30*time.Second {
+		if (!o.cfg.MeetingRequireIdle || max(worker.Metadata.Active, o.reservations[worker.InstanceID]) == 0) && !occupied[worker.InstanceID] && worker.Metadata.Batch == 0 && o.encryptionOK(worker) && worker.State == StateActive && worker.Metadata.Ready && !worker.Metadata.Draining && o.now().Sub(worker.LastHealthy) < 30*time.Second {
 			if chosen.InstanceID == "" || worker.Metadata.Active < chosen.Metadata.Active {
 				chosen = worker
 			}
@@ -91,7 +91,16 @@ func (o *Controller) proxyMeeting(p *HTTPProbe, w http.ResponseWriter, r *http.R
 		http.Error(w, "worker unavailable", 503)
 		return
 	}
-	request, e := http.NewRequestWithContext(r.Context(), r.Method, worker.EndpointURL+r.URL.RequestURI(), http.MaxBytesReader(w, r.Body, 512<<20))
+	session, sessionHeader, ok := o.transportFor(worker)
+	if !ok {
+		http.Error(w, "worker unavailable", 503)
+		return
+	}
+	var body io.Reader = http.MaxBytesReader(w, r.Body, 512<<20)
+	if session != nil {
+		body = session.SealBody(body)
+	}
+	request, e := http.NewRequestWithContext(r.Context(), r.Method, worker.EndpointURL+requestURI(r, session), body)
 	if e != nil {
 		http.Error(w, "invalid request", 400)
 		return
@@ -99,6 +108,11 @@ func (o *Controller) proxyMeeting(p *HTTPProbe, w http.ResponseWriter, r *http.R
 	request.Header.Set("Authorization", "Bearer "+p.token)
 	request.Header.Set("Content-Type", r.Header.Get("Content-Type"))
 	request.Header.Set("X-SpeekToMe-Meeting-ID", id)
+	if session != nil {
+		sealHeaders(request.Header, session, sessionHeader, r.URL.RawQuery, r.ContentLength)
+	} else {
+		request.ContentLength = r.ContentLength
+	}
 	longClient := *client
 	longClient.Timeout = 0
 	transport := client.Transport.(*http.Transport).Clone()
@@ -111,7 +125,12 @@ func (o *Controller) proxyMeeting(p *HTTPProbe, w http.ResponseWriter, r *http.R
 		return
 	}
 	defer response.Body.Close()
+	reply, e := responseBody(session, response)
+	if e != nil {
+		http.Error(w, "worker refused the request", 502)
+		return
+	}
 	w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 	w.WriteHeader(response.StatusCode)
-	io.Copy(w, response.Body)
+	io.Copy(w, reply)
 }

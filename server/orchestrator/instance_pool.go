@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	log "speektome-server/privacylog"
 	"os"
 	"path/filepath"
 	"sort"
+	log "speektome-server/privacylog"
 	"sync"
 	"time"
 )
@@ -37,24 +37,29 @@ type RegionConfig struct {
 	UserData       string            `json:"user_data"` // encoded only by AWS adapter, not by callers
 }
 type FleetConfig struct {
-	MeetingRequireIdle      bool           `json:"meeting_require_idle"`
-	FleetID                 string         `json:"fleet_id"`
-	AccountID               string         `json:"account_id"`
-	Desired                 int            `json:"desired"`
-	RootVolumeGiB           int64          `json:"root_volume_gib"`
-	MaxInstances            int            `json:"max_instances"`
-	MaxHourlyUSD            float64        `json:"max_hourly_usd"`
-	MaxPoolHourlyUSD        float64        `json:"max_pool_hourly_usd"`
-	MaxRTTMs                float64        `json:"max_rtt_ms"`
-	InstanceType            string         `json:"instance_type"`
-	InstanceProfile         string         `json:"instance_profile"`
-	KeyName                 string         `json:"key_name"`
-	TokenFile               string         `json:"token_file"`
-	StateFile               string         `json:"state_file"`
-	Listen                  string         `json:"listen"`
-	ProvisionTimeoutSeconds int            `json:"provision_timeout_seconds"`
-	HealthGraceSeconds      int            `json:"health_grace_seconds"`
-	DrainTimeoutSeconds     int            `json:"drain_timeout_seconds"`
+	MeetingRequireIdle      bool    `json:"meeting_require_idle"`
+	FleetID                 string  `json:"fleet_id"`
+	AccountID               string  `json:"account_id"`
+	Desired                 int     `json:"desired"`
+	RootVolumeGiB           int64   `json:"root_volume_gib"`
+	MaxInstances            int     `json:"max_instances"`
+	MaxHourlyUSD            float64 `json:"max_hourly_usd"`
+	MaxPoolHourlyUSD        float64 `json:"max_pool_hourly_usd"`
+	MaxRTTMs                float64 `json:"max_rtt_ms"`
+	InstanceType            string  `json:"instance_type"`
+	InstanceProfile         string  `json:"instance_profile"`
+	KeyName                 string  `json:"key_name"`
+	TokenFile               string  `json:"token_file"`
+	StateFile               string  `json:"state_file"`
+	Listen                  string  `json:"listen"`
+	ProvisionTimeoutSeconds int     `json:"provision_timeout_seconds"`
+	HealthGraceSeconds      int     `json:"health_grace_seconds"`
+	DrainTimeoutSeconds     int     `json:"drain_timeout_seconds"`
+	// TranscriptionEncryption is "required" (default from LoadConfig): only
+	// workers advertising a transport key receive audio, always sealed to it.
+	// "preferred" also routes, in plaintext over pinned TLS, to workers without
+	// one; it exists only to roll a fleet onto encrypting gateways.
+	TranscriptionEncryption string         `json:"transcription_encryption"`
 	Regions                 []RegionConfig `json:"regions"`
 }
 
@@ -89,6 +94,9 @@ func (c *FleetConfig) defaults() {
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8095"
 	}
+	if c.TranscriptionEncryption == "" {
+		c.TranscriptionEncryption = "required"
+	}
 }
 func (c FleetConfig) Validate() error {
 	if c.FleetID == "" || c.AccountID == "" || c.StateFile == "" || c.TokenFile == "" {
@@ -102,6 +110,9 @@ func (c FleetConfig) Validate() error {
 	}
 	if c.InstanceType != "g6f.large" {
 		return errors.New("only validated g6f.large profile enabled")
+	}
+	if c.TranscriptionEncryption != "required" && c.TranscriptionEncryption != "preferred" {
+		return errors.New(`transcription_encryption must be "required" or "preferred"`)
 	}
 	if len(c.Regions) == 0 || c.InstanceProfile == "" {
 		return errors.New("regions and instance_profile required")
@@ -144,6 +155,10 @@ type WorkerMetadata struct {
 	Latency    map[string]any `json:"latency"`
 	Queue      map[string]any `json:"queue"`
 	SpotSignal *SpotSignal    `json:"spot_signal"`
+	// The gateway's in-memory transport key, fetched over pinned TLS + bearer.
+	TransportSchema int    `json:"transport_schema"`
+	TransportKey    string `json:"transport_key"`
+	TransportKeyID  string `json:"transport_key_id"`
 }
 type SpotSignal struct {
 	Type string    `json:"type"`
@@ -634,7 +649,7 @@ func (o *Controller) Candidates() []SpotWorker {
 	defer o.mu.RUnlock()
 	out := []SpotWorker{}
 	for _, w := range o.state.Workers {
-		if !o.meetingReservedLocked(w.InstanceID) && w.State == StateActive && w.Metadata.Ready && !w.Metadata.Draining && o.now().Sub(w.LastHealthy) < 30*time.Second && max(w.Metadata.Active, o.reservations[w.InstanceID]) < w.Metadata.Max {
+		if !o.meetingReservedLocked(w.InstanceID) && o.encryptionOK(w) && w.State == StateActive && w.Metadata.Ready && !w.Metadata.Draining && o.now().Sub(w.LastHealthy) < 30*time.Second && max(w.Metadata.Active, o.reservations[w.InstanceID]) < w.Metadata.Max {
 			out = append(out, w)
 		}
 	}
@@ -657,11 +672,16 @@ func (o *Controller) reserve(id string) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	w, ok := o.state.Workers[id]
-	if !ok || o.meetingReservedLocked(id) || w.State != StateActive || max(w.Metadata.Active, o.reservations[id]) >= w.Metadata.Max {
+	if !ok || o.meetingReservedLocked(id) || !o.encryptionOK(w) || w.State != StateActive || max(w.Metadata.Active, o.reservations[id]) >= w.Metadata.Max {
 		return false
 	}
 	o.reservations[id]++
 	return true
+}
+
+// encryptionOK reports whether audio may be sent to w under the configured policy.
+func (o *Controller) encryptionOK(w SpotWorker) bool {
+	return w.Metadata.TransportKey != "" || o.cfg.TranscriptionEncryption != "required"
 }
 func (o *Controller) release(id string) {
 	o.mu.Lock()

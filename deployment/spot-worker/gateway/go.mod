@@ -7,6 +7,11 @@ require (
 	github.com/pion/opus v0.1.0
 )
 
-require speektome/vocabulary v0.0.0
+require (
+	speektome/transport v0.0.0
+	speektome/vocabulary v0.0.0
+)
 
 replace speektome/vocabulary => ../../../shared/vocabulary
+
+replace speektome/transport => ../../../shared/transport

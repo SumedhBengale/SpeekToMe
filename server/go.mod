@@ -38,7 +38,10 @@ require (
 	github.com/minio/sio v0.5.1
 	github.com/redis/go-redis/v9 v9.22.0
 	golang.org/x/sys v0.49.0
+	speektome/transport v0.0.0
 	speektome/vocabulary v0.0.0
 )
 
 replace speektome/vocabulary => ../shared/vocabulary
+
+replace speektome/transport => ../shared/transport
