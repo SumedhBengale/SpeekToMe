@@ -616,7 +616,7 @@ func TestGrammarPromptCannotBeOverriddenByModelConfiguration(t *testing.T) {
 	cfg := orig
 	cfg.Models.EnhancementModels = []config.ModelSpec{{Provider: config.ProviderCerebras, Model: "gpt-oss-120b", Enabled: true, EndpointOverride: srv.URL, TimeoutMs: 2000, SystemPrompt: "Rewrite as marketing"}}
 	config.ConfigManager.Set(cfg, raw)
-	if _, e := NewGrammarEnhancementTransform("", " ").Transform(context.Background(), "We use STMLOCKtest0END today.", nil); e != nil {
+	if _, e := NewGrammarEnhancementTransform("", "", " ").Transform(context.Background(), "We use STMLOCKtest0END today.", nil); e != nil {
 		t.Fatal(e)
 	}
 }
@@ -649,5 +649,39 @@ func TestTaskPromptCannotBeOverriddenByModelConfiguration(t *testing.T) {
 	config.ConfigManager.Set(cfg, raw)
 	if _, e := RunTaskCompletion(context.Background(), nil, "Summarize this meeting.", "transcript", nil); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestGrammarEnhancementSendsCustomPrompt(t *testing.T) {
+	orig := config.ConfigManager.Get()
+	raw := config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(orig, raw)
+	key := config.CerebrasAPIKey
+	config.CerebrasAPIKey = "mock"
+	defer func() { config.CerebrasAPIKey = key }()
+	GlobalCircuitBreaker.Reset()
+	defer GlobalCircuitBreaker.Reset()
+	var system string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&p)
+		if len(p.Messages) > 0 {
+			system = p.Messages[0].Content
+		}
+		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "Hello there, team."}}}})
+	}))
+	defer srv.Close()
+	cfg := orig
+	cfg.Models.EnhancementModels = []config.ModelSpec{{Provider: config.ProviderCerebras, Model: "gpt-oss-120b", Enabled: true, EndpointOverride: srv.URL, TimeoutMs: 2000}}
+	config.ConfigManager.Set(cfg, raw)
+	if _, e := NewGrammarEnhancementTransform("Use British spelling.", "", " ").Transform(context.Background(), "hello there team", nil); e != nil {
+		t.Fatal(e)
+	}
+	if !strings.Contains(system, "Fix grammar") || !strings.Contains(system, "Additional User Instructions:\nUse British spelling.") {
+		t.Fatalf("Grammar prompt must carry the user's instructions: %q", system)
 	}
 }

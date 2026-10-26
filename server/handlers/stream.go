@@ -138,6 +138,12 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	startPayload.Prompt = strings.TrimSpace(startPayload.Prompt)
+	if len(startPayload.Prompt) > pipeline.MaxCustomPromptChars {
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: fmt.Sprintf("Custom prompt is too long (maximum %d characters)", pipeline.MaxCustomPromptChars)})
+		return
+	}
+
 	language, languageErr := utils.ResolveSpeakingLanguage(startPayload.Language, user.Languages)
 	if languageErr != nil {
 		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: languageErr.Error()})
@@ -329,7 +335,7 @@ func (a *App) handleRealStreamingSession(
 
 	if finalRawTranscript != "" {
 		tstart := time.Now()
-		enhancer := pipeline.NewGrammarEnhancementTransform(config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancer := pipeline.NewGrammarEnhancementTransform(startPayload.Prompt, config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
@@ -444,15 +450,8 @@ func (a *App) handlePseudoStreamingSession(
 				toTranscribe = data
 			}
 
+			// User prompts belong to the grammar LLM, never decoder bias.
 			promptCtx := utils.GetPromptContext(committedText, 150)
-			effectivePrompt := promptCtx
-			if customPrompt != "" {
-				if promptCtx != "" {
-					effectivePrompt = customPrompt + " " + promptCtx
-				} else {
-					effectivePrompt = customPrompt
-				}
-			}
 
 			audioDurationSec := utils.GetOggOpusDuration(toTranscribe)
 			if audioDurationSec <= 0 && (startPayload.Format == "pcm" || startPayload.Format == "") {
@@ -468,7 +467,7 @@ func (a *App) handlePseudoStreamingSession(
 				currentChunk, user.ID, len(data), audioDurationSec)
 
 			startASR := time.Now()
-			rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, effectivePrompt)
+			rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, promptCtx)
 			asrDuration := time.Since(startASR)
 
 			if err != nil {
@@ -546,7 +545,7 @@ func (a *App) handlePseudoStreamingSession(
 	if enhance && finalRawTranscript != "" {
 		tstart := time.Now()
 		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Protected Vocab: %d terms", user.ID, len(audit.Decisions))
-		enhancer := pipeline.NewGrammarEnhancementTransform(config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancer := pipeline.NewGrammarEnhancementTransform(customPrompt, config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {

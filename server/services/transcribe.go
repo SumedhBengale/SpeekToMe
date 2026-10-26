@@ -949,14 +949,8 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 		return "", nil, "", "", fmt.Errorf("no streaming transcription models configured")
 	}
 
-	if promptContext != "" {
-		trimmedContext := strings.TrimSpace(promptContext)
-		if promptStr != "" {
-			promptStr = promptStr + " " + trimmedContext
-		} else {
-			promptStr = trimmedContext
-		}
-	}
+	trimmedContext := strings.TrimSpace(promptContext)
+	promptStr = joinASRPrompt(promptStr, trimmedContext)
 
 	var lastErr error
 	for _, spec := range activeCandidates {
@@ -985,9 +979,11 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 			timeout = 4000 * time.Millisecond
 		}
 
+		// A configured prompt replaces the language prompt, never the rolling
+		// transcript context, which keeps chunks consistent with each other.
 		effectivePrompt := promptStr
 		if strings.TrimSpace(spec.InitialPrompt) != "" {
-			effectivePrompt = strings.TrimSpace(spec.InitialPrompt)
+			effectivePrompt = joinASRPrompt(strings.TrimSpace(spec.InitialPrompt), trimmedContext)
 		}
 
 		var text string
@@ -1055,6 +1051,18 @@ func RunStreamingTranscribeWithPrompt(ctx context.Context, audioBytes []byte, us
 		log.Printf("[STREAMING FALLBACK] Streaming providers unconfigured. Falling back to batch STT...")
 	}
 	return RunWhisperTranscribeWithModel(ctx, audioBytes, "whisper-large-v3-turbo", userLanguages)
+}
+
+// joinASRPrompt puts the transcript context last: Whisper-style models read the
+// prompt as the text spoken just before the audio, and keep its final tokens.
+func joinASRPrompt(instruction, context string) string {
+	if context == "" {
+		return instruction
+	}
+	if instruction == "" {
+		return context
+	}
+	return instruction + " " + context
 }
 
 func RunWhisperTranscribe(ctx context.Context, audioBytes []byte) (string, []WhisperSegment, error) {
