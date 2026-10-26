@@ -316,7 +316,7 @@ pub fn processing_pixel(
     y: f64,
     rect: Rect,
     radius: f64,
-    frame: u64,
+    turns: f64,
     background: (f64, f64, f64),
 ) -> u32 {
     let cx = rect.x + rect.width / 2.0;
@@ -327,7 +327,7 @@ pub fn processing_pixel(
     if distance > 3.5 {
         return 0;
     }
-    let phase = (y - cy).atan2(x - cx) / (std::f64::consts::PI * 2.0) + frame as f64 * 0.008;
+    let phase = (y - cy).atan2(x - cx) / (std::f64::consts::PI * 2.0) + turns;
     let color = processing_color(phase);
     let (color, alpha) = if distance > 0.0 {
         (color, (150.0 * (1.0 - distance / 3.5).powi(2)) as u32)
@@ -384,5 +384,236 @@ mod custom_anchor_tests {
             let card = preview_card_in_surface(p.pill_x, p.pill_y, 370.0, 800.0, h);
             assert!(card.y >= 4.0 && card.y + card.height <= h - 4.0);
         }
+    }
+}
+
+// AI "polish" from the website hero (`voice-text-glow`/`voice-text-settle`
+// and `vocabulary-polish`): a 100deg gradient through the processing palette,
+// 300% wide and clipped to the glyphs, slides left to right under a soft pink
+// drop-shadow; then the text settles from 55% opacity under a fading glow.
+pub const POLISH_GLOW: (f64, f64, f64) = (236.0 / 255.0, 72.0 / 255.0, 153.0 / 255.0);
+pub const POLISH_SECONDS: f64 = 0.75;
+pub const SETTLE_SECONDS: f64 = 0.65;
+// The site's pill ring (`voice-pill-glow`) turns once every 1.4 s.
+pub const PROCESSING_TURN_SECONDS: f64 = 1.4;
+
+/// CSS `ease-in-out`.
+fn ease_in_out(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// How a polishing word looks `t` seconds after it appeared, or `None` once
+/// it is plain text again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Polish {
+    /// CSS background-position x (1 → 0) of the 300%-wide gradient.
+    pub position: f64,
+    /// Opacity of the pink glow behind the glyphs.
+    pub glow: f64,
+    /// Glyph opacity.
+    pub opacity: f64,
+    /// How far the gradient has faded into the plain text colour.
+    pub plain: f64,
+}
+
+pub fn polish(t: f64) -> Option<Polish> {
+    if t < 0.0 || t >= POLISH_SECONDS + SETTLE_SECONDS {
+        return None;
+    }
+    if t < POLISH_SECONDS {
+        let e = ease_in_out(t / POLISH_SECONDS);
+        return Some(Polish {
+            position: 1.0 - e,
+            glow: 0.2,
+            opacity: 1.0,
+            plain: 0.0,
+        });
+    }
+    // Settle: background 35% → 0, drop-shadow 33% → none, opacity .55 → 1.
+    let e = ease_in_out((t - POLISH_SECONDS) / SETTLE_SECONDS);
+    Some(Polish {
+        position: 0.35 * (1.0 - e),
+        glow: 0.33 * (1.0 - e),
+        opacity: 0.55 + 0.45 * e,
+        plain: e,
+    })
+}
+
+/// Gradient colour at `x` (0–1 across the word) and the vertical offset `y`
+/// in word widths. `text` replaces the site's #29292f end stops so words
+/// settle into the preview's own text colour.
+pub fn polish_color(x: f64, y: f64, position: f64, text: (f64, f64, f64)) -> (f64, f64, f64) {
+    let rgb = |r: f64, g: f64, b: f64| (r / 255.0, g / 255.0, b / 255.0);
+    let stops = [
+        (0.15, text),
+        (0.32, rgb(155.0, 60.0, 245.0)),
+        (0.42, rgb(236.0, 72.0, 153.0)),
+        (0.49, rgb(245.0, 158.0, 11.0)),
+        (0.56, rgb(6.0, 182.0, 212.0)),
+        (0.74, text),
+    ];
+    // The visible box is one third of the gradient, offset by the position;
+    // 100deg tilts the bands by tan(10deg).
+    let g = (x + 0.176 * y + 2.0 * position) / 3.0;
+    if g <= stops[0].0 {
+        return text;
+    }
+    for pair in stops.windows(2) {
+        let ((a, ca), (b, cb)) = (pair[0], pair[1]);
+        if g <= b {
+            let k = (g - a) / (b - a);
+            return (
+                ca.0 + (cb.0 - ca.0) * k,
+                ca.1 + (cb.1 - ca.1) * k,
+                ca.2 + (cb.2 - ca.2) * k,
+            );
+        }
+    }
+    text
+}
+
+/// Words a live vocabulary decision put into the preview. Each one polishes
+/// when it first appears; later interims that still carry the same
+/// replacement keep its original timing.
+#[derive(Debug, Default)]
+pub struct TextGlow {
+    spans: Vec<(std::ops::Range<usize>, String, f64)>,
+}
+
+impl TextGlow {
+    /// `replacements` are the server's byte ranges of decided words in `text`.
+    /// Returns whether a new replacement started polishing.
+    pub fn update(
+        &mut self,
+        text: &str,
+        replacements: &[std::ops::Range<usize>],
+        seconds: f64,
+    ) -> bool {
+        let mut previous = std::mem::take(&mut self.spans);
+        for range in replacements {
+            if range.start >= range.end
+                || range.end > text.len()
+                || !text.is_char_boundary(range.start)
+                || !text.is_char_boundary(range.end)
+            {
+                continue;
+            }
+            let word = &text[range.clone()];
+            // Earlier interims list spans in text order, so the first unused
+            // match is the same replacement, possibly shifted by edits before it.
+            let started = previous
+                .iter()
+                .position(|(_, w, _)| w == word)
+                .map_or(seconds, |i| previous.remove(i).2);
+            self.spans.push((range.clone(), word.to_string(), started));
+        }
+        self.spans.iter().any(|(_, _, at)| *at == seconds)
+    }
+
+    pub fn reset(&mut self) {
+        self.spans.clear();
+    }
+
+    /// Each range still polishing, with its look.
+    pub fn sample(&self, seconds: f64) -> Vec<(std::ops::Range<usize>, Polish)> {
+        self.spans
+            .iter()
+            .filter_map(|(range, _, at)| Some((range.clone(), polish(seconds - at)?)))
+            .collect()
+    }
+}
+
+/// Approximate Gaussian blur of a coverage map (three box passes per axis).
+pub fn blur(values: &mut [f32], width: usize, height: usize, radius: usize) {
+    if radius == 0 || width == 0 || height == 0 {
+        return;
+    }
+    let mut line = vec![0f32; width.max(height)];
+    let scale = 1.0 / (radius * 2 + 1) as f32;
+    let mut pass =
+        |values: &mut [f32], len: usize, count: usize, at: &dyn Fn(usize, usize) -> usize| {
+            for n in 0..count {
+                for i in 0..len {
+                    line[i] = values[at(n, i)];
+                }
+                let mut sum: f32 = (0..=radius).map(|i| line[i.min(len - 1)]).sum::<f32>()
+                    + line[0] * radius as f32;
+                for i in 0..len {
+                    values[at(n, i)] = sum * scale;
+                    sum += line[(i + radius + 1).min(len - 1)] - line[i.saturating_sub(radius)];
+                }
+            }
+        };
+    for _ in 0..3 {
+        pass(values, width, height, &|row, i| row * width + i);
+        pass(values, height, width, &|column, i| i * width + column);
+    }
+}
+
+#[cfg(test)]
+mod polish_tests {
+    use super::*;
+
+    #[test]
+    fn polish_sweeps_the_palette_across_then_settles_into_text() {
+        let text = (0.1, 0.1, 0.1);
+        // Before and after the sweep the word shows its own colour.
+        assert_eq!(polish_color(0.5, 0.0, 1.0, text), text);
+        assert_eq!(polish_color(0.0, 0.0, 0.0, text), text);
+        // Mid-sweep the pink stop crosses the word.
+        let pink = polish_color(0.5, 0.0, 0.38, text);
+        assert!((pink.0 - 236.0 / 255.0).abs() < 0.05 && pink.2 > 0.5);
+
+        let start = polish(0.0).unwrap();
+        assert_eq!(
+            (start.position, start.opacity, start.plain),
+            (1.0, 1.0, 0.0)
+        );
+        let settling = polish(POLISH_SECONDS).unwrap();
+        assert!((settling.position - 0.35).abs() < 1e-9 && settling.opacity == 0.55);
+        assert!(settling.glow > start.glow);
+        assert!(polish(POLISH_SECONDS + SETTLE_SECONDS).is_none());
+    }
+
+    #[test]
+    fn replaced_words_polish_once() {
+        let mut glow = TextGlow::default();
+        glow.update("why don't you speak to me", &[], 0.0);
+        assert!(glow.sample(0.0).is_empty());
+
+        assert!(glow.update("why don't you SpeekToMe", &[14..23], 1.0));
+        assert!(!glow.update("why don't you SpeekToMe.", &[14..23], 1.5));
+        assert_eq!(glow.sample(1.0), vec![(14..23, polish(0.0).unwrap())]);
+
+        // Later interims shift it and keep its timing; a new decision starts fresh.
+        glow.update(
+            "so why don't you SpeekToMe about PostgreSQL",
+            &[17..26, 33..43],
+            2.0,
+        );
+        let spans = glow.sample(2.0);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(
+            (spans[0].0.clone(), spans[0].1),
+            (17..26, polish(1.0).unwrap())
+        );
+        assert_eq!(spans[1].0, 33..43);
+        assert_eq!(glow.sample(3.0).len(), 1);
+        assert!(glow.sample(4.0).is_empty());
+
+        // Out-of-range or split-character spans are ignored.
+        glow.update("नमस्ते", &[1..3, 0..40], 6.0);
+        assert!(glow.sample(6.0).is_empty());
+    }
+
+    #[test]
+    fn blur_spreads_coverage_without_losing_much() {
+        let (w, h) = (21, 21);
+        let mut values = vec![0f32; w * h];
+        values[10 * w + 10] = 1.0;
+        blur(&mut values, w, h, 2);
+        assert!(values[10 * w + 10] < 1.0 && values[10 * w + 13] > 0.0);
+        assert!((values.iter().sum::<f32>() - 1.0).abs() < 1e-3);
     }
 }

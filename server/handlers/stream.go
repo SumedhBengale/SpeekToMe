@@ -49,6 +49,8 @@ type StreamEventMessage struct {
 	Provider   string                    `json:"provider,omitempty"`
 	Error      string                    `json:"error,omitempty"`
 	Vocabulary *vocabularydecision.Audit `json:"vocabulary,omitempty"`
+	// Replacements locates live vocabulary decisions in an interim's Text.
+	Replacements []vocabularydecision.Span `json:"replacements,omitempty"`
 }
 
 func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
@@ -236,15 +238,16 @@ func (a *App) handleRealStreamingSession(
 	sendPreview := func() {
 		previewMutex.Lock()
 		defer previewMutex.Unlock()
-		preview := live.Display()
+		preview, replacements := live.Preview()
 		if preview == "" || preview == lastPreview {
 			return
 		}
 		lastPreview = preview
 		_ = writeStreamJSON(ctx, conn, StreamEventMessage{
-			Type:     "interim",
-			Text:     preview,
-			Provider: provider,
+			Type:         "interim",
+			Text:         preview,
+			Provider:     provider,
+			Replacements: replacements,
 		})
 	}
 	live = vocabularydecision.NewLive(vocabularydecision.Default(), sendPreview)

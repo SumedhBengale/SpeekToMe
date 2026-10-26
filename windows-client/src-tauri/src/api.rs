@@ -494,7 +494,10 @@ pub async fn stream_transcribe_audio(
                             ack_token: event.ack_token,
                         });
                     } else if event.event_type == "interim" && !event.text.is_empty() {
-                        crate::win32::set_preview_text(&event.text);
+                        crate::win32::set_preview_text_with_replacements(
+                            &event.text,
+                            &event.replacement_ranges(),
+                        );
                     } else if event.event_type == "error" {
                         return Err(event.error.unwrap_or_else(|| {
                             "Server streaming transcription error".to_string()

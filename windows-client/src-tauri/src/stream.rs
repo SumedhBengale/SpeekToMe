@@ -31,6 +31,24 @@ pub struct StreamEventResponse {
     pub provider: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// Where live vocabulary decisions sit in an interim's `text`.
+    #[serde(default)]
+    pub replacements: Vec<ReplacementSpan>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ReplacementSpan {
+    pub start_byte: usize,
+    pub end_byte: usize,
+}
+
+impl StreamEventResponse {
+    pub fn replacement_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        self.replacements
+            .iter()
+            .map(|span| span.start_byte..span.end_byte)
+            .collect()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -288,7 +306,10 @@ pub fn start_streaming_session(
                                         "[STREAM E2E LATENCY] Chunk #{} -> Interim Return: {} ms",
                                         current_chunk, rtt_ms
                                     );
-                                    crate::win32::set_preview_text(&event.text);
+                                    crate::win32::set_preview_text_with_replacements(
+                                        &event.text,
+                                        &event.replacement_ranges(),
+                                    );
                                     *interim_reader.lock().unwrap_or_else(|e| e.into_inner()) =
                                         event.text;
                                 }

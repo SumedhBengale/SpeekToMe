@@ -91,6 +91,9 @@ func TestLiveDecisionWaitsForContextThenUpdatesPreview(t *testing.T) {
 	if got := l.Display(); got != "We use PostgreSQL as our database. Why don't you speak" {
 		t.Fatalf("preview not updated: %q", got)
 	}
+	if got, spans := l.Preview(); len(spans) != 1 || got[spans[0].Start:spans[0].End] != "PostgreSQL" {
+		t.Fatalf("replacement span not reported: %+v in %q", spans, got)
+	}
 
 	text += " speak to me?"
 	l.Text(text)

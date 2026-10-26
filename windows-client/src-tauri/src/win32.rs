@@ -21,14 +21,14 @@ mod win32_impl {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, CallNextHookEx, CreateIconIndirect, CreateWindowExW, DefWindowProcW,
-        DestroyIcon, DispatchMessageW, GetMessageW, GetSystemMetrics, KillTimer, PostQuitMessage,
-        RegisterClassW, SendMessageW, SetTimer, SetWindowPos, SetWindowsHookExW, ShowWindow,
-        TranslateMessage, UnhookWindowsHookEx, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW,
-        HWND_TOPMOST, ICONINFO, KBDLLHOOKSTRUCT, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WH_KEYBOARD_LL, WINDOWPOS, WM_CREATE,
-        WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_PAINT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
-        WM_WINDOWPOSCHANGING, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+        DestroyIcon, DispatchMessageW, GetMessageW, GetSystemMetrics, IsWindowVisible, KillTimer,
+        PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetTimer, SetWindowPos,
+        SetWindowsHookExW, ShowWindow, TranslateMessage, UnhookWindowsHookEx, UpdateLayeredWindow,
+        CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, ICONINFO, KBDLLHOOKSTRUCT, MSG, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WH_KEYBOARD_LL,
+        WINDOWPOS, WM_APP, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_PAINT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        WM_TIMER, WM_WINDOWPOSCHANGING, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
     };
 
     const SM_CXSCREEN: i32 = 0;
@@ -118,6 +118,32 @@ mod win32_impl {
         std::sync::OnceLock::new();
     pub static PREVIEW_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     pub static TRAY_HWND: std::sync::OnceLock<SendHWND> = std::sync::OnceLock::new();
+    static TEXT_GLOW: std::sync::OnceLock<Mutex<crate::native_overlay::TextGlow>> =
+        std::sync::OnceLock::new();
+    static ANIMATION_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+    // Posted by show_* from any thread; timers belong to the window's own thread.
+    const WM_APP_ANIMATE: u32 = WM_APP + 1;
+
+    fn animation_seconds() -> f64 {
+        ANIMATION_START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_secs_f64()
+    }
+
+    fn text_glow() -> std::sync::MutexGuard<'static, crate::native_overlay::TextGlow> {
+        TEXT_GLOW
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn start_animation(hwnd: HWND) {
+        unsafe {
+            PostMessageW(hwnd, WM_APP_ANIMATE, 0, 0);
+        }
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NotificationLevel {
@@ -184,6 +210,12 @@ mod win32_impl {
     }
 
     pub fn set_preview_text(text: &str) {
+        set_preview_text_with_replacements(text, &[]);
+    }
+
+    /// `replacements` are byte ranges of words a vocabulary decision put in
+    /// `text`; they glow in instead of popping into place.
+    pub fn set_preview_text_with_replacements(text: &str, replacements: &[std::ops::Range<usize>]) {
         {
             let mut lock = PREVIEW_TEXT
                 .get_or_init(|| std::sync::Mutex::new(String::new()))
@@ -191,9 +223,15 @@ mod win32_impl {
                 .unwrap_or_else(|e| e.into_inner());
             *lock = text.to_string();
         }
+        let polishing = text_glow().update(text, replacements, animation_seconds());
         let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
         if state != PreviewState::Hidden {
             update_preview_position();
+            if polishing {
+                if let Some(send_hwnd) = PREVIEW_HWND.get() {
+                    start_animation(send_hwnd.0);
+                }
+            }
         }
     }
 
@@ -234,8 +272,10 @@ mod win32_impl {
         }
     }
 
-    // 4px outer margin on each side for the refined atmospheric outer halo
+    // 4px outer margin on each side for the processing glow ring around the
+    // preview card and the pill.
     pub const GLOW_MARGIN: i32 = 4;
+    pub const PILL_GLOW_MARGIN: i32 = 4;
 
     pub unsafe fn calculate_preview_bounds(text: &str) -> (i32, i32, i32, i32) {
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
@@ -317,12 +357,13 @@ mod win32_impl {
         let mut preview_x = pill_x + (62 - total_w) / 2;
         preview_x = preview_x.clamp(4, screen_width - total_w - 4);
 
+        // The card itself sits 8px from the pill; its halo may overlap the pill's.
         let preview_y = if pill_y < screen_height / 2 {
             // Below the pill
-            (pill_y + 24 + 4).min(screen_height - total_h - 4)
+            (pill_y + 24 + 8 - GLOW_MARGIN).min(screen_height - total_h - 4)
         } else {
             // Above the pill
-            (pill_y - total_h - 4).max(4)
+            (pill_y - 8 - total_h + GLOW_MARGIN).max(4)
         };
 
         (preview_x, preview_y, total_w, total_h)
@@ -347,16 +388,16 @@ mod win32_impl {
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    x - 4,
-                    y - 4,
-                    70,
-                    32,
+                    x - PILL_GLOW_MARGIN,
+                    y - PILL_GLOW_MARGIN,
+                    62 + PILL_GLOW_MARGIN * 2,
+                    24 + PILL_GLOW_MARGIN * 2,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
                 BringWindowToTop(hwnd);
                 update_layered_overlay(hwnd);
                 ShowWindow(hwnd, SW_SHOWNA);
-                SetTimer(hwnd, 1, 30, None);
+                start_animation(hwnd);
             }
         }
         if let Some(app) = crate::TAURI_APP.get() {
@@ -428,7 +469,7 @@ mod win32_impl {
                 BringWindowToTop(hwnd);
                 update_layered_overlay(hwnd);
                 ShowWindow(hwnd, SW_SHOWNA);
-                SetTimer(hwnd, 1, 30, None);
+                start_animation(hwnd);
             }
         }
         update_tray_tooltip("SpeekTo.Me - 🔴 Scribing Meeting...");
@@ -461,10 +502,10 @@ mod win32_impl {
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    def_x - 4,
-                    def_y - 4,
-                    70,
-                    32,
+                    def_x - PILL_GLOW_MARGIN,
+                    def_y - PILL_GLOW_MARGIN,
+                    62 + PILL_GLOW_MARGIN * 2,
+                    24 + PILL_GLOW_MARGIN * 2,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
                 ShowWindow(hwnd, SW_HIDE);
@@ -483,6 +524,7 @@ mod win32_impl {
             unsafe {
                 ShowWindow(send_hwnd.0, SW_SHOWNA);
             }
+            start_animation(send_hwnd.0);
         }
     }
 
@@ -496,6 +538,7 @@ mod win32_impl {
                 t.clear();
             }
         }
+        text_glow().reset();
         if let Some(send_hwnd) = PREVIEW_HWND.get() {
             unsafe {
                 ShowWindow(send_hwnd.0, SW_HIDE);
@@ -525,7 +568,11 @@ mod win32_impl {
                     .unwrap_or_else(|e| e.into_inner());
                 calculate_pill_position(&config, pill_width, 24)
             };
-            let margin = if state == PreviewState::Meeting { 0 } else { 4 };
+            let margin = if state == PreviewState::Meeting {
+                0
+            } else {
+                PILL_GLOW_MARGIN
+            };
             unsafe {
                 SetWindowPos(
                     hwnd,
@@ -577,7 +624,7 @@ mod win32_impl {
         lparam: LPARAM,
     ) -> LRESULT {
         match msg {
-            WM_CREATE => {
+            WM_APP_ANIMATE => {
                 SetTimer(hwnd, 1, 30, None);
                 0
             }
@@ -590,6 +637,10 @@ mod win32_impl {
                 0
             }
             WM_TIMER => {
+                if IsWindowVisible(hwnd) == 0 {
+                    KillTimer(hwnd, 1);
+                    return 0;
+                }
                 let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
                 if state != PreviewState::Hidden {
                     static TOPMOST_COUNTER: std::sync::atomic::AtomicU32 =
@@ -737,14 +788,23 @@ mod win32_impl {
         lparam: LPARAM,
     ) -> LRESULT {
         match msg {
-            WM_CREATE => {
+            WM_APP_ANIMATE => {
                 SetTimer(hwnd, 1, 30, None);
                 0
             }
             WM_TIMER => {
                 let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
-                if state == PreviewState::Processing {
-                    update_layered_preview(hwnd);
+                if state == PreviewState::Hidden || IsWindowVisible(hwnd) == 0 {
+                    KillTimer(hwnd, 1);
+                    return 0;
+                }
+                update_layered_preview(hwnd);
+                // A listening preview only changes when new text arrives, so
+                // stop once no word is polishing; a new replacement restarts it.
+                if state == PreviewState::Listening
+                    && text_glow().sample(animation_seconds()).is_empty()
+                {
+                    KillTimer(hwnd, 1);
                 }
                 0
             }
@@ -800,7 +860,7 @@ mod win32_impl {
             let margin = if state == PreviewState::Meeting {
                 0.0
             } else {
-                4.0
+                PILL_GLOW_MARGIN as f32
             };
             let r = (height as f32 - margin * 2.0) / 2.0;
             let c1_x = margin + r;
@@ -862,13 +922,15 @@ mod win32_impl {
             let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
 
             if state == PreviewState::Processing {
+                let m = PILL_GLOW_MARGIN as f64;
                 let bounds = crate::native_overlay::Rect {
-                    x: 4.0,
-                    y: 4.0,
-                    width: (width - 8) as f64,
-                    height: (height - 8) as f64,
+                    x: m,
+                    y: m,
+                    width: width as f64 - m * 2.0,
+                    height: height as f64 - m * 2.0,
                 };
                 let background = crate::native_overlay::color(bg_color);
+                let turns = animation_seconds() / crate::native_overlay::PROCESSING_TURN_SECONDS;
                 for y in 0..height {
                     for x in 0..width {
                         pixel_slice[(y * width + x) as usize] =
@@ -877,7 +939,7 @@ mod win32_impl {
                                 y as f64 + 0.5,
                                 bounds,
                                 12.0,
-                                frame as u64,
+                                turns,
                                 background,
                             );
                     }
@@ -1155,18 +1217,10 @@ mod win32_impl {
             let wave_b = ((wave_color >> 16) & 0xFF) as f32;
 
             // Determine contrasting text color based on background luminance
-            let luminance = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b;
-            let (text_r, text_g, text_b) = if luminance > 128.0 {
-                // Light background: Dark slate text
-                (24u32, 16u32, 34u32)
-            } else {
-                // Dark background: Crisp pale text
-                (245u32, 245u32, 250u32)
-            };
-
-            static PREVIEW_FRAME_COUNT: std::sync::atomic::AtomicU32 =
-                std::sync::atomic::AtomicU32::new(0);
-            let frame = PREVIEW_FRAME_COUNT.fetch_add(1, Ordering::Relaxed) as f32;
+            let text_color =
+                crate::native_overlay::text_color(crate::native_overlay::color(bg_color));
+            let seconds = animation_seconds();
+            let turns = (seconds / crate::native_overlay::PROCESSING_TURN_SECONDS) as f32;
 
             let w_f = width as f32;
             let h_f = height as f32;
@@ -1200,8 +1254,8 @@ mod win32_impl {
                     if is_processing {
                         // Angle around center + rotational flow
                         let angle = (y_f - cy).atan2(x_f - cx); // -PI to PI
-                        let u = (angle / (2.0 * std::f32::consts::PI) + 1.0 + frame * 0.008)
-                            .rem_euclid(1.0);
+                        let u =
+                            (angle / (2.0 * std::f32::consts::PI) + 1.0 + turns).rem_euclid(1.0);
                         let (chroma_r, chroma_g, chroma_b) = get_apple_intelligence_color(u);
 
                         if dist > 3.5 {
@@ -1272,119 +1326,190 @@ mod win32_impl {
                 }
             }
 
-            // Draw text onto a mask DC and composite
-            let hdc_mask = CreateCompatibleDC(hdc_screen);
-            let mut mask_bits: *mut std::ffi::c_void = ptr::null_mut();
-            let mask_dib = CreateDIBSection(
-                hdc_mask,
-                &bmi as *const _,
-                0,
-                &mut mask_bits,
-                ptr::null_mut(),
-                0,
-            );
-
-            if !mask_dib.is_null() && !mask_bits.is_null() {
-                let old_mask_bitmap = SelectObject(hdc_mask, mask_dib);
-                let mask_slice = std::slice::from_raw_parts_mut(mask_bits as *mut u32, pixel_count);
-                for p in mask_slice.iter_mut() {
-                    *p = 0;
-                }
-
-                let font_name = encode_wide("Segoe UI");
-                let hfont = CreateFontW(
-                    -13,
-                    0,
-                    0,
-                    0,
-                    FW_NORMAL,
-                    0,
-                    0,
-                    0,
-                    DEFAULT_CHARSET,
-                    OUT_DEFAULT_PRECIS,
-                    CLIP_DEFAULT_PRECIS,
-                    CLEARTYPE_QUALITY,
-                    DEFAULT_PITCH | FF_DONTCARE,
-                    font_name.as_ptr(),
-                );
-
-                let old_font = SelectObject(hdc_mask, hfont);
-                SetBkMode(hdc_mask, TRANSPARENT as i32);
-                SetTextColor(hdc_mask, 0x00FFFFFF);
-
-                let display_text = if raw_text.trim().is_empty() {
-                    if is_processing {
-                        "Polishing..."
-                    } else {
-                        "Listening..."
-                    }
+            // Draw text onto mask DCs and composite.
+            let display_text = if raw_text.trim().is_empty() {
+                if is_processing {
+                    "Polishing..."
                 } else {
-                    &raw_text
-                };
+                    "Listening..."
+                }
+            } else {
+                raw_text.as_str()
+            };
+            let glows = if !raw_text.trim().is_empty() {
+                text_glow().sample(seconds)
+            } else {
+                Vec::new()
+            };
 
-                let wide_display = encode_wide(display_text);
-                let pad_x = 12;
-                let pad_y = 6;
-                let mut text_rect = RECT {
-                    left: GLOW_MARGIN + pad_x,
-                    top: GLOW_MARGIN + pad_y,
-                    right: width - (GLOW_MARGIN + pad_x),
-                    bottom: height - (GLOW_MARGIN + pad_y),
-                };
+            let font_name = encode_wide("Segoe UI");
+            let hfont = CreateFontW(
+                -13,
+                0,
+                0,
+                0,
+                FW_NORMAL,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                DEFAULT_PITCH | FF_DONTCARE,
+                font_name.as_ptr(),
+            );
+            let pad_x = 12;
+            let pad_y = 6;
+            let text_left = GLOW_MARGIN + pad_x;
+            let text_right = width - (GLOW_MARGIN + pad_x);
+            let render_mask = |text: &str| -> Vec<f32> {
+                let mut coverage = vec![0f32; pixel_count];
+                let hdc_mask = CreateCompatibleDC(hdc_screen);
+                let mut mask_bits: *mut std::ffi::c_void = ptr::null_mut();
+                let mask_dib = CreateDIBSection(
+                    hdc_mask,
+                    &bmi as *const _,
+                    0,
+                    &mut mask_bits,
+                    ptr::null_mut(),
+                    0,
+                );
+                if !mask_dib.is_null() && !mask_bits.is_null() {
+                    let old_mask_bitmap = SelectObject(hdc_mask, mask_dib);
+                    let mask_slice =
+                        std::slice::from_raw_parts_mut(mask_bits as *mut u32, pixel_count);
+                    mask_slice.fill(0);
+                    let old_font = SelectObject(hdc_mask, hfont);
+                    SetBkMode(hdc_mask, TRANSPARENT as i32);
+                    SetTextColor(hdc_mask, 0x00FFFFFF);
+                    let wide = encode_wide(text);
+                    let mut text_rect = RECT {
+                        left: text_left,
+                        top: GLOW_MARGIN + pad_y,
+                        right: text_right,
+                        bottom: height - (GLOW_MARGIN + pad_y),
+                    };
+                    if wide.len() > 1 {
+                        DrawTextW(
+                            hdc_mask,
+                            wide.as_ptr(),
+                            (wide.len() - 1) as i32,
+                            &mut text_rect,
+                            DT_WORDBREAK | DT_LEFT | DT_NOPREFIX,
+                        );
+                    }
+                    for (value, mask) in coverage.iter_mut().zip(mask_slice.iter()) {
+                        *value = (mask & 0xFF) as f32 / 255.0;
+                    }
+                    SelectObject(hdc_mask, old_font);
+                    SelectObject(hdc_mask, old_mask_bitmap);
+                    DeleteObject(mask_dib);
+                }
+                DeleteDC(hdc_mask);
+                coverage
+            };
 
-                if wide_display.len() > 1 {
-                    DrawTextW(
-                        hdc_mask,
-                        wide_display.as_ptr(),
-                        (wide_display.len() - 1) as i32,
-                        &mut text_rect,
-                        DT_WORDBREAK | DT_LEFT | DT_NOPREFIX,
+            let glyphs = render_mask(display_text);
+            // A replaced word's pixels are what text[..end] adds over
+            // text[..start]; greedy word wrap lays both prefixes out exactly as
+            // the full text. Those pixels take the site's polish gradient and
+            // opacity, and feed a pink drop-shadow.
+            let mut polished: Vec<Option<((f64, f64, f64), f32)>> = Vec::new();
+            let mut halo: Vec<f32> = Vec::new();
+            if !glows.is_empty() {
+                polished = vec![None; pixel_count];
+                halo = vec![0f32; pixel_count];
+            }
+            for (range, look) in &glows {
+                if range.end > display_text.len()
+                    || !display_text.is_char_boundary(range.start)
+                    || !display_text.is_char_boundary(range.end)
+                {
+                    continue;
+                }
+                let before = render_mask(&display_text[..range.start]);
+                let word: Vec<f32> = render_mask(&display_text[..range.end])
+                    .iter()
+                    .zip(before)
+                    .map(|(after, before)| (after - before).max(0.0))
+                    .collect();
+                let inked = word
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, w)| **w > 0.05)
+                    .map(|(idx, _)| (idx % width as usize, idx / width as usize));
+                let (Some(left), Some(right), Some(top)) = (
+                    inked.clone().map(|(x, _)| x).min(),
+                    inked.clone().map(|(x, _)| x).max(),
+                    inked.map(|(_, y)| y).min(),
+                ) else {
+                    continue;
+                };
+                let span = (right - left + 1) as f64;
+                for (idx, w) in word.iter().enumerate() {
+                    if *w <= 0.0 {
+                        continue;
+                    }
+                    let x = (idx % width as usize) as f64 - left as f64;
+                    let y = (idx / width as usize) as f64 - top as f64;
+                    let swept = crate::native_overlay::polish_color(
+                        x / span,
+                        y / span,
+                        look.position,
+                        text_color,
+                    );
+                    let color = (
+                        swept.0 + (text_color.0 - swept.0) * look.plain,
+                        swept.1 + (text_color.1 - swept.1) * look.plain,
+                        swept.2 + (text_color.2 - swept.2) * look.plain,
+                    );
+                    polished[idx] = Some((color, look.opacity as f32));
+                    halo[idx] += w * look.glow as f32;
+                }
+            }
+            DeleteObject(hfont);
+            if !halo.is_empty() {
+                // ~7px CSS drop-shadow blur.
+                crate::native_overlay::blur(&mut halo, width as usize, height as usize, 3);
+            }
+
+            let over = |dst: u32, color: (f64, f64, f64), alpha: f32| -> u32 {
+                let a = alpha.clamp(0.0, 1.0);
+                let keep = 1.0 - a;
+                let channel = |shift: u32, c: f64| {
+                    (((dst >> shift) & 0xFF) as f32 * keep + c as f32 * 255.0 * a).min(255.0) as u32
+                };
+                let out_a = ((dst >> 24) as f32 * keep + 255.0 * a).min(255.0) as u32;
+                (out_a << 24)
+                    | (channel(16, color.0) << 16)
+                    | (channel(8, color.1) << 8)
+                    | channel(0, color.2)
+            };
+            for idx in 0..pixel_count {
+                // Only draw over the solid card interior, never the outer halo.
+                if pixel_slice[idx] >> 24 < 180 {
+                    continue;
+                }
+                let halo_alpha = halo.get(idx).map_or(0.0, |h| (h * 2.5).min(1.0));
+                if halo_alpha > 0.004 {
+                    pixel_slice[idx] = over(
+                        pixel_slice[idx],
+                        crate::native_overlay::POLISH_GLOW,
+                        halo_alpha,
                     );
                 }
-
-                // Composite antialiased text onto pixel_slice (only inside the card)
-                for idx in 0..pixel_count {
-                    let mask_val = mask_slice[idx];
-                    let glyph_alpha = (mask_val & 0xFF) as u32;
-                    if glyph_alpha > 0 {
-                        let dst = pixel_slice[idx];
-                        let dst_a = dst >> 24;
-                        // Only draw text if interior card opacity is solid
-                        if dst_a >= 180 {
-                            let dst_r = ((dst >> 16 & 0xFF) * 255) / dst_a;
-                            let dst_g = ((dst >> 8 & 0xFF) * 255) / dst_a;
-                            let dst_b = (dst & 0xFF) * 255 / dst_a;
-
-                            let src_a = (glyph_alpha * 245) / 255;
-                            let out_a = src_a + (dst_a * (255 - src_a)) / 255;
-                            if out_a > 0 {
-                                let out_r = ((text_r * src_a)
-                                    + (dst_r * dst_a * (255 - src_a) / 255))
-                                    / out_a;
-                                let out_g = ((text_g * src_a)
-                                    + (dst_g * dst_a * (255 - src_a) / 255))
-                                    / out_a;
-                                let out_b = ((text_b * src_a)
-                                    + (dst_b * dst_a * (255 - src_a) / 255))
-                                    / out_a;
-
-                                let pr = ((out_r.min(255) * out_a) / 255).min(255);
-                                let pg = ((out_g.min(255) * out_a) / 255).min(255);
-                                let pb = ((out_b.min(255) * out_a) / 255).min(255);
-
-                                pixel_slice[idx] = (out_a << 24) | (pr << 16) | (pg << 8) | pb;
-                            }
-                        }
-                    }
+                let glyph = glyphs[idx];
+                if glyph > 0.0 {
+                    let (color, opacity) = polished
+                        .get(idx)
+                        .copied()
+                        .flatten()
+                        .unwrap_or((text_color, 1.0));
+                    pixel_slice[idx] =
+                        over(pixel_slice[idx], color, glyph * opacity * 245.0 / 255.0);
                 }
-
-                SelectObject(hdc_mask, old_font);
-                DeleteObject(hfont);
-                SelectObject(hdc_mask, old_mask_bitmap);
-                DeleteObject(mask_dib);
             }
-            DeleteDC(hdc_mask);
 
             let psize = windows_sys::Win32::Foundation::SIZE {
                 cx: width,
@@ -1864,8 +1989,8 @@ mod win32_impl {
             WS_POPUP,
             0,
             0,
-            70,
-            32,
+            62 + PILL_GLOW_MARGIN * 2,
+            24 + PILL_GLOW_MARGIN * 2,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
@@ -2009,10 +2134,11 @@ mod win32_impl {
 pub use win32_impl::{
     calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
     hide_overlay, hide_preview, play_chime, run_win32_hook_and_tray_thread, set_preview_state,
-    set_preview_text, set_window_icon_for_theme, show_meeting_overlay, show_overlay, show_preview,
-    show_tray_notification, update_overlay_position, update_preview_position,
-    update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
-    PREVIEW_HWND, PREVIEW_STATE, PREVIEW_TEXT, TRAY_HWND,
+    set_preview_text, set_preview_text_with_replacements, set_window_icon_for_theme,
+    show_meeting_overlay, show_overlay, show_preview, show_tray_notification,
+    update_overlay_position, update_preview_position, update_tray_icon_for_theme,
+    update_tray_tooltip, NotificationLevel, PreviewState, SendHWND, PREVIEW_HWND, PREVIEW_STATE,
+    PREVIEW_TEXT, TRAY_HWND,
 };
 
 // ==========================================
@@ -2115,6 +2241,13 @@ mod win32_stub {
         hide_overlay();
     }
 
+    pub fn set_preview_text_with_replacements(
+        text: &str,
+        _replacements: &[std::ops::Range<usize>],
+    ) {
+        set_preview_text(text);
+    }
+
     pub fn set_preview_text(text: &str) {
         *PREVIEW_TEXT
             .get_or_init(|| std::sync::Mutex::new(String::new()))
@@ -2173,7 +2306,8 @@ mod win32_stub {
 pub use win32_stub::{
     calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
     hide_overlay, hide_preview, play_chime, run_win32_hook_and_tray_thread, set_preview_state,
-    set_preview_text, set_window_icon_for_theme, show_meeting_overlay, show_overlay, show_preview,
-    show_tray_notification, update_overlay_position, update_preview_position,
-    update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
+    set_preview_text, set_preview_text_with_replacements, set_window_icon_for_theme,
+    show_meeting_overlay, show_overlay, show_preview, show_tray_notification,
+    update_overlay_position, update_preview_position, update_tray_icon_for_theme,
+    update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
 };

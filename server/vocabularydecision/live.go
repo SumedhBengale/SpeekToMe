@@ -91,9 +91,22 @@ func (l *Live) Text(text string) {
 	l.schedule()
 }
 
+// Span is a UTF-8 byte range in preview text.
+type Span struct {
+	Start int `json:"start_byte"`
+	End   int `json:"end_byte"`
+}
+
 // Display returns the latest preview with every decided replacement applied.
 // Undecided proposals keep the words the speaker's ASR produced.
 func (l *Live) Display() string {
+	text, _ := l.Preview()
+	return text
+}
+
+// Preview is Display plus where each applied replacement sits in the text,
+// so clients can mark the words a decision changed.
+func (l *Live) Preview() (string, []Span) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var use []vocabulary.Choice
@@ -103,10 +116,18 @@ func (l *Live) Display() string {
 		}
 	}
 	sortWithIDs(use)
-	if text, e := vocabulary.Apply(l.text, use, nil); e == nil {
-		return text
+	text, e := vocabulary.Apply(l.text, use, nil)
+	if e != nil {
+		return l.text, nil
 	}
-	return l.text
+	var spans []Span
+	shift := 0
+	for _, c := range use {
+		start := c.StartByte + shift
+		spans = append(spans, Span{start, start + len(c.Replacement)})
+		shift += len(c.Replacement) - len(c.Original)
+	}
+	return text, spans
 }
 
 // Close stops starting Jev calls, for a stream that ends without Finish.
