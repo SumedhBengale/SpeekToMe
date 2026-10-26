@@ -293,9 +293,35 @@ fn draw_overlay(cr: &gtk::cairo::Context) {
             );
             cr.clip();
             let text = crate::native_overlay::text_color(background);
+            let origin = (card.x + 12.0, card.y + 8.0);
+            let glows = valid_glows(&overlay.layout, crate::win32::preview_glow());
+            // Changing words are drawn on their own, so the plain pass skips them.
+            let hidden = gtk::pango::AttrList::new();
+            for (range, _) in &glows {
+                let mut attr = gtk::pango::AttrInt::new_foreground_alpha(1);
+                attr.set_start_index(range.start as u32);
+                attr.set_end_index(range.end as u32);
+                hidden.insert(attr);
+            }
+            overlay
+                .layout
+                .set_attributes((!glows.is_empty()).then_some(&hidden));
+            let words: Vec<_> = glows
+                .iter()
+                .filter_map(|(range, look)| {
+                    Some((Word::new(&overlay.layout, origin, range.clone())?, *look))
+                })
+                .collect();
+            // Glows go under all text, as the site's drop-shadow does.
+            for (word, look) in &words {
+                word.draw_glow(cr, &overlay.layout, look.glow);
+            }
             cr.set_source_rgb(text.0, text.1, text.2);
-            cr.move_to(card.x + 12.0, card.y + 8.0);
+            cr.move_to(origin.0, origin.1);
             pangocairo::functions::show_layout(cr, &overlay.layout);
+            for (word, look) in &words {
+                word.draw_polish(cr, &overlay.layout, *look, text);
+            }
             let _ = cr.restore();
         }
         overlay.frame += 1;
@@ -569,5 +595,158 @@ fn processing_border(
         let _ = cr.set_source(&gradient);
         cr.set_line_width(width);
         let _ = cr.stroke();
+    }
+}
+
+/// The glows whose ranges are whole characters of the layout's text.
+fn valid_glows(
+    layout: &gtk::pango::Layout,
+    glows: Vec<(std::ops::Range<usize>, crate::native_overlay::Polish)>,
+) -> Vec<(std::ops::Range<usize>, crate::native_overlay::Polish)> {
+    let text = layout.text();
+    glows
+        .into_iter()
+        .filter(|(range, _)| {
+            range.start < range.end
+                && range.end <= text.len()
+                && text.is_char_boundary(range.start)
+                && text.is_char_boundary(range.end)
+        })
+        .collect()
+}
+
+/// A changing word's character boxes in surface pixels and their bounds.
+struct Word {
+    origin: (f64, f64),
+    boxes: Vec<[f64; 4]>,
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+}
+
+impl Word {
+    fn new(
+        layout: &gtk::pango::Layout,
+        origin: (f64, f64),
+        range: std::ops::Range<usize>,
+    ) -> Option<Self> {
+        let text = layout.text();
+        let scale = gtk::pango::SCALE as f64;
+        let boxes: Vec<[f64; 4]> = text[range.clone()]
+            .char_indices()
+            .map(|(offset, _)| {
+                let r = layout.index_to_pos((range.start + offset) as i32);
+                // Right-to-left characters report a negative width.
+                let (x, width) = if r.width() < 0 {
+                    (r.x() + r.width(), -r.width())
+                } else {
+                    (r.x(), r.width())
+                };
+                [
+                    origin.0 + x as f64 / scale,
+                    origin.1 + r.y() as f64 / scale,
+                    width as f64 / scale,
+                    r.height() as f64 / scale,
+                ]
+            })
+            .collect();
+        let left = boxes.iter().map(|b| b[0]).fold(f64::INFINITY, f64::min);
+        let right = boxes
+            .iter()
+            .map(|b| b[0] + b[2])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let top = boxes.iter().map(|b| b[1]).fold(f64::INFINITY, f64::min);
+        let bottom = boxes
+            .iter()
+            .map(|b| b[1] + b[3])
+            .fold(f64::NEG_INFINITY, f64::max);
+        (right > left && bottom > top).then_some(Self {
+            origin,
+            boxes,
+            left,
+            top,
+            right,
+            bottom,
+        })
+    }
+
+    /// Sets the path to the word's glyphs.
+    fn glyphs(&self, cr: &gtk::cairo::Context, layout: &gtk::pango::Layout) {
+        for b in &self.boxes {
+            cr.rectangle(b[0], b[1], b[2], b[3]);
+        }
+        cr.clip();
+        cr.move_to(self.origin.0, self.origin.1);
+        pangocairo::functions::layout_path(cr, layout);
+    }
+
+    /// The website's polish gradient clipped to the glyphs, like the
+    /// Windows preview.
+    fn draw_polish(
+        &self,
+        cr: &gtk::cairo::Context,
+        layout: &gtk::pango::Layout,
+        look: crate::native_overlay::Polish,
+        text: (f64, f64, f64),
+    ) {
+        // polish_offset is linear in pixels, so a cairo linear gradient whose
+        // parameter equals it reproduces the Windows colours exactly.
+        let span = self.right - self.left;
+        let (ax, ay) = (1.0 / (3.0 * span), 0.176 / (3.0 * span));
+        let norm = ax * ax + ay * ay;
+        let c = crate::native_overlay::polish_offset(0.0, 0.0, look.position);
+        let (x0, y0) = (self.left - c * ax / norm, self.top - c * ay / norm);
+        let gradient = gtk::cairo::LinearGradient::new(x0, y0, x0 + ax / norm, y0 + ay / norm);
+        for (offset, color) in crate::native_overlay::polish_stops(text) {
+            let mix = |swept: f64, plain: f64| swept + (plain - swept) * look.plain;
+            gradient.add_color_stop_rgba(
+                offset,
+                mix(color.0, text.0),
+                mix(color.1, text.1),
+                mix(color.2, text.2),
+                look.opacity,
+            );
+        }
+        let _ = cr.save();
+        self.glyphs(cr, layout);
+        let _ = cr.set_source(&gradient);
+        let _ = cr.fill();
+        let _ = cr.restore();
+    }
+
+    /// A ~7px pink drop-shadow: the glyphs, box-blurred.
+    fn draw_glow(&self, cr: &gtk::cairo::Context, layout: &gtk::pango::Layout, glow: f64) {
+        const PAD: f64 = 10.0;
+        if glow <= 0.0 {
+            return;
+        }
+        let (x, y) = ((self.left - PAD).floor(), (self.top - PAD).floor());
+        let width = (self.right - self.left + 2.0 * PAD).ceil() as usize + 1;
+        let height = (self.bottom - self.top + 2.0 * PAD).ceil() as usize + 1;
+        let Ok(mut mask) =
+            gtk::cairo::ImageSurface::create(gtk::cairo::Format::A8, width as i32, height as i32)
+        else {
+            return;
+        };
+        if let Ok(paint) = gtk::cairo::Context::new(&mask) {
+            paint.translate(-x, -y);
+            self.glyphs(&paint, layout);
+            paint.set_source_rgba(0.0, 0.0, 0.0, glow);
+            let _ = paint.fill();
+        }
+        let stride = mask.stride() as usize;
+        if let Ok(mut data) = mask.data() {
+            let mut coverage: Vec<f32> = (0..width * height)
+                .map(|i| data[(i / width) * stride + i % width] as f32 / 255.0)
+                .collect();
+            crate::native_overlay::blur(&mut coverage, width, height, 3);
+            for (i, value) in coverage.iter().enumerate() {
+                data[(i / width) * stride + i % width] = ((value * 2.5).min(1.0) * 255.0) as u8;
+            }
+        }
+        let pink = crate::native_overlay::POLISH_GLOW;
+        cr.set_source_rgb(pink.0, pink.1, pink.2);
+        let _ = cr.mask_surface(&mask, x, y);
     }
 }

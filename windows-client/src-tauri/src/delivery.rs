@@ -20,8 +20,10 @@ fn emit(event: &str, text: String) {
 }
 
 pub fn hide_overlay() {
-    win32::hide_overlay();
+    // On Linux and macOS the pill and preview share one surface, which the
+    // polish hold keeps up, so start the hold first.
     win32::hide_preview_after_polish();
+    win32::hide_overlay();
 }
 
 /// Inserts dictated text by typing or pasting, per the user's setting.

@@ -2192,7 +2192,33 @@ pub use win32_impl::{
 // ==========================================
 #[cfg(not(target_os = "windows"))]
 mod win32_stub {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     static PREVIEW_TEXT: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+    static TEXT_GLOW: std::sync::OnceLock<std::sync::Mutex<crate::native_overlay::TextGlow>> =
+        std::sync::OnceLock::new();
+    static ANIMATION_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    // Set while a finished dictation's preview stays up for its polish.
+    static PREVIEW_HOLD: AtomicBool = AtomicBool::new(false);
+
+    fn text_glow() -> std::sync::MutexGuard<'static, crate::native_overlay::TextGlow> {
+        TEXT_GLOW
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn animation_seconds() -> f64 {
+        ANIMATION_START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_secs_f64()
+    }
+
+    /// The preview's changing words and how each looks right now.
+    pub fn preview_glow() -> Vec<(std::ops::Range<usize>, crate::native_overlay::Polish)> {
+        text_glow().sample(animation_seconds())
+    }
     pub struct SendHWND(pub *mut std::ffi::c_void);
     unsafe impl Send for SendHWND {}
     unsafe impl Sync for SendHWND {}
@@ -2242,6 +2268,11 @@ mod win32_stub {
     }
 
     pub fn hide_overlay() {
+        // The hold hides the whole surface once the polish has played.
+        if PREVIEW_HOLD.load(Ordering::SeqCst) {
+            return;
+        }
+        text_glow().reset();
         #[cfg(target_os = "macos")]
         {
             *PREVIEW_TEXT
@@ -2287,23 +2318,50 @@ mod win32_stub {
         hide_overlay();
     }
 
+    /// `replacements` are byte ranges of words a vocabulary decision put in
+    /// `text`, and `deciding` those it is still deciding; both glow instead of
+    /// popping into place.
     pub fn set_preview_text_with_replacements(
         text: &str,
-        _replacements: &[std::ops::Range<usize>],
-        _deciding: &[std::ops::Range<usize>],
+        replacements: &[std::ops::Range<usize>],
+        deciding: &[std::ops::Range<usize>],
     ) {
-        set_preview_text(text);
+        text_glow().update(text, replacements, deciding, animation_seconds());
+        show_text(text);
     }
 
+    /// Shows a dictation's final text; words it changed from the live
+    /// preview polish in.
     pub fn set_preview_final_text(text: &str) {
-        set_preview_text(text);
+        text_glow().finish(text, animation_seconds());
+        show_text(text);
     }
 
+    /// Hides the overlay once the final text's polish has played, so the
+    /// changed words are seen after the text is inserted.
     pub fn hide_preview_after_polish() {
-        hide_preview();
+        let wait = text_glow().remaining(animation_seconds());
+        if wait <= 0.0 {
+            hide_preview();
+            return;
+        }
+        PREVIEW_HOLD.store(true, Ordering::SeqCst);
+        // The work is done: stop the processing ring while the words settle.
+        #[cfg(target_os = "linux")]
+        crate::linux_desktop::set_preview_state(PreviewState::Listening as u8);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs_f64(wait));
+            if PREVIEW_HOLD.swap(false, Ordering::SeqCst) {
+                hide_preview();
+            }
+        });
     }
 
     pub fn set_preview_text(text: &str) {
+        set_preview_text_with_replacements(text, &[], &[]);
+    }
+
+    fn show_text(text: &str) {
         *PREVIEW_TEXT
             .get_or_init(|| std::sync::Mutex::new(String::new()))
             .lock()
@@ -2323,6 +2381,10 @@ mod win32_stub {
     }
 
     pub fn set_preview_state(state: PreviewState) {
+        // A new dictation replaces a finished one still on screen.
+        if PREVIEW_HOLD.swap(false, Ordering::SeqCst) {
+            set_preview_text("");
+        }
         #[cfg(target_os = "macos")]
         crate::macos_desktop::set_state(state as u8);
         #[cfg(target_os = "linux")]
@@ -2360,7 +2422,7 @@ mod win32_stub {
 #[cfg(not(target_os = "windows"))]
 pub use win32_stub::{
     calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
-    hide_overlay, hide_preview, hide_preview_after_polish, play_chime,
+    hide_overlay, hide_preview, hide_preview_after_polish, play_chime, preview_glow,
     run_win32_hook_and_tray_thread, set_preview_final_text, set_preview_state, set_preview_text,
     set_preview_text_with_replacements, set_window_icon_for_theme, show_meeting_overlay,
     show_overlay, show_preview, show_tray_notification, update_overlay_position,

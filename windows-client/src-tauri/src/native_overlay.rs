@@ -442,22 +442,32 @@ pub fn polish(t: f64) -> Option<Polish> {
     })
 }
 
-/// Gradient colour at `x` (0–1 across the word) and the vertical offset `y`
-/// in word widths. `text` replaces the site's #29292f end stops so words
-/// settle into the preview's own text colour.
-pub fn polish_color(x: f64, y: f64, position: f64, text: (f64, f64, f64)) -> (f64, f64, f64) {
+/// The polish gradient's stops; `text` replaces the site's #29292f ends.
+pub fn polish_stops(text: (f64, f64, f64)) -> [(f64, (f64, f64, f64)); 6] {
     let rgb = |r: f64, g: f64, b: f64| (r / 255.0, g / 255.0, b / 255.0);
-    let stops = [
+    [
         (0.15, text),
         (0.32, rgb(155.0, 60.0, 245.0)),
         (0.42, rgb(236.0, 72.0, 153.0)),
         (0.49, rgb(245.0, 158.0, 11.0)),
         (0.56, rgb(6.0, 182.0, 212.0)),
         (0.74, text),
-    ];
-    // The visible box is one third of the gradient, offset by the position;
-    // 100deg tilts the bands by tan(10deg).
-    let g = (x + 0.176 * y + 2.0 * position) / 3.0;
+    ]
+}
+
+/// Where `x` (0–1 across the word) and `y` (in word widths) fall on the
+/// gradient. The visible box is one third of the gradient, offset by the
+/// position; 100deg tilts the bands by tan(10deg).
+pub fn polish_offset(x: f64, y: f64, position: f64) -> f64 {
+    (x + 0.176 * y + 2.0 * position) / 3.0
+}
+
+/// Gradient colour at `x` (0–1 across the word) and the vertical offset `y`
+/// in word widths. `text` replaces the site's #29292f end stops so words
+/// settle into the preview's own text colour.
+pub fn polish_color(x: f64, y: f64, position: f64, text: (f64, f64, f64)) -> (f64, f64, f64) {
+    let stops = polish_stops(text);
+    let g = polish_offset(x, y, position);
     if g <= stops[0].0 {
         return text;
     }
