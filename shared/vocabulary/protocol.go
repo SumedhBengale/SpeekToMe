@@ -24,7 +24,15 @@ type Config struct {
 	Prefix      string   `json:"confirmed_prefix,omitempty"`
 	Confirmed   float64  `json:"confirmed_seconds,omitempty"`
 	AudioOffset float64  `json:"audio_offset_seconds,omitempty"`
+	// Live asks the worker for an UpdateType event whenever newly confirmed
+	// words change the proposals, so decisions can start before the stream ends.
+	Live bool `json:"live,omitempty"`
 }
+
+const (
+	FinalType  = "vocabulary.final"
+	UpdateType = "vocabulary.update"
+)
 type Choice struct {
 	ID          string  `json:"id"`
 	StartByte   int     `json:"start_byte"`
@@ -71,7 +79,7 @@ func Compile(terms []string) (*UserVocabulary, error) {
 	return CompileUserVocabulary(clean), nil
 }
 func Propose(ctx context.Context, raw string, compiled *UserVocabulary, termsSHA string) Result {
-	r := Result{Type: "vocabulary.final", SchemaVersion: 1, Raw: raw, Enhanced: raw, TranscriptSHA: Hash(raw), VocabularySHA: termsSHA, MatcherVersion: Version, Choices: []Choice{}}
+	r := Result{Type: FinalType, SchemaVersion: 1, Raw: raw, Enhanced: raw, TranscriptSHA: Hash(raw), VocabularySHA: termsSHA, MatcherVersion: Version, Choices: []Choice{}}
 	if len(raw) > MaxTranscriptBytes || !utf8.ValidString(raw) {
 		r.Error = "transcript_limit"
 		return r
@@ -117,7 +125,13 @@ func Apply(raw string, choices []Choice, use map[string]bool) (string, error) {
 	return b.String(), nil
 }
 func (r Result) Validate(raw string, terms []string) error {
-	if r.Type != "vocabulary.final" || r.SchemaVersion != 1 || r.Raw != raw || r.TranscriptSHA != Hash(raw) || r.VocabularySHA != TermsHash(terms) || r.MatcherVersion != Version {
+	return r.ValidateAs(FinalType, raw, terms)
+}
+
+// ValidateAs checks a result of the given event type against the transcript
+// it claims to describe.
+func (r Result) ValidateAs(kind, raw string, terms []string) error {
+	if r.Type != kind || r.SchemaVersion != 1 || r.Raw != raw || r.TranscriptSHA != Hash(raw) || r.VocabularySHA != TermsHash(terms) || r.MatcherVersion != Version {
 		return errors.New("vocabulary result identity mismatch")
 	}
 	allowed := map[string]bool{}

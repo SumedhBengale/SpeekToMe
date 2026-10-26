@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"speektome/vocabulary"
@@ -21,6 +22,7 @@ type postVocabulary struct {
 	raw               string
 	confirmed         float64
 	started, finished bool
+	liveKeys          string // proposals last sent live, to skip unchanged updates
 }
 
 func (p *postVocabulary) control(data []byte) ([]byte, error) {
@@ -76,7 +78,10 @@ func (p *postVocabulary) control(data []byte) ([]byte, error) {
 	return json.Marshal(event)
 }
 func (p *postVocabulary) audio() { p.mu.Lock(); p.started = true; p.mu.Unlock() }
-func (p *postVocabulary) observe(data []byte) *vocabulary.Result {
+
+// observe returns the vocabulary event to send after this backend event, if
+// any, and whether it is the final result that ends the stream.
+func (p *postVocabulary) observe(data []byte) ([]byte, bool) {
 	var e struct {
 		Type           string  `json:"type"`
 		Transcript     string  `json:"transcript"`
@@ -88,12 +93,12 @@ func (p *postVocabulary) observe(data []byte) *vocabulary.Result {
 		} `json:"words"`
 	}
 	if json.Unmarshal(data, &e) != nil {
-		return nil
+		return nil, false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.config == nil || p.finished {
-		return nil
+		return nil, false
 	}
 	if e.Type == "conversation.item.input_audio_transcription.completed" {
 		var words []string
@@ -112,17 +117,46 @@ func (p *postVocabulary) observe(data []byte) *vocabulary.Result {
 		if e.Transcript == "" && len(e.Words) == 0 && e.AudioProcessed > 0 {
 			p.confirmed = max(p.confirmed, e.AudioProcessed+p.config.AudioOffset)
 		}
+		if len(words) > 0 && p.config.Live {
+			return p.liveUpdate(), false
+		}
 	}
 	if e.Type != "input_audio_buffer.committed" {
-		return nil
+		return nil, false
 	}
 	p.finished = true
+	r := p.propose(time.Second)
+	encoded, _ := json.Marshal(r)
+	return encoded, true
+}
+
+func (p *postVocabulary) propose(deadline time.Duration) vocabulary.Result {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	r := vocabulary.Propose(ctx, p.raw, p.compiled, vocabulary.TermsHash(p.config.Terms))
 	r.MatchMillis = float64(time.Since(start).Microseconds()) / 1000
-	return &r
+	return r
+}
+
+// liveUpdate matches the confirmed transcript so far. Confirmed text only
+// grows, so earlier offsets stay valid; unchanged proposals are not resent.
+func (p *postVocabulary) liveUpdate() []byte {
+	r := p.propose(250 * time.Millisecond)
+	if r.Error != "" {
+		return nil
+	}
+	var keys strings.Builder
+	for _, c := range r.Choices {
+		fmt.Fprintf(&keys, "%d:%d:%s\n", c.StartByte, c.EndByte, c.Replacement)
+	}
+	if keys.String() == p.liveKeys {
+		return nil
+	}
+	p.liveKeys = keys.String()
+	r.Type = vocabulary.UpdateType
+	encoded, _ := json.Marshal(r)
+	return encoded
 }
 
 // Legacy providers and merged meeting channels use the same worker-side matcher

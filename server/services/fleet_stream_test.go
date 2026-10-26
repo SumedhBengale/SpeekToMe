@@ -419,3 +419,58 @@ func TestMeetingSessionConfirmsContiguousWordsOnRecordingTimeline(t *testing.T) 
 		}
 	}
 }
+
+func TestFleetDeliversValidLiveVocabularyProposals(t *testing.T) {
+	terms := []db.VocabularyTerm{{Canonical: "PostgreSQL"}}
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, e := websocket.Accept(w, r, nil)
+		if e != nil {
+			return
+		}
+		defer conn.CloseNow()
+		ctx := r.Context()
+		_, data, e := conn.Read(ctx)
+		if e != nil {
+			return
+		}
+		if !bytes.Contains(data, []byte(`"live":true`)) {
+			t.Error("dictation must ask for live vocabulary proposals")
+		}
+		v, _ := vocabulary.Compile([]string{"PostgreSQL"})
+		update := func(raw string) []byte {
+			result := vocabulary.Propose(ctx, raw, v, vocabulary.TermsHash([]string{"PostgreSQL"}))
+			result.Type = vocabulary.UpdateType
+			data, _ := json.Marshal(result)
+			return data
+		}
+		conn.Write(ctx, websocket.MessageText, update("not what was confirmed postgrsq"))
+		conn.Write(ctx, websocket.MessageText, []byte(`{"type":"conversation.item.input_audio_transcription.completed","transcript":"We use postgrsq","words":[{"word":"We","start":0,"end":0.2},{"word":"use","start":0.2,"end":0.4},{"word":"postgrsq","start":0.4,"end":1}]}`))
+		conn.Write(ctx, websocket.MessageText, update("We use postgrsq"))
+		conn.Read(ctx)
+	}))
+	defer worker.Close()
+	t.Setenv("SPEEKTOME_FLEET_URL", worker.URL)
+	token := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(token, []byte("token"), 0600)
+	t.Setenv("SPEEKTOME_WORKER_TOKEN_FILE", token)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s, e := createFleetStreamingSession(ctx, "self_hosted_nemotron_3_5", nil, "", terms)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close(websocket.StatusNormalClosure, "")
+	select {
+	case r := <-s.Proposals:
+		if r.Raw != "We use postgrsq" || len(r.Choices) != 1 || r.Choices[0].Replacement != "PostgreSQL" {
+			t.Fatalf("wrong live proposal: %+v", r)
+		}
+	case <-ctx.Done():
+		t.Fatal("live proposal not delivered")
+	}
+	select {
+	case r := <-s.Proposals:
+		t.Fatalf("proposal for a different transcript accepted: %+v", r)
+	default:
+	}
+}

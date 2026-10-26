@@ -228,6 +228,35 @@ func (a *App) handleRealStreamingSession(
 	var chunkCount int
 	var timingMutex sync.Mutex
 
+	// The preview shows each vocabulary proposal as the ASR words until Jev
+	// decides it, then the decision, so the end of the stream has less to do.
+	var previewMutex sync.Mutex
+	var lastPreview string
+	var live *vocabularydecision.Live
+	sendPreview := func() {
+		previewMutex.Lock()
+		defer previewMutex.Unlock()
+		preview := live.Display()
+		if preview == "" || preview == lastPreview {
+			return
+		}
+		lastPreview = preview
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+			Type:     "interim",
+			Text:     preview,
+			Provider: provider,
+		})
+	}
+	live = vocabularydecision.NewLive(vocabularydecision.Default(), sendPreview)
+	defer live.Close()
+	if upstream.Proposals != nil {
+		go func() {
+			for proposal := range upstream.Proposals {
+				live.Propose(proposal)
+			}
+		}()
+	}
+
 	// Goroutine to receive text tokens from upstream real-time model and forward to client
 	textReceiverDone := make(chan struct{})
 	go func() {
@@ -251,11 +280,8 @@ func (a *App) handleRealStreamingSession(
 				log.Printf("[STREAM REAL LATENCY] Chunk #%d -> Upstream GPU RTT: %v | Words: %d", currChunk, rtt.Round(time.Millisecond), len(strings.Fields(normText)))
 			}
 
-			_ = writeStreamJSON(ctx, conn, StreamEventMessage{
-				Type:     "interim",
-				Text:     normText,
-				Provider: provider,
-			})
+			live.Text(normText)
+			sendPreview()
 		}
 	}()
 
@@ -318,7 +344,7 @@ func (a *App) handleRealStreamingSession(
 	finalRawTranscript := committedText
 	textMutex.Unlock()
 
-	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, upstream.VocabularyResult())
+	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, upstream.VocabularyResult(), live)
 	grammarInput, restoreGrammar := audit.Protect()
 
 	audioRaw := fullAudioAccumulator.Bytes()
@@ -532,7 +558,7 @@ func (a *App) handlePseudoStreamingSession(
 		}
 	}
 
-	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, nil)
+	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, nil, nil)
 	grammarInput, restoreGrammar := audit.Protect()
 
 	whisperLatency := time.Since(whisperStart).Seconds()

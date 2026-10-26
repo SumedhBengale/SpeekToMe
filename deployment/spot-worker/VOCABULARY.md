@@ -1,6 +1,6 @@
 The production path is plain Nemotron 3.5 ASR, a final text matcher on the inference worker, one batched TypeSafe Jev evaluation on the main server, then grammar enhancement.
 
-Native fleet WebSockets send `session.vocabulary_matching.terms` once, before audio. The snapshot supports up to 1,000 terms. The gateway consumes this configuration and sends empty `speech_contexts` to Nemotron; vocabulary and user prompts do not bias ASR decoding. Intermediate previews remain raw ASR. Automatic utterance endings accumulate final timestamped words but do not run the matcher. An explicit final commit flushes the remaining PCM, finishes ASR, and triggers matching after the native commit acknowledgement. The pinned runtime emits its last completed transcript before that acknowledgement.
+Native fleet WebSockets send `session.vocabulary_matching.terms` once, before audio. The snapshot supports up to 1,000 terms. The gateway consumes this configuration and sends empty `speech_contexts` to Nemotron; vocabulary and user prompts do not bias ASR decoding. Dictation sessions also set `vocabulary_matching.live`. After each utterance's final timestamped words, the worker matches the whole confirmed transcript (250 ms deadline) and sends a `vocabulary.update` event, in the same format as `vocabulary.final`, whenever the set of proposals changed. Confirmed text only grows, so earlier offsets stay valid. Meeting sessions and workers without this support send no updates, and the final pass below covers everything. An explicit final commit flushes the remaining PCM, finishes ASR, and triggers matching after the native commit acknowledgement. The pinned runtime emits its last completed transcript before that acknowledgement.
 
 The worker returns a `vocabulary.final` JSON event containing:
 
@@ -15,6 +15,8 @@ Each native worker keeps only the committed transcript, compiled dictionary and 
 
 Legacy/batch providers and completed merged meeting transcripts use the authenticated `/v1/vocabulary/final` worker RPC. That RPC can use another available worker. The durable meeting path currently evaluates the merged final transcript after ASR and CPU diarization are available; it does not retain a GPU lease while waiting for CPU diarization. The same-worker, immediate post-ASR behavior applies to native fleet WebSockets. Existing deployed fleet recovery and durable CPU-diarization code was restored into this checkout before applying the vocabulary change.
 
+While a dictation is live, the main server validates each update against its own confirmed transcript and decides proposals as soon as `TYPESAFE_LIVE_CONTEXT_WORDS` words follow one, or it has waited `TYPESAFE_LIVE_MAX_WAIT_MS`. Ready proposals go to Jev in one request, one request at a time. The preview shows the ASR words for an undecided proposal and the decision once it arrives. At the end, decisions for the same span, original and replacement are reused; only proposals still undecided are evaluated, together, after any live request in flight returns. A live request that fails falls back like any other and is not retried. The audit records `live_decisions` and their Jev time as `jev_live_ms`.
+
 Jev receives only proposed changes and transcript context, never the user's whole dictionary. Each occurrence gets an independent two-option Choice question. Short transcripts include shared full context; long transcripts use surrounding excerpts. Questions show the original and candidate readings explicitly. All actual changes are evaluated in one POST to `https://api.typesafe.ai/v1/systemone`. The default model is pinned to `jev-1.13.0`.
 
 | Main-server setting | Default | Behavior |
@@ -25,6 +27,8 @@ Jev receives only proposed changes and transcript context, never the user's whol
 | `TYPESAFE_MAX_CONCURRENT` | `16` | No waiting for a slot; excess requests fall back |
 | `TYPESAFE_RPS` | `0` | Optional local request limit; 0 leaves enforcement to the API/cooldown |
 | `TYPESAFE_TPS` | `0` | Optional conservative local guard using request bytes as a token upper bound |
+| `TYPESAFE_LIVE_CONTEXT_WORDS` | `6` | Words that must follow a live proposal before it is decided; at most 50 |
+| `TYPESAFE_LIVE_MAX_WAIT_MS` | `2000` | Longest a live proposal waits for those words; at most 10,000 ms |
 
 There are no Jev retries. Timeout, network errors, 429/529, other HTTP errors, missing/invalid answers, local capacity limits and oversized batches select the corresponding matcher choices and continue. A 429/529 cooldown skips future evaluations instead of sleeping the current request. Missing answers can fall back individually while valid answers are retained. Account limits are organization-specific; set the optional local guards from the TypeSafe console. The current batch budget is a conservative 48,000 UTF-8 JSON bytes, with no long-context mode enabled. This is intentionally below the vendor's token limits and can cause large batches to fall back earlier than the API would require.
 

@@ -145,7 +145,7 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	pctx := pipeline.NewPipelineContext(user.ID)
 	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true"
 
-	audit := finalizeVocabulary(ctx, rawText, vocabTerms, nil)
+	audit := finalizeVocabulary(ctx, rawText, vocabTerms, nil, nil)
 	currentText := audit.Resolved
 	if enhance && rawText != "" {
 		grammarInput, restore := audit.Protect()

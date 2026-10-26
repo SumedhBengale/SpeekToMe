@@ -1077,7 +1077,8 @@ type UpstreamStreamingSession struct {
 	Provider         string
 	CancelFunc       context.CancelFunc
 	TextChan         chan string
-	Words            chan WordBatch // confirmed timed words, meeting sessions only
+	Words            chan WordBatch         // confirmed timed words, meeting sessions only
+	Proposals        chan vocabulary.Result // live vocabulary proposals, dictation on the fleet only
 	ErrChan          chan error
 	DoneChan         chan struct{}
 }
