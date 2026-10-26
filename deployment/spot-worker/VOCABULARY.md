@@ -44,4 +44,6 @@ The four active launch regions are `us-east-1`, `us-east-2`, `us-west-2` and `ca
 
 Main-server rollback backups are `/home/ec2-user/speektome/speektome-server.before-jev-20261016` and `/etc/speektome-fleet/fleet.before-jev-20261016.json`. Worker backups are `/opt/speektome-worker/bin/gateway.before-jev-20261016`. Restart the main service after rotating the Jev key.
 
+Live matching shipped on 2026-10-26 as manifest `f1fe1104…` (published from `fleet-manifest.json`, which carries the transport and meeting-range gateways). Main-server rollback copies are `/home/ec2-user/speektome/rollback-livevocab-20261026T085103Z/speektome-server` and `/etc/speektome-fleet/fleet.before-live-vocab-20261026T085103Z.json`. Workers were replaced rather than updated in place, so there are no worker backups; restoring the fleet config and restarting `speektome-fleet` brings up workers on the previous manifest.
+
 Protocol and limits: [TypeSafe API](https://docs.typesafe.ai/api), [TypeSafe models and context limits](https://docs.typesafe.ai/models). Current validation evidence is in [the test report](../../benchmark/vocabulary/results/2026-10-16-jev/REPORT.md).

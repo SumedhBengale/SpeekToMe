@@ -22,13 +22,13 @@
   },
   "gateways": {
     "amd64": {
-      "key": "gateway/3222d0b77f1dadb12cdffde3d2b1aff7ca12d3a04c2b4e22f011d85364a891ed/speektome-gateway-amd64.gz",
-      "sha256": "3222d0b77f1dadb12cdffde3d2b1aff7ca12d3a04c2b4e22f011d85364a891ed",
+      "key": "gateway/5b889b340e9edca5fdf74e803143bbe0d80604c5f17985f74304a342424a0716/speektome-gateway-amd64.gz",
+      "sha256": "5b889b340e9edca5fdf74e803143bbe0d80604c5f17985f74304a342424a0716",
       "compression": "gzip"
     },
     "arm64": {
-      "key": "gateway/6460648c88fa48033f0ea1564de3d6a22728a755a8725e89cf34c7af80a32581/speektome-gateway-arm64.gz",
-      "sha256": "6460648c88fa48033f0ea1564de3d6a22728a755a8725e89cf34c7af80a32581",
+      "key": "gateway/1d735ff7b4110a7b950fc75e83d6b9155239d867bfb07856cfecc5e248b8d7b7/speektome-gateway-arm64.gz",
+      "sha256": "1d735ff7b4110a7b950fc75e83d6b9155239d867bfb07856cfecc5e248b8d7b7",
       "compression": "gzip"
     }
   },
@@ -56,9 +56,10 @@
   },
   "capabilities": [
     "final_vocabulary_matching_v1",
+    "live_vocabulary_matching_v1",
+    "meeting_gap_ranges_v1",
     "meeting_transcription",
     "streaming_transcription",
-    "transport_encryption_v1",
-    "meeting_gap_ranges_v1"
+    "transport_encryption_v1"
   ]
 }

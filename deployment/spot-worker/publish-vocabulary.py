@@ -24,7 +24,7 @@ def main():
         data=binary.read_bytes()
         m['gateways'][arch]=dict(publish(gzip.compress(data,mtime=0),'speektome-gateway-'+arch+'.gz','gateway'),compression='gzip')
     m['helpers']['ready']=publish((BASE/'check-ready.sh').read_bytes(),'check-ready.sh','deployment/helpers')
-    m['capabilities']=sorted(set(m.get('capabilities',[])+['final_vocabulary_matching_v1']))
+    m['capabilities']=sorted(set(m.get('capabilities',[])+['final_vocabulary_matching_v1','live_vocabulary_matching_v1']))
     manifest=(json.dumps(m,indent=2)+'\n').encode();(BASE/'fleet-manifest.json').write_bytes(manifest)
     artifacts={'manifest':publish(manifest,'fleet-manifest.json','deployment/fleet-v1'),'bootstrap':publish((BASE/'bootstrap.sh').read_bytes(),'bootstrap.sh','deployment/fleet-v1')}
     fleet=json.loads(pathlib.Path(a.fleet_config).read_text());regions=[]
