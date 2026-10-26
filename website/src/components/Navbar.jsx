@@ -12,7 +12,7 @@ export default function Navbar({ token, onLogout }) {
   }, [mobileOpen]);
   const closeMenu = () => setMobileOpen(false);
   return <nav className="navbar" aria-label="Main navigation">
-    <Link to="/" className="nav-logo" onClick={closeMenu}><img src="/assets/logo.svg" alt="" className="brand-logo-icon" /><span>SpeekTo<span className="logo-dot">.</span>Me</span></Link>
+    <Link to="/" className="nav-logo" onClick={closeMenu}><img src="/assets/logo.svg" alt="" className="brand-logo-icon" /><span>SpeekTo.<span className="brand-accent">Me</span></span></Link>
     <button ref={toggleRef} type="button" className={`nav-hamburger ${mobileOpen ? 'open' : ''}`} aria-label={mobileOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={mobileOpen} aria-controls="main-navigation" onClick={() => setMobileOpen(!mobileOpen)}><span /><span /><span /></button>
     <div id="main-navigation" className={`nav-menu ${mobileOpen ? 'open' : ''}`}>
       <ul className="nav-links">{[['/', 'Home'], ['/about', 'About Us'], ['/pricing', 'Pricing']].map(([path, label]) => <li className={`nav-item ${location.pathname === path ? 'active' : ''}`} key={path}><Link to={path} aria-current={location.pathname === path ? 'page' : undefined} onClick={closeMenu}>{label}</Link></li>)}</ul>

@@ -5,6 +5,7 @@ import './index.css'
 import './marketing.css'
 import './responsive.css'
 import './account.css'
+import './home.css'
 import App from './App.jsx'
 
 createRoot(document.getElementById('root')).render(

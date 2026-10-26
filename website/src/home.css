@@ -1,0 +1,104 @@
+/* Public homepage composition. Shared colors live in marketing.css. */
+.brand-accent { color: var(--color-brand); }
+.hero-section { position: relative; isolation: isolate; overflow: clip; }
+.hero {
+  max-width: 1320px;
+  padding: 48px 40px 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  overflow: visible;
+  text-align: center;
+}
+.hero-text { position: relative; z-index: 1; width: 100%; }
+.hero-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 20px;
+  justify-content: center;
+  color: #686871;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+}
+.hero-eyebrow > span { width: 7px; height: 7px; border-radius: 50%; background: var(--color-brand); }
+.hero .hero-text h1 {
+  font-size: clamp(50px, 4.6vw, 66px);
+  line-height: 1.04;
+  font-weight: 500;
+  letter-spacing: -.055em;
+  margin: 0 0 20px;
+  text-wrap: normal;
+}
+.hero-heading-lead, .hero-heading-flow { display: inline; white-space: nowrap; }
+.hero-heading-flow {
+  color: var(--color-brand);
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-size: 1.18em;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -.035em;
+  line-height: 1.05;
+  margin-left: .12em;
+  margin-top: 4px;
+}
+.hero .hero-description {
+  max-width: 540px;
+  font-size: 17px;
+  line-height: 1.75;
+  margin: 0 auto 24px;
+}
+.hero .hero-actions { justify-content: center; align-items: center; gap: 26px; margin-bottom: 20px; }
+.hero-actions .btn { min-width: 156px; padding: 14px 24px; font-size: 14px; }
+.hero-actions .btn span { margin-left: 14px; font-size: 20px; line-height: 1; }
+.hero-how-link { display: inline-flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 500; }
+.hero-how-link:hover { color: var(--color-brand-strong); }
+.hero .hero-plan-note { font-size: 12px; margin: 0 auto 10px; color: #81818b; }
+.hero-plan-note strong { color: #45454d; font-weight: 500; }
+.hero .hero-availability { display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; margin: 0 auto; color: #71717a; }
+.hero-availability > svg { flex-shrink: 0; color: #45454d; }
+.hero-visualizer { position: relative; width: 100%; display: block; }
+.hero-preview .hero-allowance-note { position: relative; font-size: 10px; text-align: center; color: #71717a; margin: 14px 0 0; }
+.hero-allowance-note a { text-decoration: underline; text-underline-offset: 3px; }
+.apps-section { border-block: var(--border-light); padding: 30px 0 38px; }
+.apps-section p { text-align: center; font-size: 12px; margin-bottom: 25px; color: #71717a; }
+.newsletter-section input { box-shadow: none !important; }
+.cta-banner > .container { border: 0 !important; box-shadow: none !important; }
+.cta-banner .btn { box-shadow: none !important; }
+.cta-banner h2 { font-size: clamp(32px, 4vw, 48px) !important; line-height: 1.15; }
+.about-page .section.text-center > .container { box-shadow: none !important; border: var(--border-light) !important; }
+.pricing-cards .flat-pricing-card { border-color: var(--color-brand) !important; box-shadow: 0 0 0 1px var(--color-brand-tint) !important; }
+.pricing-cards .flat-pricing-card .amount, .pricing-cards .flat-pricing-card .currency { color: var(--color-brand-strong); }
+.pricing-cards #command-mode-allowance { margin-bottom: 20px; }
+
+@media (max-width: 1100px) {
+  .hero { padding-inline: 32px; }
+  .hero .hero-text h1 { font-size: 54px; }
+}
+@media (max-width: 900px) {
+  .hero { max-width: 100%; grid-template-columns: minmax(0, 1fr); gap: 16px; padding-top: 56px; text-align: center; }
+  .hero-eyebrow, .hero-plan, .hero .hero-availability { justify-content: center; }
+  .hero .hero-text h1 { font-size: clamp(50px, 8vw, 68px); max-width: none; }
+  .hero .hero-description { max-width: 480px; margin-inline: auto; }
+  .hero .hero-actions { margin-bottom: 30px; }
+  .hero-preview { width: min(100%, 540px); margin-inline: auto; }
+}
+@media (max-width: 600px) {
+  .hero { padding: 40px 20px 16px; gap: 30px; }
+  .hero-heading-lead, .hero-heading-flow { display: block; margin-left: 0; }
+  .hero-eyebrow { font-size: 10px; margin-bottom: 22px; }
+  .hero .hero-text h1 { font-size: clamp(43px, 10.5vw, 58px) !important; letter-spacing: -.05em; margin-bottom: 24px; }
+  .hero .hero-description { font-size: 15px; line-height: 1.7; margin-bottom: 24px; }
+  .hero .hero-actions { gap: 22px; margin-bottom: 28px; }
+  .hero-actions .btn { min-width: 140px; }
+  .hero-how-link { font-size: 12px; gap: 7px; }
+  .hero .hero-availability { max-width: 290px; margin-inline: auto; gap: 6px; font-size: 10px; }
+  .apps-section { padding: 26px 0 30px; }
+  .cta-banner > .container { padding: 32px 20px !important; }
+}
+
+.product-demo-section { background: #fafafa; border-bottom: var(--border-light); }
+.product-demo-section .hero-preview { width: min(100%, 880px); margin-inline: auto; }
+.product-demo-section .section-header { max-width: 680px; margin-bottom: 40px; }
+.product-demo-section .section-header p:last-child { max-width: 500px; margin-inline: auto; font-size: 15px; }
+.product-demo-section .demo-section-eyebrow { font-size: 10px; font-weight: 600; letter-spacing: .12em; color: #81818b; margin-bottom: 16px; }

@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './WritingExamples.css';
 import SpokenText from './SpokenText';
+import DemoSteps from './DemoSteps';
 
 const EXAMPLES = [
   { id: 'email', label: 'An email', spoken: 'hey maya um the onboarding flow is ready could you review it before friday thanks', transcription: 'Hey Maya, the onboarding flow is ready. Could you review it before Friday? Thanks!' },
@@ -54,7 +55,7 @@ function TranscriptionExample({ example, command = false }) {
         <p>{finished ? example.transcription : <span className="writing-placeholder">{command ? 'Your edited text will appear here.' : 'Your transcription will appear here.'}</span>}</p>
       </div>
       <div className="writing-card-footer">
-        <span role="status">{finished ? command ? 'Your command applied to the selected text.' : 'Filler words removed. Punctuation added.' : paused ? 'Paused' : 'Typing your spoken words…'}</span>
+        <DemoSteps label="Dictation example steps" completed={finished ? 2 : elapsed >= example.spoken.length * 35 ? 1 : 0} steps={['Speak your thoughts.', 'Remove fillers and add punctuation.']} />
         <div className="writing-playback">
           {!finished && <button type="button" onClick={() => setPaused(value => !value)} aria-label={paused ? `Play ${playback} example` : `Pause ${playback} example`}>{paused ? 'Play' : 'Pause'}</button>}
           <button type="button" disabled={reducedMotion} onClick={() => { setElapsed(0); setPaused(false); }} aria-label={`Replay ${playback} example`}>↻ Replay</button>
@@ -70,17 +71,18 @@ function CommandExample({ example }) {
   const [paused, setPaused] = useState(false);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const card = useRef(null);
-  const editor = useRef(null);
+  const microphone = useRef(null);
   const text = useRef(null);
   const visible = useRef(false);
-  const speechStart = 2700;
-  const speechEnd = speechStart + example.spoken.length * 40;
-  const finishAt = speechEnd + 650;
+  const speechStart = 3250;
+  const speechEnd = speechStart + example.spoken.length * 32;
+  const applyAt = speechEnd + 500;
+  const finishAt = applyAt + 800;
   const finished = reducedMotion || elapsed >= finishAt;
   const selecting = elapsed >= 1200 && elapsed < 2200;
   const selectedCount = elapsed < 1200 ? 0 : Math.min(example.before.length, Math.ceil((elapsed - 1200) / 1000 * example.before.length));
-  const typed = reducedMotion ? example.spoken : example.spoken.slice(0, Math.max(0, Math.floor((elapsed - speechStart) / 40)));
-  const phase = finished ? 'done' : elapsed < 700 ? 'original' : elapsed < 1200 ? 'pointing' : selecting ? 'selecting' : elapsed < speechStart ? 'selected' : elapsed < speechEnd ? 'speaking' : 'applying';
+  const typed = reducedMotion ? example.spoken : example.spoken.slice(0, Math.max(0, Math.floor((elapsed - speechStart) / 32)));
+  const phase = finished ? 'done' : elapsed < 700 ? 'original' : elapsed < 1200 ? 'pointing' : selecting ? 'selecting' : elapsed < 2400 ? 'selected' : elapsed < 3000 ? 'moving-to-mic' : elapsed < speechStart ? 'pressing' : elapsed < speechEnd ? 'speaking' : elapsed < applyAt ? 'heard' : 'applying';
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
     const change = () => setReducedMotion(query.matches);
@@ -96,29 +98,40 @@ function CommandExample({ example }) {
   }, [finished, paused, finishAt]);
   useLayoutEffect(() => {
     if (finished) return;
-    const character = text.current.children[Math.max(0, selectedCount - 1)];
-    if (!character) return;
-    const target = character.getBoundingClientRect();
-    const bounds = editor.current.getBoundingClientRect();
-    setPointer({ x: target.left - bounds.left + (selectedCount ? target.width : 0), y: target.bottom - bounds.top - 4 });
-  }, [selectedCount, finished]);
-  const status = finished ? 'Selected text updated.' : paused ? 'Paused' : phase === 'original' || phase === 'pointing' || phase === 'selecting' ? 'Select the text you want to change.' : phase === 'selected' ? 'Double-tap your hotkey.' : phase === 'speaking' ? 'Say your command…' : 'Applying your command…';
+    const bounds = card.current.getBoundingClientRect();
+    if (elapsed >= 2400) {
+      const target = microphone.current.getBoundingClientRect();
+      setPointer({ x: target.left - bounds.left + target.width / 2 - 4, y: target.top - bounds.top + target.height / 2 - 3 });
+    } else {
+      const character = text.current.children[Math.max(0, selectedCount - 1)];
+      if (!character) return;
+      const target = character.getBoundingClientRect();
+      setPointer({ x: target.left - bounds.left + (selectedCount ? target.width : 0), y: target.bottom - bounds.top - 4 });
+    }
+  }, [selectedCount, finished, elapsed]);
+
   return (
     <div className="writing-card command-card" ref={card} id="command-example-output" role="tabpanel" aria-labelledby={`command-tab-${example.id}`} data-phase={phase} data-paused={paused}>
       <div className="writing-card-header"><h3>{example.label}</h3><span>AI Command Mode</span></div>
-      <div className="command-editor" ref={editor}>
-        <div className="writing-label">{finished ? 'Updated text' : selectedCount === example.before.length ? 'Text selected' : 'Text in your app'}{finished && <span className="writing-complete" aria-hidden="true">✓</span>}</div>
-        <p ref={text} className={finished ? 'command-result' : 'command-existing'} aria-label={finished ? undefined : example.before}>
-          {finished ? example.transcription : [...example.before].map((character, index) => <span key={index} aria-hidden="true" className={index < selectedCount ? 'command-highlight' : undefined}>{character}</span>)}
+      <div className="command-editor">
+        <div className="writing-label">{finished ? 'Updated text' : phase === 'applying' ? 'Applying your command' : selectedCount === example.before.length ? 'Text selected' : 'Text in your app'}{finished && <span className="writing-complete" aria-hidden="true">✓</span>}</div>
+        <p ref={text} className={finished ? 'command-result' : phase === 'applying' ? 'command-existing command-glow' : 'command-existing'} aria-label={finished ? undefined : example.before}>
+          {finished ? example.transcription : phase === 'applying' ? example.before : [...example.before].map((character, index) => <span key={index} aria-hidden="true" className={index < selectedCount ? 'command-highlight' : undefined}>{character}</span>)}
         </p>
-        {!finished && elapsed >= 700 && elapsed < 2400 && <svg className="command-pointer" style={{ '--pointer-x': `${pointer.x}px`, '--pointer-y': `${pointer.y}px` }} width="23" height="28" viewBox="0 0 23 28" aria-hidden="true"><path d="M2 2v21l5-5 4 8 4-2-4-8h8Z" fill="#40101d" stroke="white" strokeWidth="2" strokeLinejoin="round" /></svg>}
       </div>
       <div className="writing-speech command-speech">
-        <div className="writing-label"><span className={`writing-recording-dot ${phase === 'speaking' && !paused ? 'active' : ''}`} aria-hidden="true" />Voice command</div>
-        <p>{typed || <span className="writing-placeholder">{elapsed < speechStart ? 'Select text, then speak your command…' : 'Start speaking…'}</span>}{phase === 'speaking' && !paused && <span className="writing-cursor" aria-hidden="true" />}</p>
+        <div className="command-mic-row">
+          <button ref={microphone} type="button" className="command-mic" aria-label="Start voice command demo" aria-pressed={phase === 'speaking'} disabled={reducedMotion} onClick={() => { setElapsed(speechStart); setPaused(false); }}>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" /></svg>
+          </button>
+          <div className="writing-label"><span className={`writing-recording-dot ${phase === 'speaking' && !paused ? 'active' : ''}`} aria-hidden="true" />Your voice command</div>
+        </div>
+        <p>{typed || <span className="writing-placeholder">{elapsed < speechStart ? 'What would you like to change?' : 'Start speaking…'}</span>}{phase === 'speaking' && !paused && <span className="writing-cursor" aria-hidden="true" />}</p>
       </div>
+      {!finished && elapsed >= 700 && elapsed < speechStart + 150 && <svg className="command-pointer" style={{ '--pointer-x': `${pointer.x}px`, '--pointer-y': `${pointer.y}px` }} width="23" height="28" viewBox="0 0 23 28" aria-hidden="true"><path d="M2 2v21l5-5 4 8 4-2-4-8h8Z" fill="#40101d" stroke="white" strokeWidth="2" strokeLinejoin="round" /></svg>}
+
       <div className="writing-card-footer">
-        <span role="status">{status}</span>
+        <DemoSteps label="Command example steps" completed={finished ? 3 : elapsed >= speechEnd ? 2 : elapsed >= 2200 ? 1 : 0} steps={['Select the text you want to change.', 'Click the mic and say your command.', 'Apply your command to the selected text.']} />
         <div className="writing-playback">
           {!finished && <button type="button" onClick={() => setPaused(value => !value)} aria-label={`${paused ? 'Play' : 'Pause'} command example`}>{paused ? 'Play' : 'Pause'}</button>}
           <button type="button" disabled={reducedMotion} onClick={() => { setElapsed(0); setPaused(false); }} aria-label="Replay command example">↻ Replay</button>

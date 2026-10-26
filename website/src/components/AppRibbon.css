@@ -1,0 +1,24 @@
+.apps-section { overflow: hidden; }
+.app-ribbon-heading { display: flex; align-items: center; justify-content: center; padding-inline: 20px; margin-bottom: 24px; }
+.app-ribbon-heading #apps-title { margin: 0; color: #29292f; text-align: center; font: 500 30px/1.3 var(--font-display); letter-spacing: -.035em; text-wrap: balance; }
+.app-ribbon-heading #apps-title span { color: var(--color-brand); display: inline-block; }
+.app-ribbon { overflow: hidden; padding-block: 14px; touch-action: pan-y; user-select: none; cursor: grab; mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent); }
+.app-ribbon[data-dragging] { cursor: grabbing; }
+.app-ribbon:focus-visible { outline: 2px solid var(--color-brand); outline-offset: -3px; border-radius: 6px; }
+.app-ribbon-track { --ribbon-gap: 28px; display: flex; width: max-content; will-change: transform; }
+.app-ribbon-group { display: flex; flex-shrink: 0; align-items: center; gap: var(--ribbon-gap); padding: 0 var(--ribbon-gap) 0 0; margin: 0; list-style: none; }
+.app-ribbon-group li { display: flex; align-items: center; justify-content: center; gap: 11px; width: 128px; flex: 0 0 128px; color: #37373e; font: 600 15px/1.3 var(--font-display); white-space: nowrap; }
+.app-ribbon-group img { width: 29px; height: 29px; object-fit: contain; pointer-events: none; }
+@media (max-width: 600px) {
+  .app-ribbon-heading { margin-bottom: 20px; }
+  .app-ribbon-heading #apps-title { font-size: 26px; max-width: 340px; }
+  .app-ribbon-track { --ribbon-gap: 16px; }
+  .app-ribbon-group li { width: 112px; flex-basis: 112px; font-size: 13px; gap: 9px; }
+  .app-ribbon-group img { width: 26px; height: 26px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-ribbon { cursor: default; mask-image: none; padding-inline: 20px; }
+  .app-ribbon-track { width: 100%; transform: none !important; will-change: auto; }
+  .app-ribbon-group { width: 100%; padding: 0; flex-wrap: wrap; justify-content: center; gap: 22px 12px; }
+  .app-ribbon-group[aria-hidden] { display: none; }
+}
