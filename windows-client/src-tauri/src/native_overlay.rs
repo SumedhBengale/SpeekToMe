@@ -158,6 +158,26 @@ fn waveform(i: usize, seconds: f64) -> f64 {
     0.6 + 0.4 * mix
 }
 
+/// Where the pill's top left lands on a screen, in logical pixels: exactly
+/// where the Linux and macOS overlays draw it, including their 4px margin
+/// around the pill. `position` is a `position_code`; 4 is a custom position.
+pub fn pill_screen_position(
+    screen_width: f64,
+    screen_height: f64,
+    position: i32,
+    x: f64,
+    y: f64,
+    meeting: bool,
+) -> (f64, f64) {
+    let p = placement(screen_width, screen_height, position, x, y);
+    let pill_x = if meeting {
+        meeting_pill(p.pill_x, p.pill_y).x
+    } else {
+        p.pill_x
+    };
+    (p.x + pill_x, p.y + p.pill_y)
+}
+
 /// The meeting pill, centred where the dictation pill at `x`, `y` sits and
 /// kept inside the overlay surface.
 pub fn meeting_pill(x: f64, y: f64) -> Rect {
@@ -247,6 +267,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn pill_lands_where_the_overlay_surface_draws_it() {
+        let (w, h) = (1920.0, 1080.0);
+        // Top Center: horizontally centred, 54px from the top.
+        assert_eq!(
+            pill_screen_position(w, h, 1, 0.0, 0.0, false),
+            ((w - PILL_WIDTH) / 2.0, 54.0)
+        );
+        // The meeting pill is centred on the same spot.
+        let meeting = pill_screen_position(w, h, 1, 0.0, 0.0, true);
+        assert_eq!(meeting.0, (w - MEETING_PILL_WIDTH) / 2.0);
+        assert_eq!(meeting.1, 54.0);
+        // Bottom Center keeps its bottom edge 84px above the screen bottom.
+        let bottom = pill_screen_position(w, h, 0, 0.0, 0.0, false);
+        assert_eq!(bottom.1 + PILL_HEIGHT, h - 84.0);
+        // Left and right anchors sit inside the 50px screen margin.
+        assert_eq!(pill_screen_position(w, h, 5, 0.0, 0.0, false).0, 54.0);
+        assert_eq!(
+            pill_screen_position(w, h, 6, 0.0, 0.0, false).0 + PILL_WIDTH,
+            w - 54.0
+        );
+        // The meeting pill never leaves the screen at the left edge.
+        assert!(pill_screen_position(w, h, 5, 0.0, 0.0, true).0 >= 0.0);
     }
 
     #[test]

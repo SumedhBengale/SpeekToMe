@@ -82,6 +82,7 @@ mod win32_impl {
         fn GetWindowRect(hWnd: HWND, lpRect: *mut RECT) -> i32;
         fn ReleaseCapture() -> i32;
         fn SetCapture(hWnd: HWND) -> HWND;
+        fn GetDpiForSystem() -> u32;
         fn GetCursorPos(lpPoint: *mut windows_sys::Win32::Foundation::POINT) -> i32;
         fn LoadCursorW(
             hInstance: *mut std::ffi::c_void,
@@ -243,15 +244,10 @@ mod win32_impl {
             .unwrap_or_else(|e| e.into_inner()) = text.to_string();
     }
 
-    fn refresh_preview(animate: bool) {
+    fn refresh_preview(_animate: bool) {
         let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
         if state != PreviewState::Hidden {
             update_preview_position();
-            if animate {
-                if let Some(send_hwnd) = PREVIEW_HWND.get() {
-                    start_animation(send_hwnd.0);
-                }
-            }
         }
     }
 
@@ -271,6 +267,7 @@ mod win32_impl {
             std::thread::sleep(std::time::Duration::from_secs_f64(wait));
             if PREVIEW_HOLD.swap(false, Ordering::SeqCst) {
                 hide_preview();
+                hide_pill();
             }
         });
     }
@@ -293,35 +290,58 @@ mod win32_impl {
         }
     }
 
-    pub fn calculate_pill_position(
-        config: &crate::config::AppConfig,
-        width: i32,
-        height: i32,
-    ) -> (i32, i32) {
-        if config.pill_position_mode == "custom" {
-            (config.pill_custom_x, config.pill_custom_y)
-        } else {
-            unsafe {
-                let screen_width = GetSystemMetrics(SM_CXSCREEN);
-                let screen_height = GetSystemMetrics(SM_CYSCREEN);
-
-                match config.pill_predefined_position.as_str() {
-                    "Top Left" => (50, 50),
-                    "Top Right" => (screen_width - width - 50, 50),
-                    "Bottom Center" => ((screen_width - width) / 2, screen_height - height - 80),
-                    "Bottom Left" => (50, screen_height - height - 80),
-                    "Bottom Right" => (screen_width - width - 50, screen_height - height - 80),
-                    _ => ((screen_width - width) / 2, 50), // Top Center
-                }
-            }
-        }
+    /// Device pixels per logical pixel. The overlay is designed in logical
+    /// pixels, as on Linux and macOS, so it keeps its size on scaled displays.
+    fn dpi_scale() -> f64 {
+        (unsafe { GetDpiForSystem() } as f64 / 96.0).max(1.0)
     }
 
-    // 4px outer margin on each side for the processing glow ring around the
-    // preview card and the pill.
-    pub const GLOW_MARGIN: i32 = 4;
-    const MEETING_PILL_WIDTH: i32 = crate::native_overlay::MEETING_PILL_WIDTH as i32;
-    pub const PILL_GLOW_MARGIN: i32 = 4;
+    /// Logical pixels to device pixels.
+    fn px(logical: f64) -> i32 {
+        (logical * dpi_scale()).round() as i32
+    }
+
+    /// The pill's top left in device pixels, at the same logical spot the
+    /// Linux and macOS overlays use. `meeting` is the wider meeting pill.
+    pub fn calculate_pill_position(config: &crate::config::AppConfig, meeting: bool) -> (i32, i32) {
+        let scale = dpi_scale();
+        let (width, height) = unsafe {
+            (
+                GetSystemMetrics(SM_CXSCREEN) as f64 / scale,
+                GetSystemMetrics(SM_CYSCREEN) as f64 / scale,
+            )
+        };
+        let position = if config.pill_position_mode == "custom" {
+            4
+        } else {
+            crate::native_overlay::position_code(&config.pill_predefined_position)
+        };
+        let (x, y) = crate::native_overlay::pill_screen_position(
+            width,
+            height,
+            position,
+            config.pill_custom_x as f64,
+            config.pill_custom_y as f64,
+            meeting,
+        );
+        ((x * scale).round() as i32, (y * scale).round() as i32)
+    }
+
+    // 4 logical pixels of outer margin on each side for the processing glow
+    // ring around the preview card and the pill.
+    const GLOW: f64 = 4.0;
+    fn glow_margin() -> i32 {
+        px(GLOW)
+    }
+    fn pill_width() -> i32 {
+        px(crate::native_overlay::PILL_WIDTH)
+    }
+    fn pill_height() -> i32 {
+        px(crate::native_overlay::PILL_HEIGHT)
+    }
+    fn meeting_pill_width() -> i32 {
+        px(crate::native_overlay::MEETING_PILL_WIDTH)
+    }
 
     pub unsafe fn calculate_preview_bounds(text: &str) -> (i32, i32, i32, i32) {
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
@@ -330,7 +350,8 @@ mod win32_impl {
         let config = crate::get_active_config()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let (pill_x, pill_y) = calculate_pill_position(&config, 62, 24);
+        let (pill_x, pill_y) = calculate_pill_position(&config, false);
+        let gm = glow_margin();
 
         let display_text = if text.trim().is_empty() {
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
@@ -348,7 +369,7 @@ mod win32_impl {
         let hdc_screen = GetDC(std::ptr::null_mut());
         let font_name = encode_wide("Segoe UI");
         let hfont = CreateFontW(
-            -13,
+            -px(13.0),
             0,
             0,
             0,
@@ -366,8 +387,9 @@ mod win32_impl {
 
         let old_font = SelectObject(hdc_screen, hfont);
 
-        // The shared card layout: 370px of text, 12px/8px padding.
-        let max_text_width = 370;
+        // The shared card layout: 370px of text, 12px/8px padding, in
+        // logical pixels.
+        let max_text_width = px(370.0);
         let mut calc_rect = RECT {
             left: 0,
             top: 0,
@@ -392,25 +414,26 @@ mod win32_impl {
         let measured_w = calc_rect.right - calc_rect.left;
         let measured_h = calc_rect.bottom - calc_rect.top;
 
-        let pad_x = 12;
-        let pad_y = 8;
-        let card_w = (measured_w + pad_x * 2).clamp(160, 394);
-        let card_h = (measured_h + pad_y * 2).max(28);
+        let pad_x = px(12.0);
+        let pad_y = px(8.0);
+        let card_w = (measured_w + pad_x * 2).clamp(px(160.0), px(394.0));
+        let card_h = (measured_h + pad_y * 2).max(px(28.0));
 
-        // Include GLOW_MARGIN on all 4 sides for the outer halo
-        let total_w = card_w + GLOW_MARGIN * 2;
-        let total_h = card_h + GLOW_MARGIN * 2;
+        // Include the glow margin on all 4 sides for the outer halo
+        let total_w = card_w + gm * 2;
+        let total_h = card_h + gm * 2;
 
-        let mut preview_x = pill_x + (62 - total_w) / 2;
-        preview_x = preview_x.clamp(4, screen_width - total_w - 4);
+        let edge = px(4.0);
+        let mut preview_x = pill_x + (pill_width() - total_w) / 2;
+        preview_x = preview_x.clamp(edge, (screen_width - total_w - edge).max(edge));
 
         // The card itself sits 8px from the pill; its halo may overlap the pill's.
         let preview_y = if pill_y < screen_height / 2 {
             // Below the pill
-            (pill_y + 24 + 8 - GLOW_MARGIN).min(screen_height - total_h - 4)
+            (pill_y + pill_height() + px(8.0) - gm).min(screen_height - total_h - edge)
         } else {
             // Above the pill
-            (pill_y - 8 - total_h + GLOW_MARGIN).max(4)
+            (pill_y - px(8.0) - total_h + gm).max(edge)
         };
 
         (preview_x, preview_y, total_w, total_h)
@@ -431,14 +454,15 @@ mod win32_impl {
                 let config = crate::get_active_config()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let (x, y) = calculate_pill_position(&config, 62, 24);
+                let (x, y) = calculate_pill_position(&config, false);
+                let gm = glow_margin();
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    x - PILL_GLOW_MARGIN,
-                    y - PILL_GLOW_MARGIN,
-                    62 + PILL_GLOW_MARGIN * 2,
-                    24 + PILL_GLOW_MARGIN * 2,
+                    x - gm,
+                    y - gm,
+                    pill_width() + gm * 2,
+                    pill_height() + gm * 2,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
                 BringWindowToTop(hwnd);
@@ -453,11 +477,19 @@ mod win32_impl {
         }
     }
 
-    pub fn hide_overlay() {
+    fn hide_pill() {
         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
             unsafe {
                 ShowWindow(send_hwnd.0, SW_HIDE);
             }
+        }
+    }
+
+    pub fn hide_overlay() {
+        // A finished dictation keeps its pill up beside the card while the
+        // final words polish in; the hold hides both afterwards.
+        if !PREVIEW_HOLD.load(Ordering::SeqCst) {
+            hide_pill();
         }
         if let Some(app) = crate::TAURI_APP.get() {
             use tauri::Emitter;
@@ -502,15 +534,15 @@ mod win32_impl {
                 let config = crate::get_active_config()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let (x, y) = calculate_pill_position(&config, MEETING_PILL_WIDTH, 24);
+                let (x, y) = calculate_pill_position(&config, true);
 
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
                     x,
                     y,
-                    MEETING_PILL_WIDTH,
-                    24,
+                    meeting_pill_width(),
+                    pill_height(),
                     SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
                 BringWindowToTop(hwnd);
@@ -543,16 +575,17 @@ mod win32_impl {
                 let config = crate::get_active_config()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let (def_x, def_y) = calculate_pill_position(&config, 62, 24);
+                let (def_x, def_y) = calculate_pill_position(&config, false);
+                let gm = glow_margin();
 
-                // Reposition back to default position and 62x24 size, then hide
+                // Reposition back to the default position and size, then hide
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    def_x - PILL_GLOW_MARGIN,
-                    def_y - PILL_GLOW_MARGIN,
-                    62 + PILL_GLOW_MARGIN * 2,
-                    24 + PILL_GLOW_MARGIN * 2,
+                    def_x - gm,
+                    def_y - gm,
+                    pill_width() + gm * 2,
+                    pill_height() + gm * 2,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
                 ShowWindow(hwnd, SW_HIDE);
@@ -567,12 +600,7 @@ mod win32_impl {
     }
 
     pub fn show_preview() {
-        if let Some(send_hwnd) = PREVIEW_HWND.get() {
-            unsafe {
-                ShowWindow(send_hwnd.0, SW_SHOWNA);
-            }
-            start_animation(send_hwnd.0);
-        }
+        update_preview_position();
     }
 
     pub fn hide_preview() {
@@ -598,14 +626,13 @@ mod win32_impl {
         if let Some(send_hwnd) = crate::OVERLAY_HWND.get() {
             let hwnd = send_hwnd.0;
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
-            let pill_width = if state == PreviewState::Meeting {
-                MEETING_PILL_WIDTH
+            let meeting = state == PreviewState::Meeting;
+            let width = if meeting {
+                meeting_pill_width()
             } else {
-                62
+                pill_width()
             };
-            let (x, y) = if state == PreviewState::Meeting
-                && MEETING_DRAGGED_X.load(Ordering::Relaxed) >= 0
-            {
+            let (x, y) = if meeting && MEETING_DRAGGED_X.load(Ordering::Relaxed) >= 0 {
                 (
                     MEETING_DRAGGED_X.load(Ordering::Relaxed),
                     MEETING_DRAGGED_Y.load(Ordering::Relaxed),
@@ -614,21 +641,17 @@ mod win32_impl {
                 let config = crate::get_active_config()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                calculate_pill_position(&config, pill_width, 24)
+                calculate_pill_position(&config, meeting)
             };
-            let margin = if state == PreviewState::Meeting {
-                0
-            } else {
-                PILL_GLOW_MARGIN
-            };
+            let margin = if meeting { 0 } else { glow_margin() };
             unsafe {
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
                     x - margin,
                     y - margin,
-                    pill_width + margin * 2,
-                    24 + margin * 2,
+                    width + margin * 2,
+                    pill_height() + margin * 2,
                     SWP_NOACTIVATE,
                 );
                 BringWindowToTop(hwnd);
@@ -638,11 +661,28 @@ mod win32_impl {
         update_preview_position();
     }
 
+    /// The card shows once there are words to show, or while polishing:
+    /// before the first words only the pill is visible, as on Linux and macOS.
+    fn preview_visible() -> bool {
+        let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+        match state {
+            PreviewState::Processing => true,
+            PreviewState::Listening => !get_preview_text().trim().is_empty(),
+            PreviewState::Hidden | PreviewState::Meeting => false,
+        }
+    }
+
     pub fn update_preview_position() {
         if let Some(send_hwnd) = PREVIEW_HWND.get() {
             let hwnd = send_hwnd.0;
             unsafe {
-                update_layered_preview(hwnd);
+                if preview_visible() {
+                    update_layered_preview(hwnd);
+                    ShowWindow(hwnd, SW_SHOWNA);
+                    start_animation(hwnd);
+                } else {
+                    ShowWindow(hwnd, SW_HIDE);
+                }
             }
         }
     }
@@ -748,8 +788,8 @@ mod win32_impl {
                     let new_y = pt.y - off_y;
                     let screen_w = GetSystemMetrics(SM_CXSCREEN);
                     let screen_h = GetSystemMetrics(SM_CYSCREEN);
-                    let clamped_x = new_x.clamp(2, screen_w - MEETING_PILL_WIDTH - 2);
-                    let clamped_y = new_y.clamp(2, screen_h - 26);
+                    let clamped_x = new_x.clamp(2, screen_w - meeting_pill_width() - 2);
+                    let clamped_y = new_y.clamp(2, screen_h - pill_height() - 2);
                     SetWindowPos(
                         hwnd,
                         HWND_TOPMOST,
@@ -905,11 +945,7 @@ mod win32_impl {
             let bg_color = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed);
 
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
-            let margin = if state == PreviewState::Meeting {
-                0.0
-            } else {
-                PILL_GLOW_MARGIN as f64
-            };
+            let scale = dpi_scale();
 
             static SMOOTHED_VOLUME: std::sync::atomic::AtomicU64 =
                 std::sync::atomic::AtomicU64::new(0);
@@ -926,30 +962,38 @@ mod win32_impl {
             );
             SMOOTHED_VOLUME.store(smoothed.to_bits(), Ordering::Relaxed);
 
-            let pill = crate::native_overlay::Rect {
-                x: margin,
-                y: margin,
-                width: width as f64 - margin * 2.0,
-                height: height as f64 - margin * 2.0,
-            };
+            // The pill in logical pixels: the meeting pill fills its window,
+            // the dictation pill sits inside the glow margin.
             let meeting = state == PreviewState::Meeting;
+            let pill = if meeting {
+                crate::native_overlay::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: crate::native_overlay::MEETING_PILL_WIDTH,
+                    height: crate::native_overlay::PILL_HEIGHT,
+                }
+            } else {
+                crate::native_overlay::Rect {
+                    x: GLOW,
+                    y: GLOW,
+                    width: crate::native_overlay::PILL_WIDTH,
+                    height: crate::native_overlay::PILL_HEIGHT,
+                }
+            };
             // The meeting pill keeps its logo at the left, before its label.
             let logo = if meeting {
                 crate::native_overlay::meeting_logo(pill)
             } else {
-                (
-                    (width as f64 - crate::native_overlay::PILL_WIDTH) / 2.0,
-                    (height as f64 - crate::native_overlay::PILL_HEIGHT) / 2.0,
-                )
+                (pill.x, pill.y)
             };
             let label = if meeting {
-                meeting_label_mask(hdc_screen, &bmi, width, height, pill)
+                meeting_label_mask(hdc_screen, &bmi, width, height, pill, scale)
             } else {
                 Vec::new()
             };
             crate::overlay_paint::paint(
                 &crate::overlay_paint::Scene {
-                    scale: 1.0,
+                    scale,
                     seconds: animation_seconds(),
                     background: crate::native_overlay::color(bg_color),
                     wave: crate::native_overlay::color(
@@ -1008,6 +1052,7 @@ mod win32_impl {
         width: i32,
         height: i32,
         pill: crate::native_overlay::Rect,
+        scale: f64,
     ) -> Vec<f32> {
         let pixel_count = (width * height) as usize;
         let mut coverage = vec![0f32; pixel_count];
@@ -1027,7 +1072,7 @@ mod win32_impl {
             mask.fill(0);
             let font_name = encode_wide("Segoe UI");
             let hfont = CreateFontW(
-                -(crate::native_overlay::MEETING_LABEL_SIZE as i32),
+                -px(crate::native_overlay::MEETING_LABEL_SIZE),
                 0,
                 0,
                 0,
@@ -1048,10 +1093,10 @@ mod win32_impl {
             let text_box = crate::native_overlay::meeting_label_box(pill);
             let label = encode_wide(crate::native_overlay::MEETING_LABEL);
             let mut rect = RECT {
-                left: text_box.x.round() as i32,
-                top: text_box.y.round() as i32,
-                right: (text_box.x + text_box.width).round() as i32,
-                bottom: (text_box.y + text_box.height).round() as i32,
+                left: (text_box.x * scale).round() as i32,
+                top: (text_box.y * scale).round() as i32,
+                right: ((text_box.x + text_box.width) * scale).round() as i32,
+                bottom: ((text_box.y + text_box.height) * scale).round() as i32,
             };
             DrawTextW(
                 hdc_mask,
@@ -1140,7 +1185,7 @@ mod win32_impl {
 
             let font_name = encode_wide("Segoe UI");
             let hfont = CreateFontW(
-                -13,
+                -px(13.0),
                 0,
                 0,
                 0,
@@ -1155,10 +1200,11 @@ mod win32_impl {
                 DEFAULT_PITCH | FF_DONTCARE,
                 font_name.as_ptr(),
             );
-            let pad_x = 12;
-            let pad_y = 8;
-            let text_left = GLOW_MARGIN + pad_x;
-            let text_right = width - (GLOW_MARGIN + pad_x);
+            let gm = glow_margin();
+            let pad_x = px(12.0);
+            let pad_y = px(8.0);
+            let text_left = gm + pad_x;
+            let text_right = width - (gm + pad_x);
             let render_mask = |text: &str| -> Vec<f32> {
                 let mut coverage = vec![0f32; pixel_count];
                 let hdc_mask = CreateCompatibleDC(hdc_screen);
@@ -1182,9 +1228,9 @@ mod win32_impl {
                     let wide = encode_wide(text);
                     let mut text_rect = RECT {
                         left: text_left,
-                        top: GLOW_MARGIN + pad_y,
+                        top: gm + pad_y,
                         right: text_right,
-                        bottom: height - (GLOW_MARGIN + pad_y),
+                        bottom: height - (gm + pad_y),
                     };
                     if wide.len() > 1 {
                         DrawTextW(
@@ -1229,10 +1275,13 @@ mod win32_impl {
                 .collect();
             DeleteObject(hfont);
 
-            let gm = GLOW_MARGIN as f64;
+            // The card in logical pixels, derived from the window so it lines
+            // up with the text masks to the device pixel.
+            let scale = dpi_scale();
+            let card_x = gm as f64 / scale;
             crate::overlay_paint::paint(
                 &crate::overlay_paint::Scene {
-                    scale: 1.0,
+                    scale,
                     seconds,
                     background,
                     wave: crate::native_overlay::color(
@@ -1244,10 +1293,10 @@ mod win32_impl {
                     volume: 0.0,
                     label: None,
                     card: Some(crate::native_overlay::Rect {
-                        x: gm,
-                        y: gm,
-                        width: width as f64 - gm * 2.0,
-                        height: height as f64 - gm * 2.0,
+                        x: card_x,
+                        y: card_x,
+                        width: (width - gm * 2) as f64 / scale,
+                        height: (height - gm * 2) as f64 / scale,
                     }),
                     text: Some(crate::overlay_paint::Text {
                         color: text_color,
@@ -1738,8 +1787,8 @@ mod win32_impl {
             WS_POPUP,
             0,
             0,
-            62 + PILL_GLOW_MARGIN * 2,
-            24 + PILL_GLOW_MARGIN * 2,
+            pill_width() + glow_margin() * 2,
+            pill_height() + glow_margin() * 2,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
@@ -1951,8 +2000,7 @@ mod win32_stub {
 
     pub fn calculate_pill_position(
         _config: &crate::config::AppConfig,
-        _width: i32,
-        _height: i32,
+        _meeting: bool,
     ) -> (i32, i32) {
         (0, 0)
     }
