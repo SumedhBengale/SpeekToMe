@@ -307,3 +307,42 @@ func TestASRProtocolErrorIsNotSuccessfulText(t *testing.T) {
 		t.Fatal("ASR error lost", err)
 	}
 }
+
+func TestStreamingInitialPromptKeepsRollingContext(t *testing.T) {
+	origCfg, origRaw := config.ConfigManager.Get(), config.ConfigManager.GetRawAll()
+	defer config.ConfigManager.Set(origCfg, origRaw)
+	origKey := config.DeepInfraAPIKey
+	config.DeepInfraAPIKey = "test-key"
+	defer func() { config.DeepInfraAPIKey = origKey }()
+	pipeline.GlobalCircuitBreaker.Reset()
+	defer pipeline.GlobalCircuitBreaker.Reset()
+
+	var prompts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Error(err)
+			return
+		}
+		defer r.MultipartForm.RemoveAll()
+		prompts = append(prompts, r.FormValue("prompt"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "next chunk"})
+	}))
+	defer srv.Close()
+
+	testCfg := origCfg
+	testCfg.Models.StreamingSTTModels = []config.STTStreamingModelSpec{{
+		STTModelSpec: config.STTModelSpec{Provider: "deepinfra", Model: "openai/whisper-large-v3-turbo", Enabled: true, EndpointOverride: srv.URL, TimeoutMs: 2000, InitialPrompt: "Transcribe verbatim.", SupportedLanguages: []string{"*"}},
+		Type:         "pseudo",
+	}}
+	config.ConfigManager.Set(testCfg, origRaw)
+
+	for _, rolling := range []string{" we moved the meeting ", ""} {
+		if _, _, _, _, err := RunStreamingTranscribeWithPrompt(context.Background(), []byte("mock audio"), []string{"en"}, rolling); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(prompts, []string{"Transcribe verbatim. we moved the meeting", "Transcribe verbatim."}) {
+		t.Fatalf("Configured prompt must precede the rolling context, not replace it: %q", prompts)
+	}
+}

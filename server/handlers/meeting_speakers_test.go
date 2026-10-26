@@ -191,3 +191,104 @@ func TestSkippingSpeakerNamesMarksTheMeetingReviewed(t *testing.T) {
 		t.Fatal("skipping must mark the review without naming anyone", meeting, err)
 	}
 }
+
+func TestRenameMeetingChangesTheSavedTitle(t *testing.T) {
+	database, err := db.NewDatabase(filepath.Join(t.TempDir(), "rename.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	owner, err := database.GetOrCreateUser("owner", "owner@example.invalid", "Meeting Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := database.GetOrCreateUser("other", "other@example.invalid", "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	database.CreateSession("owner-token", owner, 0)
+	database.CreateSession("other-token", other, 0)
+	id, err := database.CreateMeeting(owner, "Meeting on 10/17/2026 01:21 PM", 110, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{DB: database}
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /meetings/{id}/title", app.HandleRenameMeeting)
+	rename := func(token, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("PUT", fmt.Sprintf("/meetings/%d/title", id), strings.NewReader(body))
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	for token, code := range map[string]int{"": 401, "other-token": 403} {
+		if got := rename(token, `{"title":"Hijacked"}`); got.Code != code {
+			t.Fatalf("auth %q: %d %s", token, got.Code, got.Body.String())
+		}
+	}
+	for _, invalid := range []string{`{"title":"   "}`, `{"title":"two\nlines"}`, `{"title":"` + strings.Repeat("é", meetingTitleLimit+1) + `"}`, `{"title":"x","extra":1}`, `{"title":"x"} {}`} {
+		if got := rename("owner-token", invalid); got.Code != 400 {
+			t.Fatalf("accepted %s: %d", invalid[:min(len(invalid), 40)], got.Code)
+		}
+	}
+	got := rename("owner-token", `{"title":"  Weekly design sync  "}`)
+	if got.Code != 200 || !strings.Contains(got.Body.String(), `"title":"Weekly design sync"`) {
+		t.Fatal(got.Code, got.Body.String())
+	}
+	meeting, err := database.GetMeeting(id)
+	if err != nil || meeting.Title != "Weekly design sync" {
+		t.Fatal("rename not saved", meeting, err)
+	}
+}
+
+func TestRenamedSpeakersReachEveryMentionInSummaries(t *testing.T) {
+	segments := `[{"speaker":"Meeting Owner","channel":"mic","speaker_id":"speaker_local","start":0,"end":1,"text":"a"},` +
+		`{"speaker":"Speaker 1","channel":"system","speaker_id":"spk_1","start":1,"end":2,"text":"b"},` +
+		`{"speaker":"Speaker 2","channel":"system","speaker_id":"spk_2","start":2,"end":3,"text":"c"},` +
+		`{"speaker":"Speaker 3","channel":"system","speaker_id":"spk_3","start":3,"end":4,"text":"d"}]`
+	m := db.Meeting{
+		SegmentsJSON: segments,
+		SpeakerNames: map[string]string{"system:spk_1": "Alice", "system:spk_3": "Chen"},
+		// A summary written with speaker tokens.
+		Summary:     "[[system:spk_1]] and [[system:spk_3]] agreed; [[system:spk_2]] objected; [[mic:speaker_local]] will decide. **[[system:spk_1]]'s** plan wins.",
+		ActionItems: "- [[system:spk_3]]: send the notes\n- [[system:spk_9]]: left early",
+	}
+	view := prepareMeetingSpeakerView(m, "Meeting Owner")
+	if want := "Alice and Chen agreed; Speaker 2 objected; Meeting Owner will decide. **Alice's** plan wins."; view.Summary != want {
+		t.Fatalf("token summary:\n got %q\nwant %q", view.Summary, want)
+	}
+	if want := "- Chen: send the notes\n- Speaker 9: left early"; view.ActionItems != want {
+		t.Fatalf("token actions:\n got %q\nwant %q", view.ActionItems, want)
+	}
+
+	// Older summaries have labels, written however the model chose to.
+	m.Summary = "speaker 1 spoke first. Speakers 1 and 3 agreed, Speakers 2, 3 & 1 voted. SPEAKER 3 left; Speaker 10 was absent."
+	m.ActionItems = "- Speaker 1 and Speaker 3: follow up"
+	view = prepareMeetingSpeakerView(m, "Meeting Owner")
+	if want := "Alice spoke first. Alice and Chen agreed, Speaker 2, Chen & Alice voted. Chen left; Speaker 10 was absent."; view.Summary != want {
+		t.Fatalf("legacy summary:\n got %q\nwant %q", view.Summary, want)
+	}
+	if want := "- Alice and Chen: follow up"; view.ActionItems != want {
+		t.Fatalf("legacy actions:\n got %q\nwant %q", view.ActionItems, want)
+	}
+
+	// Swapping two names must not cascade.
+	m.SpeakerNames = map[string]string{"system:spk_1": "Speaker 2", "system:spk_2": "Speaker 1"}
+	m.Summary = "Speaker 1 then Speaker 2, and [[system:spk_1]] then [[system:spk_2]]."
+	if got := prepareMeetingSpeakerView(m, "Meeting Owner").Summary; got != "Speaker 2 then Speaker 1, and Speaker 2 then Speaker 1." {
+		t.Fatal(got)
+	}
+}
+
+func TestSummaryMustOnlyUseTheMeetingsParticipantTokens(t *testing.T) {
+	participants := map[string]bool{"[[mic:speaker_local]]": true, "[[system:spk_2]]": true}
+	if _, actions, err := parseSummary(`{"summary":"[[system:spk_2]] presented.","action_items":["[[mic:speaker_local]]: review"]}`, participants); err != nil || actions != "- [[mic:speaker_local]]: review" {
+		t.Fatal(actions, err)
+	}
+	if _, _, err := parseSummary(`{"summary":"[[system:spk_7]] presented.","action_items":[]}`, participants); err == nil {
+		t.Fatal("accepted an invented participant")
+	}
+}

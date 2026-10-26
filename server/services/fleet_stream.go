@@ -74,7 +74,7 @@ type WordBatch struct {
 // timestamped finals; any other provider returns a session with nil Words.
 func CreateMeetingStreamingSession(ctx context.Context, provider string, languages []string, terms []db.VocabularyTerm, offset float64) (*UpstreamStreamingSession, error) {
 	if provider == "self_hosted_nemotron_3_5" && os.Getenv("SPEEKTOME_FLEET_URL") != "" {
-		return createFleetSession(ctx, provider, languages, terms, offset, true)
+		return createFleetSession(ctx, provider, languages, terms, offset, true, false)
 	}
 	return CreateUpstreamStreamingSession(ctx, provider, languages, "", terms)
 }
@@ -84,10 +84,12 @@ func CreateMeetingStreamingSession(ctx context.Context, provider string, languag
 func createFleetStreamingSession(parent context.Context, provider string, languages []string, prompt string, terms []db.VocabularyTerm) (*UpstreamStreamingSession, error) {
 	// User prompts belong to the grammar LLM, never decoder bias.
 	_ = prompt
-	return createFleetSession(parent, provider, languages, terms, 0, false)
+	return createFleetSession(parent, provider, languages, terms, 0, false, true)
 }
 
-func createFleetSession(parent context.Context, provider string, languages []string, terms []db.VocabularyTerm, offset float64, words bool) (*UpstreamStreamingSession, error) {
+// live asks the worker for vocabulary proposals as words are confirmed, which
+// the session delivers on Proposals.
+func createFleetSession(parent context.Context, provider string, languages []string, terms []db.VocabularyTerm, offset float64, words, live bool) (*UpstreamStreamingSession, error) {
 	tokenPath := os.Getenv("SPEEKTOME_WORKER_TOKEN_FILE")
 	if tokenPath == "" {
 		tokenPath = "/etc/speektome-fleet/worker.token"
@@ -107,6 +109,9 @@ func createFleetSession(parent context.Context, provider string, languages []str
 	if words {
 		stream.Words = make(chan WordBatch, 64)
 	}
+	if live {
+		stream.Proposals = make(chan vocabulary.Result, 1)
+	}
 	session := map[string]any{"sample_rate": 16000, "language": utils.ResolveNemotronLanguage(languages), "word_timestamps": true, "speaker_diarization": false, "endpointing_ms": 1200}
 	var phrases []string
 	for _, term := range terms {
@@ -118,11 +123,11 @@ func createFleetSession(parent context.Context, provider string, languages []str
 		phrases = nil
 	}
 	if len(phrases) > 0 {
-		session["vocabulary_matching"] = vocabulary.Config{Terms: phrases}
+		session["vocabulary_matching"] = vocabulary.Config{Terms: phrases, Live: live}
 	}
 	dial := func(prefix string, confirmed, offset float64) (*websocket.Conn, error) {
 		if len(phrases) > 0 {
-			session["vocabulary_matching"] = vocabulary.Config{Terms: phrases, Prefix: prefix, Confirmed: confirmed, AudioOffset: offset}
+			session["vocabulary_matching"] = vocabulary.Config{Terms: phrases, Prefix: prefix, Confirmed: confirmed, AudioOffset: offset, Live: live}
 		}
 		dialCtx, stop := context.WithTimeout(ctx, 6*time.Second)
 		defer stop()
@@ -148,6 +153,9 @@ func createFleetSession(parent context.Context, provider string, languages []str
 		defer close(stream.TextChan)
 		if stream.Words != nil {
 			defer close(stream.Words)
+		}
+		if stream.Proposals != nil {
+			defer close(stream.Proposals)
 		}
 		defer cancel()
 		defer func() {
@@ -289,7 +297,19 @@ func createFleetSession(parent context.Context, provider string, languages []str
 				if json.Unmarshal(event.data, &payload) != nil {
 					continue
 				}
-				if payload.Type == "vocabulary.final" && committing {
+				if payload.Type == vocabulary.UpdateType && stream.Proposals != nil {
+					// Each update holds every proposal so far; only the latest matters.
+					var result vocabulary.Result
+					if json.Unmarshal(event.data, &result) == nil && result.ValidateAs(vocabulary.UpdateType, history, phrases) == nil {
+						select {
+						case <-stream.Proposals:
+						default:
+						}
+						stream.Proposals <- result
+					}
+					continue
+				}
+				if payload.Type == vocabulary.FinalType && committing {
 					var result vocabulary.Result
 					if json.Unmarshal(event.data, &result) == nil && result.Validate(history, phrases) == nil {
 						stream.vocabularyResult = &result

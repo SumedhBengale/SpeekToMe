@@ -47,6 +47,12 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	customPrompt := strings.TrimSpace(r.FormValue("prompt"))
+	if len(customPrompt) > pipeline.MaxCustomPromptChars {
+		http.Error(w, fmt.Sprintf("Bad request: prompt too long (maximum %d characters)", pipeline.MaxCustomPromptChars), http.StatusBadRequest)
+		return
+	}
+
 	language, languageErr := utils.ResolveSpeakingLanguage(r.FormValue("language"), user.Languages)
 	if languageErr != nil {
 		http.Error(w, languageErr.Error(), http.StatusBadRequest)
@@ -139,11 +145,11 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	pctx := pipeline.NewPipelineContext(user.ID)
 	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true"
 
-	audit := finalizeVocabulary(ctx, rawText, vocabTerms, nil)
+	audit := finalizeVocabulary(ctx, rawText, vocabTerms, nil, nil)
 	currentText := audit.Resolved
 	if enhance && rawText != "" {
 		grammarInput, restore := audit.Protect()
-		enhancer := pipeline.NewGrammarEnhancementTransform(config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancer := pipeline.NewGrammarEnhancementTransform(customPrompt, config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		tstart := time.Now()
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
@@ -356,8 +362,8 @@ func (a *App) HandleValidatePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prompt := strings.TrimSpace(req.Prompt)
-	if len(prompt) > 1000 {
-		http.Error(w, "Bad request: prompt too long (maximum 1000 characters)", http.StatusBadRequest)
+	if len(prompt) > pipeline.MaxCustomPromptChars {
+		http.Error(w, fmt.Sprintf("Bad request: prompt too long (maximum %d characters)", pipeline.MaxCustomPromptChars), http.StatusBadRequest)
 		return
 	}
 

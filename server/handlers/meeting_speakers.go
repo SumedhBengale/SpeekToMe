@@ -115,22 +115,72 @@ func prepareMeetingSpeakerView(m db.Meeting, owner string) meetingSpeakerView {
 			replacements[label] = m.SpeakerNames[id]
 		}
 	}
+	// Summaries name participants by token; each token shows the speaker's
+	// current name, or their default label until they are renamed.
+	tokenNames := map[string]string{}
+	for _, speaker := range view.Speakers {
+		name := m.SpeakerNames[speaker.ID]
+		if name == "" {
+			name = speaker.DefaultName
+			if speaker.IsMe && strings.TrimSpace(owner) != "" {
+				name = strings.TrimSpace(owner)
+			}
+		}
+		tokenNames[speaker.ID] = name
+	}
 	// Always derive text from canonical stored output, never from the last renamed output.
-	view.ActionItems = replaceMeetingSpeakerLabels(m.ActionItems, replacements)
-	view.Summary = replaceMeetingSpeakerLabels(m.Summary, replacements)
+	view.ActionItems = resolveSpeakerTokens(replaceMeetingSpeakerLabels(m.ActionItems, replacements), tokenNames, owner)
+	view.Summary = resolveSpeakerTokens(replaceMeetingSpeakerLabels(m.Summary, replacements), tokenNames, owner)
 	view.Transcript = replaceMeetingSpeakerLabels(m.Transcript, replacements)
 	data, _ := json.Marshal(named)
 	view.SegmentsJSON = string(data)
 	return view
 }
 
-// One pass, longest labels first: Speaker 1 cannot corrupt Speaker 10 or cascade
-// into another replacement when two names are swapped. Unicode boundaries also
-// protect names embedded in other words.
+// resolveSpeakerTokens replaces each [[channel:id]] token with that speaker's
+// name. A token for a speaker with no segments left still reads naturally.
+func resolveSpeakerTokens(text string, names map[string]string, owner string) string {
+	return speakerTokenPattern.ReplaceAllStringFunc(text, func(token string) string {
+		id := strings.TrimSuffix(strings.TrimPrefix(token, "[["), "]]")
+		if name, ok := names[id]; ok {
+			return name
+		}
+		if id == "mic:speaker_local" && strings.TrimSpace(owner) != "" {
+			return strings.TrimSpace(owner)
+		}
+		if number := numberedSpeakerID.FindStringSubmatch(strings.TrimPrefix(id, "system:")); number != nil {
+			return "Speaker " + number[1]
+		}
+		return "Unknown speaker"
+	})
+}
+
+// speakerList matches "Speakers 1 and 3" and "speakers 1, 2 & 4", which a
+// summary writes instead of repeating each label.
+const speakerList = `speakers\s+\d+(?:\s*(?:,\s*(?:and\s+|&\s*)?|and\s+|&\s*)\d+)+`
+
+var listedSpeakerNumber = regexp.MustCompile(`\d+`)
+
+// replaceMeetingSpeakerLabels renames labels written in older summaries, which
+// predate speaker tokens. It ignores case, expands lists such as "Speakers 1
+// and 3", and runs as one pass, longest labels first: Speaker 1 cannot corrupt
+// Speaker 10 or cascade into another replacement when two names are swapped.
+// Unicode boundaries also protect names embedded in other words.
 func replaceMeetingSpeakerLabels(text string, names map[string]string) string {
-	labels := make([]string, 0, len(names))
-	for label := range names {
-		labels = append(labels, label)
+	lower := map[string]string{}
+	for label, name := range names {
+		key := strings.ToLower(label)
+		if previous, seen := lower[key]; seen && previous != name {
+			lower[key] = "" // labels differing only by case are ambiguous
+			continue
+		}
+		lower[key] = name
+	}
+	labels := make([]string, 0, len(lower))
+	for label, name := range lower {
+		if name != "" {
+			labels = append(labels, label)
+		}
 	}
 	if len(labels) == 0 {
 		return text
@@ -139,19 +189,35 @@ func replaceMeetingSpeakerLabels(text string, names map[string]string) string {
 	for i := range labels {
 		labels[i] = regexp.QuoteMeta(labels[i])
 	}
-	re := regexp.MustCompile(strings.Join(labels, "|"))
+	re := regexp.MustCompile(`(?i)(` + speakerList + `)|(?:` + strings.Join(labels, "|") + `)`)
 	var out strings.Builder
 	last := 0
 	isWord := func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_' }
-	for _, match := range re.FindAllStringIndex(text, -1) {
+	for _, match := range re.FindAllStringSubmatchIndex(text, -1) {
 		start, end := match[0], match[1]
 		before, _ := utf8.DecodeLastRuneInString(text[:start])
 		after, _ := utf8.DecodeRuneInString(text[end:])
 		if (start > 0 && isWord(before)) || (end < len(text) && isWord(after)) {
 			continue
 		}
+		replacement := lower[strings.ToLower(text[start:end])]
+		if match[2] >= 0 {
+			// A list: each number becomes that speaker's name, or keeps its label.
+			list := strings.TrimSpace(text[start+len("speakers") : end])
+			renamed := false
+			replacement = listedSpeakerNumber.ReplaceAllStringFunc(list, func(number string) string {
+				if name := lower["speaker "+number]; name != "" {
+					renamed = true
+					return name
+				}
+				return "Speaker " + number
+			})
+			if !renamed {
+				continue
+			}
+		}
 		out.WriteString(text[last:start])
-		out.WriteString(names[text[start:end]])
+		out.WriteString(replacement)
 		last = end
 	}
 	out.WriteString(text[last:])

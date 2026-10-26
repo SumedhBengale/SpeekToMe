@@ -138,6 +138,12 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	startPayload.Prompt = strings.TrimSpace(startPayload.Prompt)
+	if len(startPayload.Prompt) > pipeline.MaxCustomPromptChars {
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: fmt.Sprintf("Custom prompt is too long (maximum %d characters)", pipeline.MaxCustomPromptChars)})
+		return
+	}
+
 	language, languageErr := utils.ResolveSpeakingLanguage(startPayload.Language, user.Languages)
 	if languageErr != nil {
 		_ = writeStreamJSON(ctx, conn, StreamEventMessage{Type: "error", Error: languageErr.Error()})
@@ -222,6 +228,35 @@ func (a *App) handleRealStreamingSession(
 	var chunkCount int
 	var timingMutex sync.Mutex
 
+	// The preview shows each vocabulary proposal as the ASR words until Jev
+	// decides it, then the decision, so the end of the stream has less to do.
+	var previewMutex sync.Mutex
+	var lastPreview string
+	var live *vocabularydecision.Live
+	sendPreview := func() {
+		previewMutex.Lock()
+		defer previewMutex.Unlock()
+		preview := live.Display()
+		if preview == "" || preview == lastPreview {
+			return
+		}
+		lastPreview = preview
+		_ = writeStreamJSON(ctx, conn, StreamEventMessage{
+			Type:     "interim",
+			Text:     preview,
+			Provider: provider,
+		})
+	}
+	live = vocabularydecision.NewLive(vocabularydecision.Default(), sendPreview)
+	defer live.Close()
+	if upstream.Proposals != nil {
+		go func() {
+			for proposal := range upstream.Proposals {
+				live.Propose(proposal)
+			}
+		}()
+	}
+
 	// Goroutine to receive text tokens from upstream real-time model and forward to client
 	textReceiverDone := make(chan struct{})
 	go func() {
@@ -245,11 +280,8 @@ func (a *App) handleRealStreamingSession(
 				log.Printf("[STREAM REAL LATENCY] Chunk #%d -> Upstream GPU RTT: %v | Words: %d", currChunk, rtt.Round(time.Millisecond), len(strings.Fields(normText)))
 			}
 
-			_ = writeStreamJSON(ctx, conn, StreamEventMessage{
-				Type:     "interim",
-				Text:     normText,
-				Provider: provider,
-			})
+			live.Text(normText)
+			sendPreview()
 		}
 	}()
 
@@ -312,7 +344,7 @@ func (a *App) handleRealStreamingSession(
 	finalRawTranscript := committedText
 	textMutex.Unlock()
 
-	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, upstream.VocabularyResult())
+	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, upstream.VocabularyResult(), live)
 	grammarInput, restoreGrammar := audit.Protect()
 
 	audioRaw := fullAudioAccumulator.Bytes()
@@ -329,7 +361,7 @@ func (a *App) handleRealStreamingSession(
 
 	if finalRawTranscript != "" {
 		tstart := time.Now()
-		enhancer := pipeline.NewGrammarEnhancementTransform(config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancer := pipeline.NewGrammarEnhancementTransform(startPayload.Prompt, config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {
@@ -444,15 +476,8 @@ func (a *App) handlePseudoStreamingSession(
 				toTranscribe = data
 			}
 
+			// User prompts belong to the grammar LLM, never decoder bias.
 			promptCtx := utils.GetPromptContext(committedText, 150)
-			effectivePrompt := promptCtx
-			if customPrompt != "" {
-				if promptCtx != "" {
-					effectivePrompt = customPrompt + " " + promptCtx
-				} else {
-					effectivePrompt = customPrompt
-				}
-			}
 
 			audioDurationSec := utils.GetOggOpusDuration(toTranscribe)
 			if audioDurationSec <= 0 && (startPayload.Format == "pcm" || startPayload.Format == "") {
@@ -468,7 +493,7 @@ func (a *App) handlePseudoStreamingSession(
 				currentChunk, user.ID, len(data), audioDurationSec)
 
 			startASR := time.Now()
-			rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, effectivePrompt)
+			rawChunkText, _, usedProvider, _, err := services.RunStreamingTranscribeWithPrompt(ctx, toTranscribe, user.Languages, promptCtx)
 			asrDuration := time.Since(startASR)
 
 			if err != nil {
@@ -533,7 +558,7 @@ func (a *App) handlePseudoStreamingSession(
 		}
 	}
 
-	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, nil)
+	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, nil, nil)
 	grammarInput, restoreGrammar := audit.Protect()
 
 	whisperLatency := time.Since(whisperStart).Seconds()
@@ -546,7 +571,7 @@ func (a *App) handlePseudoStreamingSession(
 	if enhance && finalRawTranscript != "" {
 		tstart := time.Now()
 		log.Printf("[STREAM AI ENHANCE START] User ID: %d | Protected Vocab: %d terms", user.ID, len(audit.Decisions))
-		enhancer := pipeline.NewGrammarEnhancementTransform(config.DeepSeekAPIKey, config.DeepSeekAPIURL)
+		enhancer := pipeline.NewGrammarEnhancementTransform(customPrompt, config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)
 		dsLatency = time.Since(tstart).Seconds()
 		if terr != nil {

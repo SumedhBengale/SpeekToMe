@@ -99,7 +99,7 @@ func mergeMeeting(mic, system jobTranscript, speakers []jobSpeaker, name string)
 // Tests replace it.
 var meetingLLM = func(ctx context.Context, user int64, system, prompt string) (string, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
-	return pipeline.RunDeepSeekChatCompletion(ctx, client, "", system, prompt, pipeline.NewPipelineContext(user))
+	return pipeline.RunTaskCompletion(ctx, client, system, prompt, pipeline.NewPipelineContext(user))
 }
 
 const (
@@ -358,23 +358,26 @@ const (
 	summaryAttempts       = 3
 )
 
-const summaryPrompt = `You are an expert meeting assistant. The input is a meeting transcript, one "Speaker: text" line per turn.
+const summaryPrompt = `You are an expert meeting assistant. The input is a meeting transcript, one "[[participant token]]: text" line per turn.
 Return only a JSON object, with no markdown fences, with exactly two fields:
 - "summary": a concise, professional markdown summary of the meeting with its key discussion points and decisions.
-- "action_items": a markdown list of action items, each with its owner.
-Use each speaker label exactly as it appears when naming owners or speakers; never abbreviate, renumber or invent speaker labels.` + descriptionRule
+- "action_items": a markdown list of action items, each with its owner.` + speakerTokenRule + descriptionRule
 
-const sectionSummaryPrompt = `You are an expert meeting assistant. The input is one part of a longer meeting transcript, one "Speaker: text" line per turn.
+const sectionSummaryPrompt = `You are an expert meeting assistant. The input is one part of a longer meeting transcript, one "[[participant token]]: text" line per turn.
 Return only a JSON object, with no markdown fences, with exactly two fields:
 - "summary": markdown notes of this part's key discussion points and decisions.
-- "action_items": a markdown list of the action items raised in this part, each with its owner.
-Use each speaker label exactly as it appears; never abbreviate, renumber or invent speaker labels.` + descriptionRule
+- "action_items": a markdown list of the action items raised in this part, each with its owner.` + speakerTokenRule + descriptionRule
 
 const combinePrompt = `You are an expert meeting assistant. The input is the notes and action items of each consecutive part of one long meeting.
 Combine them into the whole meeting's result. Return only a JSON object, with no markdown fences, with exactly two fields:
 - "summary": a concise, professional markdown summary of the whole meeting with its key discussion points and decisions.
-- "action_items": one deduplicated markdown list of all action items, each with its owner.
-Use each speaker label exactly as it appears; never abbreviate, renumber or invent speaker labels.` + descriptionRule
+- "action_items": one deduplicated markdown list of all action items, each with its owner.` + speakerTokenRule + descriptionRule
+
+// speakerTokenRule makes the summary name people by token. The server swaps
+// each token for the speaker's current name whenever the meeting is read, so a
+// rename reaches every mention, however the sentence is phrased.
+const speakerTokenRule = `
+Participants are identified by tokens such as [[system:spk_2]]. Whenever you refer to a participant, in the summary or as an action item's owner, write their token exactly as given, every time. Never write a participant's name or a label like "Speaker 2" instead, and never invent a token.`
 
 // descriptionRule keeps the organiser's description in its place: it explains
 // the meeting, but only the transcript says what happened in it.
@@ -387,15 +390,28 @@ The input may begin with a "Meeting description" written by the organiser before
 func (r *meetingRun) summarize(ctx context.Context, turns []*pipelineTurn) (string, string) {
 	var lines []string
 	words := 0
+	r.speakerTokens = map[string]bool{}
+	var participants []string
 	for _, turn := range turns {
-		lines = append(lines, turn.SpeakerName+": "+turn.Text)
+		token := speakerToken(turn)
+		if !r.speakerTokens[token] {
+			r.speakerTokens[token] = true
+			who := "a participant"
+			if turn.Channel == "mic" {
+				who = turn.SpeakerName + ", who recorded the meeting"
+			}
+			participants = append(participants, token+" is "+who)
+		}
+		lines = append(lines, token+": "+turn.Text)
 		words += len(turn.Words)
 	}
 	if len(lines) == 0 {
 		return "", ""
 	}
+	r.participants = "Participants:\n" + strings.Join(participants, "\n")
 	if words <= summaryWordLimit {
-		summary, actions, _ := r.summaryCall(ctx, summaryPrompt, r.withDescription("Transcript", strings.Join(lines, "\n")))
+		summary, actions, err := r.summaryCall(ctx, summaryPrompt, r.withDescription("Transcript", strings.Join(lines, "\n")))
+		r.summaryErr = err
 		return summary, actions
 	}
 	var sections [][]string
@@ -433,20 +449,31 @@ func (r *meetingRun) summarize(ctx context.Context, turns []*pipelineTurn) (stri
 		}
 	}
 	if len(parts) == 0 {
+		r.summaryErr = errors.New("every section summary failed")
 		return "", ""
 	}
-	summary, actions, _ := r.summaryCall(ctx, combinePrompt, r.withDescription("Notes of each part", strings.Join(parts, "\n\n")))
+	summary, actions, err := r.summaryCall(ctx, combinePrompt, r.withDescription("Notes of each part", strings.Join(parts, "\n\n")))
+	r.summaryErr = err
 	return summary, actions
 }
 
 // withDescription prefixes a summary input with the organiser's description,
 // labelled so the model can tell it from the transcript.
 func (r *meetingRun) withDescription(label, body string) string {
+	input := r.participants + "\n\n" + label + ":\n" + body
 	if r.description == "" {
-		return body
+		return input
 	}
-	return "Meeting description (written by the organiser before the meeting; background only):\n" + r.description + "\n\n" + label + ":\n" + body
+	return "Meeting description (written by the organiser before the meeting; background only):\n" + r.description + "\n\n" + input
 }
+
+// speakerToken names a turn's speaker by the same identity the meeting view
+// uses, such as [[system:spk_3]] or [[mic:speaker_local]].
+func speakerToken(turn *pipelineTurn) string {
+	return "[[" + turn.Channel + ":" + turn.SpeakerID + "]]"
+}
+
+var speakerTokenPattern = regexp.MustCompile(`\[\[[a-z]+:[A-Za-z0-9_]+\]\]`)
 
 func (r *meetingRun) summaryCall(ctx context.Context, system, input string) (string, string, error) {
 	var last error
@@ -456,7 +483,7 @@ func (r *meetingRun) summaryCall(ctx context.Context, system, input string) (str
 			last = err
 			continue
 		}
-		summary, actions, err := parseSummary(content)
+		summary, actions, err := parseSummary(content, r.speakerTokens)
 		if err == nil {
 			return summary, actions, nil
 		}
@@ -468,7 +495,9 @@ func (r *meetingRun) summaryCall(ctx context.Context, system, input string) (str
 	return "", "", last
 }
 
-func parseSummary(content string) (string, string, error) {
+// parseSummary reads a summary reply, rejecting any speaker token that is not
+// one of the meeting's participants.
+func parseSummary(content string, participants map[string]bool) (string, string, error) {
 	content = strings.TrimSpace(content)
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")
@@ -495,6 +524,11 @@ func parseSummary(content string) (string, string, error) {
 		}
 		if len(items) > 0 {
 			actions = strings.Join(items, "\n")
+		}
+	}
+	for _, token := range speakerTokenPattern.FindAllString(reply.Summary+"\n"+actions, -1) {
+		if !participants[token] {
+			return "", "", errors.New("unknown participant token")
 		}
 	}
 	return reply.Summary, actions, nil

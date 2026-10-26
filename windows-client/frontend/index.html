@@ -1101,7 +1101,6 @@
           </div>
         </div>
 
-        <p id="meeting-cloud-storage" class="section-desc" role="status"></p>
         <!-- Dynamic Content Switcher -->
         <div id="meetings-container">
           <!-- 1. Dashboard View (default) -->
@@ -1122,6 +1121,7 @@
                 <span>New Meeting</span>
               </button>
             </div>
+            <p id="meeting-cloud-storage" class="meetings-storage-note" role="status"></p>
 
             <div class="meetings-outer-card">
               <!-- Loading State -->
@@ -1155,7 +1155,52 @@
             </div>
           </div>
 
-          <!-- 2. Recording View -->
+          <!-- 2. New Meeting Setup View: nothing is recorded until Start Meeting -->
+          <div id="meetings-setup-view" class="hidden">
+            <form id="meeting-setup-form" class="settings-card meeting-setup-card" novalidate>
+              <h2 class="meeting-setup-heading">New meeting</h2>
+              <p class="section-desc">Name the meeting and check your audio. Recording starts only when you press Start meeting.</p>
+
+              <div class="setting-group meeting-setup-field">
+                <label for="meeting-setup-name" class="setting-title">Meeting name</label>
+                <input type="text" id="meeting-setup-name" class="fluent-input" maxlength="512" placeholder="e.g. Weekly design sync" autocomplete="off" required>
+              </div>
+
+              <div class="setting-group meeting-setup-field">
+                <label for="meeting-setup-description" class="setting-title">Description <span class="meeting-setup-optional">(optional)</span></label>
+                <textarea id="meeting-setup-description" class="fluent-textarea" maxlength="2000" rows="3" placeholder="What is this meeting about, and who is in it? This helps the summary."></textarea>
+                <div id="meeting-setup-description-count" class="meeting-setup-count">0 / 2000</div>
+              </div>
+
+              <div class="meeting-setup-levels">
+                <div class="meter-container">
+                  <span class="meter-label">🎙️ Microphone</span>
+                  <div class="meter-bg">
+                    <div id="setup-mic-level-fill" class="meter-fill" style="width: 0%;"></div>
+                  </div>
+                </div>
+                <div class="meter-container">
+                  <span class="meter-label">🔊 System audio (other participants)</span>
+                  <div class="meter-bg">
+                    <div id="setup-loopback-level-fill" class="meter-fill" style="width: 0%;"></div>
+                  </div>
+                </div>
+                <div class="meeting-setup-test-row">
+                  <button type="button" id="meeting-setup-test-sound" class="fluent-button secondary">Play test sound</button>
+                  <span id="meeting-setup-sound-status" class="meeting-setup-hint" role="status"></span>
+                </div>
+              </div>
+
+              <p id="meeting-setup-error" class="meeting-setup-error" role="alert" hidden></p>
+
+              <div class="meeting-setup-actions">
+                <button type="button" id="meeting-setup-cancel" class="fluent-button secondary">Cancel</button>
+                <button type="submit" id="meeting-setup-start" class="fluent-button primary large" disabled>Start meeting</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- 3. Recording View -->
           <div id="meetings-recording-view" class="hidden">
             <div class="settings-card recorder-card" style="padding: 30px; text-align: center;">
               <div class="recorder-status" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 15px;">
@@ -1206,7 +1251,7 @@
             </div>
           </div>
 
-          <!-- 3. Detail View -->
+          <!-- 4. Detail View -->
           <div id="meetings-detail-view" class="hidden">
             <!-- Top Action Navigation -->
             <div class="meetings-detail-topbar">
@@ -1235,6 +1280,12 @@
               <!-- Top Row: Title & Action Dots -->
               <div class="meeting-player-header">
                 <h3 id="meeting-detail-title" class="meeting-player-title">Recording...</h3>
+                <form id="meeting-title-form" class="meeting-title-form" hidden>
+                  <input type="text" id="meeting-title-edit" class="fluent-input" maxlength="512" aria-label="Meeting name" autocomplete="off" required>
+                  <button type="submit" id="meeting-title-save" class="fluent-button primary small">Save</button>
+                  <button type="button" id="meeting-title-cancel" class="fluent-button secondary small">Cancel</button>
+                  <span id="meeting-title-status" class="meeting-title-status" role="alert"></span>
+                </form>
                 <div class="meeting-detail-menu-wrapper">
                   <button type="button" id="meeting-detail-menu-btn" class="meeting-card-menu-btn" title="More options" aria-label="More options">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -1244,6 +1295,13 @@
                     </svg>
                   </button>
                   <div id="meeting-detail-dropdown" class="meeting-card-dropdown hidden">
+                    <button type="button" id="meeting-detail-rename-opt" class="meeting-dropdown-item">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 20h9"></path>
+                        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+                      </svg>
+                      <span>Rename</span>
+                    </button>
                     <button type="button" id="meeting-detail-delete-opt" class="meeting-dropdown-item danger">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="3 6 5 6 21 6"></polyline>
@@ -1296,63 +1354,58 @@
                 </form>
               </details>
 
-              <!-- Custom Audio Player Bar -->
-              <div class="meeting-custom-audio-bar">
-                <p id="meeting-cloud-status" class="section-desc" role="status"></p>
-                <button type="button" id="meeting-cloud-download" disabled>Download cloud audio</button>
-                <audio id="meeting-audio-player" preload="metadata" style="display: none;"></audio>
+              <!-- Audio: the player on one row, cloud backup on the next -->
+              <div class="meeting-audio-section">
+                <div class="meeting-custom-audio-bar">
+                  <audio id="meeting-audio-player" preload="metadata" style="display: none;"></audio>
                 
-                <!-- Circular Play Button -->
-                <button type="button" id="audio-play-btn" class="audio-play-circle-btn" title="Play / Pause Audio">
-                  <svg id="audio-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <polygon points="6 4 20 12 6 20 6 4"></polygon>
-                  </svg>
-                  <svg id="audio-pause-icon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="6" y="4" width="4" height="16"></rect>
-                    <rect x="14" y="4" width="4" height="16"></rect>
-                  </svg>
-                </button>
+                  <!-- Circular Play Button -->
+                  <button type="button" id="audio-play-btn" class="audio-play-circle-btn" title="Play / Pause Audio">
+                    <svg id="audio-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                    </svg>
+                    <svg id="audio-pause-icon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="4" width="4" height="16"></rect>
+                      <rect x="14" y="4" width="4" height="16"></rect>
+                    </svg>
+                  </button>
 
-                <!-- Digital Time Counter -->
-                <div class="audio-time-counter">
-                  <span id="audio-time-current">0:00</span>
-                  <span class="audio-time-slash">/</span>
-                  <span id="audio-time-total">0:00</span>
+                  <!-- Digital Time Counter -->
+                  <div class="audio-time-counter">
+                    <span id="audio-time-current">0:00</span>
+                    <span class="audio-time-slash">/</span>
+                    <span id="audio-time-total">0:00</span>
+                  </div>
+
+                  <!-- Scrubber Track -->
+                  <div id="audio-scrubber-track" class="audio-scrubber-track">
+                    <div id="audio-scrubber-fill" class="audio-scrubber-fill"></div>
+                    <div id="audio-scrubber-thumb" class="audio-scrubber-thumb"></div>
+                  </div>
+
+                  <!-- Volume Button -->
+                  <button type="button" id="audio-vol-btn" class="audio-ctrl-btn" title="Mute / Unmute">
+                    <svg id="audio-vol-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    </svg>
+                  </button>
+
+                  <!-- Speed Selector -->
+                  <div class="audio-speed-wrapper">
+                    <select id="audio-speed-select" class="audio-speed-select" title="Playback Speed">
+                      <option value="0.75">0.75x</option>
+                      <option value="1.0" selected>1.0x</option>
+                      <option value="1.25">1.25x</option>
+                      <option value="1.5">1.5x</option>
+                      <option value="2.0">2.0x</option>
+                    </select>
+                  </div>
                 </div>
-
-                <!-- Scrubber Track -->
-                <div id="audio-scrubber-track" class="audio-scrubber-track">
-                  <div id="audio-scrubber-fill" class="audio-scrubber-fill"></div>
-                  <div id="audio-scrubber-thumb" class="audio-scrubber-thumb"></div>
+                <div class="meeting-cloud-row">
+                  <p id="meeting-cloud-status" class="meeting-cloud-status" role="status"></p>
+                  <button type="button" id="meeting-cloud-download" class="fluent-button secondary small" disabled>Download cloud audio</button>
                 </div>
-
-                <!-- Volume Button -->
-                <button type="button" id="audio-vol-btn" class="audio-ctrl-btn" title="Mute / Unmute">
-                  <svg id="audio-vol-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                  </svg>
-                </button>
-
-                <!-- Speed Selector -->
-                <div class="audio-speed-wrapper">
-                  <select id="audio-speed-select" class="audio-speed-select" title="Playback Speed">
-                    <option value="0.75">0.75x</option>
-                    <option value="1.0" selected>1.0x</option>
-                    <option value="1.25">1.25x</option>
-                    <option value="1.5">1.5x</option>
-                    <option value="2.0">2.0x</option>
-                  </select>
-                </div>
-
-                <!-- More Options Button -->
-                <button type="button" id="audio-options-btn" class="audio-ctrl-btn" title="Audio Options">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                    <circle cx="12" cy="5" r="1.75"></circle>
-                    <circle cx="12" cy="12" r="1.75"></circle>
-                    <circle cx="12" cy="19" r="1.75"></circle>
-                  </svg>
-                </button>
               </div>
 
               <!-- Sub-Tabs & Delete Button -->
@@ -1469,11 +1522,7 @@
                         <tr>
                           <th style="width: 50px;">#</th>
                           <th style="width: 150px;">SPEAKER</th>
-                          <th style="width: 80px;">START</th>
-                          <th style="width: 80px;">END</th>
-                          <th style="width: 80px;">DURATION</th>
-                          <th style="width: 100px;">TIMELINE</th>
-                          <th>TRANSCRIPT TEXT</th>
+                          <th>TRANSCRIPT</th>
                         </tr>
                       </thead>
                       <tbody id="timeline-inspector-tbody">
@@ -1481,6 +1530,7 @@
                       </tbody>
                     </table>
                   </div>
+                  <div id="inspector-row-tooltip" class="inspector-row-tooltip" role="tooltip" hidden></div>
                 </div>
               </div>
 
@@ -1507,7 +1557,7 @@
             </div>
           </div>
 
-          <!-- 4. Loading/Processing View -->
+          <!-- 5. Loading/Processing View -->
           <div id="meetings-processing-view" class="hidden">
             <div class="settings-card processing-card" style="padding: 40px; text-align: center;">
               <div class="spinner" style="margin: 0 auto 20px auto; width: 40px; height: 40px; border-width: 3px;"></div>

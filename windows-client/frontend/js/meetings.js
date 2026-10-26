@@ -20,7 +20,8 @@ function setupMeetingsUI() {
   const deleteBtn = document.getElementById('meeting-delete-btn');
   const searchInput = document.getElementById('meetings-search-input');
   
-  if (startRecBtn) startRecBtn.addEventListener('click', startMeetingRecording);
+  if (startRecBtn) startRecBtn.addEventListener('click', () => openMeetingSetup());
+  setupMeetingSetupPage();
   if (stopRecBtn) stopRecBtn.addEventListener('click', stopMeetingRecording);
   if (cancelRecBtn) cancelRecBtn.addEventListener('click', cancelMeetingRecording);
   if (backBtn) backBtn.addEventListener('click', () => {
@@ -75,10 +76,15 @@ function setupMeetingsUI() {
       const [mic, loopback] = payload;
       // Perceptual dynamic scaling (0-1000 RMS -> 0-100% meter bar)
       const percent = level => level > 0 ? Math.min(100, Math.max(3, Math.round(Math.pow(level / 250, 0.5) * 100))) : 0;
-      const micFill = document.getElementById('mic-level-fill');
-      const loopbackFill = document.getElementById('loopback-level-fill');
-      if (micFill) micFill.style.width = `${percent(mic)}%`;
-      if (loopbackFill) loopbackFill.style.width = `${percent(loopback)}%`;
+      for (const id of ['mic-level-fill', 'setup-mic-level-fill']) {
+        const fill = document.getElementById(id);
+        if (fill) fill.style.width = `${percent(mic)}%`;
+      }
+      for (const id of ['loopback-level-fill', 'setup-loopback-level-fill']) {
+        const fill = document.getElementById(id);
+        if (fill) fill.style.width = `${percent(loopback)}%`;
+      }
+      if (testSoundPeak !== null) testSoundPeak = Math.max(testSoundPeak, loopback);
     });
     listen('meeting-error', (event) => {
       const badge = document.getElementById('meetings-live-status-badge');
@@ -112,6 +118,7 @@ function setupMeetingsUI() {
 }
 
 function showDashboardView() {
+  leaveMeetingSetup();
   meetingDetailGeneration++;resetMeetingAudio();
   const mainHdr = document.getElementById('meetings-main-header');
   if (mainHdr) mainHdr.classList.remove('hidden');
@@ -122,6 +129,7 @@ function showDashboardView() {
 }
 
 function showRecordingView() {
+  leaveMeetingSetup();
   const mainHdr = document.getElementById('meetings-main-header');
   if (mainHdr) mainHdr.classList.remove('hidden');
   document.getElementById('meetings-dashboard-view').classList.add('hidden');
@@ -130,7 +138,18 @@ function showRecordingView() {
   document.getElementById('meetings-processing-view').classList.add('hidden');
 }
 
+function showSetupView() {
+  const mainHdr = document.getElementById('meetings-main-header');
+  if (mainHdr) mainHdr.classList.remove('hidden');
+  document.getElementById('meetings-dashboard-view').classList.add('hidden');
+  document.getElementById('meetings-recording-view').classList.add('hidden');
+  document.getElementById('meetings-detail-view').classList.add('hidden');
+  document.getElementById('meetings-processing-view').classList.add('hidden');
+  document.getElementById('meetings-setup-view').classList.remove('hidden');
+}
+
 function showDetailView() {
+  leaveMeetingSetup();
   const mainHdr = document.getElementById('meetings-main-header');
   if (mainHdr) mainHdr.classList.add('hidden');
   document.getElementById('meetings-dashboard-view').classList.add('hidden');
@@ -140,6 +159,7 @@ function showDetailView() {
 }
 
 function showProcessingView() {
+  leaveMeetingSetup();
   const mainHdr = document.getElementById('meetings-main-header');
   if (mainHdr) mainHdr.classList.remove('hidden');
   document.getElementById('meetings-dashboard-view').classList.add('hidden');
@@ -727,6 +747,54 @@ async function viewMeeting(id) {
       };
     }
 
+    // Rename: the title becomes an inline field; Enter saves, Escape cancels.
+    const renameOpt = document.getElementById('meeting-detail-rename-opt');
+    const titleForm = document.getElementById('meeting-title-form');
+    const titleEdit = document.getElementById('meeting-title-edit');
+    const titleSave = document.getElementById('meeting-title-save');
+    const titleCancel = document.getElementById('meeting-title-cancel');
+    const titleStatus = document.getElementById('meeting-title-status');
+    const endTitleEdit = () => {
+      titleForm.hidden = true;
+      titleEl.hidden = false;
+      titleStatus.textContent = '';
+    };
+    endTitleEdit();
+    if (renameOpt) {
+      renameOpt.onclick = (e) => {
+        e.stopPropagation();
+        if (detailDropdown) detailDropdown.classList.add('hidden');
+        titleEdit.value = m.title || '';
+        titleEl.hidden = true;
+        titleForm.hidden = false;
+        titleEdit.focus();
+        titleEdit.select();
+      };
+    }
+    titleCancel.onclick = endTitleEdit;
+    titleEdit.onkeydown = (e) => { if (e.key === 'Escape') endTitleEdit(); };
+    titleForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const title = titleEdit.value.trim();
+      if (!title) { titleStatus.textContent = 'Enter a name.'; return; }
+      if (title === m.title) { endTitleEdit(); return; }
+      titleSave.disabled = true;
+      titleStatus.textContent = 'Saving…';
+      try {
+        const response = await apiRequest('PUT', `/meetings/${encodeURIComponent(id)}/title`, { title });
+        if (!response.ok) throw new Error(await response.text() || 'The name could not be saved.');
+        const saved = await response.json();
+        if (!isCurrent()) return;
+        m.title = saved.title;
+        titleEl.textContent = saved.title;
+        endTitleEdit();
+      } catch (error) {
+        if (isCurrent()) titleStatus.textContent = error.message || 'The name could not be saved. Try again.';
+      } finally {
+        titleSave.disabled = false;
+      }
+    };
+
     // Setup active tab (Timeline by default)
     const tabBtns = document.querySelectorAll('.detail-tab-btn');
     const panes = document.querySelectorAll('.detail-tab-pane');
@@ -991,6 +1059,32 @@ function renderMeetingSpeakerEditor(meeting, onSaved) {
   };
 }
 
+// A turn's start, as m:ss or h:mm:ss.
+function formatTurnTime(seconds) {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+// The segment table's hover details follow the pointer, kept inside the window.
+function showInspectorTooltip(text, event) {
+  const tip = document.getElementById('inspector-row-tooltip');
+  if (!tip) return;
+  tip.textContent = text;
+  tip.hidden = false;
+  const x = Math.min(event.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+  const y = Math.min(event.clientY + 16, window.innerHeight - tip.offsetHeight - 8);
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+}
+
+function hideInspectorTooltip() {
+  const tip = document.getElementById('inspector-row-tooltip');
+  if (tip) tip.hidden = true;
+}
+
 // Dedicated High-Precision Visualizer & Timeline Renderer
 function renderMeetingTimeline(segments, totalDuration, player, currentUserName) {
   const legendContainer = document.getElementById('timeline-speaker-legend');
@@ -1010,6 +1104,7 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
   rulerTrack.innerHTML = '';
   if (legendContainer) legendContainer.innerHTML = '';
   if (inspectorTbody) inspectorTbody.innerHTML = '';
+  hideInspectorTooltip();
   lanesBody.innerHTML = `
     <div class="timeline-playhead" id="timeline-playhead">
       <div class="timeline-playhead-line"></div>
@@ -1206,8 +1301,6 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
       };
 
       const duration = Math.max(0, seg.end - seg.start);
-      const leftPct = (seg.start / totalDuration) * 100;
-      const widthPct = Math.max((duration / totalDuration) * 100, 1.5);
 
       const tr = document.createElement('tr');
       tr.className = 'turn-table-row';
@@ -1225,20 +1318,16 @@ function renderMeetingTimeline(segments, totalDuration, player, currentUserName)
             ${escapeHtml(theme.label)}
           </span>
         </td>
-        <td>
-          <span class="inspector-start-badge">${seg.start.toFixed(2)}s</span>
-        </td>
-        <td style="font-family: monospace; color: var(--text-muted);">${seg.end.toFixed(2)}s</td>
-        <td style="font-family: monospace; color: var(--text-secondary); font-weight: 600;">${duration.toFixed(2)}s</td>
-        <td>
-          <div class="mini-timeline-bar">
-            <div class="mini-timeline-fill" style="left: ${leftPct}%; width: ${widthPct}%; background-color: ${theme.color};"></div>
-          </div>
-        </td>
-        <td style="color: var(--text-primary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(seg.text || '')}">
+        <td class="inspector-transcript">
           ${seg.text ? escapeHtml(seg.text) : '<span style="color: var(--text-muted); font-style: italic;">(No speech text)</span>'}
         </td>
       `;
+
+      // Start and duration appear on hover instead of taking columns.
+      const details = `Start ${formatTurnTime(seg.start)} · Duration ${duration.toFixed(1)}s`;
+      tr.onmouseenter = (event) => showInspectorTooltip(details, event);
+      tr.onmousemove = (event) => showInspectorTooltip(details, event);
+      tr.onmouseleave = hideInspectorTooltip;
 
       tr.onclick = () => {
         player.currentTime = seg.start;
@@ -1556,18 +1645,120 @@ function rehydrateActiveMeeting(activeMeeting) {
   // Level meters are driven by 'meeting-levels' events from the desktop process.
 }
 
-async function startMeetingRecording() {
-  console.log("[MEETING FRONTEND] startMeetingRecording clicked");
-  const token = currentConfig?.signed_in ? true : null;
-  if (!token) {
-    console.warn("[MEETING FRONTEND] No session token found. Aborting.");
+// The New Meeting setup page. The meters run from a level-only preview of the
+// meeting's own captures; nothing is recorded until Start meeting.
+let testSoundPeak = null; // loopback peak while the test sound plays
+let meetingSetupOpen = false;
+
+function setupMeetingSetupPage() {
+  const form = document.getElementById('meeting-setup-form');
+  const name = document.getElementById('meeting-setup-name');
+  const description = document.getElementById('meeting-setup-description');
+  const count = document.getElementById('meeting-setup-description-count');
+  const start = document.getElementById('meeting-setup-start');
+  const cancel = document.getElementById('meeting-setup-cancel');
+  const testSound = document.getElementById('meeting-setup-test-sound');
+  if (!form || !name || !description || !start || !cancel || !testSound) return;
+  name.addEventListener('input', () => { start.disabled = !name.value.trim(); });
+  description.addEventListener('input', () => {
+    if (count) count.textContent = `${description.value.length} / 2000`;
+  });
+  cancel.addEventListener('click', () => { showDashboardView(); loadMeetings(); });
+  testSound.addEventListener('click', playMeetingTestSound);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!start.disabled) startMeetingRecording(name.value.trim(), description.value.trim());
+  });
+  // Leaving the Meetings tab closes the devices too.
+  document.querySelectorAll('.nav-item[data-tab]').forEach(item => {
+    item.addEventListener('click', () => {
+      if (item.getAttribute('data-tab') !== 'meetings') leaveMeetingSetup();
+    });
+  });
+}
+
+function setMeetingSetupError(message) {
+  const error = document.getElementById('meeting-setup-error');
+  if (!error) return;
+  error.textContent = message || '';
+  error.hidden = !message;
+}
+
+async function openMeetingSetup({ keepFields = false } = {}) {
+  if (!currentConfig?.signed_in) {
     showToast("Please sign in to record meeting notes.", "Sign-in Required", "info");
     return;
   }
+  const name = document.getElementById('meeting-setup-name');
+  const description = document.getElementById('meeting-setup-description');
+  const count = document.getElementById('meeting-setup-description-count');
+  const start = document.getElementById('meeting-setup-start');
+  const status = document.getElementById('meeting-setup-sound-status');
+  if (!keepFields) {
+    name.value = '';
+    description.value = '';
+    if (count) count.textContent = '0 / 2000';
+    setMeetingSetupError('');
+  }
+  start.disabled = !name.value.trim();
+  if (status) status.textContent = '';
+  showSetupView();
+  meetingSetupOpen = true;
+  name.focus();
+  try {
+    const devices = await invoke('start_meeting_preview');
+    if (!meetingSetupOpen) { invoke('stop_meeting_preview').catch(() => {}); return; }
+    if (devices && !devices.system_audio && status) {
+      status.textContent = devices.system_audio_error || "System audio isn't being captured, so other participants won't be recorded.";
+    }
+  } catch (err) {
+    if (meetingSetupOpen) setMeetingSetupError(String(err));
+  }
+}
 
-  showRecordingView();
+// Stops the preview whenever the setup page is left, however it is left.
+function leaveMeetingSetup() {
+  const view = document.getElementById('meetings-setup-view');
+  if (view) view.classList.add('hidden');
+  if (!meetingSetupOpen) return;
+  meetingSetupOpen = false;
+  testSoundPeak = null;
+  invoke('stop_meeting_preview').catch(() => {});
+}
+
+// Plays the chime and reports whether the system audio meter heard it.
+async function playMeetingTestSound() {
+  const button = document.getElementById('meeting-setup-test-sound');
+  const status = document.getElementById('meeting-setup-sound-status');
+  button.disabled = true;
+  if (status) status.textContent = 'Playing…';
+  testSoundPeak = 0;
+  try {
+    await invoke('play_meeting_test_sound');
+    await new Promise(resolve => setTimeout(resolve, 300)); // let the last levels arrive
+    if (!status) return;
+    if (testSoundPeak > 20) {
+      status.textContent = 'System audio is being captured.';
+    } else {
+      status.textContent = /Mac/i.test(navigator.platform)
+        ? "System audio wasn't captured. Allow SpeekTo.Me in System Settings → Privacy & Security → Screen & System Audio Recording."
+        : "System audio wasn't captured. Check that sound plays from your usual output device.";
+    }
+  } catch (err) {
+    if (status) status.textContent = String(err);
+  } finally {
+    testSoundPeak = null;
+    button.disabled = false;
+  }
+}
+
+async function startMeetingRecording(title, description) {
+  const startButton = document.getElementById('meeting-setup-start');
+  if (startButton) startButton.disabled = true;
+  setMeetingSetupError('');
+  showRecordingView(); // also closes the preview, freeing the devices
   const titleInput = document.getElementById('meeting-title-input');
-  titleInput.value = '';
+  titleInput.value = title;
 
   const turnsList = document.getElementById('meetings-live-turns-list');
   if (turnsList) {
@@ -1588,14 +1779,16 @@ async function startMeetingRecording() {
   meetingSeconds = 0;
 
   try {
-    console.log("[MEETING FRONTEND] Invoking start_meeting command on Tauri backend...");
-    currentMeetingFile = await invoke('start_meeting', { title: "Recording..." });
+    currentMeetingFile = await invoke('start_meeting', { title, description: description || null });
     if (badge) { badge.textContent="Recording locally"; badge.style.color="#4ec9b0"; }
-    console.log("[MEETING FRONTEND] start_meeting returned successfully. Filepath:");
   } catch (err) {
     console.error("[MEETING FRONTEND ERROR] Failed to start meeting recording:");
-    showToast(String(err), "Meeting Start Error", "error");
-    cancelMeetingRecording();
+    // Clear anything half-started, then return to the setup page with the
+    // name and description still filled in.
+    try { await invoke('cancel_meeting'); } catch (_) {}
+    currentMeetingFile = null;
+    await openMeetingSetup({ keepFields: true });
+    setMeetingSetupError(`The meeting couldn't start: ${err}`);
     return;
   }
 

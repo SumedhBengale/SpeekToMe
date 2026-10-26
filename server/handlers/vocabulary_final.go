@@ -10,7 +10,9 @@ import (
 	"time"
 )
 
-func finalizeVocabulary(ctx context.Context, raw string, terms []db.VocabularyTerm, worker *vocabulary.Result) vocabularydecision.Audit {
+// finalizeVocabulary decides the final proposals. With a live resolver, the
+// decisions it made during the stream are reused rather than asked again.
+func finalizeVocabulary(ctx context.Context, raw string, terms []db.VocabularyTerm, worker *vocabulary.Result, live *vocabularydecision.Live) vocabularydecision.Audit {
 	phrases := make([]string, 0, len(terms))
 	for _, t := range terms {
 		phrases = append(phrases, t.Canonical)
@@ -32,6 +34,9 @@ func finalizeVocabulary(ctx context.Context, raw string, terms []db.VocabularyTe
 			proposal = vocabulary.Propose(matchCtx, raw, compiled, vocabulary.TermsHash(phrases))
 			cancel()
 		}
+	}
+	if live != nil {
+		return live.Finish(ctx, proposal, source)
 	}
 	return vocabularydecision.Default().Evaluate(ctx, proposal, source)
 }

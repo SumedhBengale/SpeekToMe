@@ -3,11 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	log "speektome-server/privacylog"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"speektome-server/auth"
 )
@@ -74,6 +77,60 @@ func (a *App) HandleGetMeetingDetail(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(prepareMeetingSpeakerView(*meeting, user.Name))
+}
+
+// meetingTitleLimit matches the limit on titles set at upload.
+const meetingTitleLimit = 512
+
+// HandleRenameMeeting changes an uploaded meeting's title.
+func (a *App) HandleRenameMeeting(w http.ResponseWriter, r *http.Request) {
+	user, err := auth.Authenticate(r, a.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if !a.accountRate(w, r, user.ID, "meeting_update", 30) {
+		return
+	}
+	meetingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || meetingID <= 0 {
+		http.Error(w, "Invalid meeting ID", http.StatusBadRequest)
+		return
+	}
+	var request struct {
+		Title string `json:"title"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		http.Error(w, "Invalid meeting title", http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(request.Title)
+	if title == "" || !utf8.ValidString(title) || utf8.RuneCountInString(title) > meetingTitleLimit || strings.IndexFunc(title, unicode.IsControl) >= 0 {
+		http.Error(w, "Use a meeting name of 1 to 512 characters on one line", http.StatusBadRequest)
+		return
+	}
+	meeting, err := a.DB.GetMeeting(meetingID)
+	if err != nil {
+		http.Error(w, "Meeting not found", http.StatusNotFound)
+		return
+	}
+	if meeting.UserID != user.ID {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	renamed, err := a.DB.RenameMeeting(meetingID, user.ID, title)
+	if err != nil {
+		http.Error(w, "Failed to rename the meeting", http.StatusInternalServerError)
+		return
+	}
+	if !renamed {
+		http.Error(w, "Meeting not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": meetingID, "title": title})
 }
 
 func (a *App) HandleDeleteMeeting(w http.ResponseWriter, r *http.Request) {

@@ -49,8 +49,11 @@ type meetingRun struct {
 	name, description       string
 	user, meeting           int64
 	manifest                map[string]MeetingFile
-	llmSlots                chan struct{} // LLM calls this meeting may run at once
-	gpu                     atomic.Bool   // holds a fleet meeting lease for gap ASR
+	llmSlots                chan struct{}   // LLM calls this meeting may run at once
+	speakerTokens           map[string]bool // participant tokens the summary may use
+	participants            string          // the summary prompt's participant list
+	summaryErr              error           // why the summary failed, if it did
+	gpu                     atomic.Bool     // holds a fleet meeting lease for gap ASR
 	gapSeconds, asrRequests atomic.Int64
 	jevCalls, llmRetries    atomic.Int64
 	llmFallbacks            atomic.Int64
@@ -109,8 +112,12 @@ func (j *MeetingJobs) process(parent context.Context, key, attempt string) {
 		j.retry(key, attempt, message, permanent)
 		return
 	}
-	log.Printf("[MEETINGS] meeting %d processed in %.0fs: gap audio %ds over %d ASR requests, %d Jev calls, %d LLM retries, %d LLM fallbacks",
-		run.meeting, time.Since(began).Seconds(), run.gapSeconds.Load(), run.asrRequests.Load(), run.jevCalls.Load(), run.llmRetries.Load(), run.llmFallbacks.Load())
+	summary := "ok"
+	if run.summaryErr != nil {
+		summary = "failed: " + run.summaryErr.Error()
+	}
+	log.Printf("[MEETINGS] meeting %d processed in %.0fs: gap audio %ds over %d ASR requests, %d Jev calls, %d LLM retries, %d LLM fallbacks, summary %s",
+		run.meeting, time.Since(began).Seconds(), run.gapSeconds.Load(), run.asrRequests.Load(), run.jevCalls.Load(), run.llmRetries.Load(), run.llmFallbacks.Load(), summary)
 }
 
 func (j *MeetingJobs) loadRun(ctx context.Context, key, attempt string) (*meetingRun, error) {

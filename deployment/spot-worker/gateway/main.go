@@ -287,11 +287,12 @@ func (g *gateway) stream(w http.ResponseWriter, r *http.Request, stat *streamSta
 				return
 			}
 			if kind == websocket.TextMessage {
-				if result := post.observe(data); result != nil {
-					encoded, _ := json.Marshal(result)
-					_ = writeFront(websocket.TextMessage, encoded)
-					front.Close()
-					return
+				if event, final := post.observe(data); event != nil {
+					_ = writeFront(websocket.TextMessage, event)
+					if final {
+						front.Close()
+						return
+					}
 				}
 			}
 		}

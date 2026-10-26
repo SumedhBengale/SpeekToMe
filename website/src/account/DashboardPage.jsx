@@ -1,6 +1,7 @@
 // Account dashboard: usage, languages, vocabulary, meetings and profile.
 // Each page receives the account state and actions that App owns as `view`.
-import CommandUsage from '../components/CommandUsage';
+import UsageOverview from '../components/UsageOverview';
+import MeetingDetail from './MeetingDetail';
 import TurnstileWidget from '../components/TurnstileWidget';
 import { SUPPORTED_LANGUAGES, getLanguageName } from '../utils/languages';
 
@@ -37,6 +38,7 @@ export default function DashboardPage({ view }) {
     setActiveMeeting,
     setActiveSubTab,
     setAuthError,
+    setMeetings,
     setDeleteConfirmText,
     setNewVocabTerm,
     setRoute,
@@ -45,6 +47,7 @@ export default function DashboardPage({ view }) {
     setTurnstileToken,
     showDeleteModal,
     successMessage,
+    token,
     turnstileToken,
     user,
     userLanguages,
@@ -69,7 +72,14 @@ export default function DashboardPage({ view }) {
           className={`btn ${activeSubTab === 'stats' ? 'btn-primary' : ''}`}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg> Stats & Logs
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg> Overview
+        </button>
+        <button
+          onClick={() => { setActiveSubTab('history'); setActiveMeeting(null); }}
+          className={`btn ${activeSubTab === 'history' ? 'btn-primary' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><polyline points="3 3 3 8 8 8" /><polyline points="12 7 12 12 15 14" /></svg> History
         </button>
         <button
           onClick={() => { setActiveSubTab('vocab'); setActiveMeeting(null); }}
@@ -105,58 +115,8 @@ export default function DashboardPage({ view }) {
       </div>
 
       {activeSubTab === 'stats' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          <CommandUsage usage={user.command_usage} />
-          {/* Top Row: Usage Analytics & Plan Tier (Side by Side) */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px' }}>
-            <div className="card" style={{ marginBottom: 0 }}>
-              <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg> Usage Analytics
-              </h3>
-
-              <div className="usage-summary">
-                <div className="usage-stats">
-                  <span>Usage Limit ({user.plan_tier.toUpperCase()})</span>
-                  {(() => {
-                    const isPaid = Boolean(user.plan_active && user.plan_tier === 'pro');
-                    const usage = formatUsageParts(user.duration_seconds, user.monthly_limit_seconds || (isPaid ? 180000 : 3600), isPaid);
-                    return (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', paddingBottom:'2px' }}>
-                        {usage.usedStr} / {usage.totalStr}
-                        {usage.isUnlimited && (
-                          <span
-                            className="fup-tooltip-badge"
-                            title={usage.fupTooltip}
-                            aria-label={usage.fupTooltip}
-                          >
-                            <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                          </span>
-                        )}
-                      </span>
-                    );
-                  })()}
-                </div>
-
-                <div className="progress-bar-container">
-                  <div
-                    className="progress-bar-fill"
-                    style={{
-                      width: `${Math.min(
-                        (user.duration_seconds / (user.monthly_limit_seconds || 3600)) * 100,
-                        100
-                      )}%`
-                    }}
-                  ></div>
-                </div>
-
-                <p style={{ fontSize: '13px', color: 'rgba(26, 26, 26, 0.5)', marginTop: '8px' }}>
-                  {user.plan_tier === 'free'
-                    ? 'Upgrade to SpeekTo.Me Pro to get unlimited dictation and access to Advanced AI Enhancement.'
-                    : 'Your Pro plan subscription is active and will renew monthly.'}
-                </p>
-              </div>
-            </div>
-
+        <div className="overview-grid">
+          <UsageOverview user={user} token={token} formatUsageParts={formatUsageParts} />
             <div className="card card-accent" style={{ marginBottom: 0 }}>
               <h3 className="card-title" style={{ display: 'flex', alignItems: 'center' }}>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ marginRight: '6px' }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
@@ -187,12 +147,14 @@ export default function DashboardPage({ view }) {
                 </div>
               )}
             </div>
-          </div>
+        </div>
+      )}
 
-          {/* Bottom Row: Full Width Recent Transcriptions Table */}
+      {activeSubTab === 'history' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           <div className="card" style={{ width: '100%' }}>
             <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg> Recent Transcriptions
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg> Transcription History
             </h3>
             {logs.length === 0 ? (
               <p style={{ color: 'rgba(26, 26, 26, 0.5)', padding: '20px 0', textAlign: 'center' }}>
@@ -409,186 +371,18 @@ export default function DashboardPage({ view }) {
       {activeSubTab === 'meetings' && (
         <>
           {activeMeeting ? (
-            <div className="card">
-              <div className="meeting-detail-header">
-                <div>
-                  <button
-                    onClick={() => setActiveMeeting(null)}
-                    className="btn btn-sm"
-                    style={{ marginBottom: '12px' }}
-                  >
-                    ← Back to Meetings
-                  </button>
-                  <h2 className="meeting-detail-title">{activeMeeting.title}</h2>
-                  <span className="meeting-card-date">Recorded on {formatDate(activeMeeting.timestamp)}</span>
-                </div>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                  <span className="meeting-meta-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-                    {formatSeconds(activeMeeting.duration)}
-                  </span>
-                  <button
-                    onClick={() => handleDeleteMeeting(activeMeeting.id)}
-                    className="btn btn-danger btn-sm"
-                    disabled={loading}
-                  >
-                    Delete Meeting
-                  </button>
-                </div>
-              </div>
-
-              {authError && <div className="auth-error" style={{ marginBottom: '20px' }}>{authError}</div>}
-
-              <div className="meeting-detail-grid">
-                {/* Left Column: AI Summary & Action Items */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                  <div className="meeting-panel-card">
-                    <h3 className="meeting-section-title">Summary & Takeaways</h3>
-                    <div className="meeting-text-box" style={{ maxHeight: '280px' }}>
-                      {activeMeeting.summary || "No summary generated for this meeting."}
-                    </div>
-                  </div>
-
-                  <div className="meeting-panel-card">
-                    <h3 className="meeting-section-title">Action Items</h3>
-                    <div className="meeting-text-box" style={{ maxHeight: '240px' }}>
-                      {activeMeeting.action_items ? (
-                        <ul className="action-items-list">
-                          {activeMeeting.action_items.split('\n').filter(item => item.trim() !== '').map((item, idx) => (
-                            <li key={idx}>{item.replace(/^-\s*\[\s*[x ]\s*\]\s*/, '').replace(/^-\s*/, '')}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <span style={{ color: 'rgba(26,26,26,0.5)' }}>No action items detected.</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right Column: Unified Meeting Chat Dialogue */}
-                <div className="meeting-panel-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                    <h3 className="meeting-section-title" style={{ margin: 0 }}>Conversation Dialogue</h3>
-                    <span style={{ fontSize: '12px', color: 'rgba(26,26,26,0.5)', fontWeight: 500 }}>
-                      Speaker Diarization
-                    </span>
-                  </div>
-
-                  <div className="meeting-text-box meeting-chat-stream" style={{ maxHeight: '600px', minHeight: '400px', overflowY: 'auto' }}>
-                    {(() => {
-                      let segments = [];
-                      try {
-                        segments = JSON.parse(activeMeeting.segments_json);
-                      } catch (e) { }
-
-                      const userName = (user && user.name) ? user.name.toLowerCase() : '';
-
-                      // 1. If we have segmented diarization, group continuous turns with start timestamp
-                      if (segments && Array.isArray(segments) && segments.length > 0) {
-                        const groupedTurns = [];
-                        let currentTurn = null;
-
-                        segments.forEach((seg) => {
-                          const spk = seg.speaker || 'Speaker';
-                          if (!currentTurn || currentTurn.speaker !== spk) {
-                            currentTurn = {
-                              speaker: spk,
-                              start: seg.start || 0,
-                              end: seg.end || 0,
-                              text: seg.text || ''
-                            };
-                            groupedTurns.push(currentTurn);
-                          } else {
-                            currentTurn.text += ' ' + (seg.text || '');
-                            currentTurn.end = seg.end || currentTurn.end;
-                          }
-                        });
-
-                        return (
-                          <div className="segments-list">
-                            {groupedTurns.map((turn, idx) => {
-                              const speakerName = turn.speaker || 'Speaker';
-                              const cleanLowerSpeaker = speakerName.toLowerCase().replace(/[\[\]]/g, '').trim();
-                              const isRemote = cleanLowerSpeaker.includes('remote') || cleanLowerSpeaker.includes('system') || cleanLowerSpeaker.includes('participant') || cleanLowerSpeaker.includes('caller');
-                              const isMe = !isRemote && (cleanLowerSpeaker === 'you' || cleanLowerSpeaker === 'me' || (userName && cleanLowerSpeaker.includes(userName)) || !cleanLowerSpeaker.includes('speaker 2'));
-                              const initials = speakerName.replace(/[\[\]]/g, '').split(' ').filter(Boolean).map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'SP';
-
-                              return (
-                                <div key={idx} className={`segment-item ${isRemote ? 'is-remote' : 'is-me'}`}>
-                                  <div className="segment-header">
-                                    <div className={`segment-avatar ${isRemote ? 'is-remote-avatar' : ''}`}>
-                                      {initials}
-                                    </div>
-                                    <span className="segment-speaker-name">{speakerName}</span>
-                                    <span className="segment-time">
-                                      {formatSeconds(turn.start || 0)}
-                                    </span>
-                                  </div>
-                                  <div className="segment-text">{turn.text}</div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      }
-
-                      // 2. Fallback: Parse transcript text if segments_json is not present
-                      const rawTranscript = activeMeeting.transcript || "";
-                      if (!rawTranscript.trim()) {
-                        return <p style={{ color: 'rgba(26,26,26,0.5)', textAlign: 'center', padding: '40px 0' }}>No transcript found.</p>;
-                      }
-
-                      const lines = rawTranscript.split('\n').map(l => l.trim()).filter(Boolean);
-                      const dialogueTurns = [];
-                      const lineRegex = /^([^:\n]{1,50}):\s*(.+)$/;
-
-                      lines.forEach((line) => {
-                        const match = line.match(lineRegex);
-                        if (match) {
-                          dialogueTurns.push({
-                            speaker: match[1].trim(),
-                            text: match[2].trim()
-                          });
-                        } else {
-                          if (dialogueTurns.length > 0) {
-                            dialogueTurns[dialogueTurns.length - 1].text += ' ' + line;
-                          } else {
-                            dialogueTurns.push({
-                              speaker: 'Speaker',
-                              text: line
-                            });
-                          }
-                        }
-                      });
-
-                      return (
-                        <div className="segments-list">
-                          {dialogueTurns.map((turn, idx) => {
-                            const speakerName = turn.speaker || 'Speaker';
-                            const cleanLowerSpeaker = speakerName.toLowerCase().replace(/[\[\]]/g, '').trim();
-                            const isRemote = cleanLowerSpeaker.includes('remote') || cleanLowerSpeaker.includes('system') || cleanLowerSpeaker.includes('participant') || cleanLowerSpeaker.includes('caller');
-                            const isMe = !isRemote && (cleanLowerSpeaker === 'you' || cleanLowerSpeaker === 'me' || (userName && cleanLowerSpeaker.includes(userName)) || !cleanLowerSpeaker.includes('speaker 2'));
-                            const initials = speakerName.replace(/[\[\]]/g, '').split(' ').filter(Boolean).map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'SP';
-
-                            return (
-                              <div key={idx} className={`segment-item ${isRemote ? 'is-remote' : 'is-me'}`}>
-                                <div className="segment-header">
-                                  <div className={`segment-avatar ${isRemote ? 'is-remote-avatar' : ''}`}>
-                                    {initials}
-                                  </div>
-                                  <span className="segment-speaker-name">{speakerName}</span>
-                                </div>
-                                <div className="segment-text">{turn.text}</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                </div>
-              </div>
-            </div>
+            <>
+              {authError && <div className="auth-error">{authError}</div>}
+              <MeetingDetail
+                key={activeMeeting.id}
+                meeting={activeMeeting}
+                token={token}
+                formatDate={formatDate}
+                onBack={() => setActiveMeeting(null)}
+                onDelete={handleDeleteMeeting}
+                onChanged={updated => setMeetings(list => list.map(m => (m.id === updated.id ? updated : m)))}
+              />
+            </>
           ) : (
             <div className="card">
               <h3 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

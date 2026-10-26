@@ -35,6 +35,10 @@ type Audit struct {
 	InputTokens     int               `json:"jev_input_tokens,omitempty"`
 	ProposalSource  string            `json:"proposal_source"`
 	GrammarFallback bool              `json:"grammar_fallback,omitempty"`
+	// LiveDecisions counts decisions made while the stream was still live;
+	// LiveMillis is the Jev time they took, which the user did not wait for.
+	LiveDecisions int     `json:"live_decisions,omitempty"`
+	LiveMillis    float64 `json:"jev_live_ms,omitempty"`
 }
 type Client struct {
 	Key, URL, Model  string
@@ -125,65 +129,48 @@ func (c *Client) admit(tokens int) string {
 	c.tokens += tokens
 	return ""
 }
-func (c *Client) Evaluate(ctx context.Context, r vocabulary.Result, source string) Audit {
-	a := Audit{Proposal: r, Resolved: r.Enhanced, ProposalSource: source, Decisions: []Decision{}}
-	for _, p := range r.Choices {
-		source := "matcher"
-		if p.Original == p.Replacement {
-			source = "asr"
-		}
-		a.Decisions = append(a.Decisions, Decision{Choice: p, UseVocabulary: true, Source: source})
-	}
-	fallback := func(reason string) Audit {
-		for i := range a.Decisions {
-			if a.Decisions[i].Source == "matcher" {
-				a.Decisions[i].Fallback = reason
-			}
-		}
-		return a
-	}
-	pending := 0
-	for _, d := range a.Decisions {
-		if d.Source == "matcher" {
-			pending++
-		}
-	}
-	if pending == 0 {
-		return a
-	}
+
+// verdict is one valid Jev answer.
+type verdict struct {
+	use        bool
+	confidence *float64
+}
+
+// judge asks Jev about every choice in one request. It returns the valid
+// answers by choice ID, or a fallback reason when the request itself failed.
+func (c *Client) judge(ctx context.Context, raw string, choices []vocabulary.Choice) (verdicts map[string]verdict, model string, tokens int, latency float64, reason string) {
 	if c.Key == "" {
-		return fallback("not_configured")
+		return nil, "", 0, 0, "not_configured"
 	}
-	body, e := requestBody(r, c.Model)
+	body, e := requestBody(vocabulary.Result{Raw: raw, Choices: choices}, c.Model)
 	if e != nil {
-		return fallback("context_budget")
+		return nil, "", 0, 0, "context_budget"
 	}
 	select {
 	case c.slots <- struct{}{}:
 		defer func() { <-c.slots }()
 	default:
-		return fallback("concurrency_limit")
+		return nil, "", 0, 0, "concurrency_limit"
 	}
 	if reason := c.admit(len(body)); reason != "" {
-		return fallback(reason)
+		return nil, "", 0, 0, reason
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
 	req, e := http.NewRequestWithContext(callCtx, "POST", c.URL, bytes.NewReader(body))
 	if e != nil {
-		return fallback("request_error")
+		return nil, "", 0, 0, "request_error"
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Key)
 	req.Header.Set("Content-Type", "application/json")
 	start := time.Now()
 	resp, e := c.HTTP.Do(req)
-	finish := func() { a.LatencyMillis = float64(time.Since(start).Microseconds()) / 1000 }
+	finish := func() float64 { return float64(time.Since(start).Microseconds()) / 1000 }
 	if e != nil {
-		finish()
 		if callCtx.Err() != nil {
-			return fallback("timeout")
+			return nil, "", 0, finish(), "timeout"
 		}
-		return fallback("network_error")
+		return nil, "", 0, finish(), "network_error"
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -199,8 +186,7 @@ func (c *Client) Evaluate(ctx context.Context, r vocabulary.Result, source strin
 			c.cooldown = time.Now().Add(delay)
 			c.mu.Unlock()
 		}
-		finish()
-		return fallback(fmt.Sprintf("http_%d", resp.StatusCode))
+		return nil, "", 0, finish(), fmt.Sprintf("http_%d", resp.StatusCode)
 	}
 	var result struct {
 		Model   string `json:"model"`
@@ -215,20 +201,12 @@ func (c *Client) Evaluate(ctx context.Context, r vocabulary.Result, source strin
 		} `json:"usage"`
 	}
 	if json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&result) != nil {
-		finish()
-		return fallback("invalid_response")
+		return nil, "", 0, finish(), "invalid_response"
 	}
-	finish()
-	a.Model = result.Model
-	a.InputTokens = result.Usage.Input
-	selected := map[string]bool{}
-	for i := range a.Decisions {
-		d := &a.Decisions[i]
-		if d.Source == "asr" {
-			selected[d.ID] = true
-			continue
-		}
-		answer, ok := result.Answers[d.ID]
+	latency = finish()
+	verdicts = map[string]verdict{}
+	for _, choice := range choices {
+		answer, ok := result.Answers[choice.ID]
 		valid := ok && answer.Type == "choice" && (answer.Choice == "keep_original" || answer.Choice == "use_vocabulary") && answer.Confidence != nil && *answer.Confidence >= 0 && *answer.Confidence <= 1 && !math.IsNaN(*answer.Confidence)
 		sum := 0.0
 		for _, option := range []string{"keep_original", "use_vocabulary"} {
@@ -238,12 +216,75 @@ func (c *Client) Evaluate(ctx context.Context, r vocabulary.Result, source strin
 		}
 		valid = valid && math.Abs(sum-1) < 0.01 && len(answer.Probabilities) == 2
 		if valid {
-			d.Source = "jev"
-			d.Confidence = answer.Confidence
-			d.UseVocabulary = answer.Choice == "use_vocabulary"
-		} else {
-			d.Fallback = "missing_or_invalid_answer"
+			verdicts[choice.ID] = verdict{use: answer.Choice == "use_vocabulary", confidence: answer.Confidence}
 		}
+	}
+	return verdicts, result.Model, result.Usage.Input, latency, ""
+}
+
+func (c *Client) Evaluate(ctx context.Context, r vocabulary.Result, source string) Audit {
+	return c.evaluate(ctx, r, source, nil)
+}
+
+// evaluate decides r's proposals. Decisions already made for the same span
+// while the stream was live are reused; only the rest go to Jev.
+func (c *Client) evaluate(ctx context.Context, r vocabulary.Result, source string, known map[string]Decision) Audit {
+	a := Audit{Proposal: r, Resolved: r.Enhanced, ProposalSource: source, Decisions: []Decision{}}
+	var questions []vocabulary.Choice
+	for _, p := range r.Choices {
+		if d, ok := known[choiceKey(p)]; ok && p.Original != p.Replacement {
+			d.Choice = p
+			a.Decisions = append(a.Decisions, d)
+			a.LiveDecisions++
+			continue
+		}
+		source := "matcher"
+		if p.Original == p.Replacement {
+			source = "asr"
+		} else {
+			questions = append(questions, p)
+		}
+		a.Decisions = append(a.Decisions, Decision{Choice: p, UseVocabulary: true, Source: source})
+	}
+	fallback := func(reason string) Audit {
+		for i := range a.Decisions {
+			if a.Decisions[i].Source == "matcher" {
+				a.Decisions[i].Fallback = reason
+			}
+		}
+		return a
+	}
+	answered := false
+	if len(questions) > 0 {
+		verdicts, model, tokens, latency, reason := c.judge(ctx, r.Raw, questions)
+		a.LatencyMillis = latency
+		if reason != "" {
+			fallback(reason)
+		} else {
+			answered = true
+			a.Model = model
+			a.InputTokens = tokens
+			for i := range a.Decisions {
+				d := &a.Decisions[i]
+				if d.Source != "matcher" {
+					continue
+				}
+				if v, ok := verdicts[d.ID]; ok {
+					d.Source = "jev"
+					d.Confidence = v.confidence
+					d.UseVocabulary = v.use
+				} else {
+					d.Fallback = "missing_or_invalid_answer"
+				}
+			}
+		}
+	}
+	if a.LiveDecisions == 0 && !answered {
+		// Nothing was rejected, so every proposal stands as the worker applied it.
+		return a
+	}
+	selected := map[string]bool{}
+	for _, d := range a.Decisions {
 		selected[d.ID] = d.UseVocabulary
 	}
 	resolved, e := vocabulary.Apply(r.Raw, r.Choices, selected)
@@ -252,6 +293,10 @@ func (c *Client) Evaluate(ctx context.Context, r vocabulary.Result, source strin
 	}
 	a.Resolved = resolved
 	return a
+}
+
+func choiceKey(c vocabulary.Choice) string {
+	return fmt.Sprintf("%d:%d:%s:%s", c.StartByte, c.EndByte, c.Original, c.Replacement)
 }
 
 // Protect hides already resolved spans from the grammar model. Restore rejects
