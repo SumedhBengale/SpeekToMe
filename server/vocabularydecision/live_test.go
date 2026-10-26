@@ -84,6 +84,9 @@ func TestLiveDecisionWaitsForContextThenUpdatesPreview(t *testing.T) {
 	if l.Display() != text || calls.Load() != 0 {
 		t.Fatalf("decided without context: %q, %d calls", l.Display(), calls.Load())
 	}
+	if got, _, deciding := l.Preview(); len(deciding) != 1 || got[deciding[0].Start:deciding[0].End] != "postgrsq" {
+		t.Fatalf("waiting proposal not reported: %+v in %q", deciding, got)
+	}
 
 	text = "We use postgrsq as our database. Why don't you"
 	l.Text(text + " speak") // partial words count as context but are never matched
@@ -91,8 +94,8 @@ func TestLiveDecisionWaitsForContextThenUpdatesPreview(t *testing.T) {
 	if got := l.Display(); got != "We use PostgreSQL as our database. Why don't you speak" {
 		t.Fatalf("preview not updated: %q", got)
 	}
-	if got, spans := l.Preview(); len(spans) != 1 || got[spans[0].Start:spans[0].End] != "PostgreSQL" {
-		t.Fatalf("replacement span not reported: %+v in %q", spans, got)
+	if got, spans, deciding := l.Preview(); len(spans) != 1 || got[spans[0].Start:spans[0].End] != "PostgreSQL" || len(deciding) != 0 {
+		t.Fatalf("replacement span not reported: %+v, %+v in %q", spans, deciding, got)
 	}
 
 	text += " speak to me?"
@@ -100,6 +103,9 @@ func TestLiveDecisionWaitsForContextThenUpdatesPreview(t *testing.T) {
 	l.Propose(liveProposal(text))
 	if l.Display() != "We use PostgreSQL as our database. Why don't you speak to me?" {
 		t.Fatalf("undecided proposal must show the ASR words: %q", l.Display())
+	}
+	if got, spans, deciding := l.Preview(); len(spans) != 1 || len(deciding) != 1 || got[deciding[0].Start:deciding[0].End] != "speak to me" {
+		t.Fatalf("waiting proposal after a replacement not reported: %+v in %q", deciding, got)
 	}
 
 	a := l.Finish(context.Background(), liveProposal(text), "inference_worker")

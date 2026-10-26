@@ -21,7 +21,7 @@ fn emit(event: &str, text: String) {
 
 pub fn hide_overlay() {
     win32::hide_overlay();
-    win32::hide_preview();
+    win32::hide_preview_after_polish();
 }
 
 /// Inserts dictated text by typing or pasting, per the user's setting.

@@ -396,6 +396,8 @@ pub const POLISH_SECONDS: f64 = 0.75;
 pub const SETTLE_SECONDS: f64 = 0.65;
 // The site's pill ring (`voice-pill-glow`) turns once every 1.4 s.
 pub const PROCESSING_TURN_SECONDS: f64 = 1.4;
+// One shimmer across a word still being decided.
+pub const DECIDING_SECONDS: f64 = 1.4;
 
 /// CSS `ease-in-out`.
 fn ease_in_out(t: f64) -> f64 {
@@ -473,55 +475,216 @@ pub fn polish_color(x: f64, y: f64, position: f64, text: (f64, f64, f64)) -> (f6
     text
 }
 
-/// Words a live vocabulary decision put into the preview. Each one polishes
-/// when it first appears; later interims that still carry the same
-/// replacement keep its original timing.
+/// How a word the vocabulary engine is still deciding looks `t` seconds
+/// after it was proposed: the polish gradient keeps sweeping across it under
+/// a pulsing pink glow until the decision lands.
+pub fn deciding(t: f64) -> Polish {
+    let phase = (t / DECIDING_SECONDS).rem_euclid(1.0);
+    Polish {
+        // 1.25 and -0.4 both leave the word in its own colour, so the loop
+        // has no visible seam.
+        position: 1.25 - 1.65 * phase,
+        glow: 0.12 + 0.08 * (1.0 - (phase * std::f64::consts::TAU).cos()) / 2.0,
+        opacity: 1.0,
+        plain: 0.0,
+    }
+}
+
+type Words = Vec<(std::ops::Range<usize>, String, f64)>;
+
+/// Words the preview is changing. A word the vocabulary engine is deciding
+/// shimmers; a word a decision or the final text put in polishes once.
+/// Later texts that still carry the same word keep its timing.
 #[derive(Debug, Default)]
 pub struct TextGlow {
-    spans: Vec<(std::ops::Range<usize>, String, f64)>,
+    text: String,
+    polishing: Words,
+    deciding: Words,
 }
 
 impl TextGlow {
-    /// `replacements` are the server's byte ranges of decided words in `text`.
-    /// Returns whether a new replacement started polishing.
+    /// `replacements` and `deciding` are the server's byte ranges of decided
+    /// words and of words still waiting for a decision in `text`.
+    /// Returns whether the preview needs to animate.
     pub fn update(
         &mut self,
         text: &str,
         replacements: &[std::ops::Range<usize>],
+        deciding: &[std::ops::Range<usize>],
         seconds: f64,
     ) -> bool {
-        let mut previous = std::mem::take(&mut self.spans);
-        for range in replacements {
-            if range.start >= range.end
-                || range.end > text.len()
-                || !text.is_char_boundary(range.start)
-                || !text.is_char_boundary(range.end)
-            {
+        self.text = text.to_string();
+        self.polishing = carry(
+            text,
+            replacements,
+            std::mem::take(&mut self.polishing),
+            seconds,
+        );
+        self.deciding = carry(text, deciding, std::mem::take(&mut self.deciding), seconds);
+        let fresh = self.polishing.iter().any(|(_, _, at)| *at == seconds);
+        fresh || !self.deciding.is_empty()
+    }
+
+    /// Shows the final text: every word that differs from the last preview
+    /// polishes, and words already polishing keep going.
+    /// Returns whether the preview needs to animate.
+    pub fn finish(&mut self, text: &str, seconds: f64) -> bool {
+        if text == self.text {
+            return !self.sample(seconds).is_empty();
+        }
+        let old = words(&self.text);
+        let new = words(text);
+        let matched = common_words(&self.text, &old, text, &new);
+        let mut polishing = Words::new();
+        if !old.is_empty() {
+            let mut run: Option<std::ops::Range<usize>> = None;
+            for (j, word) in new.iter().enumerate() {
+                if matched[j].is_none() {
+                    let start = run.take().map_or(word.start, |r| r.start);
+                    run = Some(start..word.end);
+                } else if let Some(r) = run.take() {
+                    polishing.push((r.clone(), text[r].to_string(), seconds));
+                }
+            }
+            if let Some(r) = run {
+                polishing.push((r.clone(), text[r].to_string(), seconds));
+            }
+        }
+        // Old words map to new positions through the matched words.
+        for (range, word, at) in std::mem::take(&mut self.polishing) {
+            if polish(seconds - at).is_none() {
                 continue;
             }
-            let word = &text[range.clone()];
-            // Earlier interims list spans in text order, so the first unused
-            // match is the same replacement, possibly shifted by edits before it.
-            let started = previous
-                .iter()
-                .position(|(_, w, _)| w == word)
-                .map_or(seconds, |i| previous.remove(i).2);
-            self.spans.push((range.clone(), word.to_string(), started));
+            let moved: Vec<_> = (0..new.len())
+                .filter(|&j| matched[j].is_some_and(|i| range.contains(&old[i].start)))
+                .collect();
+            if let (Some(&first), Some(&last)) = (moved.first(), moved.last()) {
+                if text[new[first].start..new[last].end] == word {
+                    polishing.push((new[first].start..new[last].end, word, at));
+                }
+            }
         }
-        self.spans.iter().any(|(_, _, at)| *at == seconds)
+        polishing.sort_by_key(|(range, _, _)| range.start);
+        self.text = text.to_string();
+        self.polishing = polishing;
+        self.deciding.clear();
+        !self.sample(seconds).is_empty()
     }
 
     pub fn reset(&mut self) {
-        self.spans.clear();
+        *self = Self::default();
     }
 
-    /// Each range still polishing, with its look.
+    /// Seconds until every polishing word is plain text again.
+    pub fn remaining(&self, seconds: f64) -> f64 {
+        self.polishing
+            .iter()
+            .map(|(_, _, at)| POLISH_SECONDS + SETTLE_SECONDS - (seconds - at))
+            .fold(0.0, f64::max)
+    }
+
+    /// Each range still changing, with its look.
     pub fn sample(&self, seconds: f64) -> Vec<(std::ops::Range<usize>, Polish)> {
-        self.spans
+        let mut looks: Vec<_> = self
+            .polishing
             .iter()
             .filter_map(|(range, _, at)| Some((range.clone(), polish(seconds - at)?)))
-            .collect()
+            .chain(
+                self.deciding
+                    .iter()
+                    .map(|(range, _, at)| (range.clone(), deciding(seconds - at))),
+            )
+            .collect();
+        looks.sort_by_key(|(range, _)| range.start);
+        looks
     }
+}
+
+/// The valid `ranges` of `text`, each keeping the start time of the same word
+/// in `previous`. Earlier texts list ranges in text order, so the first unused
+/// match is the same word, possibly shifted by edits before it.
+fn carry(
+    text: &str,
+    ranges: &[std::ops::Range<usize>],
+    mut previous: Words,
+    seconds: f64,
+) -> Words {
+    let mut kept = Words::new();
+    for range in ranges {
+        if range.start >= range.end
+            || range.end > text.len()
+            || !text.is_char_boundary(range.start)
+            || !text.is_char_boundary(range.end)
+        {
+            continue;
+        }
+        let word = &text[range.clone()];
+        let started = previous
+            .iter()
+            .position(|(_, w, _)| w == word)
+            .map_or(seconds, |i| previous.remove(i).2);
+        kept.push((range.clone(), word.to_string(), started));
+    }
+    kept
+}
+
+fn words(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices() {
+        match (c.is_whitespace(), start) {
+            (true, Some(s)) => {
+                out.push(s..i);
+                start = None;
+            }
+            (false, None) => start = Some(i),
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        out.push(s..text.len());
+    }
+    out
+}
+
+/// For each word of `new`, the index of the same word in `old` along their
+/// longest common subsequence.
+fn common_words(
+    old_text: &str,
+    old: &[std::ops::Range<usize>],
+    new_text: &str,
+    new: &[std::ops::Range<usize>],
+) -> Vec<Option<usize>> {
+    let mut matched = vec![None; new.len()];
+    let (n, m) = (old.len(), new.len());
+    if n == 0 || m == 0 || n * m > 1_000_000 {
+        return matched;
+    }
+    let same = |i: usize, j: usize| old_text[old[i].clone()] == new_text[new[j].clone()];
+    // lengths[i][j] is the LCS of old[i..] and new[j..].
+    let mut lengths = vec![0u32; (n + 1) * (m + 1)];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            lengths[i * (m + 1) + j] = if same(i, j) {
+                lengths[(i + 1) * (m + 1) + j + 1] + 1
+            } else {
+                lengths[(i + 1) * (m + 1) + j].max(lengths[i * (m + 1) + j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if same(i, j) {
+            matched[j] = Some(i);
+            i += 1;
+            j += 1;
+        } else if lengths[(i + 1) * (m + 1) + j] >= lengths[i * (m + 1) + j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    matched
 }
 
 /// Approximate Gaussian blur of a coverage map (three box passes per axis).
@@ -579,17 +742,18 @@ mod polish_tests {
     #[test]
     fn replaced_words_polish_once() {
         let mut glow = TextGlow::default();
-        glow.update("why don't you speak to me", &[], 0.0);
+        glow.update("why don't you speak to me", &[], &[], 0.0);
         assert!(glow.sample(0.0).is_empty());
 
-        assert!(glow.update("why don't you SpeekToMe", &[14..23], 1.0));
-        assert!(!glow.update("why don't you SpeekToMe.", &[14..23], 1.5));
+        assert!(glow.update("why don't you SpeekToMe", &[14..23], &[], 1.0));
+        assert!(!glow.update("why don't you SpeekToMe.", &[14..23], &[], 1.5));
         assert_eq!(glow.sample(1.0), vec![(14..23, polish(0.0).unwrap())]);
 
         // Later interims shift it and keep its timing; a new decision starts fresh.
         glow.update(
             "so why don't you SpeekToMe about PostgreSQL",
             &[17..26, 33..43],
+            &[],
             2.0,
         );
         let spans = glow.sample(2.0);
@@ -603,8 +767,66 @@ mod polish_tests {
         assert!(glow.sample(4.0).is_empty());
 
         // Out-of-range or split-character spans are ignored.
-        glow.update("नमस्ते", &[1..3, 0..40], 6.0);
+        glow.update("नमस्ते", &[1..3, 0..40], &[], 6.0);
         assert!(glow.sample(6.0).is_empty());
+    }
+
+    #[test]
+    fn deciding_words_shimmer_until_the_decision_polishes_them() {
+        let text = (0.1, 0.1, 0.1);
+        // The shimmer loops through plain text, so it has no seam.
+        for t in [0.0, DECIDING_SECONDS - 1e-9] {
+            let look = deciding(t);
+            for x in [0.0, 0.5, 1.0] {
+                let c = polish_color(x, 0.3, look.position, text);
+                assert!((c.0 - text.0).abs() < 0.02 && (c.2 - text.2).abs() < 0.02);
+            }
+        }
+        let mid = deciding(DECIDING_SECONDS / 2.0);
+        assert_ne!(polish_color(0.5, 0.0, mid.position, text), text);
+
+        let mut glow = TextGlow::default();
+        assert!(glow.update("why don't you speak to me", &[], &[14..25], 0.0));
+        assert!(glow.update("why don't you speak to me so", &[], &[14..25], 0.5));
+        assert_eq!(glow.sample(0.5), vec![(14..25, deciding(0.5))]);
+
+        // The decision lands: the shimmer stops and the replacement polishes.
+        assert!(glow.update("why don't you SpeekToMe so", &[14..23], &[], 1.0));
+        assert_eq!(glow.sample(1.0), vec![(14..23, polish(0.0).unwrap())]);
+        // Rejected proposals just stop shimmering.
+        assert!(!glow.update("why don't you SpeekToMe so", &[14..23], &[], 3.0));
+        assert!(glow.sample(3.0).is_empty());
+    }
+
+    #[test]
+    fn final_text_polishes_what_changed() {
+        let mut glow = TextGlow::default();
+        glow.update(
+            "so why don't you SpeekToMe about postgres",
+            &[17..26],
+            &[33..41],
+            0.0,
+        );
+        // The final text changes two words; the earlier decision keeps its timing.
+        assert!(glow.finish("So why don't you SpeekToMe about PostgreSQL?", 0.5));
+        assert_eq!(
+            glow.sample(0.5),
+            vec![
+                (0..2, polish(0.0).unwrap()),
+                (17..26, polish(0.5).unwrap()),
+                (33..44, polish(0.0).unwrap()),
+            ]
+        );
+        assert!((glow.remaining(0.5) - (POLISH_SECONDS + SETTLE_SECONDS)).abs() < 1e-9);
+        // Showing the same text again changes nothing.
+        assert!(glow.finish("So why don't you SpeekToMe about PostgreSQL?", 0.6));
+        assert_eq!(glow.sample(0.6).len(), 3);
+        assert!(!glow.finish("So why don't you SpeekToMe about PostgreSQL?", 5.0));
+        assert_eq!(glow.remaining(5.0), 0.0);
+
+        // Without an earlier preview there is nothing to compare.
+        let mut fresh = TextGlow::default();
+        assert!(!fresh.finish("Hello there.", 0.0));
     }
 
     #[test]

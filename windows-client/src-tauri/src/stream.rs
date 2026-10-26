@@ -31,9 +31,12 @@ pub struct StreamEventResponse {
     pub provider: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
-    /// Where live vocabulary decisions sit in an interim's `text`.
+    /// Where live vocabulary decisions sit in an interim's `text`, and the
+    /// proposals still waiting for one.
     #[serde(default)]
     pub replacements: Vec<ReplacementSpan>,
+    #[serde(default)]
+    pub deciding: Vec<ReplacementSpan>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -43,11 +46,20 @@ pub struct ReplacementSpan {
 }
 
 impl StreamEventResponse {
-    pub fn replacement_ranges(&self) -> Vec<std::ops::Range<usize>> {
-        self.replacements
-            .iter()
-            .map(|span| span.start_byte..span.end_byte)
-            .collect()
+    /// Shows this interim in the preview, marking the words a vocabulary
+    /// decision changed or is deciding.
+    pub fn show_interim(&self) {
+        let ranges = |spans: &[ReplacementSpan]| -> Vec<std::ops::Range<usize>> {
+            spans
+                .iter()
+                .map(|span| span.start_byte..span.end_byte)
+                .collect()
+        };
+        crate::win32::set_preview_text_with_replacements(
+            &self.text,
+            &ranges(&self.replacements),
+            &ranges(&self.deciding),
+        );
     }
 }
 
@@ -306,17 +318,14 @@ pub fn start_streaming_session(
                                         "[STREAM E2E LATENCY] Chunk #{} -> Interim Return: {} ms",
                                         current_chunk, rtt_ms
                                     );
-                                    crate::win32::set_preview_text_with_replacements(
-                                        &event.text,
-                                        &event.replacement_ranges(),
-                                    );
+                                    event.show_interim();
                                     *interim_reader.lock().unwrap_or_else(|e| e.into_inner()) =
                                         event.text;
                                 }
                             } else if event.event_type == "final" {
                                 crate::account_errors::notify_warning(event.warning.as_deref());
                                 println!("[STREAM FINAL RECEIVED] Final result received");
-                                crate::win32::set_preview_text(&event.text);
+                                crate::win32::set_preview_final_text(&event.text);
 
                                 final_res = Some(StreamFinalResult {
                                     text: event.text,

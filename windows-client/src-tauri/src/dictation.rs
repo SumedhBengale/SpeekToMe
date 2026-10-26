@@ -519,7 +519,7 @@ fn stream_dictation(
         };
         match text {
             Some(text) => {
-                win32::set_preview_text(&text);
+                win32::set_preview_final_text(&text);
                 if is_command_mode {
                     crate::delivery::spawn_command(text, context.clone(), api_url, token);
                 } else {

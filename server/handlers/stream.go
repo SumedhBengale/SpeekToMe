@@ -49,8 +49,10 @@ type StreamEventMessage struct {
 	Provider   string                    `json:"provider,omitempty"`
 	Error      string                    `json:"error,omitempty"`
 	Vocabulary *vocabularydecision.Audit `json:"vocabulary,omitempty"`
-	// Replacements locates live vocabulary decisions in an interim's Text.
+	// Replacements locates live vocabulary decisions in an interim's Text,
+	// and Deciding the proposals still waiting for one.
 	Replacements []vocabularydecision.Span `json:"replacements,omitempty"`
+	Deciding     []vocabularydecision.Span `json:"deciding,omitempty"`
 }
 
 func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
@@ -238,16 +240,19 @@ func (a *App) handleRealStreamingSession(
 	sendPreview := func() {
 		previewMutex.Lock()
 		defer previewMutex.Unlock()
-		preview, replacements := live.Preview()
-		if preview == "" || preview == lastPreview {
+		preview, replacements, deciding := live.Preview()
+		// A new proposal can mark words as deciding without changing the text.
+		key := fmt.Sprint(preview, replacements, deciding)
+		if preview == "" || key == lastPreview {
 			return
 		}
-		lastPreview = preview
+		lastPreview = key
 		_ = writeStreamJSON(ctx, conn, StreamEventMessage{
 			Type:         "interim",
 			Text:         preview,
 			Provider:     provider,
 			Replacements: replacements,
+			Deciding:     deciding,
 		})
 	}
 	live = vocabularydecision.NewLive(vocabularydecision.Default(), sendPreview)
@@ -256,6 +261,7 @@ func (a *App) handleRealStreamingSession(
 		go func() {
 			for proposal := range upstream.Proposals {
 				live.Propose(proposal)
+				sendPreview()
 			}
 		}()
 	}

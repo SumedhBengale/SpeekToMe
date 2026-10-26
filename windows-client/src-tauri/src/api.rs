@@ -418,7 +418,7 @@ pub fn process_and_paste(
             Ok(result) => {
                 let text = result.text.trim().to_string();
                 if !text.is_empty() {
-                    crate::win32::set_preview_text(&text);
+                    crate::win32::set_preview_final_text(&text);
                     if context.is_command_mode {
                         crate::delivery::run_command(text, context, api_url, token).await;
                         return;
@@ -487,17 +487,14 @@ pub async fn stream_transcribe_audio(
                 {
                     if event.event_type == "final" {
                         crate::account_errors::notify_warning(event.warning.as_deref());
-                        crate::win32::set_preview_text(&event.text);
+                        crate::win32::set_preview_final_text(&event.text);
                         return Ok(TranscribeResult {
                             text: event.text,
                             log_id: event.log_id,
                             ack_token: event.ack_token,
                         });
                     } else if event.event_type == "interim" && !event.text.is_empty() {
-                        crate::win32::set_preview_text_with_replacements(
-                            &event.text,
-                            &event.replacement_ranges(),
-                        );
+                        event.show_interim();
                     } else if event.event_type == "error" {
                         return Err(event.error.unwrap_or_else(|| {
                             "Server streaming transcription error".to_string()

@@ -27,6 +27,7 @@ type Live struct {
 	pending  map[string]pendingChoice
 	decided  map[string]Decision
 	inflight chan struct{} // closed when the current Jev call returns
+	asked    []vocabulary.Choice // proposals in the current Jev call
 	timer    *time.Timer
 	closed   bool
 	millis   float64
@@ -100,13 +101,14 @@ type Span struct {
 // Display returns the latest preview with every decided replacement applied.
 // Undecided proposals keep the words the speaker's ASR produced.
 func (l *Live) Display() string {
-	text, _ := l.Preview()
+	text, _, _ := l.Preview()
 	return text
 }
 
 // Preview is Display plus where each applied replacement sits in the text,
-// so clients can mark the words a decision changed.
-func (l *Live) Preview() (string, []Span) {
+// and where the words still waiting for a decision sit, so clients can mark
+// the words a decision is changing and has changed.
+func (l *Live) Preview() (text string, replaced, deciding []Span) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var use []vocabulary.Choice
@@ -118,16 +120,55 @@ func (l *Live) Preview() (string, []Span) {
 	sortWithIDs(use)
 	text, e := vocabulary.Apply(l.text, use, nil)
 	if e != nil {
-		return l.text, nil
+		return l.text, nil, nil
 	}
-	var spans []Span
-	shift := 0
+	// at maps a byte offset in l.text outside every replacement to the preview.
+	at := func(offset int) int {
+		shift := 0
+		for _, c := range use {
+			if offset >= c.EndByte {
+				shift += len(c.Replacement) - len(c.Original)
+			}
+		}
+		return offset + shift
+	}
 	for _, c := range use {
-		start := c.StartByte + shift
-		spans = append(spans, Span{start, start + len(c.Replacement)})
-		shift += len(c.Replacement) - len(c.Original)
+		start := at(c.StartByte)
+		replaced = append(replaced, Span{start, start + len(c.Replacement)})
 	}
-	return text, spans
+	applied := func(p vocabulary.Choice) bool {
+		for _, c := range use {
+			if p.StartByte < c.EndByte && c.StartByte < p.EndByte {
+				return true
+			}
+		}
+		return false
+	}
+	var waiting []vocabulary.Choice
+	for _, p := range l.pending {
+		waiting = append(waiting, p.Choice)
+	}
+	for _, c := range l.asked {
+		if l.current[choiceKey(c)] {
+			waiting = append(waiting, c)
+		}
+	}
+	sort.Slice(waiting, func(i, j int) bool { return waiting[i].StartByte < waiting[j].StartByte })
+	for _, c := range waiting {
+		if !fits(l.text, c) || applied(c) {
+			continue
+		}
+		start, end := at(c.StartByte), at(c.EndByte)
+		if overlaps(deciding, start) {
+			continue
+		}
+		deciding = append(deciding, Span{start, end})
+	}
+	return text, replaced, deciding
+}
+
+func overlaps(spans []Span, start int) bool {
+	return len(spans) > 0 && start < spans[len(spans)-1].End
 }
 
 // Close stops starting Jev calls, for a stream that ends without Finish.
@@ -214,6 +255,7 @@ func (l *Live) schedule() {
 	sortWithIDs(ready)
 	done := make(chan struct{})
 	l.inflight = done
+	l.asked = ready
 	text := l.text
 	go l.decide(text, ready, done)
 }
@@ -239,6 +281,7 @@ func (l *Live) decide(text string, ready []vocabulary.Choice, done chan struct{}
 		l.model = model
 	}
 	l.inflight = nil
+	l.asked = nil
 	close(done)
 	l.schedule()
 	l.mu.Unlock()

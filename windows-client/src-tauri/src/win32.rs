@@ -121,6 +121,8 @@ mod win32_impl {
     static TEXT_GLOW: std::sync::OnceLock<Mutex<crate::native_overlay::TextGlow>> =
         std::sync::OnceLock::new();
     static ANIMATION_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    // Set while a finished dictation's preview stays up for its polish.
+    static PREVIEW_HOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     // Posted by show_* from any thread; timers belong to the window's own thread.
     const WM_APP_ANIMATE: u32 = WM_APP + 1;
@@ -210,24 +212,42 @@ mod win32_impl {
     }
 
     pub fn set_preview_text(text: &str) {
-        set_preview_text_with_replacements(text, &[]);
+        set_preview_text_with_replacements(text, &[], &[]);
     }
 
     /// `replacements` are byte ranges of words a vocabulary decision put in
-    /// `text`; they glow in instead of popping into place.
-    pub fn set_preview_text_with_replacements(text: &str, replacements: &[std::ops::Range<usize>]) {
-        {
-            let mut lock = PREVIEW_TEXT
-                .get_or_init(|| std::sync::Mutex::new(String::new()))
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            *lock = text.to_string();
-        }
-        let polishing = text_glow().update(text, replacements, animation_seconds());
+    /// `text`, and `deciding` those it is still deciding; both glow instead of
+    /// popping into place.
+    pub fn set_preview_text_with_replacements(
+        text: &str,
+        replacements: &[std::ops::Range<usize>],
+        deciding: &[std::ops::Range<usize>],
+    ) {
+        store_preview_text(text);
+        let animate = text_glow().update(text, replacements, deciding, animation_seconds());
+        refresh_preview(animate);
+    }
+
+    /// Shows a dictation's final text; words it changed from the live
+    /// preview polish in.
+    pub fn set_preview_final_text(text: &str) {
+        store_preview_text(text);
+        let animate = text_glow().finish(text, animation_seconds());
+        refresh_preview(animate);
+    }
+
+    fn store_preview_text(text: &str) {
+        *PREVIEW_TEXT
+            .get_or_init(|| std::sync::Mutex::new(String::new()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = text.to_string();
+    }
+
+    fn refresh_preview(animate: bool) {
         let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
         if state != PreviewState::Hidden {
             update_preview_position();
-            if polishing {
+            if animate {
                 if let Some(send_hwnd) = PREVIEW_HWND.get() {
                     start_animation(send_hwnd.0);
                 }
@@ -235,7 +255,32 @@ mod win32_impl {
         }
     }
 
+    /// Hides the preview once the final text's polish has played, so the
+    /// changed words are seen after the text is inserted.
+    pub fn hide_preview_after_polish() {
+        let wait = text_glow().remaining(animation_seconds());
+        let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
+        if wait <= 0.0 || state != PreviewState::Processing {
+            hide_preview();
+            return;
+        }
+        // The work is done: stop the processing ring while the words settle.
+        PREVIEW_STATE.store(PreviewState::Listening as u8, Ordering::SeqCst);
+        PREVIEW_HOLD.store(true, Ordering::SeqCst);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs_f64(wait));
+            if PREVIEW_HOLD.swap(false, Ordering::SeqCst) {
+                hide_preview();
+            }
+        });
+    }
+
     pub fn set_preview_state(state: PreviewState) {
+        // A new dictation replaces a finished one still on screen.
+        if PREVIEW_HOLD.swap(false, Ordering::SeqCst) {
+            store_preview_text("");
+            text_glow().reset();
+        }
         PREVIEW_STATE.store(state as u8, Ordering::SeqCst);
         match state {
             PreviewState::Hidden | PreviewState::Meeting => {
@@ -529,6 +574,7 @@ mod win32_impl {
     }
 
     pub fn hide_preview() {
+        PREVIEW_HOLD.store(false, Ordering::SeqCst);
         let current_state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
         if current_state != PreviewState::Meeting {
             PREVIEW_STATE.store(PreviewState::Hidden as u8, Ordering::SeqCst);
@@ -2133,12 +2179,12 @@ mod win32_impl {
 #[cfg(target_os = "windows")]
 pub use win32_impl::{
     calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
-    hide_overlay, hide_preview, play_chime, run_win32_hook_and_tray_thread, set_preview_state,
-    set_preview_text, set_preview_text_with_replacements, set_window_icon_for_theme,
-    show_meeting_overlay, show_overlay, show_preview, show_tray_notification,
-    update_overlay_position, update_preview_position, update_tray_icon_for_theme,
-    update_tray_tooltip, NotificationLevel, PreviewState, SendHWND, PREVIEW_HWND, PREVIEW_STATE,
-    PREVIEW_TEXT, TRAY_HWND,
+    hide_overlay, hide_preview, hide_preview_after_polish, play_chime,
+    run_win32_hook_and_tray_thread, set_preview_final_text, set_preview_state, set_preview_text,
+    set_preview_text_with_replacements, set_window_icon_for_theme, show_meeting_overlay,
+    show_overlay, show_preview, show_tray_notification, update_overlay_position,
+    update_preview_position, update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel,
+    PreviewState, SendHWND, PREVIEW_HWND, PREVIEW_STATE, PREVIEW_TEXT, TRAY_HWND,
 };
 
 // ==========================================
@@ -2244,8 +2290,17 @@ mod win32_stub {
     pub fn set_preview_text_with_replacements(
         text: &str,
         _replacements: &[std::ops::Range<usize>],
+        _deciding: &[std::ops::Range<usize>],
     ) {
         set_preview_text(text);
+    }
+
+    pub fn set_preview_final_text(text: &str) {
+        set_preview_text(text);
+    }
+
+    pub fn hide_preview_after_polish() {
+        hide_preview();
     }
 
     pub fn set_preview_text(text: &str) {
@@ -2305,9 +2360,10 @@ mod win32_stub {
 #[cfg(not(target_os = "windows"))]
 pub use win32_stub::{
     calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
-    hide_overlay, hide_preview, play_chime, run_win32_hook_and_tray_thread, set_preview_state,
-    set_preview_text, set_preview_text_with_replacements, set_window_icon_for_theme,
-    show_meeting_overlay, show_overlay, show_preview, show_tray_notification,
-    update_overlay_position, update_preview_position, update_tray_icon_for_theme,
-    update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
+    hide_overlay, hide_preview, hide_preview_after_polish, play_chime,
+    run_win32_hook_and_tray_thread, set_preview_final_text, set_preview_state, set_preview_text,
+    set_preview_text_with_replacements, set_window_icon_for_theme, show_meeting_overlay,
+    show_overlay, show_preview, show_tray_notification, update_overlay_position,
+    update_preview_position, update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel,
+    PreviewState, SendHWND,
 };
