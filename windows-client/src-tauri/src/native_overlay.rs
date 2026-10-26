@@ -101,13 +101,13 @@ pub fn smooth_volume(previous: f64, raw: f64) -> f64 {
     previous + (target - previous) * response
 }
 
-pub fn bars(x: f64, y: f64, frame: u64, volume: f64, processing: bool) -> [Rect; 5] {
+pub fn bars(x: f64, y: f64, seconds: f64, volume: f64, processing: bool) -> [Rect; 5] {
     // Preserve the SVG's coordinates and rounded capsules, fitting its tallest
     // bar into 18 logical pixels. All recording movement comes from real audio.
     let scale = 18.0 / 316.0;
     let activity = if processing {
         // Processing has no microphone input; a gentle pulse marks that state.
-        0.55 + 0.15 * (frame as f64 * 0.12).sin()
+        0.55 + 0.15 * (seconds * 3.6).sin()
     } else {
         // Suppress the noise floor; a square-root curve keeps soft speech visible.
         let level = ((volume - 2.0) / 118.0).clamp(0.0, 1.0).sqrt();
@@ -190,10 +190,13 @@ mod tests {
 
     #[test]
     fn logo_responds_to_audio_and_processing_animates_without_audio() {
-        let quiet = bars(179.0, 0.0, 10, 0.0, false);
-        let speech = bars(179.0, 0.0, 10, 30.0, false);
+        let quiet = bars(179.0, 0.0, 0.3, 0.0, false);
+        let speech = bars(179.0, 0.0, 0.3, 30.0, false);
         assert!(speech.iter().zip(quiet).any(|(a, b)| a.height > b.height));
-        assert_ne!(bars(0.0, 0.0, 0, 0.0, true), bars(0.0, 0.0, 10, 0.0, true));
+        assert_ne!(
+            bars(0.0, 0.0, 0.0, 0.0, true),
+            bars(0.0, 0.0, 0.3, 0.0, true)
+        );
         for rect in speech {
             assert!(rect.x >= 179.0 && rect.x + rect.width <= 179.0 + PILL_WIDTH);
             assert!(rect.y >= 0.0 && rect.y + rect.height <= PILL_HEIGHT);
@@ -203,17 +206,20 @@ mod tests {
     #[test]
     fn recording_logo_is_still_in_silence_and_preserves_svg_at_full_volume() {
         assert_eq!(
-            bars(0.0, 0.0, 0, 0.0, false),
-            bars(0.0, 0.0, 500, 0.0, false)
+            bars(0.0, 0.0, 0.0, 0.0, false),
+            bars(0.0, 0.0, 16.0, 0.0, false)
         );
-        assert_eq!(bars(0.0, 0.0, 0, 0.0, false), bars(0.0, 0.0, 0, 2.0, false));
-        let loud = bars(0.0, 0.0, 0, 120.0, false);
+        assert_eq!(
+            bars(0.0, 0.0, 0.0, 0.0, false),
+            bars(0.0, 0.0, 0.0, 2.0, false)
+        );
+        let loud = bars(0.0, 0.0, 0.0, 120.0, false);
         for (bar, original) in loud.iter().zip([120.0, 208.0, 316.0, 208.0, 120.0]) {
             assert!((bar.height / bar.width - original / 40.0).abs() < 1e-10);
             assert!((bar.y + bar.height / 2.0 - 12.0).abs() < 1e-10);
         }
         for volume in [0.0, 2.0, 10.0, 30.0, 60.0, 120.0, 1000.0] {
-            let shape = bars(0.0, 0.0, 0, volume, false);
+            let shape = bars(0.0, 0.0, 0.0, volume, false);
             assert_eq!(shape[0].height, shape[4].height);
             assert_eq!(shape[1].height, shape[3].height);
             assert!(shape[0].height < shape[1].height && shape[1].height < shape[2].height);

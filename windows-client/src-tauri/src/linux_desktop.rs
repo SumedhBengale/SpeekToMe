@@ -92,7 +92,6 @@ struct NativeOverlay {
     has_preview: bool,
     height: f64,
     timer: Option<gtk::glib::SourceId>,
-    frame: u64,
     smoothed: f64,
     pill_x: f64,
     pill_y: f64,
@@ -165,7 +164,6 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
             has_preview: false,
             height: 140.0,
             timer: None,
-            frame: 0,
             smoothed: 0.0,
             pill_x: 179.0,
             pill_y: 0.0,
@@ -214,118 +212,148 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, width: f64, height: f64, radius: f64) {
-    let pi = std::f64::consts::PI;
-    cr.new_sub_path();
-    cr.arc(x + width - radius, y + radius, radius, -pi / 2.0, 0.0);
-    cr.arc(
-        x + width - radius,
-        y + height - radius,
-        radius,
-        0.0,
-        pi / 2.0,
-    );
-    cr.arc(x + radius, y + height - radius, radius, pi / 2.0, pi);
-    cr.arc(x + radius, y + radius, radius, pi, 3.0 * pi / 2.0);
-    cr.close_path();
-}
 fn draw_overlay(cr: &gtk::cairo::Context) {
     cr.set_operator(gtk::cairo::Operator::Source);
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
     let _ = cr.paint();
-    cr.set_operator(gtk::cairo::Operator::Over);
     let background =
         crate::native_overlay::color(crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed));
-    let wave = crate::native_overlay::color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed));
     NATIVE_OVERLAY.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(overlay) = slot.as_mut() else { return };
-        let (x, y) = (overlay.pill_x, overlay.pill_y);
-        cr.set_source_rgba(background.0, background.1, background.2, 235.0 / 255.0);
-        rounded_rect(cr, x + 0.5, y + 0.5, 61.0, 23.0, 11.5);
-        let _ = cr.fill();
-        if OVERLAY_STATE.load(Ordering::SeqCst) == 2 {
-            processing_border(
-                cr,
-                crate::native_overlay::Rect {
-                    x: x + 0.5,
-                    y: y + 0.5,
-                    width: 61.0,
-                    height: 23.0,
-                },
-                11.5,
-                overlay.frame,
-            );
-        }
-        let logo = crate::native_overlay::color(crate::native_overlay::LOGO_COLOR);
-        cr.set_source_rgb(logo.0, logo.1, logo.2);
-        let level = crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed) as f64;
-        overlay.smoothed = crate::native_overlay::smooth_volume(overlay.smoothed, level);
-        let processing = OVERLAY_STATE.load(Ordering::SeqCst) == 2;
-        for bar in crate::native_overlay::bars(x, y, overlay.frame, overlay.smoothed, processing) {
-            rounded_rect(cr, bar.x, bar.y, bar.width, bar.height, bar.width / 2.0);
-            let _ = cr.fill();
-        }
-        if overlay.has_preview {
-            let (width, height) = overlay.layout.pixel_size();
-            let card = crate::native_overlay::preview_card_in_surface(
-                x,
-                y,
-                width as f64,
-                height as f64,
+        let state = OVERLAY_STATE.load(Ordering::SeqCst);
+        let level = if state == 3 {
+            crate::audio::MIC_VOLUME
+                .load(Ordering::Relaxed)
+                .max(crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed))
+        } else {
+            crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed)
+        };
+        overlay.smoothed = crate::native_overlay::smooth_volume(overlay.smoothed, level as f64);
+
+        let scale = overlay.surface.scale_factor().max(1) as f64;
+        let (width, height) = (
+            (crate::native_overlay::WIDTH * scale).ceil() as usize,
+            (overlay.height * scale).ceil() as usize,
+        );
+        let pill = crate::native_overlay::Rect {
+            x: overlay.pill_x,
+            y: overlay.pill_y,
+            width: crate::native_overlay::PILL_WIDTH,
+            height: crate::native_overlay::PILL_HEIGHT,
+        };
+        let card = overlay.has_preview.then(|| {
+            let (text_width, text_height) = overlay.layout.pixel_size();
+            crate::native_overlay::preview_card_in_surface(
+                pill.x,
+                pill.y,
+                text_width as f64,
+                text_height as f64,
                 overlay.height,
-            );
-            rounded_rect(cr, card.x, card.y, card.width, card.height, 7.0);
-            cr.set_source_rgba(background.0, background.1, background.2, 0.96);
-            let _ = cr.fill_preserve();
-            cr.set_source_rgba(wave.0, wave.1, wave.2, 0.64);
-            cr.set_line_width(1.0);
-            let _ = cr.stroke();
-            if processing {
-                processing_border(cr, card, 7.0, overlay.frame);
-            }
-            let _ = cr.save();
-            cr.rectangle(
+            )
+        });
+        let text = crate::native_overlay::text_color(background);
+        let mut glyphs = Vec::new();
+        let mut words = Vec::new();
+        if let Some(card) = card {
+            let origin = (card.x + 12.0, card.y + 8.0);
+            let clip = [
                 card.x + 8.0,
                 card.y + 8.0,
                 card.width - 16.0,
                 card.height - 16.0,
-            );
-            cr.clip();
-            let text = crate::native_overlay::text_color(background);
-            let origin = (card.x + 12.0, card.y + 8.0);
-            let glows = valid_glows(&overlay.layout, crate::win32::preview_glow());
-            // Changing words are drawn on their own, so the plain pass skips them.
-            let hidden = gtk::pango::AttrList::new();
-            for (range, _) in &glows {
-                let mut attr = gtk::pango::AttrInt::new_foreground_alpha(1);
-                attr.set_start_index(range.start as u32);
-                attr.set_end_index(range.end as u32);
-                hidden.insert(attr);
+            ];
+            let layout = &overlay.layout;
+            glyphs = coverage(width, height, scale, clip, |cr| {
+                cr.move_to(origin.0, origin.1);
+                pangocairo::functions::show_layout(cr, layout);
+            });
+            for (range, look) in valid_glows(layout, crate::win32::preview_glow()) {
+                if let Some(word) = Word::new(layout, origin, range) {
+                    let mask = coverage(width, height, scale, clip, |cr| {
+                        word.glyphs(cr, layout);
+                        let _ = cr.fill();
+                    });
+                    words.push((mask, look));
+                }
             }
-            overlay
-                .layout
-                .set_attributes((!glows.is_empty()).then_some(&hidden));
-            let words: Vec<_> = glows
-                .iter()
-                .filter_map(|(range, look)| {
-                    Some((Word::new(&overlay.layout, origin, range.clone())?, *look))
-                })
-                .collect();
-            // Glows go under all text, as the site's drop-shadow does.
-            for (word, look) in &words {
-                word.draw_glow(cr, &overlay.layout, look.glow);
-            }
-            cr.set_source_rgb(text.0, text.1, text.2);
-            cr.move_to(origin.0, origin.1);
-            pangocairo::functions::show_layout(cr, &overlay.layout);
-            for (word, look) in &words {
-                word.draw_polish(cr, &overlay.layout, *look, text);
-            }
-            let _ = cr.restore();
         }
-        overlay.frame += 1;
+        let mut pixels = vec![0u32; width * height];
+        crate::overlay_paint::paint(
+            &crate::overlay_paint::Scene {
+                scale,
+                seconds: crate::win32::animation_seconds(),
+                background,
+                wave: crate::native_overlay::color(
+                    crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed),
+                ),
+                processing: state == 2,
+                pill: Some(pill),
+                logo: Some((pill.x, pill.y)),
+                volume: overlay.smoothed,
+                card,
+                text: card.map(|_| crate::overlay_paint::Text {
+                    color: text,
+                    glyphs: &glyphs,
+                    words: &words,
+                }),
+            },
+            &mut pixels,
+            width,
+            height,
+        );
+        let Ok(mut image) = gtk::cairo::ImageSurface::create(
+            gtk::cairo::Format::ARgb32,
+            width as i32,
+            height as i32,
+        ) else {
+            return;
+        };
+        let stride = image.stride() as usize;
+        if let Ok(mut data) = image.data() {
+            for (row, line) in pixels.chunks(width).enumerate() {
+                for (column, pixel) in line.iter().enumerate() {
+                    let at = row * stride + column * 4;
+                    data[at..at + 4].copy_from_slice(&pixel.to_ne_bytes());
+                }
+            }
+        }
+        image.set_device_scale(scale, scale);
+        cr.set_operator(gtk::cairo::Operator::Over);
+        let _ = cr.set_source_surface(&image, 0.0, 0.0);
+        let _ = cr.paint();
     });
+}
+
+/// Glyph coverage drawn by `draw` in logical pixels, inside `clip`, as one
+/// value per device pixel.
+fn coverage(
+    width: usize,
+    height: usize,
+    scale: f64,
+    clip: [f64; 4],
+    draw: impl FnOnce(&gtk::cairo::Context),
+) -> Vec<f32> {
+    let mut values = vec![0f32; width * height];
+    let Ok(mut mask) =
+        gtk::cairo::ImageSurface::create(gtk::cairo::Format::A8, width as i32, height as i32)
+    else {
+        return values;
+    };
+    mask.set_device_scale(scale, scale);
+    if let Ok(cr) = gtk::cairo::Context::new(&mask) {
+        cr.rectangle(clip[0], clip[1], clip[2], clip[3]);
+        cr.clip();
+        cr.set_source_rgba(0.0, 0.0, 0.0, 1.0);
+        draw(&cr);
+    }
+    let stride = mask.stride() as usize;
+    if let Ok(data) = mask.data() {
+        for (i, value) in values.iter_mut().enumerate() {
+            *value = data[(i / width) * stride + i % width] as f32 / 255.0;
+        }
+    }
+    values
 }
 
 fn apply_overlay_text_and_theme() {
@@ -567,37 +595,6 @@ pub fn notify(title: &str, message: &str) {
     });
 }
 
-fn processing_border(
-    cr: &gtk::cairo::Context,
-    rect: crate::native_overlay::Rect,
-    radius: f64,
-    frame: u64,
-) {
-    for (width, alpha) in [
-        (8.0, 0.025),
-        (6.0, 0.045),
-        (4.0, 0.08),
-        (2.6, 0.16),
-        (1.2, 0.95),
-    ] {
-        let gradient = gtk::cairo::LinearGradient::new(
-            rect.x,
-            rect.y,
-            rect.x + rect.width,
-            rect.y + rect.height,
-        );
-        for i in 0..=8 {
-            let offset = i as f64 / 8.0;
-            let (r, g, b) = crate::native_overlay::processing_color(offset + frame as f64 * 0.008);
-            gradient.add_color_stop_rgba(offset, r, g, b, alpha);
-        }
-        rounded_rect(cr, rect.x, rect.y, rect.width, rect.height, radius);
-        let _ = cr.set_source(&gradient);
-        cr.set_line_width(width);
-        let _ = cr.stroke();
-    }
-}
-
 /// The glows whose ranges are whole characters of the layout's text.
 fn valid_glows(
     layout: &gtk::pango::Layout,
@@ -615,14 +612,10 @@ fn valid_glows(
         .collect()
 }
 
-/// A changing word's character boxes in surface pixels and their bounds.
+/// A changing word's character boxes in surface pixels.
 struct Word {
     origin: (f64, f64),
     boxes: Vec<[f64; 4]>,
-    left: f64,
-    top: f64,
-    right: f64,
-    bottom: f64,
 }
 
 impl Word {
@@ -651,27 +644,13 @@ impl Word {
                 ]
             })
             .collect();
-        let left = boxes.iter().map(|b| b[0]).fold(f64::INFINITY, f64::min);
-        let right = boxes
+        boxes
             .iter()
-            .map(|b| b[0] + b[2])
-            .fold(f64::NEG_INFINITY, f64::max);
-        let top = boxes.iter().map(|b| b[1]).fold(f64::INFINITY, f64::min);
-        let bottom = boxes
-            .iter()
-            .map(|b| b[1] + b[3])
-            .fold(f64::NEG_INFINITY, f64::max);
-        (right > left && bottom > top).then_some(Self {
-            origin,
-            boxes,
-            left,
-            top,
-            right,
-            bottom,
-        })
+            .any(|b| b[2] > 0.0 && b[3] > 0.0)
+            .then_some(Self { origin, boxes })
     }
 
-    /// Sets the path to the word's glyphs.
+    /// Clips to the word and sets the path to its glyphs.
     fn glyphs(&self, cr: &gtk::cairo::Context, layout: &gtk::pango::Layout) {
         for b in &self.boxes {
             cr.rectangle(b[0], b[1], b[2], b[3]);
@@ -679,74 +658,5 @@ impl Word {
         cr.clip();
         cr.move_to(self.origin.0, self.origin.1);
         pangocairo::functions::layout_path(cr, layout);
-    }
-
-    /// The website's polish gradient clipped to the glyphs, like the
-    /// Windows preview.
-    fn draw_polish(
-        &self,
-        cr: &gtk::cairo::Context,
-        layout: &gtk::pango::Layout,
-        look: crate::native_overlay::Polish,
-        text: (f64, f64, f64),
-    ) {
-        // polish_offset is linear in pixels, so a cairo linear gradient whose
-        // parameter equals it reproduces the Windows colours exactly.
-        let span = self.right - self.left;
-        let (ax, ay) = (1.0 / (3.0 * span), 0.176 / (3.0 * span));
-        let norm = ax * ax + ay * ay;
-        let c = crate::native_overlay::polish_offset(0.0, 0.0, look.position);
-        let (x0, y0) = (self.left - c * ax / norm, self.top - c * ay / norm);
-        let gradient = gtk::cairo::LinearGradient::new(x0, y0, x0 + ax / norm, y0 + ay / norm);
-        for (offset, color) in crate::native_overlay::polish_stops(text) {
-            let mix = |swept: f64, plain: f64| swept + (plain - swept) * look.plain;
-            gradient.add_color_stop_rgba(
-                offset,
-                mix(color.0, text.0),
-                mix(color.1, text.1),
-                mix(color.2, text.2),
-                look.opacity,
-            );
-        }
-        let _ = cr.save();
-        self.glyphs(cr, layout);
-        let _ = cr.set_source(&gradient);
-        let _ = cr.fill();
-        let _ = cr.restore();
-    }
-
-    /// A ~7px pink drop-shadow: the glyphs, box-blurred.
-    fn draw_glow(&self, cr: &gtk::cairo::Context, layout: &gtk::pango::Layout, glow: f64) {
-        const PAD: f64 = 10.0;
-        if glow <= 0.0 {
-            return;
-        }
-        let (x, y) = ((self.left - PAD).floor(), (self.top - PAD).floor());
-        let width = (self.right - self.left + 2.0 * PAD).ceil() as usize + 1;
-        let height = (self.bottom - self.top + 2.0 * PAD).ceil() as usize + 1;
-        let Ok(mut mask) =
-            gtk::cairo::ImageSurface::create(gtk::cairo::Format::A8, width as i32, height as i32)
-        else {
-            return;
-        };
-        if let Ok(paint) = gtk::cairo::Context::new(&mask) {
-            paint.translate(-x, -y);
-            self.glyphs(&paint, layout);
-            paint.set_source_rgba(0.0, 0.0, 0.0, glow);
-            let _ = paint.fill();
-        }
-        let stride = mask.stride() as usize;
-        if let Ok(mut data) = mask.data() {
-            let mut coverage: Vec<f32> = (0..width * height)
-                .map(|i| data[(i / width) * stride + i % width] as f32 / 255.0)
-                .collect();
-            crate::native_overlay::blur(&mut coverage, width, height, 3);
-            for (i, value) in coverage.iter().enumerate() {
-                data[(i / width) * stride + i % width] = ((value * 2.5).min(1.0) * 255.0) as u8;
-            }
-        }
-        let pink = crate::native_overlay::POLISH_GLOW;
-        cr.set_source_rgb(pink.0, pink.1, pink.2);
-        let _ = cr.mask_surface(&mask, x, y);
     }
 }

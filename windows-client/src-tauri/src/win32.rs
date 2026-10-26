@@ -365,7 +365,8 @@ mod win32_impl {
 
         let old_font = SelectObject(hdc_screen, hfont);
 
-        let max_text_width = 340;
+        // The shared card layout: 370px of text, 12px/8px padding.
+        let max_text_width = 370;
         let mut calc_rect = RECT {
             left: 0,
             top: 0,
@@ -391,8 +392,8 @@ mod win32_impl {
         let measured_h = calc_rect.bottom - calc_rect.top;
 
         let pad_x = 12;
-        let pad_y = 6;
-        let card_w = (measured_w + pad_x * 2).clamp(120, 380);
+        let pad_y = 8;
+        let card_w = (measured_w + pad_x * 2).clamp(160, 394);
         let card_h = (measured_h + pad_y * 2).max(28);
 
         // Include GLOW_MARGIN on all 4 sides for the outer halo
@@ -901,53 +902,16 @@ mod win32_impl {
             }
 
             let bg_color = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed);
+            let bg_r = (bg_color & 0xFF) as f32;
+            let bg_g = ((bg_color >> 8) & 0xFF) as f32;
+            let bg_b = ((bg_color >> 16) & 0xFF) as f32;
 
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
             let margin = if state == PreviewState::Meeting {
                 0.0
             } else {
-                PILL_GLOW_MARGIN as f32
+                PILL_GLOW_MARGIN as f64
             };
-            let r = (height as f32 - margin * 2.0) / 2.0;
-            let c1_x = margin + r;
-            let c1_y = margin + r;
-            let c2_x = width as f32 - margin - r;
-            let c2_y = margin + r;
-
-            let bg_r = (bg_color & 0xFF) as f32;
-            let bg_g = ((bg_color >> 8) & 0xFF) as f32;
-            let bg_b = ((bg_color >> 16) & 0xFF) as f32;
-
-            for y in 0..height {
-                for x in 0..width {
-                    let px = x as f32 + 0.5;
-                    let py = y as f32 + 0.5;
-
-                    let d = if px < c1_x {
-                        ((px - c1_x).powi(2) + (py - c1_y).powi(2)).sqrt()
-                    } else if px > c2_x {
-                        ((px - c2_x).powi(2) + (py - c2_y).powi(2)).sqrt()
-                    } else {
-                        (py - c1_y).abs()
-                    };
-
-                    if d >= r + 0.5 {
-                        pixel_slice[(y * width + x) as usize] = 0;
-                        continue;
-                    }
-
-                    let edge_cov = (r + 0.5 - d).clamp(0.0, 1.0);
-                    let alpha = (235.0 * edge_cov) as u32;
-
-                    if alpha > 0 {
-                        let pr = (bg_r as u32 * alpha) / 255;
-                        let pg = (bg_g as u32 * alpha) / 255;
-                        let pb = (bg_b as u32 * alpha) / 255;
-                        pixel_slice[(y * width + x) as usize] =
-                            (alpha << 24) | (pr << 16) | (pg << 8) | pb;
-                    }
-                }
-            }
 
             static SMOOTHED_VOLUME: std::sync::atomic::AtomicU64 =
                 std::sync::atomic::AtomicU64::new(0);
@@ -964,37 +928,6 @@ mod win32_impl {
             );
             SMOOTHED_VOLUME.store(smoothed.to_bits(), Ordering::Relaxed);
 
-            static FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
-
-            if state == PreviewState::Processing {
-                let m = PILL_GLOW_MARGIN as f64;
-                let bounds = crate::native_overlay::Rect {
-                    x: m,
-                    y: m,
-                    width: width as f64 - m * 2.0,
-                    height: height as f64 - m * 2.0,
-                };
-                let background = crate::native_overlay::color(bg_color);
-                let turns = animation_seconds() / crate::native_overlay::PROCESSING_TURN_SECONDS;
-                for y in 0..height {
-                    for x in 0..width {
-                        pixel_slice[(y * width + x) as usize] =
-                            crate::native_overlay::processing_pixel(
-                                x as f64 + 0.5,
-                                y as f64 + 0.5,
-                                bounds,
-                                12.0,
-                                turns,
-                                background,
-                            );
-                    }
-                }
-            }
-            let logo_color = crate::native_overlay::LOGO_COLOR;
-            let bar_r = logo_color & 0xFF;
-            let bar_g = (logo_color >> 8) & 0xFF;
-            let bar_b = (logo_color >> 16) & 0xFF;
             // Keep the meeting indicator beside its timer; center normal dictation.
             let logo_x = if state == PreviewState::Meeting {
                 -7.0
@@ -1002,63 +935,30 @@ mod win32_impl {
                 (width as f64 - crate::native_overlay::PILL_WIDTH) / 2.0
             };
             let logo_y = (height as f64 - crate::native_overlay::PILL_HEIGHT) / 2.0;
-            for bar in crate::native_overlay::bars(
-                logo_x,
-                logo_y,
-                frame as u64,
-                smoothed,
-                state == PreviewState::Processing,
-            ) {
-                let radius = (bar.width / 2.0) as f32;
-                let x_center = (bar.x + bar.width / 2.0) as f32;
-                let y_start = bar.y as f32 + radius;
-                let y_end = (bar.y + bar.height) as f32 - radius;
-
-                for y in 0..height {
-                    for x in 0..width {
-                        let px = x as f32 + 0.5;
-                        let py = y as f32 + 0.5;
-
-                        if (px - x_center).abs() > radius + 0.5 {
-                            continue;
-                        }
-
-                        let d = if py < y_start {
-                            ((px - x_center).powi(2) + (py - y_start).powi(2)).sqrt()
-                        } else if py > y_end {
-                            ((px - x_center).powi(2) + (py - y_end).powi(2)).sqrt()
-                        } else {
-                            (px - x_center).abs()
-                        };
-
-                        let bar_alpha = ((radius + 0.5 - d).clamp(0.0, 1.0) * 255.0) as u32;
-
-                        if bar_alpha > 0 {
-                            let idx = (y * width + x) as usize;
-                            let dst = pixel_slice[idx];
-                            let dst_a = dst >> 24;
-
-                            let src_r = (bar_r * bar_alpha) / 255;
-                            let src_g = (bar_g * bar_alpha) / 255;
-                            let src_b = (bar_b * bar_alpha) / 255;
-
-                            if dst_a == 0 {
-                                pixel_slice[idx] =
-                                    (bar_alpha << 24) | (src_r << 16) | (src_g << 8) | src_b;
-                            } else {
-                                let out_r = src_r + (dst >> 16 & 0xFF) * (255 - bar_alpha) / 255;
-                                let out_g = src_g + (dst >> 8 & 0xFF) * (255 - bar_alpha) / 255;
-                                let out_b = src_b + (dst & 0xFF) * (255 - bar_alpha) / 255;
-                                let out_a = bar_alpha + dst_a * (255 - bar_alpha) / 255;
-                                pixel_slice[idx] = (out_a << 24)
-                                    | (out_r.min(255) << 16)
-                                    | (out_g.min(255) << 8)
-                                    | out_b.min(255);
-                            }
-                        }
-                    }
-                }
-            }
+            crate::overlay_paint::paint(
+                &crate::overlay_paint::Scene {
+                    scale: 1.0,
+                    seconds: animation_seconds(),
+                    background: crate::native_overlay::color(bg_color),
+                    wave: crate::native_overlay::color(
+                        crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed),
+                    ),
+                    processing: state == PreviewState::Processing,
+                    pill: Some(crate::native_overlay::Rect {
+                        x: margin,
+                        y: margin,
+                        width: width as f64 - margin * 2.0,
+                        height: height as f64 - margin * 2.0,
+                    }),
+                    logo: Some((logo_x, logo_y)),
+                    volume: smoothed,
+                    card: None,
+                    text: None,
+                },
+                pixel_slice,
+                width as usize,
+                height as usize,
+            );
 
             if state == PreviewState::Meeting {
                 let hdc_mask = CreateCompatibleDC(hdc_screen);
@@ -1199,13 +1099,6 @@ mod win32_impl {
         ReleaseDC(std::ptr::null_mut(), hdc_screen);
     }
 
-    // Apple Intelligence Chromatic Aurora Gradient Palette
-    #[inline(always)]
-    fn get_apple_intelligence_color(u: f32) -> (f32, f32, f32) {
-        let (r, g, b) = crate::native_overlay::processing_color(u as f64);
-        ((r * 255.0) as f32, (g * 255.0) as f32, (b * 255.0) as f32)
-    }
-
     pub unsafe fn update_layered_preview(hwnd: HWND) {
         let raw_text = get_preview_text();
         let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
@@ -1252,127 +1145,11 @@ mod win32_impl {
             }
 
             let bg_color = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed);
-            let wave_color = crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed);
-
-            let bg_r = (bg_color & 0xFF) as f32;
-            let bg_g = ((bg_color >> 8) & 0xFF) as f32;
-            let bg_b = ((bg_color >> 16) & 0xFF) as f32;
-
-            let wave_r = (wave_color & 0xFF) as f32;
-            let wave_g = ((wave_color >> 8) & 0xFF) as f32;
-            let wave_b = ((wave_color >> 16) & 0xFF) as f32;
-
-            // Determine contrasting text color based on background luminance
-            let text_color =
-                crate::native_overlay::text_color(crate::native_overlay::color(bg_color));
+            let background = crate::native_overlay::color(bg_color);
+            let text_color = crate::native_overlay::text_color(background);
             let seconds = animation_seconds();
-            let turns = (seconds / crate::native_overlay::PROCESSING_TURN_SECONDS) as f32;
-
-            let w_f = width as f32;
-            let h_f = height as f32;
-            let gm = GLOW_MARGIN as f32;
-            let card_w = w_f - gm * 2.0;
-            let card_h = h_f - gm * 2.0;
-            let hx = card_w / 2.0;
-            let hy = card_h / 2.0;
-            let cx = w_f / 2.0;
-            let cy = h_f / 2.0;
-            let radius = 7.0f32.min(hy - 1.0);
-
             let is_processing = state == PreviewState::Processing;
 
-            // Draw rounded card background & refined Apple Intelligence Chromatic Glow
-            for py in 0..height {
-                for px in 0..width {
-                    let x_f = px as f32 + 0.5;
-                    let y_f = py as f32 + 0.5;
-
-                    // Signed Distance Function to Card Edge (dist = 0 is card boundary)
-                    let qx = (x_f - cx).abs() - (hx - radius);
-                    let qy = (y_f - cy).abs() - (hy - radius);
-
-                    let dist = if qx > 0.0 && qy > 0.0 {
-                        (qx * qx + qy * qy).sqrt() - radius
-                    } else {
-                        qx.max(qy) - radius
-                    };
-
-                    if is_processing {
-                        // Angle around center + rotational flow
-                        let angle = (y_f - cy).atan2(x_f - cx); // -PI to PI
-                        let u =
-                            (angle / (2.0 * std::f32::consts::PI) + 1.0 + turns).rem_euclid(1.0);
-                        let (chroma_r, chroma_g, chroma_b) = get_apple_intelligence_color(u);
-
-                        if dist > 3.5 {
-                            // Outside outer glow halo
-                            pixel_slice[(py * width + px) as usize] = 0;
-                            continue;
-                        } else if dist > 0.0 {
-                            // Sleek outer atmospheric chromatic glow halo (3.5px diffusion)
-                            let halo_t = 1.0 - (dist / 3.5);
-                            let halo_alpha = ((halo_t * halo_t) * 150.0) as u32;
-                            if halo_alpha > 0 {
-                                let pr = ((chroma_r * halo_alpha as f32) / 255.0) as u32;
-                                let pg = ((chroma_g * halo_alpha as f32) / 255.0) as u32;
-                                let pb = ((chroma_b * halo_alpha as f32) / 255.0) as u32;
-                                pixel_slice[(py * width + px) as usize] =
-                                    (halo_alpha << 24) | (pr << 16) | (pg << 8) | pb;
-                            } else {
-                                pixel_slice[(py * width + px) as usize] = 0;
-                            }
-                            continue;
-                        } else {
-                            // Inside card (dist <= 0.0): Sleek, refined inner border stroke (2.8px depth)
-                            let inner_glow_depth = 2.8f32;
-                            let stroke_mix = if dist >= -1.2 {
-                                0.85 // Crisp illuminated edge
-                            } else if dist >= -inner_glow_depth {
-                                0.85 * ((dist + inner_glow_depth) / (inner_glow_depth - 1.2))
-                            } else {
-                                0.0
-                            };
-
-                            let cr = bg_r * (1.0 - stroke_mix) + chroma_r * stroke_mix;
-                            let cg = bg_g * (1.0 - stroke_mix) + chroma_g * stroke_mix;
-                            let cb = bg_b * (1.0 - stroke_mix) + chroma_b * stroke_mix;
-
-                            let edge_cov = (0.5 - dist).clamp(0.0, 1.0);
-                            let alpha_u = ((242.0 * edge_cov) as u32).min(255);
-
-                            let pr = (((cr * alpha_u as f32) / 255.0).min(255.0)) as u32;
-                            let pg = (((cg * alpha_u as f32) / 255.0).min(255.0)) as u32;
-                            let pb = (((cb * alpha_u as f32) / 255.0).min(255.0)) as u32;
-
-                            pixel_slice[(py * width + px) as usize] =
-                                (alpha_u << 24) | (pr << 16) | (pg << 8) | pb;
-                        }
-                    } else {
-                        // Listening state: Clean, minimal static theme border (1.2px)
-                        if dist >= 0.5 {
-                            pixel_slice[(py * width + px) as usize] = 0;
-                            continue;
-                        }
-                        let edge_cov = (0.5 - dist).clamp(0.0, 1.0);
-                        let in_border = ((dist + 1.2) / 1.2).clamp(0.0, 1.0);
-                        let blend = in_border * 0.40;
-
-                        let cr = bg_r * (1.0 - blend) + wave_r * blend;
-                        let cg = bg_g * (1.0 - blend) + wave_g * blend;
-                        let cb = bg_b * (1.0 - blend) + wave_b * blend;
-
-                        let alpha_u = ((240.0 * edge_cov) as u32).min(255);
-                        let pr = (((cr * alpha_u as f32) / 255.0).min(255.0)) as u32;
-                        let pg = (((cg * alpha_u as f32) / 255.0).min(255.0)) as u32;
-                        let pb = (((cb * alpha_u as f32) / 255.0).min(255.0)) as u32;
-
-                        pixel_slice[(py * width + px) as usize] =
-                            (alpha_u << 24) | (pr << 16) | (pg << 8) | pb;
-                    }
-                }
-            }
-
-            // Draw text onto mask DCs and composite.
             let display_text = if raw_text.trim().is_empty() {
                 if is_processing {
                     "Polishing..."
@@ -1406,7 +1183,7 @@ mod win32_impl {
                 font_name.as_ptr(),
             );
             let pad_x = 12;
-            let pad_y = 6;
+            let pad_y = 8;
             let text_left = GLOW_MARGIN + pad_x;
             let text_right = width - (GLOW_MARGIN + pad_x);
             let render_mask = |text: &str| -> Vec<f32> {
@@ -1457,105 +1234,57 @@ mod win32_impl {
             };
 
             let glyphs = render_mask(display_text);
-            // A replaced word's pixels are what text[..end] adds over
+            // A changing word's pixels are what text[..end] adds over
             // text[..start]; greedy word wrap lays both prefixes out exactly as
-            // the full text. Those pixels take the site's polish gradient and
-            // opacity, and feed a pink drop-shadow.
-            let mut polished: Vec<Option<((f64, f64, f64), f32)>> = Vec::new();
-            let mut halo: Vec<f32> = Vec::new();
-            if !glows.is_empty() {
-                polished = vec![None; pixel_count];
-                halo = vec![0f32; pixel_count];
-            }
-            for (range, look) in &glows {
-                if range.end > display_text.len()
-                    || !display_text.is_char_boundary(range.start)
-                    || !display_text.is_char_boundary(range.end)
-                {
-                    continue;
-                }
-                let before = render_mask(&display_text[..range.start]);
-                let word: Vec<f32> = render_mask(&display_text[..range.end])
-                    .iter()
-                    .zip(before)
-                    .map(|(after, before)| (after - before).max(0.0))
-                    .collect();
-                let inked = word
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, w)| **w > 0.05)
-                    .map(|(idx, _)| (idx % width as usize, idx / width as usize));
-                let (Some(left), Some(right), Some(top)) = (
-                    inked.clone().map(|(x, _)| x).min(),
-                    inked.clone().map(|(x, _)| x).max(),
-                    inked.map(|(_, y)| y).min(),
-                ) else {
-                    continue;
-                };
-                let span = (right - left + 1) as f64;
-                for (idx, w) in word.iter().enumerate() {
-                    if *w <= 0.0 {
-                        continue;
-                    }
-                    let x = (idx % width as usize) as f64 - left as f64;
-                    let y = (idx / width as usize) as f64 - top as f64;
-                    let swept = crate::native_overlay::polish_color(
-                        x / span,
-                        y / span,
-                        look.position,
-                        text_color,
-                    );
-                    let color = (
-                        swept.0 + (text_color.0 - swept.0) * look.plain,
-                        swept.1 + (text_color.1 - swept.1) * look.plain,
-                        swept.2 + (text_color.2 - swept.2) * look.plain,
-                    );
-                    polished[idx] = Some((color, look.opacity as f32));
-                    halo[idx] += w * look.glow as f32;
-                }
-            }
+            // the full text.
+            let words: Vec<(Vec<f32>, crate::native_overlay::Polish)> = glows
+                .iter()
+                .filter(|(range, _)| {
+                    range.end <= display_text.len()
+                        && display_text.is_char_boundary(range.start)
+                        && display_text.is_char_boundary(range.end)
+                })
+                .map(|(range, look)| {
+                    let before = render_mask(&display_text[..range.start]);
+                    let word = render_mask(&display_text[..range.end])
+                        .iter()
+                        .zip(before)
+                        .map(|(after, before)| (after - before).max(0.0))
+                        .collect();
+                    (word, *look)
+                })
+                .collect();
             DeleteObject(hfont);
-            if !halo.is_empty() {
-                // ~7px CSS drop-shadow blur.
-                crate::native_overlay::blur(&mut halo, width as usize, height as usize, 3);
-            }
 
-            let over = |dst: u32, color: (f64, f64, f64), alpha: f32| -> u32 {
-                let a = alpha.clamp(0.0, 1.0);
-                let keep = 1.0 - a;
-                let channel = |shift: u32, c: f64| {
-                    (((dst >> shift) & 0xFF) as f32 * keep + c as f32 * 255.0 * a).min(255.0) as u32
-                };
-                let out_a = ((dst >> 24) as f32 * keep + 255.0 * a).min(255.0) as u32;
-                (out_a << 24)
-                    | (channel(16, color.0) << 16)
-                    | (channel(8, color.1) << 8)
-                    | channel(0, color.2)
-            };
-            for idx in 0..pixel_count {
-                // Only draw over the solid card interior, never the outer halo.
-                if pixel_slice[idx] >> 24 < 180 {
-                    continue;
-                }
-                let halo_alpha = halo.get(idx).map_or(0.0, |h| (h * 2.5).min(1.0));
-                if halo_alpha > 0.004 {
-                    pixel_slice[idx] = over(
-                        pixel_slice[idx],
-                        crate::native_overlay::POLISH_GLOW,
-                        halo_alpha,
-                    );
-                }
-                let glyph = glyphs[idx];
-                if glyph > 0.0 {
-                    let (color, opacity) = polished
-                        .get(idx)
-                        .copied()
-                        .flatten()
-                        .unwrap_or((text_color, 1.0));
-                    pixel_slice[idx] =
-                        over(pixel_slice[idx], color, glyph * opacity * 245.0 / 255.0);
-                }
-            }
+            let gm = GLOW_MARGIN as f64;
+            crate::overlay_paint::paint(
+                &crate::overlay_paint::Scene {
+                    scale: 1.0,
+                    seconds,
+                    background,
+                    wave: crate::native_overlay::color(
+                        crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed),
+                    ),
+                    processing: is_processing,
+                    pill: None,
+                    logo: None,
+                    volume: 0.0,
+                    card: Some(crate::native_overlay::Rect {
+                        x: gm,
+                        y: gm,
+                        width: width as f64 - gm * 2.0,
+                        height: height as f64 - gm * 2.0,
+                    }),
+                    text: Some(crate::overlay_paint::Text {
+                        color: text_color,
+                        glyphs: &glyphs,
+                        words: &words,
+                    }),
+                },
+                pixel_slice,
+                width as usize,
+                height as usize,
+            );
 
             let psize = windows_sys::Win32::Foundation::SIZE {
                 cx: width,
@@ -2208,7 +1937,8 @@ mod win32_stub {
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    fn animation_seconds() -> f64 {
+    /// The overlay animation clock; every effect is timed by it.
+    pub fn animation_seconds() -> f64 {
         ANIMATION_START
             .get_or_init(std::time::Instant::now)
             .elapsed()
@@ -2349,6 +2079,8 @@ mod win32_stub {
         // The work is done: stop the processing ring while the words settle.
         #[cfg(target_os = "linux")]
         crate::linux_desktop::set_preview_state(PreviewState::Listening as u8);
+        #[cfg(target_os = "macos")]
+        crate::macos_desktop::set_state(PreviewState::Listening as u8);
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs_f64(wait));
             if PREVIEW_HOLD.swap(false, Ordering::SeqCst) {
@@ -2421,11 +2153,11 @@ mod win32_stub {
 
 #[cfg(not(target_os = "windows"))]
 pub use win32_stub::{
-    calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
-    hide_overlay, hide_preview, hide_preview_after_polish, play_chime, preview_glow,
-    run_win32_hook_and_tray_thread, set_preview_final_text, set_preview_state, set_preview_text,
-    set_preview_text_with_replacements, set_window_icon_for_theme, show_meeting_overlay,
-    show_overlay, show_preview, show_tray_notification, update_overlay_position,
-    update_preview_position, update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel,
-    PreviewState, SendHWND,
+    animation_seconds, calculate_pill_position, ensure_single_instance, get_preview_text,
+    hide_meeting_overlay, hide_overlay, hide_preview, hide_preview_after_polish, play_chime,
+    preview_glow, run_win32_hook_and_tray_thread, set_preview_final_text, set_preview_state,
+    set_preview_text, set_preview_text_with_replacements, set_window_icon_for_theme,
+    show_meeting_overlay, show_overlay, show_preview, show_tray_notification,
+    update_overlay_position, update_preview_position, update_tray_icon_for_theme,
+    update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
 };

@@ -49,32 +49,26 @@ unsafe extern "C" {
         draw: extern "C" fn(*mut c_void, f64, f64),
         placement: extern "C" fn(f64, f64, i32, f64, f64) -> Placement,
     );
-    fn CGContextClip(context: *mut c_void);
-    fn CGContextReplacePathWithStrokedPath(context: *mut c_void);
     fn CGColorSpaceCreateDeviceRGB() -> Ref;
-    fn CGGradientCreateWithColorComponents(
+    fn CGBitmapContextCreate(
+        data: *mut c_void,
+        width: usize,
+        height: usize,
+        bits_per_component: usize,
+        bytes_per_row: usize,
         space: Ref,
-        components: *const f64,
-        locations: *const f64,
-        count: usize,
-    ) -> Ref;
-    fn CGContextDrawLinearGradient(
-        context: *mut c_void,
-        gradient: Ref,
-        start: Point,
-        end: Point,
-        options: u32,
-    );
+        bitmap_info: u32,
+    ) -> *mut c_void;
+    fn CGBitmapContextGetData(context: *mut c_void) -> *mut c_void;
+    fn CGBitmapContextGetBytesPerRow(context: *mut c_void) -> usize;
+    fn CGBitmapContextCreateImage(context: *mut c_void) -> Ref;
+    fn CGContextDrawImage(context: *mut c_void, rect: CgRect, image: Ref);
+    fn CGContextScaleCTM(context: *mut c_void, sx: f64, sy: f64);
+    fn CGContextConvertRectToDeviceSpace(context: *mut c_void, rect: CgRect) -> CgRect;
     fn CGContextSaveGState(context: *mut c_void);
     fn CGContextRestoreGState(context: *mut c_void);
     fn CGContextClearRect(context: *mut c_void, rect: CgRect);
-    fn CGContextSetRGBFillColor(context: *mut c_void, r: f64, g: f64, b: f64, a: f64);
-    fn CGContextSetRGBStrokeColor(context: *mut c_void, r: f64, g: f64, b: f64, a: f64);
-    fn CGContextSetLineWidth(context: *mut c_void, width: f64);
-    fn CGContextAddPath(context: *mut c_void, path: Ref);
-    fn CGContextDrawPath(context: *mut c_void, mode: i32);
     fn CGContextSetTextMatrix(context: *mut c_void, transform: Transform);
-    fn CGPathCreateWithRoundedRect(rect: CgRect, rx: f64, ry: f64, transform: Ref) -> Ref;
     fn CGPathCreateWithRect(rect: CgRect, transform: Ref) -> Ref;
     fn CGColorCreateGenericRGB(r: f64, g: f64, b: f64, a: f64) -> Ref;
     fn CFRelease(value: Ref);
@@ -222,7 +216,6 @@ impl TextLayout {
 
 #[derive(Default)]
 struct Renderer {
-    frame: u64,
     smoothed: f64,
     text: Option<TextLayout>,
 }
@@ -238,26 +231,6 @@ fn cg_rect(rect: Rect) -> CgRect {
             width: rect.width,
             height: rect.height,
         },
-    }
-}
-
-unsafe fn rounded(
-    context: *mut c_void,
-    rect: Rect,
-    radius: f64,
-    color: (f64, f64, f64),
-    alpha: f64,
-    stroke: bool,
-) {
-    if let Some(path) = Owned::new(CGPathCreateWithRoundedRect(
-        cg_rect(rect),
-        radius,
-        radius,
-        std::ptr::null(),
-    )) {
-        CGContextSetRGBFillColor(context, color.0, color.1, color.2, alpha);
-        CGContextAddPath(context, path.0);
-        CGContextDrawPath(context, if stroke { 3 } else { 0 }); // fill-stroke / fill
     }
 }
 
@@ -303,104 +276,192 @@ extern "C" fn draw(context: *mut c_void, x: f64, y: f64) {
     }
     let _ = std::panic::catch_unwind(|| unsafe {
         CGContextSaveGState(context);
-        CGContextClearRect(
-            context,
-            cg_rect(Rect {
-                x: 0.0,
-                y: 0.0,
-                width: design::WIDTH,
-                height: surface_height(),
-            }),
-        );
+        let bounds = cg_rect(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: design::WIDTH,
+            height: surface_height(),
+        });
+        CGContextClearRect(context, bounds);
         let state = crate::macos_desktop::overlay_state();
         if state != 0 {
             RENDERER.with(|slot| {
                 let mut renderer = slot.borrow_mut();
-                let background = design::color(crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed));
-                let wave = design::color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed));
-                rounded(
-                    context,
-                    Rect {
-                        x: x + 0.5,
-                        y: y + 0.5,
-                        width: 61.0,
-                        height: 23.0,
-                    },
-                    11.5,
-                    background,
-                    235.0 / 255.0,
-                    false,
-                );
-                if state == 2 {
-                    processing_border(
-                        context,
-                        Rect {
-                            x: x + 0.5,
-                            y: y + 0.5,
-                            width: 61.0,
-                            height: 23.0,
-                        },
-                        11.5,
-                        renderer.frame,
-                    );
-                }
-                let volume = if state == 3 {
-                    crate::audio::MIC_VOLUME
-                        .load(Ordering::Relaxed)
-                        .max(crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed))
-                } else {
-                    crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed)
-                };
-                renderer.smoothed = design::smooth_volume(renderer.smoothed, volume as f64);
-                for bar in design::bars(x, y, renderer.frame, renderer.smoothed, state == 2) {
-                    rounded(
-                        context,
-                        bar,
-                        bar.width / 2.0,
-                        design::color(design::LOGO_COLOR),
-                        1.0,
-                        false,
-                    );
-                }
-                let raw = crate::win32::get_preview_text();
-                let text = design::preview_text(&raw, state == 2);
-                if !text.trim().is_empty() {
-                    let color = design::text_color(background);
-                    if renderer
-                        .text
-                        .as_ref()
-                        .map(|layout| (layout.text.as_str(), layout.color))
-                        != Some((text, color))
-                    {
-                        renderer.text = TextLayout::new(&text, color);
-                    }
-                    let renderer_frame = renderer.frame;
-                    if let Some(layout) = renderer.text.as_mut() {
-                        let card = design::preview_card_in_surface(
-                            x,
-                            y,
-                            layout.size.width,
-                            layout.size.height,
-                            surface_height(),
-                        );
-                        CGContextSetRGBStrokeColor(context, wave.0, wave.1, wave.2, 0.64);
-                        CGContextSetLineWidth(context, 1.0);
-                        rounded(context, card, 7.0, background, 0.96, true);
-                        if state == 2 {
-                            processing_border(context, card, 7.0, renderer_frame);
-                        }
-                        layout.draw(context, card);
-                    }
-                } else {
-                    renderer.text = None;
-                }
-                renderer.frame = renderer.frame.wrapping_add(1);
+                render(&mut renderer, context, bounds, x, y, state);
             });
         } else {
             RENDERER.with(|slot| *slot.borrow_mut() = Renderer::default());
         }
         CGContextRestoreGState(context);
     });
+}
+
+/// Paints the pill and preview with the shared renderer at the display's
+/// backing scale; CoreText only supplies the text's coverage.
+unsafe fn render(
+    renderer: &mut Renderer,
+    context: *mut c_void,
+    bounds: CgRect,
+    x: f64,
+    y: f64,
+    state: u8,
+) -> Option<()> {
+    let unit = CGContextConvertRectToDeviceSpace(
+        context,
+        CgRect {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size {
+                width: 1.0,
+                height: 1.0,
+            },
+        },
+    );
+    let scale = unit.size.width.abs().max(1.0);
+    let width = (design::WIDTH * scale).ceil() as usize;
+    let height = (surface_height() * scale).ceil() as usize;
+    let background = design::color(crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed));
+    let volume = if state == 3 {
+        crate::audio::MIC_VOLUME
+            .load(Ordering::Relaxed)
+            .max(crate::audio::LOOPBACK_VOLUME.load(Ordering::Relaxed))
+    } else {
+        crate::audio::CURRENT_VOLUME.load(Ordering::Relaxed)
+    };
+    renderer.smoothed = design::smooth_volume(renderer.smoothed, volume as f64);
+
+    let raw = crate::win32::get_preview_text();
+    let text = design::preview_text(&raw, state == 2);
+    let color = design::text_color(background);
+    let mut card = None;
+    let mut glyphs = Vec::new();
+    let mut words = Vec::new();
+    if text.trim().is_empty() {
+        renderer.text = None;
+    } else {
+        if renderer
+            .text
+            .as_ref()
+            .map(|layout| (layout.text.as_str(), layout.color))
+            != Some((text, color))
+        {
+            renderer.text = TextLayout::new(text, color);
+        }
+        if let Some(layout) = renderer.text.as_mut() {
+            let shape = design::preview_card_in_surface(
+                x,
+                y,
+                layout.size.width,
+                layout.size.height,
+                surface_height(),
+            );
+            glyphs = coverage(width, height, scale, |mask| layout.draw(mask, shape));
+            for (range, look) in crate::win32::preview_glow() {
+                if range.end > text.len()
+                    || !text.is_char_boundary(range.start)
+                    || !text.is_char_boundary(range.end)
+                {
+                    continue;
+                }
+                // A word's pixels are what text[..end] adds over
+                // text[..start]; greedy wrapping lays out both prefixes
+                // exactly as the full text.
+                let prefix = |end: usize| {
+                    TextLayout::new(&text[..end], color).map_or_else(
+                        || vec![0.0; width * height],
+                        |mut layout| {
+                            coverage(width, height, scale, |mask| layout.draw(mask, shape))
+                        },
+                    )
+                };
+                let before = prefix(range.start);
+                let word = prefix(range.end)
+                    .iter()
+                    .zip(before)
+                    .map(|(after, before)| (after - before).max(0.0))
+                    .collect();
+                words.push((word, look));
+            }
+            card = Some(shape);
+        }
+    }
+    let mut pixels = vec![0u32; width * height];
+    crate::overlay_paint::paint(
+        &crate::overlay_paint::Scene {
+            scale,
+            seconds: crate::win32::animation_seconds(),
+            background,
+            wave: design::color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed)),
+            processing: state == 2,
+            pill: Some(Rect {
+                x,
+                y,
+                width: design::PILL_WIDTH,
+                height: design::PILL_HEIGHT,
+            }),
+            logo: Some((x, y)),
+            volume: renderer.smoothed,
+            card,
+            text: card.map(|_| crate::overlay_paint::Text {
+                color,
+                glyphs: &glyphs,
+                words: &words,
+            }),
+        },
+        &mut pixels,
+        width,
+        height,
+    );
+    let space = Owned::new(CGColorSpaceCreateDeviceRGB())?;
+    // Premultiplied-first, 32-bit little-endian: the shared renderer's pixels.
+    let bitmap = CGBitmapContextCreate(
+        pixels.as_mut_ptr() as *mut c_void,
+        width,
+        height,
+        8,
+        width * 4,
+        space.0,
+        2 | (2 << 12),
+    );
+    let bitmap = Owned::new(bitmap as Ref)?;
+    // Drawn while `pixels` is alive: the image may share its memory.
+    let image = Owned::new(CGBitmapContextCreateImage(bitmap.0 as *mut c_void))?;
+    CGContextDrawImage(context, bounds, image.0);
+    Some(())
+}
+
+/// Coverage of what `draw` puts in an alpha-only bitmap, one value per
+/// device pixel, top row first.
+unsafe fn coverage(
+    width: usize,
+    height: usize,
+    scale: f64,
+    draw: impl FnOnce(*mut c_void),
+) -> Vec<f32> {
+    let mut values = vec![0f32; width * height];
+    // kCGImageAlphaOnly with no colour space.
+    let mask = CGBitmapContextCreate(
+        std::ptr::null_mut(),
+        width,
+        height,
+        8,
+        width,
+        std::ptr::null(),
+        7,
+    );
+    let Some(owned) = Owned::new(mask as Ref) else {
+        return values;
+    };
+    CGContextScaleCTM(mask, scale, scale);
+    draw(mask);
+    let data = CGBitmapContextGetData(mask) as *const u8;
+    let stride = CGBitmapContextGetBytesPerRow(mask);
+    if !data.is_null() {
+        for (i, value) in values.iter_mut().enumerate() {
+            *value = *data.add((i / width) * stride + i % width) as f32 / 255.0;
+        }
+    }
+    drop(owned);
+    values
 }
 
 pub fn install() {
@@ -413,60 +474,4 @@ static SURFACE_HEIGHT: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(design::HEIGHT.to_bits());
 fn surface_height() -> f64 {
     f64::from_bits(SURFACE_HEIGHT.load(Ordering::Relaxed))
-}
-unsafe fn processing_border(context: *mut c_void, rect: Rect, radius: f64, frame: u64) {
-    let Some(space) = Owned::new(CGColorSpaceCreateDeviceRGB()) else {
-        return;
-    };
-    for (width, alpha) in [
-        (8.0, 0.025),
-        (6.0, 0.045),
-        (4.0, 0.08),
-        (2.6, 0.16),
-        (1.2, 0.95),
-    ] {
-        let mut colors = [0.0; 36];
-        let mut locations = [0.0; 9];
-        for i in 0..=8 {
-            let offset = i as f64 / 8.0;
-            let (r, g, b) = design::processing_color(offset + frame as f64 * 0.008);
-            colors[i * 4..i * 4 + 4].copy_from_slice(&[r, g, b, alpha]);
-            locations[i] = offset;
-        }
-        let Some(gradient) = Owned::new(CGGradientCreateWithColorComponents(
-            space.0,
-            colors.as_ptr(),
-            locations.as_ptr(),
-            9,
-        )) else {
-            continue;
-        };
-        let Some(path) = Owned::new(CGPathCreateWithRoundedRect(
-            cg_rect(rect),
-            radius,
-            radius,
-            std::ptr::null(),
-        )) else {
-            continue;
-        };
-        CGContextSaveGState(context);
-        CGContextAddPath(context, path.0);
-        CGContextSetLineWidth(context, width);
-        CGContextReplacePathWithStrokedPath(context);
-        CGContextClip(context);
-        CGContextDrawLinearGradient(
-            context,
-            gradient.0,
-            Point {
-                x: rect.x,
-                y: surface_height() - rect.y,
-            },
-            Point {
-                x: rect.x + rect.width,
-                y: surface_height() - rect.y - rect.height,
-            },
-            3,
-        );
-        CGContextRestoreGState(context);
-    }
 }

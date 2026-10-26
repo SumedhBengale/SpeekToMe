@@ -50,6 +50,7 @@ mod meeting_setup;
 pub mod meeting_stream;
 #[allow(dead_code)]
 mod native_overlay;
+mod overlay_paint;
 #[cfg(any(target_os = "linux", test))]
 mod portal_gestures;
 mod settings_lifecycle;
