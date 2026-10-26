@@ -183,6 +183,34 @@ func TestStrictOpenAIProvidersPayloadCleanliness(t *testing.T) {
 	}
 }
 
+func TestCerebrasGPTOSSReasoningEffort(t *testing.T) {
+	prov, ok := GetLLMProvider(ProviderCerebras)
+	if !ok {
+		t.Fatal("Cerebras provider not found")
+	}
+
+	cases := []struct {
+		reasoning string
+		want      string
+	}{
+		{"", "low"},
+		{"disabled", "low"},
+		{"low", "low"},
+		{"medium", "medium"},
+		{"high", "high"},
+	}
+	for _, tc := range cases {
+		spec := ModelSpec{Provider: ProviderCerebras, Model: "gpt-oss-120b", Reasoning: tc.reasoning}
+		payload, err := prov.FormatPayload(spec, "System Prompt", "User Message")
+		if err != nil {
+			t.Fatalf("FormatPayload failed: %v", err)
+		}
+		if got := payload["reasoning_effort"]; got != tc.want {
+			t.Errorf("Reasoning %q: reasoning_effort = %v, want %q", tc.reasoning, got, tc.want)
+		}
+	}
+}
+
 func TestModelSpecValidation(t *testing.T) {
 	prov, _ := GetLLMProvider(ProviderGroq)
 

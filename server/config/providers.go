@@ -299,6 +299,16 @@ var LLMProvidersRegistry = map[string]ProviderDefinition{
 		FormatPayload: func(spec ModelSpec, systemPrompt, userMessage string) (map[string]interface{}, error) {
 			// Strict OpenAI format; Cerebras rejects extra custom fields
 			payload := defaultBasePayload(spec, systemPrompt, userMessage)
+			// gpt-oss can't disable reasoning (only low/medium/high, default medium).
+			// Cleanup doesn't benefit from it, so pin low unless a level is set.
+			if strings.Contains(strings.ToLower(spec.Model), "gpt-oss") {
+				switch spec.Reasoning {
+				case "low", "medium", "high":
+					payload["reasoning_effort"] = spec.Reasoning
+				default:
+					payload["reasoning_effort"] = "low"
+				}
+			}
 			return payload, nil
 		},
 		ValidateModelSpec: func(spec ModelSpec) error {
