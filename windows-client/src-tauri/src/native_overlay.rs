@@ -4,6 +4,8 @@ pub const WIDTH: f64 = 420.0;
 pub const HEIGHT: f64 = 140.0;
 pub const PILL_WIDTH: f64 = 62.0;
 pub const PILL_HEIGHT: f64 = 24.0;
+/// Height of the logo's tallest bar inside the pill.
+pub const LOGO_HEIGHT: f64 = 21.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -103,11 +105,11 @@ pub fn smooth_volume(previous: f64, raw: f64) -> f64 {
 
 pub fn bars(x: f64, y: f64, seconds: f64, volume: f64, processing: bool) -> [Rect; 5] {
     // Preserve the SVG's coordinates and rounded capsules, fitting its tallest
-    // bar into 18 logical pixels. In silence the logo rests in its SVG shape;
+    // bar into LOGO_HEIGHT logical pixels. In silence the logo rests in its SVG shape;
     // speech lifts every bar on its own rhythm, like a live waveform, and any
     // of them can reach the full height. All recording movement comes from
     // real audio.
-    let scale = 18.0 / 316.0;
+    let scale = LOGO_HEIGHT / 316.0;
     let width = 40.0 * scale;
     // Suppress the noise floor; a square-root curve keeps soft speech visible.
     let level = if processing {
@@ -126,7 +128,7 @@ pub fn bars(x: f64, y: f64, seconds: f64, volume: f64, processing: bool) -> [Rec
             0.2
         };
         let resting = width + (heights[i] * scale - width) * activity;
-        let speaking = width + (18.0 - width) * level * waveform(i, seconds);
+        let speaking = width + (LOGO_HEIGHT - width) * level * waveform(i, seconds);
         let height = resting.max(speaking);
         Rect {
             x: x + PILL_WIDTH / 2.0 + (positions[i] - 256.0) * scale,
@@ -238,7 +240,7 @@ mod tests {
         assert_eq!(rest[1].height, rest[3].height);
         assert!(rest[0].height < rest[1].height && rest[1].height < rest[2].height);
         for (bar, original) in rest.iter().zip([120.0, 208.0, 316.0, 208.0, 120.0]) {
-            let svg = bar.width + (original * 18.0 / 316.0 - bar.width) * 0.2;
+            let svg = bar.width + (original * LOGO_HEIGHT / 316.0 - bar.width) * 0.2;
             assert!((bar.height - svg).abs() < 1e-10);
         }
 
@@ -269,7 +271,7 @@ mod tests {
         for volume in [30.0, 60.0, 120.0, 1000.0] {
             for step in 0..100 {
                 for bar in bars(0.0, 0.0, step as f64 * 0.07, volume, false) {
-                    assert!(bar.height <= 18.0 + 1e-10);
+                    assert!(bar.height <= LOGO_HEIGHT + 1e-10);
                 }
             }
         }
