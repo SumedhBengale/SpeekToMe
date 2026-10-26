@@ -6,6 +6,10 @@ pub const PILL_WIDTH: f64 = 62.0;
 pub const PILL_HEIGHT: f64 = 24.0;
 /// Height of the logo's tallest bar inside the pill.
 pub const LOGO_HEIGHT: f64 = 21.0;
+/// The meeting pill holds the logo and a short label.
+pub const MEETING_PILL_WIDTH: f64 = 156.0;
+pub const MEETING_LABEL: &str = "Recording meeting";
+pub const MEETING_LABEL_SIZE: f64 = 11.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -152,6 +156,36 @@ fn waveform(i: usize, seconds: f64) -> f64 {
     let (a, b, phase) = RATES[i];
     let mix = 0.6 * (seconds * a + phase).sin() + 0.4 * (seconds * b + phase * 1.7).sin();
     0.6 + 0.4 * mix
+}
+
+/// The meeting pill, centred where the dictation pill at `x`, `y` sits and
+/// kept inside the overlay surface.
+pub fn meeting_pill(x: f64, y: f64) -> Rect {
+    Rect {
+        x: (x + PILL_WIDTH / 2.0 - MEETING_PILL_WIDTH / 2.0)
+            .clamp(4.0, WIDTH - MEETING_PILL_WIDTH - 4.0),
+        y,
+        width: MEETING_PILL_WIDTH,
+        height: PILL_HEIGHT,
+    }
+}
+
+/// Top left of the logo box inside a meeting pill: the logo sits at the left.
+pub fn meeting_logo(pill: Rect) -> (f64, f64) {
+    (
+        pill.x + 20.0 - PILL_WIDTH / 2.0,
+        pill.y + (pill.height - PILL_HEIGHT) / 2.0,
+    )
+}
+
+/// Where the meeting label is laid out, left aligned after the logo.
+pub fn meeting_label_box(pill: Rect) -> Rect {
+    Rect {
+        x: pill.x + 38.0,
+        y: pill.y,
+        width: pill.width - 38.0 - 10.0,
+        height: pill.height,
+    }
 }
 
 pub fn preview_card(x: f64, y: f64, text_width: f64, text_height: f64) -> Rect {

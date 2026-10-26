@@ -46,6 +46,7 @@ unsafe extern "C" {
     fn s2m_overlay_callbacks(
         width: f64,
         height: f64,
+        meeting_width: f64,
         draw: extern "C" fn(*mut c_void, f64, f64),
         placement: extern "C" fn(f64, f64, i32, f64, f64) -> Placement,
     );
@@ -123,13 +124,18 @@ struct TextLayout {
 }
 impl TextLayout {
     unsafe fn new(text: &str, color: (f64, f64, f64)) -> Option<Self> {
+        // kCTFontUIFontUser
+        Self::with_font(text, color, 0, 13.0)
+    }
+
+    unsafe fn with_font(text: &str, color: (f64, f64, f64), kind: u32, size: f64) -> Option<Self> {
         let utf8 = CString::new(text.replace('\0', "")).ok()?;
         let string = Owned::new(CFStringCreateWithCString(
             std::ptr::null(),
             utf8.as_ptr(),
             0x08000100,
         ))?;
-        let font = Owned::new(CTFontCreateUIFontForLanguage(0, 13.0, std::ptr::null()))?;
+        let font = Owned::new(CTFontCreateUIFontForLanguage(kind, size, std::ptr::null()))?;
         let foreground = Owned::new(CGColorCreateGenericRGB(color.0, color.1, color.2, 1.0))?;
         let keys = [kCTFontAttributeName, kCTForegroundColorAttributeName];
         let values = [font.0, foreground.0];
@@ -172,17 +178,10 @@ impl TextLayout {
         })
     }
 
-    unsafe fn draw(&mut self, context: *mut c_void, card: Rect) {
-        if self.frame.as_ref().map(|(bounds, _)| *bounds) != Some(card) {
-            let path = Owned::new(CGPathCreateWithRect(
-                cg_rect(Rect {
-                    x: card.x + 12.0,
-                    y: card.y + 8.0,
-                    width: card.width - 24.0,
-                    height: card.height - 16.0,
-                }),
-                std::ptr::null(),
-            ));
+    /// Draws the text laid out in `text_box`, from its top left.
+    unsafe fn draw(&mut self, context: *mut c_void, text_box: Rect) {
+        if self.frame.as_ref().map(|(bounds, _)| *bounds) != Some(text_box) {
+            let path = Owned::new(CGPathCreateWithRect(cg_rect(text_box), std::ptr::null()));
             self.frame = path
                 .and_then(|path| {
                     Owned::new(CTFramesetterCreateFrame(
@@ -195,7 +194,7 @@ impl TextLayout {
                         std::ptr::null(),
                     ))
                 })
-                .map(|frame| (card, frame));
+                .map(|frame| (text_box, frame));
         }
         if let Some((_, frame)) = &self.frame {
             CGContextSetTextMatrix(
@@ -237,7 +236,7 @@ fn cg_rect(rect: Rect) -> CgRect {
 extern "C" fn placement(width: f64, height: f64, position: i32, x: f64, y: f64) -> Placement {
     let text = crate::win32::get_preview_text();
     let state = crate::macos_desktop::overlay_state();
-    let text = if state == 0 {
+    let text = if state == 0 || state == MEETING {
         ""
     } else {
         design::preview_text(&text, state == 2)
@@ -267,8 +266,16 @@ extern "C" fn placement(width: f64, height: f64, position: i32, x: f64, y: f64) 
     });
     let surface_height = design::surface_height_at(text_height, height, position, y);
     SURFACE_HEIGHT.store(surface_height.to_bits(), Ordering::Relaxed);
-    design::placement_with_height(width, height, position, x, y, surface_height)
+    let mut placement =
+        design::placement_with_height(width, height, position, x, y, surface_height);
+    if state == MEETING {
+        // AppKit hit-tests the meeting pill from this position.
+        placement.pill_x = design::meeting_pill(placement.pill_x, placement.pill_y).x;
+    }
+    placement
 }
+
+const MEETING: u8 = 3;
 
 extern "C" fn draw(context: *mut c_void, x: f64, y: f64) {
     if context.is_null() {
@@ -329,7 +336,12 @@ unsafe fn render(
     };
     renderer.smoothed = design::smooth_volume(renderer.smoothed, volume as f64);
 
-    let raw = crate::win32::get_preview_text();
+    let meeting = state == MEETING;
+    let raw = if meeting {
+        String::new()
+    } else {
+        crate::win32::get_preview_text()
+    };
     let text = design::preview_text(&raw, state == 2);
     let color = design::text_color(background);
     let mut card = None;
@@ -354,7 +366,13 @@ unsafe fn render(
                 layout.size.height,
                 surface_height(),
             );
-            glyphs = coverage(width, height, scale, |mask| layout.draw(mask, shape));
+            let text_box = Rect {
+                x: shape.x + 12.0,
+                y: shape.y + 8.0,
+                width: shape.width - 24.0,
+                height: shape.height - 16.0,
+            };
+            glyphs = coverage(width, height, scale, |mask| layout.draw(mask, text_box));
             for (range, look) in crate::win32::preview_glow() {
                 if range.end > text.len()
                     || !text.is_char_boundary(range.start)
@@ -369,7 +387,7 @@ unsafe fn render(
                     TextLayout::new(&text[..end], color).map_or_else(
                         || vec![0.0; width * height],
                         |mut layout| {
-                            coverage(width, height, scale, |mask| layout.draw(mask, shape))
+                            coverage(width, height, scale, |mask| layout.draw(mask, text_box))
                         },
                     )
                 };
@@ -384,6 +402,37 @@ unsafe fn render(
             card = Some(shape);
         }
     }
+    // Placement already moved a meeting's `x` to the meeting pill.
+    let pill = Rect {
+        x,
+        y,
+        width: if meeting {
+            design::MEETING_PILL_WIDTH
+        } else {
+            design::PILL_WIDTH
+        },
+        height: design::PILL_HEIGHT,
+    };
+    let logo = if meeting {
+        design::meeting_logo(pill)
+    } else {
+        (x, y)
+    };
+    let mut label = Vec::new();
+    if meeting {
+        // kCTFontUIFontEmphasizedSystem
+        if let Some(mut layout) =
+            TextLayout::with_font(design::MEETING_LABEL, color, 3, design::MEETING_LABEL_SIZE)
+        {
+            let text_box = design::meeting_label_box(pill);
+            let line = Rect {
+                y: text_box.y + (text_box.height - layout.size.height) / 2.0,
+                height: layout.size.height,
+                ..text_box
+            };
+            label = coverage(width, height, scale, |mask| layout.draw(mask, line));
+        }
+    }
     let mut pixels = vec![0u32; width * height];
     crate::overlay_paint::paint(
         &crate::overlay_paint::Scene {
@@ -392,14 +441,10 @@ unsafe fn render(
             background,
             wave: design::color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed)),
             processing: state == 2,
-            pill: Some(Rect {
-                x,
-                y,
-                width: design::PILL_WIDTH,
-                height: design::PILL_HEIGHT,
-            }),
-            logo: Some((x, y)),
+            pill: Some(pill),
+            logo: Some(logo),
             volume: renderer.smoothed,
+            label: meeting.then_some(label.as_slice()),
             card,
             text: card.map(|_| crate::overlay_paint::Text {
                 color,
@@ -466,7 +511,13 @@ unsafe fn coverage(
 
 pub fn install() {
     unsafe {
-        s2m_overlay_callbacks(design::WIDTH, design::HEIGHT, draw, placement);
+        s2m_overlay_callbacks(
+            design::WIDTH,
+            design::HEIGHT,
+            design::MEETING_PILL_WIDTH,
+            draw,
+            placement,
+        );
     }
 }
 

@@ -7,7 +7,8 @@
 //! cairo `ARgb32` surface and a CoreGraphics little-endian premultiplied-first
 //! bitmap all store.
 use crate::native_overlay::{
-    bars, blur, polish_color, processing_pixel, Polish, Rect, POLISH_GLOW, PROCESSING_TURN_SECONDS,
+    bars, blur, polish_color, processing_pixel, text_color, Polish, Rect, POLISH_GLOW,
+    PROCESSING_TURN_SECONDS,
 };
 
 pub const PILL_ALPHA: f64 = 235.0 / 255.0;
@@ -30,6 +31,8 @@ pub struct Scene<'a> {
     pub logo: Option<(f64, f64)>,
     /// Smoothed microphone level for the logo.
     pub volume: f64,
+    /// Coverage of a label drawn inside the pill, such as the meeting's.
+    pub label: Option<&'a [f32]>,
     pub card: Option<Rect>,
     pub text: Option<Text<'a>>,
 }
@@ -85,6 +88,14 @@ pub fn paint(scene: &Scene, pixels: &mut [u32], width: usize, height: usize) {
             }
         }
     }
+    if let (Some(pill), Some(label)) = (scene.pill, scene.label) {
+        let text = Text {
+            color: text_color(scene.background),
+            glyphs: label,
+            words: &[],
+        };
+        paint_text(&text, pill, scene.scale, pixels, width, height);
+    }
     if let Some(card) = scene.card {
         let radius = CARD_RADIUS.min(card.height / 2.0 - 1.0);
         for (px, py) in area(card, HALO) {
@@ -123,8 +134,8 @@ fn card_pixel(x: f64, y: f64, card: Rect, radius: f64, scene: &Scene, s: f64) ->
     )
 }
 
-/// Draws the text inside the card. A changing word takes the website's
-/// polish gradient over a pink drop-shadow.
+/// Draws text inside `card` (or the pill, for a label). A changing word
+/// takes the website's polish gradient over a pink drop-shadow.
 fn paint_text(
     text: &Text,
     card: Rect,
@@ -266,6 +277,7 @@ mod tests {
             }),
             logo: Some((4.0, 4.0)),
             volume: 0.0,
+            label: None,
             card: Some(Rect {
                 x: 4.0,
                 y: 40.0,
@@ -355,6 +367,38 @@ mod tests {
         });
         let shimmer = render(&with_text);
         assert!((80..120).any(|x| shimmer[60 * 220 + x] != plain));
+    }
+
+    #[test]
+    fn meeting_pill_shows_its_label_and_logo_inside_the_pill() {
+        let pill = crate::native_overlay::meeting_pill(79.0, 4.0);
+        let text_box = crate::native_overlay::meeting_label_box(pill);
+        let mut label = vec![0f32; 220 * 90];
+        for y in 10..20 {
+            for x in text_box.x as usize..text_box.x as usize + 20 {
+                label[y * 220 + x] = 1.0;
+            }
+        }
+        let meeting = Scene {
+            pill: Some(pill),
+            logo: Some(crate::native_overlay::meeting_logo(pill)),
+            label: Some(&label),
+            card: None,
+            ..scene(false, 0.0)
+        };
+        let pixels = render(&meeting);
+        let at = 15 * 220 + text_box.x as usize + 5;
+        assert!(
+            (pixels[at] >> 16) & 0xFF < 0x40,
+            "label is dark text on the pill"
+        );
+        // The logo sits at the left of the pill, before the label.
+        let (logo_x, logo_y) = crate::native_overlay::meeting_logo(pill);
+        let logo = bars(logo_x, logo_y, 0.0, 120.0, false);
+        assert!(logo[0].x > pill.x + 4.0 && logo[4].x + logo[4].width < text_box.x);
+        assert!(logo
+            .iter()
+            .all(|b| b.y >= pill.y && b.y + b.height <= pill.y + pill.height));
     }
 
     #[test]

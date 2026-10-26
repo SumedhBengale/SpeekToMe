@@ -320,6 +320,7 @@ mod win32_impl {
     // 4px outer margin on each side for the processing glow ring around the
     // preview card and the pill.
     pub const GLOW_MARGIN: i32 = 4;
+    const MEETING_PILL_WIDTH: i32 = crate::native_overlay::MEETING_PILL_WIDTH as i32;
     pub const PILL_GLOW_MARGIN: i32 = 4;
 
     pub unsafe fn calculate_preview_bounds(text: &str) -> (i32, i32, i32, i32) {
@@ -501,14 +502,14 @@ mod win32_impl {
                 let config = crate::get_active_config()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let (x, y) = calculate_pill_position(&config, 104, 24);
+                let (x, y) = calculate_pill_position(&config, MEETING_PILL_WIDTH, 24);
 
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
                     x,
                     y,
-                    104,
+                    MEETING_PILL_WIDTH,
                     24,
                     SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
@@ -518,7 +519,7 @@ mod win32_impl {
                 start_animation(hwnd);
             }
         }
-        update_tray_tooltip("SpeekTo.Me - 🔴 Scribing Meeting...");
+        update_tray_tooltip("SpeekTo.Me - 🔴 Recording meeting...");
         if let Some(app) = crate::TAURI_APP.get() {
             use tauri::Emitter;
             let _ = app.emit("meeting-recording-started", ());
@@ -598,7 +599,7 @@ mod win32_impl {
             let hwnd = send_hwnd.0;
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
             let pill_width = if state == PreviewState::Meeting {
-                104
+                MEETING_PILL_WIDTH
             } else {
                 62
             };
@@ -747,7 +748,7 @@ mod win32_impl {
                     let new_y = pt.y - off_y;
                     let screen_w = GetSystemMetrics(SM_CXSCREEN);
                     let screen_h = GetSystemMetrics(SM_CYSCREEN);
-                    let clamped_x = new_x.clamp(2, screen_w - 106);
+                    let clamped_x = new_x.clamp(2, screen_w - MEETING_PILL_WIDTH - 2);
                     let clamped_y = new_y.clamp(2, screen_h - 26);
                     SetWindowPos(
                         hwnd,
@@ -902,9 +903,6 @@ mod win32_impl {
             }
 
             let bg_color = crate::ACTIVE_PILL_BG_COLOR.load(Ordering::Relaxed);
-            let bg_r = (bg_color & 0xFF) as f32;
-            let bg_g = ((bg_color >> 8) & 0xFF) as f32;
-            let bg_b = ((bg_color >> 16) & 0xFF) as f32;
 
             let state: PreviewState = PREVIEW_STATE.load(Ordering::Relaxed).into();
             let margin = if state == PreviewState::Meeting {
@@ -928,13 +926,27 @@ mod win32_impl {
             );
             SMOOTHED_VOLUME.store(smoothed.to_bits(), Ordering::Relaxed);
 
-            // Keep the meeting indicator beside its timer; center normal dictation.
-            let logo_x = if state == PreviewState::Meeting {
-                -7.0
-            } else {
-                (width as f64 - crate::native_overlay::PILL_WIDTH) / 2.0
+            let pill = crate::native_overlay::Rect {
+                x: margin,
+                y: margin,
+                width: width as f64 - margin * 2.0,
+                height: height as f64 - margin * 2.0,
             };
-            let logo_y = (height as f64 - crate::native_overlay::PILL_HEIGHT) / 2.0;
+            let meeting = state == PreviewState::Meeting;
+            // The meeting pill keeps its logo at the left, before its label.
+            let logo = if meeting {
+                crate::native_overlay::meeting_logo(pill)
+            } else {
+                (
+                    (width as f64 - crate::native_overlay::PILL_WIDTH) / 2.0,
+                    (height as f64 - crate::native_overlay::PILL_HEIGHT) / 2.0,
+                )
+            };
+            let label = if meeting {
+                meeting_label_mask(hdc_screen, &bmi, width, height, pill)
+            } else {
+                Vec::new()
+            };
             crate::overlay_paint::paint(
                 &crate::overlay_paint::Scene {
                     scale: 1.0,
@@ -944,14 +956,10 @@ mod win32_impl {
                         crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed),
                     ),
                     processing: state == PreviewState::Processing,
-                    pill: Some(crate::native_overlay::Rect {
-                        x: margin,
-                        y: margin,
-                        width: width as f64 - margin * 2.0,
-                        height: height as f64 - margin * 2.0,
-                    }),
-                    logo: Some((logo_x, logo_y)),
+                    pill: Some(pill),
+                    logo: Some(logo),
                     volume: smoothed,
+                    label: meeting.then_some(label.as_slice()),
                     card: None,
                     text: None,
                 },
@@ -959,113 +967,6 @@ mod win32_impl {
                 width as usize,
                 height as usize,
             );
-
-            if state == PreviewState::Meeting {
-                let hdc_mask = CreateCompatibleDC(hdc_screen);
-                let mut mask_bits: *mut std::ffi::c_void = ptr::null_mut();
-                let mask_dib = CreateDIBSection(
-                    hdc_mask,
-                    &bmi as *const _,
-                    0,
-                    &mut mask_bits,
-                    ptr::null_mut(),
-                    0,
-                );
-
-                if !mask_dib.is_null() && !mask_bits.is_null() {
-                    let old_mask_bitmap = SelectObject(hdc_mask, mask_dib);
-                    let mask_slice =
-                        std::slice::from_raw_parts_mut(mask_bits as *mut u32, pixel_count);
-                    for p in mask_slice.iter_mut() {
-                        *p = 0;
-                    }
-
-                    let font_name = encode_wide("Segoe UI");
-                    let hfont = CreateFontW(
-                        -11,
-                        0,
-                        0,
-                        0,
-                        FW_SEMIBOLD,
-                        0,
-                        0,
-                        0,
-                        DEFAULT_CHARSET,
-                        OUT_DEFAULT_PRECIS,
-                        CLIP_DEFAULT_PRECIS,
-                        CLEARTYPE_QUALITY,
-                        DEFAULT_PITCH | FF_DONTCARE,
-                        font_name.as_ptr(),
-                    );
-
-                    let old_font = SelectObject(hdc_mask, hfont);
-                    SetBkMode(hdc_mask, TRANSPARENT as i32);
-                    SetTextColor(hdc_mask, 0x00FFFFFF);
-
-                    let wide_display = encode_wide("Scribing");
-                    let mut text_rect = RECT {
-                        left: 41,
-                        top: 0,
-                        right: width - 8,
-                        bottom: height,
-                    };
-
-                    DrawTextW(
-                        hdc_mask,
-                        wide_display.as_ptr(),
-                        (wide_display.len() - 1) as i32,
-                        &mut text_rect,
-                        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
-                    );
-
-                    let luminance = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b;
-                    let (text_r, text_g, text_b) = if luminance > 128.0 {
-                        (24u32, 16u32, 34u32)
-                    } else {
-                        (245u32, 245u32, 250u32)
-                    };
-
-                    for idx in 0..pixel_count {
-                        let mask_val = mask_slice[idx];
-                        let glyph_alpha = (mask_val & 0xFF) as u32;
-                        if glyph_alpha > 0 {
-                            let dst = pixel_slice[idx];
-                            let dst_a = dst >> 24;
-                            if dst_a >= 100 {
-                                let dst_r = ((dst >> 16 & 0xFF) * 255) / dst_a;
-                                let dst_g = ((dst >> 8 & 0xFF) * 255) / dst_a;
-                                let dst_b = (dst & 0xFF) * 255 / dst_a;
-
-                                let src_a = (glyph_alpha * 245) / 255;
-                                let out_a = src_a + (dst_a * (255 - src_a)) / 255;
-                                if out_a > 0 {
-                                    let out_r = ((text_r * src_a)
-                                        + (dst_r * dst_a * (255 - src_a) / 255))
-                                        / out_a;
-                                    let out_g = ((text_g * src_a)
-                                        + (dst_g * dst_a * (255 - src_a) / 255))
-                                        / out_a;
-                                    let out_b = ((text_b * src_a)
-                                        + (dst_b * dst_a * (255 - src_a) / 255))
-                                        / out_a;
-
-                                    let pr = ((out_r.min(255) * out_a) / 255).min(255);
-                                    let pg = ((out_g.min(255) * out_a) / 255).min(255);
-                                    let pb = ((out_b.min(255) * out_a) / 255).min(255);
-
-                                    pixel_slice[idx] = (out_a << 24) | (pr << 16) | (pg << 8) | pb;
-                                }
-                            }
-                        }
-                    }
-
-                    SelectObject(hdc_mask, old_font);
-                    DeleteObject(hfont);
-                    SelectObject(hdc_mask, old_mask_bitmap);
-                    DeleteObject(mask_dib);
-                }
-                DeleteDC(hdc_mask);
-            }
 
             let psize = windows_sys::Win32::Foundation::SIZE {
                 cx: width,
@@ -1097,6 +998,78 @@ mod win32_impl {
 
         DeleteDC(hdc_mem);
         ReleaseDC(std::ptr::null_mut(), hdc_screen);
+    }
+
+    /// Coverage of the meeting label, left aligned in its box and centred
+    /// vertically, with the pill window's dimensions.
+    unsafe fn meeting_label_mask(
+        hdc_screen: windows_sys::Win32::Graphics::Gdi::HDC,
+        bmi: &windows_sys::Win32::Graphics::Gdi::BITMAPINFO,
+        width: i32,
+        height: i32,
+        pill: crate::native_overlay::Rect,
+    ) -> Vec<f32> {
+        let pixel_count = (width * height) as usize;
+        let mut coverage = vec![0f32; pixel_count];
+        let hdc_mask = CreateCompatibleDC(hdc_screen);
+        let mut mask_bits: *mut std::ffi::c_void = ptr::null_mut();
+        let mask_dib = CreateDIBSection(
+            hdc_mask,
+            bmi as *const _,
+            0,
+            &mut mask_bits,
+            ptr::null_mut(),
+            0,
+        );
+        if !mask_dib.is_null() && !mask_bits.is_null() {
+            let old_bitmap = SelectObject(hdc_mask, mask_dib);
+            let mask = std::slice::from_raw_parts_mut(mask_bits as *mut u32, pixel_count);
+            mask.fill(0);
+            let font_name = encode_wide("Segoe UI");
+            let hfont = CreateFontW(
+                -(crate::native_overlay::MEETING_LABEL_SIZE as i32),
+                0,
+                0,
+                0,
+                FW_SEMIBOLD,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                DEFAULT_PITCH | FF_DONTCARE,
+                font_name.as_ptr(),
+            );
+            let old_font = SelectObject(hdc_mask, hfont);
+            SetBkMode(hdc_mask, TRANSPARENT as i32);
+            SetTextColor(hdc_mask, 0x00FFFFFF);
+            let text_box = crate::native_overlay::meeting_label_box(pill);
+            let label = encode_wide(crate::native_overlay::MEETING_LABEL);
+            let mut rect = RECT {
+                left: text_box.x.round() as i32,
+                top: text_box.y.round() as i32,
+                right: (text_box.x + text_box.width).round() as i32,
+                bottom: (text_box.y + text_box.height).round() as i32,
+            };
+            DrawTextW(
+                hdc_mask,
+                label.as_ptr(),
+                (label.len() - 1) as i32,
+                &mut rect,
+                DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX,
+            );
+            for (value, pixel) in coverage.iter_mut().zip(mask.iter()) {
+                *value = (pixel & 0xFF) as f32 / 255.0;
+            }
+            SelectObject(hdc_mask, old_font);
+            DeleteObject(hfont);
+            SelectObject(hdc_mask, old_bitmap);
+            DeleteObject(mask_dib);
+        }
+        DeleteDC(hdc_mask);
+        coverage
     }
 
     pub unsafe fn update_layered_preview(hwnd: HWND) {
@@ -1269,6 +1242,7 @@ mod win32_impl {
                     pill: None,
                     logo: None,
                     volume: 0.0,
+                    label: None,
                     card: Some(crate::native_overlay::Rect {
                         x: gm,
                         y: gm,
@@ -2028,7 +2002,6 @@ mod win32_stub {
         #[cfg(target_os = "linux")]
         {
             set_preview_state(PreviewState::Meeting);
-            crate::linux_desktop::set_preview_text("Recording meeting…");
             crate::linux_desktop::show_overlay();
         }
     }

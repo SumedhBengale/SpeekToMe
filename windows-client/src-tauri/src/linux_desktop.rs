@@ -10,6 +10,7 @@ use tauri::{
 };
 
 static OVERLAY_STATE: AtomicU8 = AtomicU8::new(0);
+const MEETING: u8 = 3;
 static LAYER_SHELL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 type LayerSupported = unsafe extern "C" fn() -> i32;
@@ -89,6 +90,12 @@ pub fn refresh_language_menu(app: &tauri::AppHandle) {
 struct NativeOverlay {
     surface: gtk::DrawingArea,
     layout: gtk::pango::Layout,
+    label: gtk::pango::Layout,
+    /// How far the user has dragged the meeting pill, in logical pixels.
+    meeting_offset: (f64, f64),
+    /// Where a meeting-pill drag grabbed the surface, and when the last move
+    /// may still be in flight.
+    drag: Option<((f64, f64), std::time::Instant)>,
     has_preview: bool,
     height: f64,
     timer: Option<gtk::glib::SourceId>,
@@ -153,6 +160,38 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     layout.set_wrap(gtk::pango::WrapMode::WordChar);
     layout.set_height(-1);
     layout.set_ellipsize(gtk::pango::EllipsizeMode::None);
+    let label = surface.create_pango_layout(Some(crate::native_overlay::MEETING_LABEL));
+    let mut label_font = gtk::pango::FontDescription::from_string("Sans Semi-Bold");
+    label_font
+        .set_absolute_size(crate::native_overlay::MEETING_LABEL_SIZE * gtk::pango::SCALE as f64);
+    label.set_font_description(Some(&label_font));
+    surface.add_events(
+        gtk::gdk::EventMask::BUTTON_PRESS_MASK
+            | gtk::gdk::EventMask::BUTTON_RELEASE_MASK
+            | gtk::gdk::EventMask::POINTER_MOTION_MASK,
+    );
+    surface.connect_button_press_event(|_, event| {
+        if event.button() == 1 && OVERLAY_STATE.load(Ordering::SeqCst) == MEETING {
+            NATIVE_OVERLAY.with(|slot| {
+                if let Some(overlay) = slot.borrow_mut().as_mut() {
+                    overlay.drag = Some((event.position(), std::time::Instant::now()));
+                }
+            });
+        }
+        gtk::glib::Propagation::Stop
+    });
+    surface.connect_button_release_event(|_, _| {
+        NATIVE_OVERLAY.with(|slot| {
+            if let Some(overlay) = slot.borrow_mut().as_mut() {
+                overlay.drag = None;
+            }
+        });
+        gtk::glib::Propagation::Stop
+    });
+    surface.connect_motion_notify_event(|_, event| {
+        drag_meeting_pill(event.position());
+        gtk::glib::Propagation::Stop
+    });
     let container = overlay.default_vbox()?;
     container.pack_start(&surface, true, true, 0);
     container.show();
@@ -161,6 +200,9 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
         *slot.borrow_mut() = Some(NativeOverlay {
             surface,
             layout,
+            label,
+            meeting_offset: (0.0, 0.0),
+            drag: None,
             has_preview: false,
             height: 140.0,
             timer: None,
@@ -236,13 +278,36 @@ fn draw_overlay(cr: &gtk::cairo::Context) {
             (crate::native_overlay::WIDTH * scale).ceil() as usize,
             (overlay.height * scale).ceil() as usize,
         );
-        let pill = crate::native_overlay::Rect {
-            x: overlay.pill_x,
-            y: overlay.pill_y,
-            width: crate::native_overlay::PILL_WIDTH,
-            height: crate::native_overlay::PILL_HEIGHT,
+        let meeting = state == MEETING;
+        let pill = if meeting {
+            crate::native_overlay::meeting_pill(overlay.pill_x, overlay.pill_y)
+        } else {
+            crate::native_overlay::Rect {
+                x: overlay.pill_x,
+                y: overlay.pill_y,
+                width: crate::native_overlay::PILL_WIDTH,
+                height: crate::native_overlay::PILL_HEIGHT,
+            }
         };
-        let card = overlay.has_preview.then(|| {
+        let logo = if meeting {
+            crate::native_overlay::meeting_logo(pill)
+        } else {
+            (pill.x, pill.y)
+        };
+        let mut label = Vec::new();
+        if meeting {
+            let text_box = crate::native_overlay::meeting_label_box(pill);
+            let (_, label_height) = overlay.label.pixel_size();
+            let clip = [pill.x, pill.y, pill.width, pill.height];
+            label = coverage(width, height, scale, clip, |cr| {
+                cr.move_to(
+                    text_box.x,
+                    text_box.y + (text_box.height - label_height as f64) / 2.0,
+                );
+                pangocairo::functions::show_layout(cr, &overlay.label);
+            });
+        }
+        let card = (overlay.has_preview && !meeting).then(|| {
             let (text_width, text_height) = overlay.layout.pixel_size();
             crate::native_overlay::preview_card_in_surface(
                 pill.x,
@@ -289,8 +354,9 @@ fn draw_overlay(cr: &gtk::cairo::Context) {
                 ),
                 processing: state == 2,
                 pill: Some(pill),
-                logo: Some((pill.x, pill.y)),
+                logo: Some(logo),
                 volume: overlay.smoothed,
+                label: meeting.then_some(label.as_slice()),
                 card,
                 text: card.map(|_| crate::overlay_paint::Text {
                     color: text,
@@ -395,6 +461,7 @@ pub fn show_overlay() {
                 configure_overlay_position(&window, &config);
                 let _ = window.show();
                 let _ = window.set_ignore_cursor_events(true);
+                apply_input_region(&window);
                 NATIVE_OVERLAY.with(|slot| {
                     if let Some(overlay) = slot.borrow_mut().as_mut() {
                         if overlay.timer.is_none() {
@@ -449,7 +516,93 @@ pub fn set_preview_text(_text: &str) {
 }
 pub fn set_preview_state(state: u8) {
     OVERLAY_STATE.store(state, Ordering::SeqCst);
-    set_preview_text("");
+    if let Some(app) = crate::TAURI_APP.get() {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if state != MEETING {
+                // The next meeting starts where the settings place the pill.
+                NATIVE_OVERLAY.with(|slot| {
+                    if let Some(overlay) = slot.borrow_mut().as_mut() {
+                        overlay.meeting_offset = (0.0, 0.0);
+                        overlay.drag = None;
+                    }
+                });
+            }
+            apply_overlay_text_and_theme();
+            if let Some(window) = handle.get_window("overlay") {
+                apply_input_region(&window);
+            }
+        });
+    }
+}
+
+/// Only the meeting pill takes the mouse, so it can be dragged out of the
+/// way; the rest of the overlay, and the pill while dictating, let clicks
+/// through to the windows below.
+fn apply_input_region(window: &tauri::Window) {
+    let Ok(native) = window.gtk_window() else {
+        return;
+    };
+    let pill = NATIVE_OVERLAY.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|o| crate::native_overlay::meeting_pill(o.pill_x, o.pill_y))
+    });
+    let region = match pill {
+        Some(pill) if OVERLAY_STATE.load(Ordering::SeqCst) == MEETING => {
+            gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(
+                pill.x.floor() as i32,
+                pill.y.floor() as i32,
+                pill.width.ceil() as i32,
+                pill.height.ceil() as i32,
+            ))
+        }
+        _ => gtk::cairo::Region::create(),
+    };
+    native.input_shape_combine_region(Some(&region));
+    if let Some(gdk_window) = native.window() {
+        let cursor = (OVERLAY_STATE.load(Ordering::SeqCst) == MEETING)
+            .then(|| gtk::gdk::Cursor::from_name(&gdk_window.display(), "grab"))
+            .flatten();
+        gdk_window.set_cursor(cursor.as_ref());
+    }
+}
+
+/// Moves the meeting pill with the pointer. The surface moves under the
+/// pointer, so positions are relative to where the grab started; events
+/// that arrive before the last move lands are skipped so the pill does not
+/// overshoot.
+fn drag_meeting_pill(position: (f64, f64)) {
+    let moved = NATIVE_OVERLAY.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let overlay = slot.as_mut()?;
+        let (grab, ready) = overlay.drag?;
+        let now = std::time::Instant::now();
+        if now < ready {
+            return None;
+        }
+        let delta = (position.0 - grab.0, position.1 - grab.1);
+        if delta.0.abs() < 0.5 && delta.1.abs() < 0.5 {
+            return None;
+        }
+        overlay.meeting_offset.0 += delta.0;
+        overlay.meeting_offset.1 += delta.1;
+        overlay.drag = Some((grab, now + std::time::Duration::from_millis(25)));
+        Some(())
+    });
+    if moved.is_none() {
+        return;
+    }
+    if let Some(window) = crate::TAURI_APP
+        .get()
+        .and_then(|app| app.get_window("overlay"))
+    {
+        let config = crate::get_active_config()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        configure_overlay_position(&window, &config);
+    }
 }
 pub fn sync_overlay_theme() {
     if let Some(app) = crate::TAURI_APP.get() {
@@ -538,7 +691,26 @@ fn configure_overlay_position(window: &tauri::Window, config: &crate::config::Ap
         height,
     );
     let (pill_x, pill_y) = (design.pill_x, design.pill_y);
-    let (x, y) = (design.x, design.y);
+    let (mut x, mut y) = (design.x, design.y);
+    let dragged = OVERLAY_STATE.load(Ordering::SeqCst) == MEETING
+        && NATIVE_OVERLAY.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let Some(overlay) = slot.as_mut() else {
+                return false;
+            };
+            if overlay.meeting_offset == (0.0, 0.0) {
+                return false;
+            }
+            // Keep the whole meeting pill on the monitor.
+            let pill = crate::native_overlay::meeting_pill(pill_x, pill_y);
+            let left =
+                (x + overlay.meeting_offset.0).clamp(-pill.x, monitor_width - pill.x - pill.width);
+            let top = (y + overlay.meeting_offset.1)
+                .clamp(-pill.y, monitor_height - pill.y - pill.height);
+            overlay.meeting_offset = (left - x, top - y);
+            (x, y) = (left, top);
+            true
+        });
     let changed =
         NATIVE_OVERLAY.with(|slot| slot.borrow().as_ref().is_some_and(|o| o.height != height));
     NATIVE_OVERLAY.with(|slot| {
@@ -565,7 +737,7 @@ fn configure_overlay_position(window: &tauri::Window, config: &crate::config::Ap
                 }
                 (api.set_anchor)(ptr, 0, 1); // left
                 (api.set_margin)(ptr, 0, x.round() as i32);
-                if position.starts_with("Bottom") && !custom {
+                if position.starts_with("Bottom") && !custom && !dragged {
                     (api.set_anchor)(ptr, 3, 1); // bottom
                     (api.set_margin)(ptr, 3, 80);
                 } else {

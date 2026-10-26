@@ -27,7 +27,10 @@ typedef struct { double height, x, y, pill_x, pill_y; } S2MOverlayPlacement;
 static void (*overlayDraw)(CGContextRef, double, double);
 static S2MOverlayPlacement (*overlayPlacement)(double, double, int, double, double);
 static NSTimer *overlayTimer;
-static double surfaceWidth, surfaceHeight, pillX, pillY;
+static double surfaceWidth, surfaceHeight, pillX, pillY, meetingWidth;
+// The meeting pill can be dragged out of the way for the rest of a meeting.
+static bool meetingMoved, meetingDragging;
+static NSPoint meetingOrigin, dragMouse, dragOrigin;
 static uint64_t drawFrames;
 static int overlayState;
 static NSString *previewText = @"";
@@ -294,10 +297,23 @@ int s2m_key(uint32_t vk, bool down) {
 }
 // AppKit owns only the window, redraw scheduling and native context. The shared
 // design, waveform animation, colors and CoreText rendering are all Rust.
-void s2m_overlay_callbacks(double width, double height,
+void s2m_overlay_callbacks(double width, double height, double meeting,
     void (*draw)(CGContextRef, double, double),
     S2MOverlayPlacement (*layout)(double, double, int, double, double)) {
-    mainAsync(^{ surfaceWidth = width; surfaceHeight = height; overlayDraw = draw; overlayPlacement = layout; });
+    mainAsync(^{ surfaceWidth = width; surfaceHeight = height; meetingWidth = meeting; overlayDraw = draw; overlayPlacement = layout; });
+}
+// The meeting pill in screen coordinates; during a meeting Rust reports its
+// left edge as pillX.
+static NSRect meetingPillRect(void) {
+    NSRect frame = panel.frame;
+    return NSMakeRect(NSMinX(frame) + pillX, NSMaxY(frame) - pillY - 24, meetingWidth, 24);
+}
+// Only the meeting pill takes the mouse; everything else, and the pill while
+// dictating, stays click-through.
+static void updateMouseCapture(void) {
+    if (!panel) return;
+    bool capture = overlayState == 3 && (meetingDragging || NSPointInRect(NSEvent.mouseLocation, meetingPillRect()));
+    if (panel.ignoresMouseEvents == capture) panel.ignoresMouseEvents = !capture;
 }
 @interface S2MPanelView : NSView
 @end
@@ -306,6 +322,27 @@ void s2m_overlay_callbacks(double width, double height,
 - (void)drawRect:(NSRect)dirtyRect {
     if (overlayDraw) { overlayDraw(NSGraphicsContext.currentContext.CGContext, pillX, pillY); drawFrames++; }
 }
+- (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
+- (void)mouseDown:(NSEvent *)event {
+    if (overlayState != 3) return;
+    meetingDragging = true;
+    dragMouse = NSEvent.mouseLocation;
+    dragOrigin = self.window.frame.origin;
+}
+- (void)mouseDragged:(NSEvent *)event {
+    if (!meetingDragging) return;
+    NSPoint mouse = NSEvent.mouseLocation;
+    NSPoint origin = NSMakePoint(dragOrigin.x + mouse.x - dragMouse.x, dragOrigin.y + mouse.y - dragMouse.y);
+    // Keep the whole pill on the screen it is on.
+    NSRect screen = (self.window.screen ?: NSScreen.mainScreen).frame;
+    double height = self.window.frame.size.height;
+    origin.x = MAX(NSMinX(screen) - pillX, MIN(origin.x, NSMaxX(screen) - pillX - meetingWidth));
+    origin.y = MAX(NSMinY(screen) - (height - pillY - 24), MIN(origin.y, NSMaxY(screen) - (height - pillY)));
+    [self.window setFrameOrigin:origin];
+    meetingOrigin = origin;
+    meetingMoved = true;
+}
+- (void)mouseUp:(NSEvent *)event { meetingDragging = false; }
 @end
 static void updatePanel(void) {
     if (!overlayDraw || !overlayPlacement) return;
@@ -326,7 +363,10 @@ static void updatePanel(void) {
     [panel setContentSize:NSMakeSize(surfaceWidth,surfaceHeight)];
     [panel.contentView setFrameSize:NSMakeSize(surfaceWidth,surfaceHeight)];
     pillX = layout.pill_x; pillY = layout.pill_y;
-    [panel setFrameOrigin:NSMakePoint(NSMinX(frame) + layout.x, NSMaxY(frame) - layout.y - surfaceHeight)];
+    NSPoint origin = NSMakePoint(NSMinX(frame) + layout.x, NSMaxY(frame) - layout.y - surfaceHeight);
+    if (overlayState == 3 && meetingMoved) origin = meetingOrigin;
+    [panel setFrameOrigin:origin];
+    updateMouseCapture();
     [panel.contentView setNeedsDisplay:YES];
     if (overlayState) {
         if (NSApp.isHidden) [NSApp unhideWithoutActivation];
@@ -334,6 +374,7 @@ static void updatePanel(void) {
         if (!overlayTimer) {
             overlayTimer = [NSTimer timerWithTimeInterval:1.0/30.0 repeats:YES block:^(NSTimer *timer) {
                 [panel.contentView setNeedsDisplay:YES];
+                updateMouseCapture();
             }];
             [NSRunLoop.mainRunLoop addTimer:overlayTimer forMode:NSRunLoopCommonModes];
         }
@@ -345,7 +386,10 @@ static void updatePanel(void) {
 }
 void s2m_overlay(int state, const char *text) {
     NSString *value = text ? [NSString stringWithUTF8String:text] : @"";
-    mainAsync(^{ overlayState = state; previewText = value ?: @""; updatePanel(); });
+    mainAsync(^{
+        if (state != 3) meetingMoved = meetingDragging = false;
+        overlayState = state; previewText = value ?: @""; updatePanel();
+    });
 }
 void s2m_overlay_style(int position, double x, double y) {
     mainAsync(^{ placement = position; customX = x; customY = y; if (panel) updatePanel(); });
