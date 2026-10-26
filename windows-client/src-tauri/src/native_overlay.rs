@@ -103,21 +103,31 @@ pub fn smooth_volume(previous: f64, raw: f64) -> f64 {
 
 pub fn bars(x: f64, y: f64, seconds: f64, volume: f64, processing: bool) -> [Rect; 5] {
     // Preserve the SVG's coordinates and rounded capsules, fitting its tallest
-    // bar into 18 logical pixels. All recording movement comes from real audio.
+    // bar into 18 logical pixels. In silence the logo rests in its SVG shape;
+    // speech lifts every bar on its own rhythm, like a live waveform, and any
+    // of them can reach the full height. All recording movement comes from
+    // real audio.
     let scale = 18.0 / 316.0;
-    let activity = if processing {
-        // Processing has no microphone input; a gentle pulse marks that state.
-        0.55 + 0.15 * (seconds * 3.6).sin()
+    let width = 40.0 * scale;
+    // Suppress the noise floor; a square-root curve keeps soft speech visible.
+    let level = if processing {
+        0.0
     } else {
-        // Suppress the noise floor; a square-root curve keeps soft speech visible.
-        let level = ((volume - 2.0) / 118.0).clamp(0.0, 1.0).sqrt();
-        0.2 + 0.8 * level
+        ((volume - 2.0) / 118.0).clamp(0.0, 1.0).sqrt()
     };
     let positions = [108.0, 173.0, 236.0, 301.0, 364.0];
     let heights = [120.0, 208.0, 316.0, 208.0, 120.0];
     std::array::from_fn(|i| {
-        let width = 40.0 * scale;
-        let height = width + (heights[i] * scale - width) * activity;
+        let activity = if processing {
+            // Processing has no microphone input; a gentle pulse travelling
+            // across the bars marks that state.
+            0.55 + 0.15 * (seconds * 3.6 - i as f64 * 0.9).sin()
+        } else {
+            0.2
+        };
+        let resting = width + (heights[i] * scale - width) * activity;
+        let speaking = width + (18.0 - width) * level * waveform(i, seconds);
+        let height = resting.max(speaking);
         Rect {
             x: x + PILL_WIDTH / 2.0 + (positions[i] - 256.0) * scale,
             y: y + PILL_HEIGHT / 2.0 - height / 2.0,
@@ -125,6 +135,21 @@ pub fn bars(x: f64, y: f64, seconds: f64, volume: f64, processing: bool) -> [Rec
             height,
         }
     })
+}
+
+/// Bar `i`'s share (0.2–1) of the current level. Two sines at unrelated
+/// rates per bar keep the pattern from repeating or mirroring.
+fn waveform(i: usize, seconds: f64) -> f64 {
+    const RATES: [(f64, f64, f64); 5] = [
+        (7.3, 11.9, 0.4),
+        (9.1, 5.7, 2.1),
+        (6.2, 13.3, 4.0),
+        (10.7, 8.3, 1.3),
+        (8.4, 6.9, 5.2),
+    ];
+    let (a, b, phase) = RATES[i];
+    let mix = 0.6 * (seconds * a + phase).sin() + 0.4 * (seconds * b + phase * 1.7).sin();
+    0.6 + 0.4 * mix
 }
 
 pub fn preview_card(x: f64, y: f64, text_width: f64, text_height: f64) -> Rect {
@@ -204,27 +229,56 @@ mod tests {
     }
 
     #[test]
-    fn recording_logo_is_still_in_silence_and_preserves_svg_at_full_volume() {
-        assert_eq!(
-            bars(0.0, 0.0, 0.0, 0.0, false),
-            bars(0.0, 0.0, 16.0, 0.0, false)
-        );
-        assert_eq!(
-            bars(0.0, 0.0, 0.0, 0.0, false),
-            bars(0.0, 0.0, 0.0, 2.0, false)
-        );
-        let loud = bars(0.0, 0.0, 0.0, 120.0, false);
-        for (bar, original) in loud.iter().zip([120.0, 208.0, 316.0, 208.0, 120.0]) {
-            assert!((bar.height / bar.width - original / 40.0).abs() < 1e-10);
-            assert!((bar.y + bar.height / 2.0 - 12.0).abs() < 1e-10);
+    fn recording_logo_rests_in_its_svg_shape_and_moves_like_a_waveform() {
+        // Silence and the noise floor leave the logo still, in its SVG shape.
+        let rest = bars(0.0, 0.0, 0.0, 0.0, false);
+        assert_eq!(rest, bars(0.0, 0.0, 16.0, 0.0, false));
+        assert_eq!(rest, bars(0.0, 0.0, 0.0, 2.0, false));
+        assert_eq!(rest[0].height, rest[4].height);
+        assert_eq!(rest[1].height, rest[3].height);
+        assert!(rest[0].height < rest[1].height && rest[1].height < rest[2].height);
+        for (bar, original) in rest.iter().zip([120.0, 208.0, 316.0, 208.0, 120.0]) {
+            let svg = bar.width + (original * 18.0 / 316.0 - bar.width) * 0.2;
+            assert!((bar.height - svg).abs() < 1e-10);
         }
-        for volume in [0.0, 2.0, 10.0, 30.0, 60.0, 120.0, 1000.0] {
-            let shape = bars(0.0, 0.0, 0.0, volume, false);
-            assert_eq!(shape[0].height, shape[4].height);
-            assert_eq!(shape[1].height, shape[3].height);
-            assert!(shape[0].height < shape[1].height && shape[1].height < shape[2].height);
-            assert!(shape.iter().zip(loud).all(|(a, b)| a.height <= b.height));
+
+        // Speech moves every bar on its own rhythm: not mirrored, and the
+        // tallest bar is not always the middle one.
+        let mut tallest = std::collections::BTreeSet::new();
+        let mut mirrored = true;
+        for step in 0..200 {
+            let shape = bars(0.0, 0.0, step as f64 * 0.05, 60.0, false);
+            mirrored &= shape[0].height == shape[4].height && shape[1].height == shape[3].height;
+            let top = (0..5)
+                .max_by(|&a, &b| shape[a].height.total_cmp(&shape[b].height))
+                .unwrap();
+            tallest.insert(top);
+            for (bar, resting) in shape.iter().zip(rest) {
+                assert!(bar.height >= resting.height);
+                assert!((bar.y + bar.height / 2.0 - 12.0).abs() < 1e-10);
+            }
         }
+        assert!(!mirrored);
+        assert!(tallest.len() >= 4, "tallest bars: {tallest:?}");
+        assert_ne!(
+            bars(0.0, 0.0, 0.0, 60.0, false),
+            bars(0.0, 0.0, 0.3, 60.0, false)
+        );
+
+        // Louder speech reaches higher, never past the pill.
+        for volume in [30.0, 60.0, 120.0, 1000.0] {
+            for step in 0..100 {
+                for bar in bars(0.0, 0.0, step as f64 * 0.07, volume, false) {
+                    assert!(bar.height <= 18.0 + 1e-10);
+                }
+            }
+        }
+        let peak = |volume: f64| {
+            (0..100)
+                .map(|step| bars(0.0, 0.0, step as f64 * 0.07, volume, false)[0].height)
+                .fold(0.0, f64::max)
+        };
+        assert!(peak(120.0) > peak(30.0));
         assert_eq!(
             color(LOGO_COLOR),
             (250.0 / 255.0, 83.0 / 255.0, 136.0 / 255.0)
