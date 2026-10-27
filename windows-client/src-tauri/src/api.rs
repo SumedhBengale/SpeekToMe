@@ -724,6 +724,37 @@ pub async fn delete_vocab_term(api_url: &str, token: &str, term: &str) -> Result
     }
 }
 
+/// Sends one snippets request and returns the server's JSON reply. Snippet
+/// text can hold personal details, so it is never logged.
+pub async fn snippets_request(
+    api_url: &str,
+    token: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let mut request = create_client()
+        .request(method, format!("{}{}", api_url, path))
+        .header("Authorization", format!("Bearer {}", token));
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let res = request
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    let status = res.status();
+    let body_text = res.text().await.unwrap_or_default();
+    if status.is_success() {
+        serde_json::from_str(&body_text).map_err(|_| "Unexpected reply from the server".to_string())
+    } else if status.as_u16() == 401 {
+        crate::handle_session_expired(Some("Your session has expired. Please sign in again."));
+        Err("Session expired. Please sign in again.".to_string())
+    } else {
+        Err(crate::account_errors::message(status.as_u16(), &body_text))
+    }
+}
+
 pub async fn validate_custom_prompt(
     api_url: &str,
     token: &str,

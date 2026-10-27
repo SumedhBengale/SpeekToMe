@@ -254,6 +254,25 @@
 .vocab-table-container .logs-table { border: 1px solid var(--account-border); border-radius: 16px; overflow: hidden; }
 .vocab-table-container .logs-table code { background: var(--bg-canvas) !important; border-color: var(--account-border) !important; border-radius: 6px !important; font-size: 13px; }
 
+/* ── Snippets ──────────────────────────────────────────────── */
+.snippets-intro { font-size: 14px; color: var(--account-muted); margin-bottom: 20px; line-height: 1.55; }
+.snippet-form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+.snippet-label { font-size: 13px; font-weight: 600; color: var(--account-muted); }
+.snippet-textarea { min-height: 96px; resize: vertical; font-family: inherit; line-height: 1.5; }
+.snippet-form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+.snippets-empty { color: var(--account-faint); padding: 20px 0; text-align: center; }
+.snippet-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--account-border); border-radius: 16px; overflow: hidden; }
+.snippet-row { display: flex; align-items: flex-start; gap: 16px; padding: 14px 18px; background: #fff; }
+.snippet-row + .snippet-row { border-top: 1px solid var(--account-border); }
+.snippet-row.is-inactive { background: var(--account-surface-alt); }
+.snippet-row-text { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.snippet-row-content { flex-basis: 100%; margin: 2px 0 0; font-size: 13.5px; color: var(--account-muted); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.snippet-row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+@media (max-width: 600px) {
+  .snippet-row { flex-direction: column; }
+}
+
 .col-status { text-align: center; white-space: nowrap; width: 1%; }
 .logs-table td.transcription-cell { width: auto; min-width: 320px; }
 .logs-table th { white-space: nowrap; }

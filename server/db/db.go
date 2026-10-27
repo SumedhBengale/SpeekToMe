@@ -1938,7 +1938,7 @@ func (d *Database) DeleteUserAccount(userID int64) error {
 			}
 		}
 	}
-	for _, table := range []string{"meeting_diarization_queue", "meeting_jobs", "account_rate_windows", "account_leases", "command_usage", "command_attempts", "billing_subscriptions", "auth_codes", "sessions", "meetings", "usage_logs", "vocabulary", "subscription_payments", "webhook_logs"} {
+	for _, table := range []string{"meeting_diarization_queue", "meeting_jobs", "account_rate_windows", "account_leases", "command_usage", "command_attempts", "billing_subscriptions", "auth_codes", "sessions", "meetings", "usage_logs", "vocabulary", "snippets", "subscription_payments", "webhook_logs"} {
 		var exists int
 		if err = tx.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&exists); err != nil {
 			return err

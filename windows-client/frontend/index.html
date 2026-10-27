@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="css/layout.css">
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/vocabulary.css">
+  <link rel="stylesheet" href="css/snippets.css">
   <link rel="stylesheet" href="css/account.css">
   <link rel="stylesheet" href="css/meetings.css">
   <link rel="stylesheet" href="css/onboarding.css">
@@ -431,6 +432,16 @@
             <path d="M6 14h6"></path>
           </svg>
           <span>Vocabulary</span>
+        </a>
+        <a href="#" class="nav-item" data-tab="snippets">
+          <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path>
+            <path d="M14 3h7v7"></path>
+            <path d="M21 3l-9 9"></path>
+            <path d="M8 12h3"></path>
+            <path d="M8 16h6"></path>
+          </svg>
+          <span>Snippets</span>
         </a>
         <a href="#" class="nav-item" data-tab="history">
           <svg class="icon svg-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -900,6 +911,52 @@
               <line x1="12" y1="8" x2="12.01" y2="8"></line>
             </svg>
             <span class="vocab-notice-text">Terms are synced to all your devices. Matching is case-insensitive.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Snippets Tab -->
+      <div class="tab-pane" id="tab-snippets">
+        <div class="tab-header">
+          <h2>Snippets</h2>
+          <p class="section-desc">Save text you type often, then say its name while dictating to insert it.</p>
+        </div>
+
+        <div class="vocab-outer-card snippets-card">
+          <form id="snippet-form" class="snippet-form" autocomplete="off">
+            <label class="snippet-label" for="snippet-name">Name you'll say</label>
+            <input type="text" id="snippet-name" class="snippet-input" maxlength="60" placeholder="e.g. my address" required>
+            <label class="snippet-label" for="snippet-content">Text it inserts</label>
+            <textarea id="snippet-content" class="snippet-input snippet-textarea" maxlength="5000" rows="4" placeholder="e.g. 221B Baker Street, London NW1 6XE" required></textarea>
+            <div class="snippet-form-actions">
+              <span id="snippet-form-error" class="snippet-form-error" aria-live="polite"></span>
+              <button type="button" id="snippet-cancel-btn" class="snippet-secondary-btn hidden">Cancel</button>
+              <button type="submit" id="snippet-save-btn" class="vocab-add-btn">Save snippet</button>
+            </div>
+          </form>
+
+          <p class="setting-hint" id="snippets-count" aria-live="polite"></p>
+
+          <div class="vocab-list-wrapper">
+            <div id="snippets-loading" class="vocab-loading hidden">
+              <div class="vocab-spinner-wrapper"><div class="spinner"></div></div>
+              <div class="vocab-loading-content">
+                <span class="vocab-loading-title">Loading snippets...</span>
+              </div>
+            </div>
+            <div id="snippets-empty" class="vocab-empty hidden">
+              <div class="vocab-empty-text">No snippets yet. Save one above, then say its name on its own while dictating.</div>
+            </div>
+            <ul id="snippets-list" class="vocab-items-list"></ul>
+          </div>
+
+          <div class="vocab-notice-banner">
+            <svg class="vocab-notice-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span class="vocab-notice-text">Say a name on its own, or "insert my address", to add the snippet. In a sentence like "I'll email you my address", the words stay as you said them.</span>
           </div>
         </div>
       </div>
@@ -1604,6 +1661,7 @@
   <script src="js/onboarding.js"></script>
   <script src="js/account.js"></script>
   <script src="js/vocabulary.js"></script>
+  <script src="js/snippets.js"></script>
   <script src="js/meetings.js"></script>
   <script src="js/text.js"></script>
   <script src="js/history.js"></script>

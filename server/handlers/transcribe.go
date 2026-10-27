@@ -145,10 +145,8 @@ func (a *App) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	pctx := pipeline.NewPipelineContext(user.ID)
 	pctx.Debug = os.Getenv("SPEEKTOME_DEBUG") == "true"
 
-	audit := finalizeVocabulary(ctx, rawText, vocabTerms, nil, nil)
-	currentText := audit.Resolved
+	audit, grammarInput, currentText, restore := a.finalizeDictation(ctx, user.ID, rawText, vocabTerms, nil, nil, a.dictationSnippets(ctx, user.ID))
 	if enhance && rawText != "" {
-		grammarInput, restore := audit.Protect()
 		enhancer := pipeline.NewGrammarEnhancementTransform(customPrompt, config.DeepSeekAPIKey, config.DeepSeekAPIURL)
 		tstart := time.Now()
 		enhancedText, terr := enhancer.Transform(ctx, grammarInput, pctx)

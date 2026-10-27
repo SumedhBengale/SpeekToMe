@@ -133,6 +133,8 @@ async function init() {
         loadTranscriptionHistory();
       } else if (tabId === 'vocabulary') {
         loadVocabulary();
+      } else if (tabId === 'snippets') {
+        loadSnippets();
       } else if (tabId === 'meetings') {
         if (currentMeetingFile) {
           showRecordingView();

@@ -1,8 +1,9 @@
-// Account dashboard: usage, languages, vocabulary, meetings and profile.
+// Account dashboard: usage, languages, vocabulary, snippets, meetings and profile.
 // Each page receives the account state and actions that App owns as `view`.
 import UsageOverview from '../components/UsageOverview';
 import MeetingDetail from './MeetingDetail';
 import TurnstileWidget from '../components/TurnstileWidget';
+import SnippetsPanel from './SnippetsPanel';
 import { SUPPORTED_LANGUAGES, getLanguageName } from '../utils/languages';
 
 export default function DashboardPage({ view }) {
@@ -87,6 +88,13 @@ export default function DashboardPage({ view }) {
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg> Custom Vocabulary
+        </button>
+        <button
+          onClick={() => { setActiveSubTab('snippets'); setActiveMeeting(null); }}
+          className={`btn ${activeSubTab === 'snippets' ? 'btn-primary' : ''}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /><path d="M14 3h7v7" /><path d="M21 3l-9 9" /><path d="M8 12h3" /><path d="M8 16h6" /></svg> Snippets
         </button>
         <button
           onClick={() => { setActiveSubTab('languages'); setActiveMeeting(null); }}
@@ -310,6 +318,8 @@ export default function DashboardPage({ view }) {
           </div>
         </div>
       )}
+
+      {activeSubTab === 'snippets' && <SnippetsPanel token={token} />}
 
       {activeSubTab === 'languages' && (
         <div className="card">

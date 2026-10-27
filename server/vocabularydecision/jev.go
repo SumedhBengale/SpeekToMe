@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"sort"
 	"speektome/vocabulary"
 	"strconv"
 	"strings"
@@ -146,6 +147,48 @@ func (c *Client) judge(ctx context.Context, raw string, choices []vocabulary.Cho
 	if e != nil {
 		return nil, "", 0, 0, "context_budget"
 	}
+	ids := make([]string, len(choices))
+	for i, choice := range choices {
+		ids[i] = choice.ID
+	}
+	return c.ask(ctx, body, ids, "keep_original", "use_vocabulary")
+}
+
+// Choose asks Jev one two-way question per ID in a single request. Each
+// question's criteria must be keyed by keep and use; an answer is true when
+// Jev selects use. IDs without a valid answer are missing from the result.
+func (c *Client) Choose(ctx context.Context, state, questions map[string]any, keep, use string) (answers map[string]Answer, latency float64, reason string) {
+	if c.Key == "" {
+		return nil, 0, "not_configured"
+	}
+	body, e := json.Marshal(map[string]any{"model": c.Model, "state": state, "questions": questions})
+	if e != nil || len(body) > 48000 {
+		return nil, 0, "context_budget"
+	}
+	ids := make([]string, 0, len(questions))
+	for id := range questions {
+		ids = append(ids, id)
+	}
+	verdicts, _, _, latency, reason := c.ask(ctx, body, ids, keep, use)
+	if reason != "" {
+		return nil, latency, reason
+	}
+	answers = map[string]Answer{}
+	for id, v := range verdicts {
+		answers[id] = Answer{Use: v.use, Confidence: v.confidence}
+	}
+	return answers, latency, ""
+}
+
+// Answer is one valid answer to a Choose question.
+type Answer struct {
+	Use        bool
+	Confidence *float64
+}
+
+// ask sends one request body and validates the answer to each ID: one of the
+// two options, a confidence, and probabilities for both options summing to 1.
+func (c *Client) ask(ctx context.Context, body []byte, ids []string, keep, use string) (verdicts map[string]verdict, model string, tokens int, latency float64, reason string) {
 	select {
 	case c.slots <- struct{}{}:
 		defer func() { <-c.slots }()
@@ -205,18 +248,18 @@ func (c *Client) judge(ctx context.Context, raw string, choices []vocabulary.Cho
 	}
 	latency = finish()
 	verdicts = map[string]verdict{}
-	for _, choice := range choices {
-		answer, ok := result.Answers[choice.ID]
-		valid := ok && answer.Type == "choice" && (answer.Choice == "keep_original" || answer.Choice == "use_vocabulary") && answer.Confidence != nil && *answer.Confidence >= 0 && *answer.Confidence <= 1 && !math.IsNaN(*answer.Confidence)
+	for _, id := range ids {
+		answer, ok := result.Answers[id]
+		valid := ok && answer.Type == "choice" && (answer.Choice == keep || answer.Choice == use) && answer.Confidence != nil && *answer.Confidence >= 0 && *answer.Confidence <= 1 && !math.IsNaN(*answer.Confidence)
 		sum := 0.0
-		for _, option := range []string{"keep_original", "use_vocabulary"} {
+		for _, option := range []string{keep, use} {
 			p, ok := answer.Probabilities[option]
 			valid = valid && ok && p >= 0 && p <= 1 && !math.IsNaN(p)
 			sum += p
 		}
 		valid = valid && math.Abs(sum-1) < 0.01 && len(answer.Probabilities) == 2
 		if valid {
-			verdicts[choice.ID] = verdict{use: answer.Choice == "use_vocabulary", confidence: answer.Confidence}
+			verdicts[id] = verdict{use: answer.Choice == use, confidence: answer.Confidence}
 		}
 	}
 	return verdicts, result.Model, result.Usage.Input, latency, ""
@@ -361,4 +404,91 @@ func (a *Audit) RestoreMentions(text string) string {
 		text = strings.ReplaceAll(text, fmt.Sprintf("%s%dEND", prefix, i), value)
 	}
 	return text
+}
+
+// Locked is a span of the raw transcript that the output replaces with Value,
+// hidden from the grammar model like a resolved vocabulary term.
+type Locked struct {
+	Start, End int
+	Value      string
+}
+
+// ProtectWith is Protect with extra locked spans, such as inserted snippets.
+// Vocabulary decisions inside an extra span give way to it. It also returns
+// the transcript with every span applied, which the grammar model's output
+// falls back to when it loses a marker.
+func (a *Audit) ProtectWith(extra []Locked) (protected, resolved string, restore func(string) string) {
+	if len(extra) == 0 {
+		protected, restore = a.Protect()
+		return protected, a.Resolved, restore
+	}
+	raw := a.Proposal.Raw
+	spans := append([]Locked(nil), extra...)
+	for _, d := range a.Decisions {
+		inside := false
+		for _, e := range extra {
+			inside = inside || d.StartByte < e.End && e.Start < d.EndByte
+		}
+		if inside {
+			continue
+		}
+		value := d.Original
+		if d.UseVocabulary {
+			value = d.Replacement
+		}
+		spans = append(spans, Locked{d.StartByte, d.EndByte, value})
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].Start < spans[j].Start })
+	prefix := "STMLOCK"
+	for {
+		clash := strings.Contains(raw, prefix)
+		for _, s := range spans {
+			clash = clash || strings.Contains(s.Value, prefix)
+		}
+		if !clash {
+			break
+		}
+		prefix += "X"
+	}
+	var marked, plain strings.Builder
+	var markers []string
+	pos := 0
+	for i, s := range spans {
+		if s.Start < pos || s.End > len(raw) {
+			continue
+		}
+		marker := fmt.Sprintf("%s%dEND", prefix, i)
+		marked.WriteString(raw[pos:s.Start])
+		marked.WriteString(marker)
+		plain.WriteString(raw[pos:s.Start])
+		plain.WriteString(s.Value)
+		markers = append(markers, marker)
+		pos = s.End
+	}
+	marked.WriteString(raw[pos:])
+	plain.WriteString(raw[pos:])
+	resolved = plain.String()
+	values := map[string]string{}
+	for i, s := range spans {
+		values[fmt.Sprintf("%s%dEND", prefix, i)] = s.Value
+	}
+	return marked.String(), resolved, func(s string) string {
+		last := -1
+		for _, marker := range markers {
+			at := strings.Index(s, marker)
+			if at <= last || strings.Count(s, marker) != 1 {
+				a.GrammarFallback = true
+				return resolved
+			}
+			last = at
+		}
+		for _, marker := range markers {
+			s = strings.Replace(s, marker, values[marker], 1)
+		}
+		if strings.Contains(s, prefix) {
+			a.GrammarFallback = true
+			return resolved
+		}
+		return s
+	}
 }

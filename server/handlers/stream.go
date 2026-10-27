@@ -21,6 +21,7 @@ import (
 	"speektome-server/pipeline"
 	"speektome-server/ratelimit"
 	"speektome-server/services"
+	"speektome-server/snippets"
 	"speektome-server/utils"
 	"speektome-server/vocabularydecision"
 )
@@ -160,6 +161,10 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[STREAM START] Session initialized | User ID: %d | Lang: %v | Enhance: %v | Capabilities: %v | Vocab: %d terms",
 		user.ID, user.Languages, startPayload.Enhance, startPayload.Capabilities, len(vocabTerms))
 
+	// Snippet names are decided while the user speaks, like vocabulary.
+	snippetResolver := a.dictationSnippets(ctx, user.ID)
+	defer snippetResolver.Close()
+
 	// 3. Resolve best available streaming provider
 	activeConfig := config.ConfigManager.Get()
 	streamOrder := activeConfig.GetActiveStreamingFallbackOrder()
@@ -188,7 +193,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 				Mode:     "continuous_stream",
 				Provider: selectedProvider,
 			})
-			a.handleRealStreamingSession(ctx, conn, user, vocabTerms, upstreamSess, startPayload, selectedProvider, streamStartTime)
+			a.handleRealStreamingSession(ctx, conn, user, vocabTerms, snippetResolver, upstreamSess, startPayload, selectedProvider, streamStartTime)
 			return
 		}
 		log.Printf("[STREAM REAL FAILOVER] Upstream connection to %s failed (%v). Falling back to pseudo-streaming.", selectedProvider, uerr)
@@ -209,7 +214,7 @@ func (a *App) HandleStreamTranscribe(w http.ResponseWriter, r *http.Request) {
 		Mode:     "chunked_vad",
 		Provider: selectedProvider,
 	})
-	a.handlePseudoStreamingSession(ctx, conn, user, vocabTerms, startPayload, selectedProvider, streamStartTime)
+	a.handlePseudoStreamingSession(ctx, conn, user, vocabTerms, snippetResolver, startPayload, selectedProvider, streamStartTime)
 }
 
 func (a *App) handleRealStreamingSession(
@@ -217,6 +222,7 @@ func (a *App) handleRealStreamingSession(
 	conn *websocket.Conn,
 	user *db.UserProfile,
 	vocabTerms []db.VocabularyTerm,
+	snippetResolver *snippets.Resolver,
 	upstream *services.UpstreamStreamingSession,
 	startPayload StreamStartPayload,
 	provider string,
@@ -290,6 +296,7 @@ func (a *App) handleRealStreamingSession(
 			}
 
 			live.Text(normText)
+			snippetResolver.Text(normText)
 			sendPreview()
 		}
 	}()
@@ -353,8 +360,7 @@ func (a *App) handleRealStreamingSession(
 	finalRawTranscript := committedText
 	textMutex.Unlock()
 
-	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, upstream.VocabularyResult(), live)
-	grammarInput, restoreGrammar := audit.Protect()
+	audit, grammarInput, resolvedText, restoreGrammar := a.finalizeDictation(ctx, user.ID, finalRawTranscript, vocabTerms, upstream.VocabularyResult(), live, snippetResolver)
 
 	audioRaw := fullAudioAccumulator.Bytes()
 	audioSizeBytes := len(audioRaw)
@@ -363,7 +369,7 @@ func (a *App) handleRealStreamingSession(
 		audioDuration = float64(audioSizeBytes) / 32000.0
 	}
 
-	currentText := audit.Resolved
+	currentText := resolvedText
 	var dsLatency float64
 	var enhancementWarning string
 	pctx := pipeline.NewPipelineContext(user.ID)
@@ -436,6 +442,7 @@ func (a *App) handlePseudoStreamingSession(
 	conn *websocket.Conn,
 	user *db.UserProfile,
 	vocabTerms []db.VocabularyTerm,
+	snippetResolver *snippets.Resolver,
 	startPayload StreamStartPayload,
 	provider string,
 	startTime time.Time,
@@ -521,6 +528,7 @@ func (a *App) handlePseudoStreamingSession(
 				log.Printf("[STREAM ASR MERGE] Chunk: %d | Prev: %q | New: %q -> Merged: %q",
 					currentChunk, previousCommitted, rawChunkText, committedText)
 
+				snippetResolver.Text(committedText)
 				_ = writeStreamJSON(ctx, conn, StreamEventMessage{
 					Type: "interim",
 					Text: committedText,
@@ -567,12 +575,11 @@ func (a *App) handlePseudoStreamingSession(
 		}
 	}
 
-	audit := finalizeVocabulary(ctx, finalRawTranscript, vocabTerms, nil, nil)
-	grammarInput, restoreGrammar := audit.Protect()
+	audit, grammarInput, resolvedText, restoreGrammar := a.finalizeDictation(ctx, user.ID, finalRawTranscript, vocabTerms, nil, nil, snippetResolver)
 
 	whisperLatency := time.Since(whisperStart).Seconds()
 
-	currentText := audit.Resolved
+	currentText := resolvedText
 	var dsLatency float64
 	var enhancementWarning string
 	pctx := pipeline.NewPipelineContext(user.ID)

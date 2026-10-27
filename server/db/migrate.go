@@ -23,6 +23,21 @@ CREATE TABLE IF NOT EXISTS oauth_states(state_hash TEXT PRIMARY KEY,cookie_hash 
 	{2, "two-factor code replay protection", func(tx *sql.Tx) error {
 		return addColumn(tx, "users", "totp_last_step", "INTEGER NOT NULL DEFAULT 0")
 	}},
+	{3, "dictation snippets", func(tx *sql.Tx) error {
+		_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS snippets(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ public_id TEXT NOT NULL UNIQUE,
+ user_id INTEGER NOT NULL,
+ name TEXT NOT NULL,
+ normalized_name TEXT NOT NULL,
+ content TEXT NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+ UNIQUE(user_id, normalized_name));
+CREATE INDEX IF NOT EXISTS idx_snippets_user ON snippets(user_id, id);`)
+		return err
+	}},
 }
 
 func addColumn(tx *sql.Tx, table, column, definition string) error {

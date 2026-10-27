@@ -27,7 +27,8 @@ with a shared Rust/Tauri client and Go backend.
 The production server runs on ARM64; follow the
 [deployment instructions](deployment/security/README.md) rather than uploading a
 local desktop build. See [desktop/backend contracts](docs/desktop-backend-contracts.md)
-and [encrypted personal storage](docs/encrypted-personal-storage.md) for application behaviour.
+, [encrypted personal storage](docs/encrypted-personal-storage.md) and
+[snippets](docs/snippets.md) for application behaviour.
 
 Generated Rust/Go binaries, dependency/build caches, Tauri schemas, credentials,
 local databases and recordings are ignored. Keep intentional synthetic fixtures

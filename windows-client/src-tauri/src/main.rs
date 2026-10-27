@@ -516,6 +516,87 @@ async fn delete_vocabulary_term(term: String) -> Result<(), String> {
     api::delete_vocab_term(&api::get_api_url(), &token, &term).await
 }
 
+fn session_token() -> Result<String, String> {
+    get_active_config()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .session_token
+        .clone()
+        .ok_or_else(|| "Not logged in".to_string())
+}
+
+/// Snippet ids are 24 lowercase hex characters from the server.
+fn snippet_path(id: &str) -> Result<String, String> {
+    if id.len() == 24
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        Ok(format!("/v1/snippets/{}", id))
+    } else {
+        Err("Snippet not found".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_snippets() -> Result<serde_json::Value, String> {
+    let token = session_token()?;
+    api::snippets_request(
+        &api::get_api_url(),
+        &token,
+        reqwest::Method::GET,
+        "/v1/snippets",
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn save_snippet(
+    id: Option<String>,
+    name: String,
+    content: String,
+) -> Result<serde_json::Value, String> {
+    let token = session_token()?;
+    let body = Some(serde_json::json!({ "name": name, "content": content }));
+    match id {
+        Some(id) => {
+            api::snippets_request(
+                &api::get_api_url(),
+                &token,
+                reqwest::Method::PUT,
+                &snippet_path(&id)?,
+                body,
+            )
+            .await
+        }
+        None => {
+            api::snippets_request(
+                &api::get_api_url(),
+                &token,
+                reqwest::Method::POST,
+                "/v1/snippets",
+                body,
+            )
+            .await
+        }
+    }
+}
+
+#[tauri::command]
+async fn delete_snippet(id: String) -> Result<(), String> {
+    let token = session_token()?;
+    api::snippets_request(
+        &api::get_api_url(),
+        &token,
+        reqwest::Method::DELETE,
+        &snippet_path(&id)?,
+        None,
+    )
+    .await
+    .map(|_| ())
+}
+
 #[tauri::command]
 async fn update_languages(languages: Vec<String>) -> Result<Vec<String>, String> {
     let token = {
@@ -904,6 +985,9 @@ fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
         get_vocabulary,
         add_vocabulary_term,
         delete_vocabulary_term,
+        get_snippets,
+        save_snippet,
+        delete_snippet,
         update_languages,
         set_active_language,
         get_supported_languages,

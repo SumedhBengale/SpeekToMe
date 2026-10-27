@@ -2,6 +2,7 @@ package privatevault
 
 import (
 	"context"
+	"crypto/cipher"
 	"fmt"
 	"strconv"
 	"strings"
@@ -106,4 +107,35 @@ func (v *Vault) MigrateMeetingText(ctx context.Context) error {
 	}
 	_, e := v.db.ExecContext(ctx, `UPDATE meeting_jobs SET mic_result='',system_result='',diar_result='' WHERE status='completed'`)
 	return e
+}
+
+// OpenStoredAll opens many stored values of one kind with a single account key
+// lookup. values maps each value's id to its stored text; the result has the
+// same ids.
+func (v *Vault) OpenStoredAll(ctx context.Context, user int64, kind string, values map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(values))
+	var a cipher.AEAD
+	for id, text := range values {
+		if !strings.HasPrefix(text, storedPrefix) {
+			out[id] = text
+			continue
+		}
+		if a == nil {
+			key, e := v.UserKey(ctx, user)
+			if e != nil {
+				return nil, e
+			}
+			a, e = aead(key)
+			clear(key)
+			if e != nil {
+				return nil, e
+			}
+		}
+		p, e := v.open(a, strings.TrimPrefix(text, storedPrefix), fmt.Sprintf("%s:%d:%s", kind, user, id))
+		if e != nil {
+			return nil, e
+		}
+		out[id] = string(p)
+	}
+	return out, nil
 }
