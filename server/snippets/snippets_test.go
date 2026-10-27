@@ -90,7 +90,12 @@ func (f *fakeJev) Choose(ctx context.Context, state, questions map[string]any, k
 		if !strings.Contains(instructions["context"].(string), "[TARGET: ") {
 			panic("no target")
 		}
-		out[id] = vocabularydecision.Answer{Use: f.insert[instructions["words_reading"].(string)]}
+		use := f.insert[instructions["words_reading"].(string)]
+		p := 0.1
+		if use {
+			p = 0.9
+		}
+		out[id] = vocabularydecision.Answer{Use: use, UseProbability: p}
 	}
 	return out, 5, ""
 }

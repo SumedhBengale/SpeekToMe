@@ -172,16 +172,16 @@ func (a *App) finalizeDictation(ctx context.Context, user int64, raw string, ter
 	wg.Wait()
 	locks := a.snippetLocks(ctx, user, raw, audit.Proposal.Raw, decisions)
 	if len(decisions) > 0 {
-		inserted, live := 0, 0
+		live, rule := 0, 0
 		for _, d := range decisions {
-			if d.Insert {
-				inserted++
-			}
 			if d.Live {
 				live++
 			}
+			if d.Source == "sentence_rule" {
+				rule++
+			}
 		}
-		log.Printf("[SNIPPETS] user %d: %d spoken, %d inserted, %d decided live, decision model %.0fms", user, len(decisions), len(locks), live, jevMillis)
+		log.Printf("[SNIPPETS] user %d: %d spoken, %d inserted, %d decided live, %d by the fallback rule, decision model %.0fms", user, len(decisions), len(locks), live, rule, jevMillis)
 	}
 	grammarInput, resolved, restore = audit.ProtectWith(locks)
 	return audit, grammarInput, resolved, restore

@@ -16,7 +16,9 @@ Each occurrence is then decided:
 - **The whole dictation** is the name: inserted without asking.
 - **Otherwise Jev decides**, through `vocabularydecision.Client.Choose` with the
   options `keep_words` / `insert_snippet`. Jev receives the transcript and the
-  snippet's name, never its saved text.
+  snippet's name, never its saved text. The snippet is pasted only when Jev
+  gives `insert_snippet` a probability of at least 0.55, so an even split keeps
+  the words.
 - **Without a Jev answer** (timeout, rate limit, no key) the occurrence is
   inserted only when it is a sentence of its own or follows a command word. A
   snippet wrongly pasted mid-sentence is worse than a name left as words.
@@ -70,7 +72,14 @@ manage snippets through this API.
 (cd server && go test ./snippets ./db ./handlers ./vocabularydecision)
 ```
 
-`snippets/jev_acceptance_test.go` asks the real decision model about typical
-dictations. It needs `TYPESAFE_API_KEY` and `SPEEKTOME_JEV_ACCEPTANCE=1`. On
-2026-10-27 it answered 7 of 8 cases as expected. The one miss, a name at the
-end of a sentence without a pause, kept the words.
+`snippets/jev_acceptance_test.go` asks the real decision model about 29
+dictations, most from real test sessions, written with and without the
+punctuation the recognizer may add. It needs `TYPESAFE_API_KEY` and
+`SPEEKTOME_JEV_ACCEPTANCE=1`.
+
+On 2026-10-27 the first question wording put snippet requests near an even
+split (0.16–0.67), so they flipped between runs. The current wording describes
+a snippet request as content the speaker hands over after words that introduce
+it ("here are the details you asked for", "check out my profile here"). It
+answered all 29 correctly in four runs: requests scored 0.65–0.91, sentence
+uses 0.01–0.34.

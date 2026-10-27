@@ -135,6 +135,7 @@ func (c *Client) admit(tokens int) string {
 type verdict struct {
 	use        bool
 	confidence *float64
+	pUse       float64 // the probability Jev gave the use option
 }
 
 // judge asks Jev about every choice in one request. It returns the valid
@@ -175,15 +176,16 @@ func (c *Client) Choose(ctx context.Context, state, questions map[string]any, ke
 	}
 	answers = map[string]Answer{}
 	for id, v := range verdicts {
-		answers[id] = Answer{Use: v.use, Confidence: v.confidence}
+		answers[id] = Answer{Use: v.use, Confidence: v.confidence, UseProbability: v.pUse}
 	}
 	return answers, latency, ""
 }
 
 // Answer is one valid answer to a Choose question.
 type Answer struct {
-	Use        bool
-	Confidence *float64
+	Use            bool
+	Confidence     *float64
+	UseProbability float64
 }
 
 // ask sends one request body and validates the answer to each ID: one of the
@@ -259,7 +261,7 @@ func (c *Client) ask(ctx context.Context, body []byte, ids []string, keep, use s
 		}
 		valid = valid && math.Abs(sum-1) < 0.01 && len(answer.Probabilities) == 2
 		if valid {
-			verdicts[id] = verdict{use: answer.Choice == use, confidence: answer.Confidence}
+			verdicts[id] = verdict{use: answer.Choice == use, confidence: answer.Confidence, pUse: answer.Probabilities[use]}
 		}
 	}
 	return verdicts, result.Model, result.Usage.Input, latency, ""
