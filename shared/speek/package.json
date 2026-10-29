@@ -1,0 +1,9 @@
+{
+  "name": "@speektome/speek",
+  "private": true,
+  "type": "module",
+  "main": "speek.js",
+  "scripts": {
+    "icons": "node build-icons.js"
+  }
+}

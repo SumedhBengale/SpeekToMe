@@ -11,7 +11,7 @@ import RefundPage from './pages/RefundPage';
 import TermsPage from './pages/TermsPage';
 import ScrollToTop from './components/ScrollToTop';
 import TurnstileWidget from './components/TurnstileWidget';
-import logoSvg from '/logo.svg';
+import logoSvg from '/assets/speek.svg';
 import { TwoFactorPage, LoginPage, ForgotPasswordPage, ResetPasswordPage, SignupPage } from './account/AuthPages';
 import DashboardPage from './account/DashboardPage';
 import BillingPage from './account/BillingPage';

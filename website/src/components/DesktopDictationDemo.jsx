@@ -143,7 +143,7 @@ function Demo() {
     >
       <div className="demo-window-bar">
         <div className="demo-app-brand">
-          <img src="/assets/logo.svg" alt="" />
+          <img src="/assets/speek.svg" alt="" />
           SpeekTo.Me
         </div>
         <span className="demo-preview-badge">Interactive preview</span>

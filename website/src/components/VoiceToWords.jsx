@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import './VoiceToWords.css';
 import DemoSteps from './DemoSteps';
+import SpeekMascot from './SpeekMascot';
 
 // Each polished example comes from its raw transcript; there is no second draft.
 const SPELLING = {
@@ -38,75 +39,11 @@ const EXAMPLES = [
   { raw: 'i have a few idea about the new homepage... aah let me talk you thru them and we can pick a direction together', pause: '.' }
 ].map(example => ({ ...example, clean: polishTranscript(example.raw, example.pause) }));
 
-function RecordingPill({ processing }) {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const pill = ref.current;
-    const bars = [...pill.querySelectorAll('g rect')];
-    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    let animation;
-    let inView = true;
-    let volume = 0;
-    let previousTime = 0;
-    let frame = 0;
-
-    const draw = time => {
-      const delta = previousTime ? Math.min(time - previousTime, 64) : 16;
-      previousTime = time;
-      frame += delta / 16;
-      // Sample speech levels drive the native recording animation; no mic is used.
-      const rawVolume = 2.5 + 4 * (0.5 + 0.5 * Math.sin(time / 580)) ** 2;
-      volume = volume * 0.8 + rawVolume * 0.2;
-      bars.forEach((bar, index) => {
-        // Same geometry and bar_height formula as src-tauri/src/native_overlay.rs.
-        const gain = (volume > 2 ? 5 : 2.5) + Math.min(volume / 4, 2.5);
-        const phase = frame * 0.1 + index * 0.7;
-        const height = processing
-          ? 2.2 + 2.5 * ((Math.sin(frame * 0.12 + index * 0.75) + 1) / 2)
-          : Math.max(2, Math.min(8, gain * (0.35 + 0.65 * Math.abs(Math.sin(phase)))));
-        bar.setAttribute('y', 12 - height + 0.8);
-        bar.setAttribute('height', height * 2 - 1.6);
-      });
-      animation = requestAnimationFrame(draw);
-    };
-    const syncPlayback = () => {
-      if (inView && !document.hidden && !motion.matches) {
-        if (animation == null) animation = requestAnimationFrame(draw);
-      } else {
-        cancelAnimationFrame(animation);
-        animation = null;
-        previousTime = 0;
-      }
-    };
-    const observer = new IntersectionObserver(([entry]) => {
-      inView = entry.isIntersecting;
-      syncPlayback();
-    });
-    observer.observe(pill);
-    motion.addEventListener('change', syncPlayback);
-    document.addEventListener('visibilitychange', syncPlayback);
-    return () => {
-      cancelAnimationFrame(animation);
-      observer.disconnect();
-      motion.removeEventListener('change', syncPlayback);
-      document.removeEventListener('visibilitychange', syncPlayback);
-    };
-  }, [processing]);
-
-  return (
-    <svg ref={ref} className={`voice-recording-pill${processing ? ' is-processing' : ''}`} viewBox="0 0 62 24" aria-hidden="true">
-      <rect className="voice-pill-background" x=".25" y=".25" width="61.5" height="23.5" rx="11.75" />
-      <g className="voice-pill-bars">
-        {[3, 6, 8, 6, 3].map((height, i) => <rect key={i} x={20.75 + i * 4.5} y={12 - height + 0.8} width="2.5" height={height * 2 - 1.6} rx="1.25" />)}
-      </g>
-    </svg>
-  );
-}
+const MASCOT_MODES = { raw: 'listen', 'raw-complete': 'think', processing: 'think', reveal: 'happy', polished: 'admire' };
 
 export default function VoiceToWords() {
   const waveRef = useRef(null);
-  const [transcript, setTranscript] = useState({ example: 0, count: 0, stage: 'raw' });
+  const [transcript, setTranscript] = useState({ example: 0, count: 0, stage: 'raw', steps: 0 });
 
   useEffect(() => {
     const canvas = waveRef.current;
@@ -190,7 +127,7 @@ export default function VoiceToWords() {
         stage = 'raw';
         delay = 180;
       }
-      setTranscript({ example, count, stage });
+      setTranscript(current => ({ example, count, stage, steps: current.steps + 1 }));
       timer = setTimeout(advance, delay);
     };
     const syncPlayback = () => {
@@ -205,7 +142,7 @@ export default function VoiceToWords() {
         timer = null;
         if (motion.matches) {
           stage = 'polished';
-          setTranscript({ example, count, stage });
+          setTranscript(current => ({ example, count, stage, steps: current.steps + 1 }));
           paint();
         }
       }
@@ -240,6 +177,8 @@ export default function VoiceToWords() {
 
   const processing = transcript.stage === 'processing' || transcript.stage === 'reveal';
   const polished = transcript.stage === 'reveal' || transcript.stage === 'polished';
+  // Speek dozes until the demo first plays, then startles awake and listens.
+  const mascotMode = transcript.steps === 0 ? 'sleepy' : transcript.steps < 30 ? 'surprised' : MASCOT_MODES[transcript.stage];
 
   return (
     <figure className="voice-to-words" aria-label="Raw speech flows through SpeekTo.Me and becomes polished text.">
@@ -253,7 +192,7 @@ export default function VoiceToWords() {
           <div className="voice-progress"><DemoSteps compact label="Voice to text steps" completed={transcript.stage === 'polished' ? 3 : polished ? 2 : processing ? 1 : 0} steps={['Speak', 'Polish', 'Ready']} /></div>
         </div>
         <div className="voice-brand">
-          <span className={`voice-pill-shell${processing ? ' is-processing' : ''}`}><RecordingPill processing={processing} /></span>
+          <SpeekMascot className="voice-mascot" mode={mascotMode} faceColor="#240a12" followPointer />
           <span className="voice-brand-name">SpeekTo.<span>Me</span></span>
         </div>
         <span className="voice-input-label voice-part-label">YOUR VOICE</span>

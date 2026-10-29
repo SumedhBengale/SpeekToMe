@@ -8,7 +8,7 @@ export default function Footer() {
         <div className="footer-content" style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '32px' }}>
           <div className="footer-brand" style={{ maxWidth: '360px' }}>
             <Link to="/" className="nav-logo" style={{ marginBottom: '16px', display: 'inline-flex' }}>
-              <img src="/assets/logo.svg" alt="SpeekTo.Me Logo" className="brand-logo-icon" />
+              <img src="/assets/speek.svg" alt="SpeekTo.Me Logo" className="brand-logo-icon" />
               <span>SpeekTo.<span className="brand-accent">Me</span></span>
             </Link>
             <p className="text-muted" style={{ fontSize: '14px', lineHeight: '1.6' }}>
