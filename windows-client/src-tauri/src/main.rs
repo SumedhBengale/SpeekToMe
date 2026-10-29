@@ -54,6 +54,7 @@ mod overlay_paint;
 #[cfg(any(target_os = "linux", test))]
 mod portal_gestures;
 mod settings_lifecycle;
+mod speek;
 pub mod stream;
 pub mod vad;
 pub mod win32;

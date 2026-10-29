@@ -26,9 +26,10 @@ const markup = speekSvg({ mode: 'idle', faceColor: SPEEK_COLORS.faceOnDark, size
 
 | Export | Use |
 | --- | --- |
-| `createSpeekMascot(svg, options)` | The animated rig. Options: `mode`, `faceColor`, `followPointer`. |
+| `createSpeekMascot(svg, options)` | The animated rig. Options: `mode`, `faceColor`, `followPointer`, and `voice`, a function from time in ms to a voice level 0–1 (defaults to `simulatedVoice`). |
 | `speekSvg(options)` | Static SVG string. Options: `mode`, `faceColor`, `viewBox`, `size`. |
 | `SPEEK_MODES` | Every mood name. |
+| `simulatedVoice` | A speech-like level for pages without a microphone. |
 | `SPEEK_COLORS` | Body, cheek and the two face colours. |
 | `SPEEK_VIEWBOX` | `0 0 1254 1254`: room for hops, raised ears and thought dots. |
 | `SPEEK_ICON_VIEWBOX` | `172 215 910 910`: crops to the resting mascot for logo-sized slots. |
@@ -51,11 +52,34 @@ rig for React; pass `framing="icon"` to crop it for small slots.
 
 ### Desktop client
 
-The desktop frontend loads classic scripts from `windows-client/frontend`,
-which Tauri serves as-is, so it cannot import from `shared/` yet. When the
-client adopts Speek, copy or link `speek.js` into the frontend at build time
-and load it with `<script type="module">`; add the client's icons to
-`build-icons.js`.
+The overlays are drawn natively in Rust, so the rig is ported to
+`windows-client/src-tauri/src/speek.rs`: the same shapes, moods, springs and
+timings, stepped at the web's 60 Hz whatever the overlay's frame rate. The M
+logo and pointer following are not ported. `overlay_paint.rs` draws the frame
+for Windows, Linux and macOS alike, anti-aliasing each pill, stroke and the
+tail from its signed distance.
+
+**Keep the two in step.** A change to `speek.js` needs the same change in
+`speek.rs`. To check them, render both: the Rust painter at a large scale and
+`speekSvg` for the same mood should match to the anti-aliased edge, and
+stepping the JS rig with a fake clock should give the same numbers as
+`Rig::advance` frame for frame.
+
+Speek replaces the waveform bars inside the pill. Its resting box fills 22 of
+the pill's 24px (`SPEEK_HEIGHT`), centred; raised ears and hops reach into the
+4px margin around the pill. In the meeting pill Speek sits at the left, before
+the label.
+
+| Overlay | Mood |
+| --- | --- |
+| Pill appears | `surprised` for 350ms |
+| Recording, meetings | `listen`; the ears, eyes and tail follow the real microphone level |
+| Polishing | `think` |
+| Finished, while the changed words settle | `happy` |
+
+At 100% display scaling the face is about 22px tall: the ears, eyes and the
+happy smile read, which is why listening shows the voice in the ears rather
+than the mouth. At 200% every expression is clear.
 
 ## Geometry
 
@@ -99,13 +123,30 @@ shakes and settles on its own.
 | --- | --- | --- | --- | --- |
 | `logo` | Brand mark | None | The pill M | Hidden |
 | `idle` | Ready | Pill eyes, small smile, cheeks; glances around or follows the pointer | Breathes; one ear twitches every few seconds | Sways, counterbalances the gaze, flicks every few seconds |
-| `listen` | Recording | Wider eyes that follow the pointer; the mouth is a five-bar waveform | Ears up and leaning in | Pulses longer with the voice level |
+| `listen` | Recording | Concentrating: slightly narrowed eyes, furrowed brows, a short flat mouth; eyes follow the pointer | Ears carry the voice (below) | Pulses longer with the voice level |
 | `think` | Transcribing | Eyes up and drifting, one brow raised, lopsided "hmm", three pulsing thought dots | Left ear flops, head tilts | Taps on a 700ms beat |
 | `happy` | Text pasted | ^ ^ eyes, big smile, rosy cheeks | Ears wiggle, squash-and-stretch hop | Wags hard, then keeps a gentle wag |
 | `admire` | Showing the result | Happy eyes looking right at the text; after 2s glances back at the viewer | Head tilts toward the text, one small nod | Slow happy sway |
 | `surprised` | Hotkey pressed | Tall eyes, raised brows, "o" mouth | Ears shoot up, quick jump | Shoots out and quivers |
 | `sleepy` | Idle for a long time | Closed eyes, tiny mouth, rising bubbles | Ears droop, slow deep breathing | Droops and rests |
 | `oops` | Something failed | Small eyes, worried brows, frown | Ears flat, quick shake | Curls in short and fidgets |
+
+### Listening to the voice
+
+`listen` takes a voice level from 0 to 1: the real microphone on the desktop
+(the overlay's smoothed volume through `voice()`, a square root above the
+noise floor), `simulatedVoice` on the website.
+
+- **Ears.** Each ear's share of the level is the level times its own rhythm
+  (two sines per ear, 0.2–1), so the ears flop independently but always
+  with the voice. An ear stretches upward from its pivot by up to 110 units
+  and tilts out by up to 10°. Above 60% level both ears flare out a further
+  10° at full volume.
+- **Eyes and brows.** Loud speech widens the eyes: with `peak` = level²,
+  each eye grows from 100×170 to 116×260 and the brows lift 30 units, easing
+  the furrow.
+- **Silence.** Everything settles to the concentrating face; an ear still
+  twitches every few seconds, as in `idle`.
 
 Blinks happen every 2.2–4.8s in `idle`, `listen`, `think`, `admire`, `oops`
 and `surprised`.

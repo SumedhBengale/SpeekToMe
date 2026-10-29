@@ -7,9 +7,10 @@
 //! cairo `ARgb32` surface and a CoreGraphics little-endian premultiplied-first
 //! bitmap all store.
 use crate::native_overlay::{
-    bars, blur, polish_color, processing_pixel, text_color, Polish, Rect, POLISH_GLOW,
-    PROCESSING_TURN_SECONDS,
+    blur, polish_color, processing_pixel, text_color, Polish, Rect, PILL_HEIGHT, PILL_WIDTH,
+    POLISH_GLOW, PROCESSING_TURN_SECONDS, SPEEK_HEIGHT,
 };
+use crate::speek::{Frame, ICON_BOX, TAIL_ROUNDING};
 
 pub const PILL_ALPHA: f64 = 235.0 / 255.0;
 pub const CARD_ALPHA: f64 = 240.0 / 255.0;
@@ -27,10 +28,8 @@ pub struct Scene<'a> {
     pub wave: (f64, f64, f64),
     pub processing: bool,
     pub pill: Option<Rect>,
-    /// Top left of the 62×24 logo box, when the logo is drawn.
-    pub logo: Option<(f64, f64)>,
-    /// Smoothed microphone level for the logo.
-    pub volume: f64,
+    /// Speek, centred in the 62×24 box whose top left is given.
+    pub speek: Option<(f64, f64, Frame)>,
     /// Coverage of a label drawn inside the pill, such as the meeting's.
     pub label: Option<&'a [f32]>,
     pub card: Option<Rect>,
@@ -74,19 +73,8 @@ pub fn paint(scene: &Scene, pixels: &mut [u32], width: usize, height: usize) {
             pixels[i] = over(pixels[i], pixel);
         }
     }
-    if let Some((x, y)) = scene.logo {
-        let logo = crate::native_overlay::color(crate::native_overlay::LOGO_COLOR);
-        for bar in bars(x, y, scene.seconds, scene.volume, scene.processing) {
-            let radius = bar.width / 2.0;
-            for (px, py) in area(bar, 1.0) {
-                let (lx, ly) = logical(px, py);
-                let cover = (0.5 - round_rect_distance(lx, ly, bar, radius) * s).clamp(0.0, 1.0);
-                if cover > 0.0 {
-                    let i = py * width + px;
-                    pixels[i] = over(pixels[i], premultiply(logo, cover));
-                }
-            }
-        }
+    if let Some((x, y, frame)) = &scene.speek {
+        paint_speek(frame, *x, *y, s, pixels, width, height);
     }
     if let (Some(pill), Some(label)) = (scene.pill, scene.label) {
         let text = Text {
@@ -227,6 +215,135 @@ fn paint_text(
     }
 }
 
+/// Draws Speek's pose with its resting box filling `SPEEK_HEIGHT` and centred in
+/// the 62×24 box at `x`, `y`. Shapes are drawn in the web rig's order, each
+/// anti-aliased from its signed distance like the pill.
+fn paint_speek(
+    frame: &Frame,
+    x: f64,
+    y: f64,
+    s: f64,
+    pixels: &mut [u32],
+    width: usize,
+    height: usize,
+) {
+    let (box_x, box_y, box_size) = ICON_BOX;
+    let unit = SPEEK_HEIGHT / box_size;
+    let left = x + PILL_WIDTH / 2.0 - SPEEK_HEIGHT / 2.0 - box_x * unit;
+    let top = y + (PILL_HEIGHT - SPEEK_HEIGHT) / 2.0 - box_y * unit;
+    // Device pixels per mascot unit, to turn distances into coverage.
+    let pixel = unit * s;
+    let x0 = ((left * s).floor().max(0.0) as usize).min(width);
+    let x1 = (((left + 1254.0 * unit) * s).ceil().max(0.0) as usize).min(width);
+    let y0 = ((top * s).floor().max(0.0) as usize).min(height);
+    let y1 = (((top + 1254.0 * unit) * s).ceil().max(0.0) as usize).min(height);
+    let pink = crate::speek::PINK;
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let ux = ((px as f64 + 0.5) / s - left) / unit;
+            let uy = ((py as f64 + 0.5) / s - top) / unit;
+            let (ux, uy) = frame.unpose(ux, uy);
+            let i = py * width + px;
+            let mut paint = |distance: f64, color: (f64, f64, f64), opacity: f64| {
+                let cover = (0.5 - distance * pixel).clamp(0.0, 1.0) * opacity;
+                if cover > 0.0 {
+                    pixels[i] = over(pixels[i], premultiply(color, cover));
+                }
+            };
+            for part in [0, 4] {
+                paint(pill_distance(ux, uy, frame.pills[part]), pink, 1.0);
+            }
+            let [a, b, c] = frame.tail;
+            paint(
+                triangle_distance([ux, uy], a, b, c) - TAIL_ROUNDING,
+                pink,
+                frame.tail_opacity,
+            );
+            for part in [1, 3, 2] {
+                paint(pill_distance(ux, uy, frame.pills[part]), pink, 1.0);
+            }
+            for (stroke, color) in &frame.strokes {
+                if stroke[7] > 0.0 {
+                    paint(
+                        stroke_distance(ux, uy, stroke) - stroke[6] / 2.0,
+                        *color,
+                        stroke[7],
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Distance from a rotated rounded rectangle: cx, cy, width, height, degrees, radius.
+fn pill_distance(x: f64, y: f64, [cx, cy, w, h, rotation, radius]: [f64; 6]) -> f64 {
+    let (sin, cos) = (-rotation.to_radians()).sin_cos();
+    let (dx, dy) = (x - cx, y - cy);
+    let (w, h) = (w.max(0.0), h.max(0.0));
+    let rect = Rect {
+        x: -w / 2.0,
+        y: -h / 2.0,
+        width: w,
+        height: h,
+    };
+    round_rect_distance(
+        dx * cos - dy * sin,
+        dx * sin + dy * cos,
+        rect,
+        radius.min(w / 2.0).min(h / 2.0),
+    )
+}
+
+/// Distance from the centre line of a quadratic stroke, sampled as segments.
+fn stroke_distance(x: f64, y: f64, s: &[f64; 8]) -> f64 {
+    const SEGMENTS: usize = 12;
+    let point = |t: f64| {
+        let u = 1.0 - t;
+        (
+            u * u * s[0] + 2.0 * u * t * s[2] + t * t * s[4],
+            u * u * s[1] + 2.0 * u * t * s[3] + t * t * s[5],
+        )
+    };
+    let mut nearest = f64::MAX;
+    let mut from = point(0.0);
+    for step in 1..=SEGMENTS {
+        let to = point(step as f64 / SEGMENTS as f64);
+        let (ex, ey) = (to.0 - from.0, to.1 - from.1);
+        let length = ex * ex + ey * ey;
+        let t = if length > 0.0 {
+            (((x - from.0) * ex + (y - from.1) * ey) / length).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        nearest = nearest.min((x - from.0 - ex * t).hypot(y - from.1 - ey * t));
+        from = to;
+    }
+    nearest
+}
+
+/// Signed distance from a triangle; negative inside.
+fn triangle_distance(p: [f64; 2], a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    let sub = |u: [f64; 2], v: [f64; 2]| [u[0] - v[0], u[1] - v[1]];
+    let dot = |u: [f64; 2], v: [f64; 2]| u[0] * v[0] + u[1] * v[1];
+    let cross = |u: [f64; 2], v: [f64; 2]| u[0] * v[1] - u[1] * v[0];
+    let edges = [(a, sub(b, a)), (b, sub(c, b)), (c, sub(a, c))];
+    let winding = cross(sub(b, a), sub(c, a)).signum();
+    let mut nearest = f64::MAX;
+    let mut inside = true;
+    for (start, edge) in edges {
+        let v = sub(p, start);
+        let t = (dot(v, edge) / dot(edge, edge)).clamp(0.0, 1.0);
+        let gap = [v[0] - edge[0] * t, v[1] - edge[1] * t];
+        nearest = nearest.min(dot(gap, gap));
+        inside &= winding * cross(edge, v) >= 0.0;
+    }
+    if inside {
+        -nearest.sqrt()
+    } else {
+        nearest.sqrt()
+    }
+}
+
 /// Signed distance from a rounded rectangle's edge; negative inside.
 pub fn round_rect_distance(x: f64, y: f64, rect: Rect, radius: f64) -> f64 {
     let qx = (x - rect.x - rect.width / 2.0).abs() - (rect.width / 2.0 - radius);
@@ -275,8 +392,13 @@ mod tests {
                 width: 62.0,
                 height: 24.0,
             }),
-            logo: Some((4.0, 4.0)),
-            volume: 0.0,
+            speek: Some((
+                4.0,
+                4.0,
+                crate::speek::Rig::new(crate::speek::Mood::Listen, 0.0, 7)
+                    .advance(0.0, 0.0)
+                    .clone(),
+            )),
             label: None,
             card: Some(Rect {
                 x: 4.0,
@@ -297,7 +419,7 @@ mod tests {
     #[test]
     fn listening_pill_and_card_are_the_background_with_a_wave_border() {
         let pixels = render(&scene(false, 0.0));
-        // Pill body away from the logo.
+        // Pill body away from Speek.
         assert_eq!(pixels[16 * 220 + 8] >> 24, 235);
         // Card interior and its tinted edge.
         let inside = pixels[60 * 220 + 100];
@@ -370,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn meeting_pill_shows_its_label_and_logo_inside_the_pill() {
+    fn meeting_pill_shows_its_label_and_speek_inside_the_pill() {
         let pill = crate::native_overlay::meeting_pill(79.0, 4.0);
         let text_box = crate::native_overlay::meeting_label_box(pill);
         let mut label = vec![0f32; 220 * 90];
@@ -381,7 +503,16 @@ mod tests {
         }
         let meeting = Scene {
             pill: Some(pill),
-            logo: Some(crate::native_overlay::meeting_logo(pill)),
+            speek: {
+                let (x, y) = crate::native_overlay::meeting_logo(pill);
+                Some((
+                    x,
+                    y,
+                    crate::speek::Rig::new(crate::speek::Mood::Listen, 0.0, 7)
+                        .advance(0.0, 0.0)
+                        .clone(),
+                ))
+            },
             label: Some(&label),
             card: None,
             ..scene(false, 0.0)
@@ -392,13 +523,17 @@ mod tests {
             (pixels[at] >> 16) & 0xFF < 0x40,
             "label is dark text on the pill"
         );
-        // The logo sits at the left of the pill, before the label.
-        let (logo_x, logo_y) = crate::native_overlay::meeting_logo(pill);
-        let logo = bars(logo_x, logo_y, 0.0, 120.0, false);
-        assert!(logo[0].x > pill.x + 4.0 && logo[4].x + logo[4].width < text_box.x);
-        assert!(logo
-            .iter()
-            .all(|b| b.y >= pill.y && b.y + b.height <= pill.y + pill.height));
+        // Speek sits at the left of the pill, before the label: its head is
+        // pink and nothing of it reaches the label.
+        let (x, y) = crate::native_overlay::meeting_logo(pill);
+        let centre = ((y + 13.0) as usize) * 220 + (x + PILL_WIDTH / 2.0) as usize;
+        assert_eq!(pixels[centre] >> 24, 255);
+        assert!((pixels[centre] >> 16) & 0xFF > 0xE0, "head is pink");
+        let clear = (pill.x + pill.width - 12.0) as usize;
+        for row in 6..26 {
+            let at = row * 220 + text_box.x as usize - 2;
+            assert_eq!(pixels[at], pixels[row * 220 + clear]);
+        }
     }
 
     #[test]

@@ -4,9 +4,9 @@ pub const WIDTH: f64 = 420.0;
 pub const HEIGHT: f64 = 140.0;
 pub const PILL_WIDTH: f64 = 62.0;
 pub const PILL_HEIGHT: f64 = 24.0;
-/// Height of the logo's tallest bar inside the pill.
-pub const LOGO_HEIGHT: f64 = 21.0;
-/// The meeting pill holds the logo and a short label.
+/// Height Speek fills inside the pill: as large as fits with a 1px margin.
+pub const SPEEK_HEIGHT: f64 = 22.0;
+/// The meeting pill holds Speek and a short label.
 pub const MEETING_PILL_WIDTH: f64 = 156.0;
 pub const MEETING_LABEL: &str = "Recording meeting";
 pub const MEETING_LABEL_SIZE: f64 = 11.0;
@@ -95,67 +95,13 @@ pub fn placement_with_height(
     }
 }
 
-// The supplied logo uses #FA5388; settings colors elsewhere use COLORREF order.
-pub const LOGO_COLOR: u32 = 0x8853FA;
-
 pub fn smooth_volume(previous: f64, raw: f64) -> f64 {
     // Capture publishes RMS * 1000. Bound loud transients before smoothing so
-    // clipping cannot leave the logo stuck at full height. Renderers tick at 30 Hz.
+    // clipping cannot leave Speek's mouth stuck wide open. Renderers tick at 30 Hz.
     let target = raw.clamp(0.0, 120.0);
     let previous = previous.clamp(0.0, 120.0);
     let response = if target > previous { 0.6 } else { 0.16 };
     previous + (target - previous) * response
-}
-
-pub fn bars(x: f64, y: f64, seconds: f64, volume: f64, processing: bool) -> [Rect; 5] {
-    // Preserve the SVG's coordinates and rounded capsules, fitting its tallest
-    // bar into LOGO_HEIGHT logical pixels. In silence the logo rests in its SVG shape;
-    // speech lifts every bar on its own rhythm, like a live waveform, and any
-    // of them can reach the full height. All recording movement comes from
-    // real audio.
-    let scale = LOGO_HEIGHT / 316.0;
-    let width = 40.0 * scale;
-    // Suppress the noise floor; a square-root curve keeps soft speech visible.
-    let level = if processing {
-        0.0
-    } else {
-        ((volume - 2.0) / 118.0).clamp(0.0, 1.0).sqrt()
-    };
-    let positions = [108.0, 173.0, 236.0, 301.0, 364.0];
-    let heights = [120.0, 208.0, 316.0, 208.0, 120.0];
-    std::array::from_fn(|i| {
-        let activity = if processing {
-            // Processing has no microphone input; a gentle pulse travelling
-            // across the bars marks that state.
-            0.55 + 0.15 * (seconds * 3.6 - i as f64 * 0.9).sin()
-        } else {
-            0.2
-        };
-        let resting = width + (heights[i] * scale - width) * activity;
-        let speaking = width + (LOGO_HEIGHT - width) * level * waveform(i, seconds);
-        let height = resting.max(speaking);
-        Rect {
-            x: x + PILL_WIDTH / 2.0 + (positions[i] - 256.0) * scale,
-            y: y + PILL_HEIGHT / 2.0 - height / 2.0,
-            width,
-            height,
-        }
-    })
-}
-
-/// Bar `i`'s share (0.2–1) of the current level. Two sines at unrelated
-/// rates per bar keep the pattern from repeating or mirroring.
-fn waveform(i: usize, seconds: f64) -> f64 {
-    const RATES: [(f64, f64, f64); 5] = [
-        (7.3, 11.9, 0.4),
-        (9.1, 5.7, 2.1),
-        (6.2, 13.3, 4.0),
-        (10.7, 8.3, 1.3),
-        (8.4, 6.9, 5.2),
-    ];
-    let (a, b, phase) = RATES[i];
-    let mix = 0.6 * (seconds * a + phase).sin() + 0.4 * (seconds * b + phase * 1.7).sin();
-    0.6 + 0.4 * mix
 }
 
 /// Where the pill's top left lands on a screen, in logical pixels: exactly
@@ -190,7 +136,7 @@ pub fn meeting_pill(x: f64, y: f64) -> Rect {
     }
 }
 
-/// Top left of the logo box inside a meeting pill: the logo sits at the left.
+/// Top left of Speek's 62×24 box inside a meeting pill: Speek sits at the left.
 pub fn meeting_logo(pill: Rect) -> (f64, f64) {
     (
         pill.x + 20.0 - PILL_WIDTH / 2.0,
@@ -198,7 +144,7 @@ pub fn meeting_logo(pill: Rect) -> (f64, f64) {
     )
 }
 
-/// Where the meeting label is laid out, left aligned after the logo.
+/// Where the meeting label is laid out, left aligned after Speek.
 pub fn meeting_label_box(pill: Rect) -> Rect {
     Rect {
         x: pill.x + 38.0,
@@ -292,78 +238,6 @@ mod tests {
         );
         // The meeting pill never leaves the screen at the left edge.
         assert!(pill_screen_position(w, h, 5, 0.0, 0.0, true).0 >= 0.0);
-    }
-
-    #[test]
-    fn logo_responds_to_audio_and_processing_animates_without_audio() {
-        let quiet = bars(179.0, 0.0, 0.3, 0.0, false);
-        let speech = bars(179.0, 0.0, 0.3, 30.0, false);
-        assert!(speech.iter().zip(quiet).any(|(a, b)| a.height > b.height));
-        assert_ne!(
-            bars(0.0, 0.0, 0.0, 0.0, true),
-            bars(0.0, 0.0, 0.3, 0.0, true)
-        );
-        for rect in speech {
-            assert!(rect.x >= 179.0 && rect.x + rect.width <= 179.0 + PILL_WIDTH);
-            assert!(rect.y >= 0.0 && rect.y + rect.height <= PILL_HEIGHT);
-        }
-    }
-
-    #[test]
-    fn recording_logo_rests_in_its_svg_shape_and_moves_like_a_waveform() {
-        // Silence and the noise floor leave the logo still, in its SVG shape.
-        let rest = bars(0.0, 0.0, 0.0, 0.0, false);
-        assert_eq!(rest, bars(0.0, 0.0, 16.0, 0.0, false));
-        assert_eq!(rest, bars(0.0, 0.0, 0.0, 2.0, false));
-        assert_eq!(rest[0].height, rest[4].height);
-        assert_eq!(rest[1].height, rest[3].height);
-        assert!(rest[0].height < rest[1].height && rest[1].height < rest[2].height);
-        for (bar, original) in rest.iter().zip([120.0, 208.0, 316.0, 208.0, 120.0]) {
-            let svg = bar.width + (original * LOGO_HEIGHT / 316.0 - bar.width) * 0.2;
-            assert!((bar.height - svg).abs() < 1e-10);
-        }
-
-        // Speech moves every bar on its own rhythm: not mirrored, and the
-        // tallest bar is not always the middle one.
-        let mut tallest = std::collections::BTreeSet::new();
-        let mut mirrored = true;
-        for step in 0..200 {
-            let shape = bars(0.0, 0.0, step as f64 * 0.05, 60.0, false);
-            mirrored &= shape[0].height == shape[4].height && shape[1].height == shape[3].height;
-            let top = (0..5)
-                .max_by(|&a, &b| shape[a].height.total_cmp(&shape[b].height))
-                .unwrap();
-            tallest.insert(top);
-            for (bar, resting) in shape.iter().zip(rest) {
-                assert!(bar.height >= resting.height);
-                assert!((bar.y + bar.height / 2.0 - 12.0).abs() < 1e-10);
-            }
-        }
-        assert!(!mirrored);
-        assert!(tallest.len() >= 4, "tallest bars: {tallest:?}");
-        assert_ne!(
-            bars(0.0, 0.0, 0.0, 60.0, false),
-            bars(0.0, 0.0, 0.3, 60.0, false)
-        );
-
-        // Louder speech reaches higher, never past the pill.
-        for volume in [30.0, 60.0, 120.0, 1000.0] {
-            for step in 0..100 {
-                for bar in bars(0.0, 0.0, step as f64 * 0.07, volume, false) {
-                    assert!(bar.height <= LOGO_HEIGHT + 1e-10);
-                }
-            }
-        }
-        let peak = |volume: f64| {
-            (0..100)
-                .map(|step| bars(0.0, 0.0, step as f64 * 0.07, volume, false)[0].height)
-                .fold(0.0, f64::max)
-        };
-        assert!(peak(120.0) > peak(30.0));
-        assert_eq!(
-            color(LOGO_COLOR),
-            (250.0 / 255.0, 83.0 / 255.0, 136.0 / 255.0)
-        );
     }
 
     #[test]

@@ -433,17 +433,19 @@ unsafe fn render(
             label = coverage(width, height, scale, |mask| layout.draw(mask, line));
         }
     }
+    let seconds = crate::win32::animation_seconds();
+    let mood = crate::speek::overlay_mood(state, crate::win32::preview_finished());
+    let speek = crate::speek::overlay_frame(seconds, mood, renderer.smoothed);
     let mut pixels = vec![0u32; width * height];
     crate::overlay_paint::paint(
         &crate::overlay_paint::Scene {
             scale,
-            seconds: crate::win32::animation_seconds(),
+            seconds,
             background,
             wave: design::color(crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed)),
             processing: state == 2,
             pill: Some(pill),
-            logo: Some(logo),
-            volume: renderer.smoothed,
+            speek: Some((logo.0, logo.1, speek)),
             label: meeting.then_some(label.as_slice()),
             card,
             text: card.map(|_| crate::overlay_paint::Text {

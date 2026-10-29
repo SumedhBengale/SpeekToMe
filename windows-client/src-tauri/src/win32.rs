@@ -251,6 +251,11 @@ mod win32_impl {
         }
     }
 
+    /// Whether a finished dictation is still on screen while its words settle.
+    pub fn preview_finished() -> bool {
+        PREVIEW_HOLD.load(Ordering::SeqCst)
+    }
+
     /// Hides the preview once the final text's polish has played, so the
     /// changed words are seen after the text is inserted.
     pub fn hide_preview_after_polish() {
@@ -991,18 +996,20 @@ mod win32_impl {
             } else {
                 Vec::new()
             };
+            let seconds = animation_seconds();
+            let mood = crate::speek::overlay_mood(state as u8, preview_finished());
+            let speek = crate::speek::overlay_frame(seconds, mood, smoothed);
             crate::overlay_paint::paint(
                 &crate::overlay_paint::Scene {
                     scale,
-                    seconds: animation_seconds(),
+                    seconds,
                     background: crate::native_overlay::color(bg_color),
                     wave: crate::native_overlay::color(
                         crate::ACTIVE_PILL_WAVE_COLOR.load(Ordering::Relaxed),
                     ),
                     processing: state == PreviewState::Processing,
                     pill: Some(pill),
-                    logo: Some(logo),
-                    volume: smoothed,
+                    speek: Some((logo.0, logo.1, speek)),
                     label: meeting.then_some(label.as_slice()),
                     card: None,
                     text: None,
@@ -1289,8 +1296,7 @@ mod win32_impl {
                     ),
                     processing: is_processing,
                     pill: None,
-                    logo: None,
-                    volume: 0.0,
+                    speek: None,
                     label: None,
                     card: Some(crate::native_overlay::Rect {
                         x: card_x,
@@ -2088,6 +2094,11 @@ mod win32_stub {
         show_text(text);
     }
 
+    /// Whether a finished dictation is still on screen while its words settle.
+    pub fn preview_finished() -> bool {
+        PREVIEW_HOLD.load(Ordering::SeqCst)
+    }
+
     /// Hides the overlay once the final text's polish has played, so the
     /// changed words are seen after the text is inserted.
     pub fn hide_preview_after_polish() {
@@ -2176,9 +2187,9 @@ mod win32_stub {
 pub use win32_stub::{
     animation_seconds, calculate_pill_position, ensure_single_instance, get_preview_text,
     hide_meeting_overlay, hide_overlay, hide_preview, hide_preview_after_polish, play_chime,
-    preview_glow, run_win32_hook_and_tray_thread, set_preview_final_text, set_preview_state,
-    set_preview_text, set_preview_text_with_replacements, set_window_icon_for_theme,
-    show_meeting_overlay, show_overlay, show_preview, show_tray_notification,
-    update_overlay_position, update_preview_position, update_tray_icon_for_theme,
-    update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
+    preview_finished, preview_glow, run_win32_hook_and_tray_thread, set_preview_final_text,
+    set_preview_state, set_preview_text, set_preview_text_with_replacements,
+    set_window_icon_for_theme, show_meeting_overlay, show_overlay, show_preview,
+    show_tray_notification, update_overlay_position, update_preview_position,
+    update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
 };
