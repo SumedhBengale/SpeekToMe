@@ -36,9 +36,16 @@ const moduleSource=file=>fs.readFileSync(path.join(frontend,file),'utf8').replac
  await t.goToStep(6);await tick();
  assert.equal(w.document.querySelector('#speek-replies-6 [data-value="on"]').disabled,true,'Pro-only answers are disabled on Free');
  assert.match(line(),/Pro trick/);
- await t.goToStep(6);await t.goToStep(7);await t.goToStep(8);await t.goToStep(9);await t.goToStep(10);await tick();
+ await t.goToStep(7);await tick();
+ assert.match(line(),/lighter model that’s slower and less accurate/,'Free hears what after-stop transcription costs');
+ assert.equal(w.document.querySelectorAll('#speek-replies-7 .speek-reply.is-card').length,2,'live vs after-stop is a weighted choice');
+ assert.match(w.document.querySelector('#speek-replies-7 [data-value="on"]').textContent,/Recommended/);
+ await t.goToStep(8);await t.goToStep(9);await t.goToStep(10);await tick();
  assert.match(line(),/Your turn! Click the box, hold Ctrl \+ Windows/);
- const practice=w.document.getElementById('onboard-practice-text');practice.value='Hello there';practice.dispatchEvent(new w.Event('input',{bubbles:true}));await tick();
+ // Text typed in key by key is quoted only once it settles, so the line never restarts per key.
+ const practice=w.document.getElementById('onboard-practice-text');
+ for(const ch of 'Hello there'){practice.value+=ch;practice.dispatchEvent(new w.Event('input',{bubbles:true}));await tick();assert.equal(line(),'Here it comes…');}
+ await new Promise(r=>setTimeout(r,800));
  assert.match(line(),/“Hello there” Look at that!/);
  await t.goToStep(11);await tick();assert.match(line(),/system tray/);
  assert.equal(cfg.typing_mode,true,'the reply was saved with setup progress');

@@ -75,7 +75,15 @@ controls, so setup works as before if the module fails to load.
   The page's own heading and description stay for focus and screen readers;
   the bubble's full line is announced politely.
 - **Replies.** Steps 5 to 8 answer with two reply buttons bound to the step's
-  checkbox. A Pro-only answer is disabled on Free, as the checkbox is.
+  checkbox. A Pro-only answer is disabled on Free, as the checkbox is. Live
+  transcription (step 7) is a weighted choice: two cards, live marked
+  Recommended, each saying what it costs. Live is the fastest and most accurate
+  transcription; after-stop text comes from a lighter model that is noticeably
+  slower and less accurate, which is also all Free gets. Speek says so, and
+  Settings and the step's hint repeat it.
+- **Practice text** typed in key by key (or streamed live) is quoted once it
+  has been still for 700ms; until then Speek says "Here it comes…", so its
+  line never restarts with every key.
 - **Listening.** During the microphone check and the practice dictation the
   guide polls `get_voice_level` (the check's live peak, otherwise the active
   dictation's level, 0 to 1), so Speek's ears move with the voice. Nothing is

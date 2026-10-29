@@ -107,8 +107,8 @@ function renderWizardEntitlements() {
     ? 'Optional. In Push to Talk, tap once, then hold to speak a command. In Hands-Free mode, double-tap to start a command, then tap to finish.'
     : 'Command Mode is available with Pro. Your Free account can still dictate text. Continue to keep it off.';
   document.getElementById('onboard-stream-help').textContent=pro
-    ? 'Selected by default for Pro during setup. Turn it off if you prefer to receive the completed transcription after recording.'
-    : 'Your Free account receives the completed transcription after you stop. This still uses the transcription service and an internet connection.';
+    ? 'On by default for Pro. Live transcription is faster and more accurate. With it off, your text arrives after you stop talking, from a lighter model that takes noticeably longer and is less accurate.'
+    : 'Your Free account gets the completed text after you stop talking, from a lighter model that is slower and less accurate than Pro’s live transcription. It still needs an internet connection.';
 }
 function updateWizardGesture() {
   const hold = document.getElementById('onboard-hotkey-mode-select').value === 'hold';

@@ -9,12 +9,21 @@ const card = root?.querySelector('.onboarding-card');
 const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const invoke = (command, args) => window.__TAURI__?.core?.invoke(command, args);
 const TYPE_MS = 22;
+// Practice text that is still arriving (typed out, or streamed live) is only
+// quoted once it has been still this long.
+const SETTLE_MS = 700;
 
 // Yes/no steps answer with two replies bound to the step's existing checkbox.
 const REPLIES = {
   5: { check: 'onboard-typing-mode-check', on: 'Type it out key by key', off: 'Paste it all at once', offFirst: true },
   6: { check: 'onboard-command-mode-check', on: 'Yes, take orders', off: 'Not now' },
-  7: { check: 'onboard-streaming-mode-check', on: 'Show my words live', off: 'After I stop talking' },
+  7: {
+    check: 'onboard-streaming-mode-check', on: 'Show my words live', off: 'After I stop talking', recommended: 'on',
+    details: {
+      on: 'Words appear as you speak. Our fastest and most accurate transcription.',
+      off: 'Text arrives once you stop, from a lighter model: noticeably slower and less accurate.'
+    }
+  },
   8: { check: 'onboard-autostart-check', on: 'Yes, start with my computer', off: 'I’ll open it myself' }
 };
 
@@ -40,6 +49,7 @@ function context() {
 // What Speek says and how it feels about the page as it is right now.
 const answered = new Set();
 let shortcutSeen = '';
+let practiceChangedAt = 0;
 function scene() {
   const c = context();
   const press = `${c.hold ? 'hold' : 'tap'} ${c.shortcut}`;
@@ -86,10 +96,11 @@ function scene() {
       return { key: `6-${on}`, mood: on ? 'happy' : 'idle', parts: [on ? 'Orders it is. I’m all ears.' : 'No problem. You can turn it on in Settings later.'] };
     }
     case 7: {
-      if (!c.pro) return { key: '7-free', mood: 'idle', parts: ['On Free, your words arrive once you stop talking. Pro shows them live as you speak.'] };
-      if (!answered.has(7)) return { key: '7-ask', mood: 'think', parts: ['Want to watch your words appear while you’re still talking?'] };
+      if (!c.pro) return { key: '7-free', mood: 'idle', parts: ['On Free, I wait until you stop talking, then use a lighter model that’s slower and less accurate. Pro shows your words live, faster and more accurately.'] };
+      if (!answered.has(7)) return { key: '7-ask', mood: 'think', parts: ['Want to watch your words appear while you’re still talking? Live is also my fastest and most accurate mode.'] };
       const on = byId('onboard-streaming-mode-check').checked;
-      return { key: `7-${on}`, mood: 'happy', parts: [on ? 'Live it is. Watch them roll in!' : 'Okay, I’ll hand them over when you’re done.'] };
+      if (on) return { key: '7-true', mood: 'happy', parts: ['Live it is. Fast and accurate, just how I like it!'] };
+      return { key: '7-false', mood: 'think', parts: ['Okay, but a heads-up: after you stop, I use a lighter model. It’s noticeably slower and a little less accurate. You can switch to live in Settings anytime.'] };
     }
     case 8: {
       if (!answered.has(8)) return { key: '8-ask', mood: 'sleepy', parts: ['Should I wake up when your computer does?'] };
@@ -100,6 +111,7 @@ function scene() {
       return { key: '9', mood: 'listen', parts: ['Which languages do you speak? I can follow up to five, and I’ll listen for the starred one.'] };
     case 10: {
       const text = byId('onboard-practice-text')?.value.trim() || '';
+      if (text && Date.now() - practiceChangedAt < SETTLE_MS) return { key: '10-arriving', mood: 'admire', poll: true, parts: ['Here it comes…'] };
       if (text) {
         const quote = text.length > 70 ? `${text.slice(0, 67).trimEnd()}…` : text;
         return { key: `10-said-${text}`, mood: 'admire', poll: true, parts: [name(`“${quote}”`, 'speek-quote'), ' Look at that!'] };
@@ -295,9 +307,24 @@ function start() {
     for (const value of options) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'speek-reply';
+      button.className = reply.details ? 'speek-reply is-card' : 'speek-reply';
       button.dataset.value = value;
-      button.textContent = reply[value];
+      if (reply.details) {
+        // A weighty choice: each answer explains what it costs.
+        const title = document.createElement('strong');
+        title.textContent = reply[value];
+        if (reply.recommended === value) {
+          const badge = document.createElement('span');
+          badge.className = 'speek-reply-badge';
+          badge.textContent = 'Recommended';
+          title.append(badge);
+        }
+        const detail = document.createElement('small');
+        detail.textContent = reply.details[value];
+        button.append(title, detail);
+      } else {
+        button.textContent = reply[value];
+      }
       button.addEventListener('click', () => {
         if (check.disabled && value === 'on') return;
         answered.add(Number(step));
@@ -315,7 +342,13 @@ function start() {
     if (event.target?.name === 'onboard-gesture') answered.add('4-gesture');
     schedule();
   });
-  root.addEventListener('input', schedule);
+  root.addEventListener('input', event => {
+    if (event.target?.id === 'onboard-practice-text') {
+      practiceChangedAt = Date.now();
+      setTimeout(schedule, SETTLE_MS + 20);
+    }
+    schedule();
+  });
 
   // Changes to the guide's own nodes (bubble, dots, replies) never reschedule it.
   const ours = node => stage.contains(node) || dots.contains(node) || Boolean(node.closest?.('.speek-replies') || node.parentElement?.closest('.speek-replies'));

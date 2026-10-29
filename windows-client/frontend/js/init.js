@@ -39,6 +39,7 @@ async function init() {
     if (!winMaxBtn) return;
     try {
       const isMax = await invoke('is_window_maximized');
+      document.documentElement.dataset.maximized = String(Boolean(isMax));
       if (isMax) {
         winMaxBtn.title = 'Restore';
         winMaxBtn.setAttribute('aria-label', 'Restore');
@@ -52,6 +53,14 @@ async function init() {
       console.error('Failed to update maximize icon:');
     }
   }
+
+  // Maximizing by other means (a double-click, the keyboard, the desktop)
+  // resizes the window; keep the icon and rounded corners in step.
+  let resizeCheck = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeCheck);
+    resizeCheck = setTimeout(updateMaximizeIcon, 150);
+  });
 
   if (winMaxBtn) {
     winMaxBtn.addEventListener('click', async (e) => {

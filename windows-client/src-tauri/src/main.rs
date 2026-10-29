@@ -740,6 +740,17 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         .decorations(cfg!(target_os = "macos"))
         .skip_taskbar(false)
         .min_inner_size(default_width.min(760.0), default_height.min(560.0));
+        // The window has no system frame on Windows and Linux. Windows 11 rounds
+        // a frameless window's corners when it has a shadow; Linux has no such
+        // option, so the window is transparent and the page draws its corners.
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder.shadow(true);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            builder = builder.transparent(true);
+        }
 
         let pos_opt = LAST_WINDOW_POSITION
             .get_or_init(|| Mutex::new(None))
