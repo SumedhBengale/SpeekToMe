@@ -62,8 +62,9 @@
 .command-allowance progress::-moz-progress-bar { background: var(--accent-color); border-radius: 8px; }
 .command-allowance .command-usage-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); opacity: 1; }
 
-/* macOS uses its native window controls and title bar. */
-html[data-platform="macos"] .window-titlebar { display: none; }
+/* macOS and Linux use the system's window controls and title bar. */
+html[data-platform="macos"] .window-titlebar,
+html[data-platform="linux"] .window-titlebar { display: none; }
 
 .history-result { padding:20px; margin:16px 0; border:1px solid var(--border-color,#ddd); border-radius:12px; }
 .history-result-meta { font-size:12px; opacity:.65; margin:0 0 12px; }

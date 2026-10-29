@@ -30,19 +30,6 @@ body {
   position: relative;
 }
 
-/* Linux: the window is transparent and the page draws its rounded corners,
-   square again when maximized. */
-html[data-platform="linux"],
-html[data-platform="linux"] body { background: transparent; }
-html[data-platform="linux"] #app,
-html[data-platform="linux"] #onboarding {
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: inset 0 0 0 1px var(--border-color);
-}
-html[data-platform="linux"][data-maximized="true"] #app,
-html[data-platform="linux"][data-maximized="true"] #onboarding { border-radius: 0; box-shadow: none; }
-
 [data-tauri-drag-region] {
   -webkit-app-region: drag;
 }

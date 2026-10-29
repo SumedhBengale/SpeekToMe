@@ -737,19 +737,18 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         // Settings view its own disposable WebKit website-data store.
         .incognito(cfg!(target_os = "macos"))
         .resizable(true)
-        .decorations(cfg!(target_os = "macos"))
+        // macOS and Linux use the system window frame; Windows draws its own.
+        .decorations(cfg!(any(target_os = "macos", target_os = "linux")))
         .skip_taskbar(false)
         .min_inner_size(default_width.min(760.0), default_height.min(560.0));
-        // The window has no system frame on Windows and Linux. Windows 11 rounds
-        // a frameless window's corners when it has a shadow; Linux has no such
-        // option, so the window is transparent and the page draws its corners.
+        // Windows 11 rounds a frameless window's corners when it has a shadow.
+        // Linux gets its rounded corners from the desktop's frame instead: a
+        // transparent WebKitGTK window, which page-drawn corners would need,
+        // draws in pieces on KDE Wayland and then shows only what the pointer
+        // hovers, even with WebKit's compositing mode disabled.
         #[cfg(target_os = "windows")]
         {
             builder = builder.shadow(true);
-        }
-        #[cfg(target_os = "linux")]
-        {
-            builder = builder.transparent(true);
         }
 
         let pos_opt = LAST_WINDOW_POSITION
