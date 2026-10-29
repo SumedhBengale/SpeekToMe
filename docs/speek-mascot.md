@@ -35,8 +35,20 @@ const markup = speekSvg({ mode: 'idle', faceColor: SPEEK_COLORS.faceOnDark, size
 | `SPEEK_ICON_VIEWBOX` | `172 215 910 910`: crops to the resting mascot for logo-sized slots. |
 
 Static icons are generated, never drawn by hand. After changing the geometry,
-run `node shared/speek/build-icons.js`; it rewrites every file listed in it
-(today `website/public/assets/speek.svg`, which is also the favicon).
+run `node shared/speek/build-icons.js`; it rewrites every SVG listed in it:
+`website/public/assets/speek.svg` (the website's logo and favicon),
+`windows-client/frontend/logo.svg` (the desktop app's in-app logo and
+favicon) and `windows-client/src-tauri/icons/app-icon.svg`. Then rebuild the
+desktop app icons from that source:
+
+```bash
+cd windows-client && cargo tauri icon src-tauri/icons/app-icon.svg
+```
+
+Keep the desktop files it writes to `src-tauri/icons` (the PNGs, `icon.ico`
+and `icon.icns`) and delete the `android` and `ios` folders it adds. Every icon
+is the resting `idle` mood, Speek's smile; the app icon has a little margin
+around it.
 
 ### Website
 
@@ -64,6 +76,12 @@ tail from its signed distance.
 `speekSvg` for the same mood should match to the anti-aliased edge, and
 stepping the JS rig with a fake clock should give the same numbers as
 `Rig::advance` frame for frame.
+
+The tray icon on every platform is drawn by the same painter at startup
+(`overlay_paint::speek_icon`): at the system's small-icon size on Windows,
+64px on Linux and macOS, which scale it to the bar. The window and taskbar
+icons come from the generated app icons, and Speek keeps its own colours in
+every app theme.
 
 Speek replaces the waveform bars inside the pill. Its resting box fills 22 of
 the pill's 24px (`SPEEK_HEIGHT`), centred; raised ears and hops reach into the
@@ -140,8 +158,9 @@ noise floor), `simulatedVoice` on the website.
 - **Ears.** Each ear's share of the level is the level times its own rhythm
   (two sines per ear, 0.2–1), so the ears flop independently but always
   with the voice. An ear stretches upward from its pivot by up to 110 units
-  and tilts out by up to 10°. Above 60% level both ears flare out a further
-  10° at full volume.
+  and tilts out by up to 14°, and sways side to side by up to ±12° times the
+  level (about 0.85 and 1 Hz for the left and right ear). Above 60% level both
+  ears flare out a further 10° at full volume.
 - **Eyes and brows.** Loud speech widens the eyes: with `peak` = level²,
   each eye grows from 100×170 to 116×260 and the brows lift 30 units, easing
   the furrow.

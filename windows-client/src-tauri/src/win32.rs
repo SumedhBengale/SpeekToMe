@@ -21,14 +21,14 @@ mod win32_impl {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, CallNextHookEx, CreateIconIndirect, CreateWindowExW, DefWindowProcW,
-        DestroyIcon, DispatchMessageW, GetMessageW, GetSystemMetrics, IsWindowVisible, KillTimer,
-        PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetTimer, SetWindowPos,
-        SetWindowsHookExW, ShowWindow, TranslateMessage, UnhookWindowsHookEx, UpdateLayeredWindow,
-        CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, ICONINFO, KBDLLHOOKSTRUCT, MSG, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WH_KEYBOARD_LL,
-        WINDOWPOS, WM_APP, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_PAINT, WM_SYSKEYDOWN, WM_SYSKEYUP,
-        WM_TIMER, WM_WINDOWPOSCHANGING, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+        DispatchMessageW, GetMessageW, GetSystemMetrics, IsWindowVisible, KillTimer, PostMessageW,
+        PostQuitMessage, RegisterClassW, SetTimer, SetWindowPos, SetWindowsHookExW, ShowWindow,
+        TranslateMessage, UnhookWindowsHookEx, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW,
+        HWND_TOPMOST, ICONINFO, KBDLLHOOKSTRUCT, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNA, WH_KEYBOARD_LL, WINDOWPOS, WM_APP,
+        WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_PAINT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+        WM_WINDOWPOSCHANGING, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
     };
 
     const SM_CXSCREEN: i32 = 0;
@@ -1594,99 +1594,20 @@ mod win32_impl {
         }
     }
 
-    static CURRENT_TRAY_HICON: std::sync::atomic::AtomicIsize =
-        std::sync::atomic::AtomicIsize::new(0);
+    const SM_CXSMICON: i32 = 49;
 
-    pub unsafe fn create_themed_soundwave_icon(theme: &str) -> *mut std::ffi::c_void {
-        let (r, g, b) = match theme {
-            "lavender" => (179u8, 136u8, 255u8),   // #b388ff
-            "mint" => (0u8, 230u8, 118u8),         // #00e676
-            "classic_dark" => (0u8, 230u8, 118u8), // #00e676
-            _ => (244u8, 63u8, 94u8),              // "forest" / default -> #f43f5e
-        };
-
-        let size = 32i32;
-        let mut bgra = vec![0u8; (size * size * 4) as usize];
-
-        struct Bar {
-            cx: f32,
-            half_h: f32,
-            radius: f32,
-        }
-        let bars = [
-            Bar {
-                cx: 4.5,
-                half_h: 5.0,
-                radius: 1.8,
-            },
-            Bar {
-                cx: 10.25,
-                half_h: 10.0,
-                radius: 1.8,
-            },
-            Bar {
-                cx: 16.0,
-                half_h: 14.2,
-                radius: 1.8,
-            },
-            Bar {
-                cx: 21.75,
-                half_h: 10.0,
-                radius: 1.8,
-            },
-            Bar {
-                cx: 27.5,
-                half_h: 5.0,
-                radius: 1.8,
-            },
-        ];
-
-        for y in 0..size {
-            for x in 0..size {
-                let px = x as f32 + 0.5;
-                let py = y as f32 + 0.5;
-                let cy = 15.5f32;
-
-                let mut min_dist_to_pill = 999.0f32;
-                for bar in &bars {
-                    let dx = (px - bar.cx).abs();
-                    let segment_half = (bar.half_h - bar.radius).max(0.0);
-                    let dy = (py - cy).abs();
-                    let clamped_dy = (dy - segment_half).max(0.0);
-                    let dist = (dx * dx + clamped_dy * clamped_dy).sqrt();
-                    if dist < min_dist_to_pill {
-                        min_dist_to_pill = dist;
-                    }
-                }
-
-                let radius = 1.8f32;
-                let edge = min_dist_to_pill - radius;
-                let alpha = if edge <= -0.5 {
-                    1.0f32
-                } else if edge >= 0.5 {
-                    0.0f32
-                } else {
-                    0.5 - edge
-                };
-
-                if alpha > 0.0 {
-                    let row = (size - 1 - y) as usize;
-                    let col = x as usize;
-                    let idx = (row * size as usize + col) * 4;
-                    let a = (alpha * 255.0).clamp(0.0, 255.0) as u8;
-                    bgra[idx + 0] = (b as f32 * alpha) as u8; // B
-                    bgra[idx + 1] = (g as f32 * alpha) as u8; // G
-                    bgra[idx + 2] = (r as f32 * alpha) as u8; // R
-                    bgra[idx + 3] = a; // A
-                }
-            }
-        }
+    /// Speek resting and smiling as a `size`-pixel icon, from the same
+    /// painter as the overlay pill.
+    unsafe fn create_speek_icon(size: i32) -> *mut std::ffi::c_void {
+        let size = size.max(16);
+        let pixels = crate::overlay_paint::speek_icon(size as usize);
 
         let h_dc = GetDC(std::ptr::null_mut());
         let mut bmi: BITMAPINFO = mem::zeroed();
         bmi.bmiHeader.biSize = mem::size_of::<BITMAPINFOHEADER>() as u32;
         bmi.bmiHeader.biWidth = size;
-        bmi.bmiHeader.biHeight = size;
+        // Negative height: top-down rows, as the painter writes them.
+        bmi.bmiHeader.biHeight = -size;
         bmi.bmiHeader.biPlanes = 1;
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
@@ -1700,21 +1621,20 @@ mod win32_impl {
             std::ptr::null_mut(),
             0,
         );
-
         if !bits_ptr.is_null() {
-            std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits_ptr as *mut u8, bgra.len());
+            // Premultiplied ARGB words are the DIB's BGRA bytes.
+            std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits_ptr as *mut u32, pixels.len());
         }
 
-        let mask_bytes = [0u8; 128];
+        // An empty mask: the colour bitmap's alpha decides what shows.
+        let mask_stride = ((size + 15) / 16 * 2) as usize;
+        let mask_bytes = vec![0u8; mask_stride * size as usize];
         let h_mask = CreateBitmap(size, size, 1, 1, mask_bytes.as_ptr() as *const _);
 
         let mut ii: ICONINFO = mem::zeroed();
         ii.fIcon = 1;
-        ii.xHotspot = 0;
-        ii.yHotspot = 0;
         ii.hbmMask = h_mask;
         ii.hbmColor = h_color;
-
         let h_icon = CreateIconIndirect(&ii);
 
         DeleteObject(h_color);
@@ -1722,49 +1642,6 @@ mod win32_impl {
         ReleaseDC(std::ptr::null_mut(), h_dc);
 
         h_icon as *mut std::ffi::c_void
-    }
-
-    pub fn update_tray_icon_for_theme(theme: &str) {
-        unsafe {
-            if let Some(hwnd) = TRAY_HWND.get() {
-                let h_icon = create_themed_soundwave_icon(theme);
-                if !h_icon.is_null() {
-                    let mut nid: NOTIFYICONDATAW = mem::zeroed();
-                    nid.cbSize = mem::size_of::<NOTIFYICONDATAW>() as u32;
-                    nid.hWnd = hwnd.0;
-                    nid.uID = 1;
-                    nid.uFlags = NIF_ICON;
-                    nid.hIcon = h_icon;
-                    let res = Shell_NotifyIconW(NIM_MODIFY, &nid);
-                    println!(
-                        "[WIN32] Updated tray icon for theme: {} (success: {})",
-                        theme,
-                        res != 0
-                    );
-
-                    let old_icon = CURRENT_TRAY_HICON.swap(h_icon as isize, Ordering::SeqCst);
-                    if old_icon != 0 {
-                        DestroyIcon(old_icon as *mut std::ffi::c_void);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn set_window_icon_for_theme(hwnd: *mut std::ffi::c_void, theme: &str) {
-        unsafe {
-            if !hwnd.is_null() {
-                let h_icon = create_themed_soundwave_icon(theme);
-                if !h_icon.is_null() {
-                    const WM_SETICON: u32 = 0x0080;
-                    const ICON_SMALL: usize = 0;
-                    const ICON_BIG: usize = 1;
-                    SendMessageW(hwnd as HWND, WM_SETICON, ICON_BIG, h_icon as isize);
-                    SendMessageW(hwnd as HWND, WM_SETICON, ICON_SMALL, h_icon as isize);
-                    println!("[WIN32] Updated taskbar window icon for theme: {}", theme);
-                }
-            }
-        }
     }
 
     pub unsafe fn run_win32_hook_and_tray_thread() {
@@ -1878,12 +1755,7 @@ mod win32_impl {
         nid.uID = 1;
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
-        let initial_theme = "forest";
-        let h_icon = create_themed_soundwave_icon(initial_theme);
-        if !h_icon.is_null() {
-            CURRENT_TRAY_HICON.store(h_icon as isize, Ordering::SeqCst);
-        }
-        nid.hIcon = h_icon;
+        nid.hIcon = create_speek_icon(GetSystemMetrics(SM_CXSMICON));
 
         let tip = encode_wide("SpeekTo.Me (Hold Shortcut to transcribe)");
         for (i, &c) in tip.iter().enumerate() {
@@ -1893,7 +1765,7 @@ mod win32_impl {
         }
         let tray_ok = Shell_NotifyIconW(NIM_ADD, &nid);
         println!(
-            "[WIN32] Themed system tray icon registered (success: {}).",
+            "[WIN32] System tray icon registered (success: {}).",
             tray_ok != 0
         );
 
@@ -1939,10 +1811,10 @@ pub use win32_impl::{
     calculate_pill_position, ensure_single_instance, get_preview_text, hide_meeting_overlay,
     hide_overlay, hide_preview, hide_preview_after_polish, play_chime,
     run_win32_hook_and_tray_thread, set_preview_final_text, set_preview_state, set_preview_text,
-    set_preview_text_with_replacements, set_window_icon_for_theme, show_meeting_overlay,
-    show_overlay, show_preview, show_tray_notification, update_overlay_position,
-    update_preview_position, update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel,
-    PreviewState, SendHWND, PREVIEW_HWND, PREVIEW_STATE, PREVIEW_TEXT, TRAY_HWND,
+    set_preview_text_with_replacements, show_meeting_overlay, show_overlay, show_preview,
+    show_tray_notification, update_overlay_position, update_preview_position, update_tray_tooltip,
+    NotificationLevel, PreviewState, SendHWND, PREVIEW_HWND, PREVIEW_STATE, PREVIEW_TEXT,
+    TRAY_HWND,
 };
 
 // ==========================================
@@ -2172,10 +2044,6 @@ mod win32_stub {
 
     pub fn ensure_single_instance() {}
 
-    pub fn update_tray_icon_for_theme(_theme: &str) {}
-
-    pub fn set_window_icon_for_theme(_hwnd: *mut std::ffi::c_void, _theme: &str) {}
-
     pub unsafe fn run_win32_hook_and_tray_thread() {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3600));
@@ -2188,8 +2056,7 @@ pub use win32_stub::{
     animation_seconds, calculate_pill_position, ensure_single_instance, get_preview_text,
     hide_meeting_overlay, hide_overlay, hide_preview, hide_preview_after_polish, play_chime,
     preview_finished, preview_glow, run_win32_hook_and_tray_thread, set_preview_final_text,
-    set_preview_state, set_preview_text, set_preview_text_with_replacements,
-    set_window_icon_for_theme, show_meeting_overlay, show_overlay, show_preview,
-    show_tray_notification, update_overlay_position, update_preview_position,
-    update_tray_icon_for_theme, update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
+    set_preview_state, set_preview_text, set_preview_text_with_replacements, show_meeting_overlay,
+    show_overlay, show_preview, show_tray_notification, update_overlay_position,
+    update_preview_position, update_tray_tooltip, NotificationLevel, PreviewState, SendHWND,
 };

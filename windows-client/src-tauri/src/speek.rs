@@ -212,6 +212,8 @@ fn body(p: [f64; 5], stretch: [f64; 2]) -> [Pill; 5] {
 /// While listening the ears follow the voice level (0–1), each on its own
 /// rhythm so they flop independently. Two sines per ear, rates in 1/seconds.
 const EAR_RHYTHMS: [(f64, f64, f64); 2] = [(7.3, 11.9, 0.4), (8.4, 6.9, 5.2)];
+/// Each ear also sways side to side with the voice, slower than its rhythm.
+const EAR_SWAY: [f64; 2] = [5.3, 6.1];
 fn ear_rhythm(side: usize, time: f64) -> f64 {
     let (a, b, phase) = EAR_RHYTHMS[side];
     let seconds = time / 1000.0;
@@ -442,13 +444,15 @@ impl Rig {
             }
         }
         if mood == Mood::Listen {
-            // Concentrating: the ears carry the voice. Each stretches and flops
-            // on its own rhythm; loud speech flares them out and widens the eyes.
+            // Concentrating: the ears carry the voice. Each stretches, flops and
+            // sways on its own rhythm; loud speech flares them out and widens the eyes.
             let flare = ((level - 0.6) / 0.4).max(0.0) * 10.0;
             for side in 0..2 {
                 let share = level * ear_rhythm(side, time);
                 stretch[side] = 110.0 * share;
-                pose_target[side] += 10.0 * share + flare;
+                let sway =
+                    level * 12.0 * (time / 1000.0 * EAR_SWAY[side] + side as f64 * 2.1).sin();
+                pose_target[side] += 14.0 * share + sway + flare;
             }
             let peak = level * level;
             for (slot, x) in [(1, 497.0), (3, 757.0)] {

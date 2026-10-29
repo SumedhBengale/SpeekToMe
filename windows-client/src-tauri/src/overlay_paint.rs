@@ -216,8 +216,7 @@ fn paint_text(
 }
 
 /// Draws Speek's pose with its resting box filling `SPEEK_HEIGHT` and centred in
-/// the 62×24 box at `x`, `y`. Shapes are drawn in the web rig's order, each
-/// anti-aliased from its signed distance like the pill.
+/// the 62×24 box at `x`, `y`.
 fn paint_speek(
     frame: &Frame,
     x: f64,
@@ -227,10 +226,60 @@ fn paint_speek(
     width: usize,
     height: usize,
 ) {
+    let box_x = x + PILL_WIDTH / 2.0 - SPEEK_HEIGHT / 2.0;
+    let box_y = y + (PILL_HEIGHT - SPEEK_HEIGHT) / 2.0;
+    paint_speek_box(frame, box_x, box_y, SPEEK_HEIGHT, s, pixels, width, height);
+}
+
+/// Speek resting and smiling, filling a `size`×`size` icon: premultiplied
+/// ARGB like the overlay, for the tray and window icons.
+pub fn speek_icon(size: usize) -> Vec<u32> {
+    let frame = crate::speek::Rig::new(crate::speek::Mood::Idle, 0.0, 1)
+        .advance(0.0, 0.0)
+        .clone();
+    let mut pixels = vec![0u32; size * size];
+    paint_speek_box(&frame, 0.0, 0.0, size as f64, 1.0, &mut pixels, size, size);
+    pixels
+}
+
+/// `speek_icon` as straight (not premultiplied) RGBA bytes, as tray icons take.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn speek_icon_rgba(size: usize) -> Vec<u8> {
+    speek_icon(size)
+        .into_iter()
+        .flat_map(|pixel| {
+            let alpha = pixel >> 24;
+            let straight = |shift: u32| {
+                let value = (pixel >> shift) & 0xFF;
+                if alpha == 0 {
+                    0
+                } else {
+                    ((value * 255 + alpha / 2) / alpha).min(255) as u8
+                }
+            };
+            [straight(16), straight(8), straight(0), alpha as u8]
+        })
+        .collect()
+}
+
+/// Draws Speek's pose with its resting box (`ICON_BOX`) as the `side`-sized
+/// square at `x`, `y`. Shapes are drawn in the web rig's order, each
+/// anti-aliased from its signed distance like the pill.
+#[allow(clippy::too_many_arguments)]
+fn paint_speek_box(
+    frame: &Frame,
+    x: f64,
+    y: f64,
+    side: f64,
+    s: f64,
+    pixels: &mut [u32],
+    width: usize,
+    height: usize,
+) {
     let (box_x, box_y, box_size) = ICON_BOX;
-    let unit = SPEEK_HEIGHT / box_size;
-    let left = x + PILL_WIDTH / 2.0 - SPEEK_HEIGHT / 2.0 - box_x * unit;
-    let top = y + (PILL_HEIGHT - SPEEK_HEIGHT) / 2.0 - box_y * unit;
+    let unit = side / box_size;
+    let left = x - box_x * unit;
+    let top = y - box_y * unit;
     // Device pixels per mascot unit, to turn distances into coverage.
     let pixel = unit * s;
     let x0 = ((left * s).floor().max(0.0) as usize).min(width);

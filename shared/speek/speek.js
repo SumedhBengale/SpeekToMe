@@ -64,6 +64,8 @@ export const SPEEK_MODES = Object.keys(FACES);
 // While listening the ears follow the voice level (0-1), each on its own
 // rhythm so they flop independently. Two sines per ear, rates in 1/seconds.
 const EAR_RHYTHMS = [[7.3, 11.9, 0.4], [8.4, 6.9, 5.2]];
+// Each ear also sways side to side with the voice, slower than its rhythm.
+const EAR_SWAY = [5.3, 6.1];
 const earRhythm = (side, time) => {
   const [a, b, phase] = EAR_RHYTHMS[side];
   const seconds = time / 1000;
@@ -199,13 +201,14 @@ export function createSpeekMascot(svg, { mode: initialMode = 'idle', faceColor =
       [0, 4].forEach(slot => shift(faceTarget[slot], look.x * 20, look.y * 12));
     }
     if (mode === 'listen') {
-      // Concentrating: the ears carry the voice. Each stretches and flops on
-      // its own rhythm; loud speech flares them out and widens the eyes.
+      // Concentrating: the ears carry the voice. Each stretches, flops and
+      // sways on its own rhythm; loud speech flares them out and widens the eyes.
       const flare = Math.max(0, (level - 0.6) / 0.4) * 10;
       [0, 1].forEach(side => {
         const share = level * earRhythm(side, time);
         stretch[side] = 110 * share;
-        poseTarget[side] += 10 * share + flare;
+        const sway = level * 12 * Math.sin(time / 1000 * EAR_SWAY[side] + side * 2.1);
+        poseTarget[side] += 14 * share + sway + flare;
       });
       const peak = level * level;
       [[1, 497], [3, 757]].forEach(([slot, x]) => { faceTarget[slot] = pill(x, 682, 100 + 16 * peak, 170 + 90 * peak); });

@@ -55,6 +55,10 @@ mod overlay_paint;
 mod portal_gestures;
 mod settings_lifecycle;
 mod speek;
+
+/// Tray icons are drawn at this many pixels; Linux and macOS scale them to the bar.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const TRAY_ICON_SIZE: u32 = 64;
 pub mod stream;
 pub mod vad;
 pub mod win32;
@@ -230,13 +234,11 @@ fn get_audio_level() -> u32 {
 }
 
 #[tauri::command]
-async fn save_config(app: tauri::AppHandle, mut config: AppConfig) -> Result<(), String> {
+async fn save_config(mut config: AppConfig) -> Result<(), String> {
     // Reject before touching memory, disk, autostart or existing portal grants.
     let report = hotkey_conflicts::check(&config.hotkey).await?;
     report.ensure_allowed()?;
     config.hotkey = report.canonical;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let _ = &app;
     #[cfg(target_os = "linux")]
     let (old_hotkey, old_hotkey_mode) = {
         let active = get_active_config()
@@ -268,29 +270,7 @@ async fn save_config(app: tauri::AppHandle, mut config: AppConfig) -> Result<(),
         linux_portal::rebind();
     }
     crate::win32::update_overlay_position();
-    crate::win32::update_tray_icon_for_theme(&config.theme);
-    #[cfg(target_os = "windows")]
-    if let Some(window) = app.get_webview_window("main") {
-        if let Ok(hwnd_ptr) = window.hwnd() {
-            let hwnd = hwnd_ptr.0 as *mut std::ffi::c_void;
-            crate::win32::set_window_icon_for_theme(hwnd, &config.theme);
-        }
-    }
     Ok(())
-}
-
-#[tauri::command]
-fn update_tray_theme(app: tauri::AppHandle, theme: String) {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let _ = &app;
-    crate::win32::update_tray_icon_for_theme(&theme);
-    #[cfg(target_os = "windows")]
-    if let Some(window) = app.get_webview_window("main") {
-        if let Ok(hwnd_ptr) = window.hwnd() {
-            let hwnd = hwnd_ptr.0 as *mut std::ffi::c_void;
-            crate::win32::set_window_icon_for_theme(hwnd, &theme);
-        }
-    }
 }
 
 // Destroy Settings on close so the web UI does not stay resident in the tray.
@@ -775,16 +755,6 @@ pub fn show_or_create_settings_window(app: &tauri::AppHandle) {
         match builder.build() {
             Ok(window) => {
                 settings_lifecycle::watch(&window);
-                #[cfg(target_os = "windows")]
-                if let Ok(hwnd_ptr) = window.hwnd() {
-                    let hwnd = hwnd_ptr.0 as *mut std::ffi::c_void;
-                    let current_theme = get_active_config()
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .theme
-                        .clone();
-                    crate::win32::set_window_icon_for_theme(hwnd, &current_theme);
-                }
                 let _ = window.show();
                 let _ = window.set_focus();
                 println!("[WINDOW] Settings window built and displayed successfully.");
@@ -1015,8 +985,7 @@ fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
         minimize_window,
         is_window_maximized,
         toggle_maximize_window,
-        close_window,
-        update_tray_theme
+        close_window
     ]
 }
 

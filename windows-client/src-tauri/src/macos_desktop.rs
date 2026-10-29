@@ -242,9 +242,12 @@ pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu(app)?)
         .tooltip("SpeekTo.Me");
-    if let Some(icon) = app.default_window_icon() {
-        tray = tray.icon(icon.clone());
-    }
+    let size = crate::TRAY_ICON_SIZE;
+    tray = tray.icon(tauri::image::Image::new_owned(
+        crate::overlay_paint::speek_icon_rgba(size as usize),
+        size,
+        size,
+    ));
     tray.build(app)?;
     // Accessory apps still need an explicit application menu and Cmd+Q.
     let application = SubmenuBuilder::new(app, "SpeekTo.Me")

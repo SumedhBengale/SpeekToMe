@@ -212,11 +212,6 @@ function applyAppTheme(theme) {
     onboardThemeSelect.value = t;
   }
   syncCustomSelects();
-  try {
-    if (window.__TAURI__ && window.__TAURI__.core) {
-      invoke('update_tray_theme', { theme: t }).catch(() => {});
-    }
-  } catch (_) {}
 }
 
 function applyConfigToUI(config) {
