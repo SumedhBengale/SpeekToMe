@@ -64,6 +64,13 @@ rig for React; pass `framing="icon"` to crop it for small slots.
 
 ### Desktop client
 
+The desktop UI (setup and settings) uses the web rig itself, from a copy in
+`windows-client/frontend/js/vendor/speek.js`: run `node
+shared/speek/sync-desktop.js` after changing `speek.js`, and
+`windows-client/tests/speek-sync.cjs` fails until you do. Setup's guide is
+described in docs/desktop-onboarding.md.
+
+
 The overlays are drawn natively in Rust, so the rig is ported to
 `windows-client/src-tauri/src/speek.rs`: the same shapes, moods, springs and
 timings, stepped at the web's 60 Hz whatever the overlay's frame rate. The M

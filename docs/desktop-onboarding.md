@@ -53,7 +53,48 @@ late success events. Normal Settings close/hide behavior and native overlays
 are unchanged: the settings webview can be destroyed and setup resumes when
 Settings is reopened.
 
+## Speek guides setup
+
+`frontend/js/speek-guide.js` turns setup into a conversation with Speek. It
+adds an animated Speek beside a speech bubble, the same rig as the website and
+the overlay pill, and changes nothing about the steps, saved progress, gates or
+native calls above. The guide only reads the page and toggles its existing
+controls, so setup works as before if the module fails to load.
+
+- **Intro.** On a first visit to the sign-in page Speek fades in, centred in
+  the card, says "Hi! I'm Speek" with a glow on its name, builds "You can Speek
+  To Me" word by word, and joins those words into "SpeekToMe". It then glides
+  into place and the sign-in form fades in. A click skips it; reduced motion
+  shows the sign-in page at once. Speek never plays sound: its lines are text
+  in the bubble, typed out quickly, and a click shows the whole line.
+- **What Speek says** follows what the page shows: the auth state on step 1,
+  the plan on step 2, each permission and the microphone check on step 3, the
+  shortcut and gesture on step 4, each answer on steps 5 to 8, the practice
+  text on step 10. Each line has a mood (thinking while sign-in waits in the
+  browser, worried when access or the microphone fails, happy when it works).
+  The page's own heading and description stay for focus and screen readers;
+  the bubble's full line is announced politely.
+- **Replies.** Steps 5 to 8 answer with two reply buttons bound to the step's
+  checkbox. A Pro-only answer is disabled on Free, as the checkbox is.
+- **Listening.** During the microphone check and the practice dictation the
+  guide polls `get_voice_level` (the check's live peak, otherwise the active
+  dictation's level, 0 to 1), so Speek's ears move with the voice. Nothing is
+  recorded or stored for this.
+- **Layout.** Speek has its own column beside the bubble and the step; on
+  windows narrower than 900px or shorter than 700px Speek gets smaller, and the
+  step's content scrolls between the bubble and the footer down to the
+  760x560 minimum window.
+
+The guide uses `frontend/js/vendor/speek.js`, a copy of `shared/speek/speek.js`
+made by `node shared/speek/sync-desktop.js`, because the desktop UI loads plain
+files without a bundler. `tests/speek-sync.cjs` fails while the copy is stale.
+
 ## Validation
+
+`windows-client/tests/speek-guide.cjs` runs the guide on the same DOM: Speek's
+lines per step, the reply buttons and Pro gating, and the practice reaction.
+Both jsdom tests load the frontend's scripts in `index.html` order through
+`tests/frontend-scripts.cjs`.
 
 `windows-client/tests/onboarding.cjs` exercises synthetic Free and Pro accounts
 for all three platform adapters: login gates, paid defaults, permission gating,

@@ -20,6 +20,8 @@ pub struct EnergySample {
 }
 
 pub static CURRENT_VOLUME: AtomicU32 = AtomicU32::new(0);
+/// The setup microphone check's latest peak, 0–100, while it listens.
+pub static SETUP_MIC_LEVEL: AtomicU32 = AtomicU32::new(0);
 pub use crate::dictation::recording_thread;
 #[cfg(test)]
 use crate::dictation::take_capture;
@@ -812,7 +814,9 @@ pub fn check_setup_microphone() -> serde_json::Value {
                         samples.store(true, Ordering::Relaxed);
                     }
                     let level = data.iter().map($amplitude).fold(0.0_f32, f32::max);
-                    volume.fetch_max((level.min(1.0) * 100.0) as u32, Ordering::Relaxed);
+                    let percent = (level.min(1.0) * 100.0) as u32;
+                    volume.fetch_max(percent, Ordering::Relaxed);
+                    SETUP_MIC_LEVEL.store(percent, Ordering::Relaxed);
                 },
                 move |_| {
                     errors.store(true, Ordering::Relaxed);
@@ -837,5 +841,6 @@ pub fn check_setup_microphone() -> serde_json::Value {
     }
     std::thread::sleep(std::time::Duration::from_secs(3));
     drop(stream);
+    SETUP_MIC_LEVEL.store(0, Ordering::Relaxed);
     serde_json::json!({"ready":!failed.load(Ordering::Relaxed)&&received.load(Ordering::Relaxed),"device":name,"level":peak.load(Ordering::Relaxed)})
 }

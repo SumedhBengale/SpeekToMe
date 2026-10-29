@@ -1,0 +1,181 @@
+/* Speek hosts first-run setup (js/speek-guide.js). Everything here is scoped to
+   .has-speek, which the guide adds once Speek is running. */
+#onboarding { --speek-pink: #fc5b90; }
+
+#onboarding.has-speek .onboarding-card {
+  width: 840px;
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "header header" "speek bubble" "speek content" "footer footer";
+  column-gap: 22px;
+}
+.has-speek .onboarding-header { grid-area: header; }
+.has-speek .speek-stage { display: contents; }
+.has-speek .speek-host { grid-area: speek; align-self: start; padding-top: 14px; }
+.has-speek .speek-mascot { display: block; width: 128px; height: 128px; overflow: visible; }
+.has-speek .onboarding-content { grid-area: content; padding-top: 18px; }
+.has-speek .setup-footer { grid-area: footer; }
+
+/* Speek says each step's heading, so the page's own heading stays for focus
+   and screen readers only. */
+.has-speek .onboarding-step > h2,
+.has-speek .onboarding-step > .step-desc,
+.has-speek .onboarding-step > .promo-badge + h2 + .step-desc,
+.has-speek #onboard-step-label,
+.has-speek #onboard-progress,
+.speek-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+.has-speek .setup-success-mark { display: none; }
+
+/* The speech bubble, its tail pointing at Speek. */
+.speek-bubble {
+  grid-area: bubble;
+  position: relative;
+  align-self: start;
+  margin-top: 26px;
+  min-height: 54px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 14px 20px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  cursor: default;
+}
+.speek-bubble::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 22px;
+  width: 14px;
+  height: 14px;
+  background: inherit;
+  border-left: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  transform: rotate(45deg);
+  border-bottom-left-radius: 3px;
+}
+.speek-bubble.is-new { animation: speek-pop 0.28s cubic-bezier(0.2, 1.4, 0.4, 1); }
+.speek-line {
+  margin: 0;
+  font-family: 'Figtree', sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.speek-name { color: var(--speek-pink); font-weight: 800; }
+.speek-keys { color: var(--speek-pink); white-space: nowrap; }
+.speek-quote { font-style: italic; font-weight: 500; }
+
+/* "Speek" lights up when Speek says its name. */
+.speek-name.is-glowing {
+  background: linear-gradient(100deg, var(--speek-pink) 35%, #ffe1ec 50%, var(--speek-pink) 65%);
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: speek-shine 1.1s ease-out forwards;
+  filter: drop-shadow(0 0 10px rgba(252, 91, 144, 0.55));
+}
+
+/* The intro: Speek arrives, says hi, and turns "Speek To Me" into the name. */
+.speek-intro .onboarding-content,
+.speek-intro .setup-footer,
+.speek-intro .speek-dots { opacity: 0; pointer-events: none; }
+.has-speek .onboarding-content,
+.has-speek .setup-footer,
+.has-speek .speek-dots { transition: opacity 0.5s ease; }
+/* During the intro Speek and the bubble sit centred in the card; the guide
+   glides them up into place when the step appears. */
+.speek-intro .speek-host,
+.speek-intro .speek-bubble { grid-row: 2 / 4; align-self: center; }
+.speek-intro .speek-host { animation: speek-arrive 0.65s ease-out both; padding-top: 0; }
+.speek-intro .speek-bubble { margin-top: 0; }
+.speek-intro .step-nav-arrow { visibility: hidden; }
+.speek-intro .speek-bubble { opacity: 0; transform: scale(0.92); transform-origin: left center; transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.2, 1.4, 0.4, 1); }
+.speek-intro.speek-intro-talk .speek-bubble { opacity: 1; transform: none; cursor: pointer; }
+.speek-line.is-phrase .speek-word {
+  display: inline-block;
+  margin-right: 0.28em;
+  opacity: 0;
+  animation: speek-word-in 0.4s ease-out forwards;
+  transition: margin 0.45s ease, font-size 0.4s ease, max-width 0.45s ease, opacity 0.35s ease;
+}
+.speek-line.is-phrase .speek-word:nth-child(2) { animation-delay: 0.35s; }
+.speek-line.is-phrase .speek-word:nth-child(3) { animation-delay: 0.7s; }
+.speek-line.is-phrase .speek-word:nth-child(4) { animation-delay: 1.05s; }
+.speek-line.is-phrase .speek-lead { max-width: 7em; overflow: hidden; white-space: nowrap; vertical-align: bottom; }
+.speek-line.is-joined .speek-word { margin-right: 0; }
+.speek-line.is-joined .speek-lead { max-width: 0; opacity: 0; }
+.speek-line.is-brand .speek-word { font-size: 26px; font-weight: 800; letter-spacing: -0.6px; }
+.speek-line.is-brand .speek-me { color: var(--speek-pink); }
+.speek-line.is-brand { animation: speek-brand 1.2s ease-out; }
+
+/* Yes/no steps: two replies, like answering Speek. */
+.has-speek .setup-choice { display: none; }
+.speek-replies { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.speek-reply {
+  font-family: 'Figtree', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 18px;
+  border-radius: 18px 18px 6px 18px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-content);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.speek-reply:hover:not(:disabled) { border-color: var(--setup-primary); transform: translateY(-1px); }
+.speek-reply[aria-pressed="true"] { background: var(--setup-primary); border-color: var(--setup-primary); color: #fff; }
+.speek-reply:focus-visible { outline: 2px solid var(--setup-primary); outline-offset: 2px; }
+#onboarding .speek-reply:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* One dot per step; the current one is a pill. */
+.speek-dots { display: flex; align-items: center; gap: 5px; }
+.speek-dots span { width: 6px; height: 6px; border-radius: 3px; background: var(--border-color); transition: width 0.25s ease, background 0.25s ease; }
+.speek-dots span.is-done { background: color-mix(in srgb, var(--speek-pink) 45%, var(--border-color)); }
+.speek-dots span.is-current { width: 18px; background: var(--speek-pink); }
+
+@keyframes speek-pop { from { transform: scale(0.96); opacity: 0.6; } to { transform: none; opacity: 1; } }
+@keyframes speek-shine { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes speek-arrive { from { opacity: 0; transform: translateY(10px) scale(0.85); } to { opacity: 1; transform: none; } }
+@keyframes speek-word-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes speek-brand { 0% { filter: none; } 40% { filter: drop-shadow(0 0 12px rgba(252, 91, 144, 0.6)); } 100% { filter: none; } }
+
+/* Smaller windows: a smaller Speek, then Speek above the step. */
+@media (max-width: 900px) {
+  #onboarding.has-speek .onboarding-card { grid-template-columns: 96px minmax(0, 1fr); column-gap: 18px; }
+  .has-speek .speek-mascot { width: 96px; height: 96px; }
+  .speek-line { font-size: 17px; }
+}
+@media (max-height: 700px) {
+  .has-speek .speek-mascot { width: 88px; height: 88px; }
+  #onboarding.has-speek .onboarding-card { grid-template-columns: 88px minmax(0, 1fr); }
+  .speek-bubble { margin-top: 16px; }
+}
+@media (max-width: 640px) {
+  #onboarding.has-speek .onboarding-card {
+    grid-template-columns: 64px minmax(0, 1fr);
+    grid-template-areas: "header header" "speek bubble" "content content" "footer footer";
+    column-gap: 14px;
+  }
+  .has-speek .speek-host { padding-top: 8px; }
+  .has-speek .speek-mascot { width: 64px; height: 64px; }
+  .speek-bubble { margin-top: 12px; padding: 12px 16px; }
+  .speek-line { font-size: 16px; }
+  .speek-line.is-brand .speek-word { font-size: 22px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .speek-bubble.is-new, .speek-intro .speek-host, .speek-line.is-brand, .speek-name.is-glowing { animation: none; }
+  .speek-name.is-glowing { background-position: 0 0; }
+  .speek-line.is-phrase .speek-word { animation: none; opacity: 1; }
+}

@@ -14,9 +14,9 @@ async function run(platform){
   if(command==='get_user_info')return user;if(command==='check_setup_microphone')return {ready:true,device:'Synthetic microphone',level:20};
   if(command==='check_hotkey_conflicts')return {conflicts:[],verified:true};return null;
  }},event:{listen:async()=>()=>{}}};
- w.eval(fs.readFileSync(path.join(frontend,'main.js'),'utf8')+`;window.wizardTest={initializeWizard,goToStep,finishOnboarding,applyWizardProDefaults,refreshWizardAccess,gatherConfigFromUI,step:()=>currentStep,load(c,u){currentConfig=c;currentUserInfo=u;applyConfigToUI(c)},micReady(v){wizardMicrophoneReady=v}};`);
+ w.eval(require('./frontend-scripts.cjs')(frontend)+`;window.wizardTest={initializeWizard,goToStep,finishOnboarding,applyWizardProDefaults,refreshWizardAccess,gatherConfigFromUI,step:()=>currentStep,load(c,u){currentConfig=c;currentUserInfo=u;applyConfigToUI(c)},micReady(v){wizardMicrophoneReady=v}};`);
  const t=w.wizardTest;t.load(cfg,user);await t.initializeWizard();await t.goToStep(2);assert.equal(t.step(),1,'anonymous navigation must remain at login');
- cfg.session_token='synthetic-session';user={id:1,name:'Synthetic',email:'fixture@example.invalid',plan_tier:'pro',plan_active:true};t.load(cfg,user);
+ cfg.session_token='synthetic-session';cfg.signed_in=true;user={id:1,name:'Synthetic',email:'fixture@example.invalid',plan_tier:'pro',plan_active:true};t.load(cfg,user);
  await t.goToStep(2);assert.equal(t.step(),2);assert.equal(cfg.transcription_mode,'stream','first Pro setup enables streaming');
  w.document.getElementById('onboard-streaming-mode-check').checked=false;await t.goToStep(3);assert.equal(cfg.transcription_mode,'batch','later choices override the Pro default');
  await t.goToStep(4);assert.equal(t.step(),3,'missing permissions block progression');

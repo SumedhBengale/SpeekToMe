@@ -197,6 +197,15 @@ async fn check_setup_microphone() -> Result<serde_json::Value, String> {
         .await
         .map_err(|_| "Microphone check could not finish".to_string())
 }
+/// How loudly the user is speaking right now (0–1), for Speek in setup: the
+/// microphone check while it runs, otherwise the active dictation's level.
+#[tauri::command]
+fn get_voice_level() -> f64 {
+    let check = audio::SETUP_MIC_LEVEL.load(Ordering::Relaxed) as f64;
+    let check = ((check - 2.0) / 60.0).clamp(0.0, 1.0).sqrt();
+    let dictation = speek::voice(audio::CURRENT_VOLUME.load(Ordering::Relaxed) as f64);
+    check.max(dictation)
+}
 #[tauri::command]
 async fn repair_desktop_permissions() -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -985,7 +994,8 @@ fn settings_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
         minimize_window,
         is_window_maximized,
         toggle_maximize_window,
-        close_window
+        close_window,
+        get_voice_level
     ]
 }
 
