@@ -2,7 +2,8 @@
 """Publish a content-addressed gateway release. Does not change live fleet state."""
 import argparse,base64,gzip,hashlib,json,pathlib,re,subprocess
 BASE=pathlib.Path(__file__).resolve().parent
-BUCKET='speektome-inference-ACCOUNT_ID-us-east-1'
+import os
+BUCKET=os.environ['SPEEKTOME_INFERENCE_BUCKET']  # e.g. the S3 bucket holding gateway releases
 def publish(data,name,prefix):
     sha=hashlib.sha256(data).hexdigest();key=f'{prefix}/{sha}/{name}'
     path=pathlib.Path('/tmp')/('speektome-publish-'+sha);path.write_bytes(data)

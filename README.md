@@ -35,3 +35,15 @@ local databases and recordings are ignored. Keep intentional synthetic fixtures
 under a component's `testdata/` directory. The standalone provider benchmark
 requires `SPEEKTOME_BENCHMARK_AUDIO=/path/to/selected-audio`; it never selects a
 user meeting implicitly.
+
+## Configuration
+
+Deployment-specific values (hosts, IP addresses, buckets, keys) are never
+committed. Copy `server/.env.example` to `server/.env` and
+`website/.env.example` to `website/.env`, then fill in your own values.
+
+## License
+
+Copyright (c) 2026 Sumedh Bengale. All rights reserved. See [LICENSE](LICENSE).
+The source is visible for reference only; no right to use, copy, modify or
+distribute it is granted.

@@ -1,8 +1,8 @@
 """Run new synthetic holdout cases on worker two, isolated from worker-one trials."""
-import json,pathlib,random,socket,subprocess,time
+import json,os,pathlib,random,socket,subprocess,time
 import followup,run_probe
 ROOT=followup.ROOT
-cmd=['ssh','-o','ExitOnForwardFailure=yes','-N','-L','127.0.0.1:18091:127.0.0.1:8090','-o','IdentitiesOnly=yes','-i',str(pathlib.Path.home()/'.ssh/YOUR_SSH_KEY'),'-J','speektome-direct','ubuntu@WORKER_IPV6']
+cmd=['ssh','-o','ExitOnForwardFailure=yes','-N','-L','127.0.0.1:18091:127.0.0.1:8090','-o','IdentitiesOnly=yes','-i',os.environ['BENCH_SSH_KEY'],'-J',os.environ['BENCH_SSH_JUMP'],os.environ['BENCH_SSH_TARGET']]  # key path, jump host, worker (user@host)
 tunnel=subprocess.Popen(cmd,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
 try:
  for _ in range(120):

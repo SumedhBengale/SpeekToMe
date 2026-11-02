@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"sort"
 	log "speektome-server/privacylog"
 	"strconv"
@@ -14,6 +15,13 @@ import (
 	"speektome-server/utils"
 	"speektome-server/valkey"
 )
+
+// selfHostedStreamURL is the websocket endpoint of the self-hosted streaming
+// ASR gateway (SPEEKTOME_SELF_HOSTED_STREAM_URL). Without it the self-hosted
+// provider stays disabled and streaming falls through to the hosted providers.
+func selfHostedStreamURL() string {
+	return strings.TrimSpace(os.Getenv("SPEEKTOME_SELF_HOSTED_STREAM_URL"))
+}
 
 var (
 	GroqAPIKey            string
@@ -324,11 +332,11 @@ func DefaultModelsConfig() ModelsConfig {
 		},
 		StreamingProviders: map[string]StreamingProviderConfig{
 			"self_hosted_nemotron_3_5": {
-				Enabled:            true,
+				Enabled:            selfHostedStreamURL() != "",
 				Priority:           1,
 				Type:               "real",
 				Model:              "nemotron-3.5-asr-streaming-0.6b.planar.q8_0",
-				BaseURL:            "ws://GPU_HOST_IP:80/v1/stream",
+				BaseURL:            selfHostedStreamURL(),
 				TimeoutMs:          5000,
 				InitialPrompt:      defaultStreamingPrompt,
 				SupportedLanguages: []string{"*"},
@@ -477,11 +485,11 @@ func DefaultModelsConfig() ModelsConfig {
 				STTModelSpec: STTModelSpec{
 					Provider:           "self_hosted",
 					Model:              "nemotron-3.5-asr-streaming-0.6b.planar.q8_0",
-					Enabled:            true,
+					Enabled:            selfHostedStreamURL() != "",
 					TimeoutMs:          5000,
 					InitialPrompt:      defaultStreamingPrompt,
 					SupportedLanguages: []string{"*"},
-					EndpointOverride:   "ws://GPU_HOST_IP:80/v1/stream",
+					EndpointOverride:   selfHostedStreamURL(),
 				},
 				Type: "real",
 			},

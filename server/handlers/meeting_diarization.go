@@ -40,10 +40,9 @@ type MeetingDiarization struct {
 }
 
 func newMeetingDiarization(j *MeetingJobs) (*MeetingDiarization, error) {
+	// Unset leaves the endpoint empty: requests fail and meetings keep waiting
+	// until SPEEKTOME_DIARIZATION_URL is configured.
 	endpoint := strings.TrimRight(os.Getenv("SPEEKTOME_DIARIZATION_URL"), "/")
-	if endpoint == "" {
-		endpoint = "http://DIARIZATION_PRIVATE_IP:8081"
-	}
 	token := os.Getenv("SPEEKTOME_DIARIZATION_TOKEN")
 	if token == "" {
 		tokenPath := os.Getenv("SPEEKTOME_DIARIZATION_TOKEN_FILE")
@@ -75,6 +74,9 @@ const diarizationAttempts = 3
 
 // run diarizes the meeting's system audio and returns its speaker segments.
 func (d *MeetingDiarization) run(ctx context.Context, key string) ([]jobSpeaker, error) {
+	if d.url == "" {
+		return nil, errors.New("waiting for " + d.label + " endpoint")
+	}
 	if len(d.token) < 24 {
 		return nil, errors.New("waiting for " + d.label + " credentials")
 	}

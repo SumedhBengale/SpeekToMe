@@ -65,3 +65,17 @@ server/benchmark/turso/turso_benchmark_linux_*
 /server/uploads/
 *.db-wal
 *.db-shm
+
+# Local agent/tooling state and per-user runtime config (holds session tokens)
+.claude/
+.commandcode/
+website/.wrangler/
+.wrangler/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*_config.json
+!**/testdata/*_config.json
+.env.*
+!.env.example
+**/.env.example.local

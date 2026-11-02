@@ -5,18 +5,19 @@ import (
 	"fmt"
 	log "speektome-server/privacylog"
 	"math/rand"
+	"os"
 	"time"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 )
 
-// Define your Turso credentials here
-const (
-	TursoURL   = "libsql://YOUR-DATABASE.turso.io"
-	TursoToken = "REDACTED_TURSO_TOKEN"
-)
-
 func main() {
+	// Credentials come from the environment: TURSO_DATABASE_URL and TURSO_AUTH_TOKEN.
+	TursoURL := os.Getenv("TURSO_DATABASE_URL")
+	TursoToken := os.Getenv("TURSO_AUTH_TOKEN")
+	if TursoURL == "" || TursoToken == "" {
+		log.Fatalf("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set")
+	}
 	connectionString := fmt.Sprintf("%s?authToken=%s", TursoURL, TursoToken)
 	log.Printf("Connecting to Turso: %s", TursoURL)
 

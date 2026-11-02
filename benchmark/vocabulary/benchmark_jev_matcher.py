@@ -8,7 +8,7 @@ payload=json.dumps({"raw_transcript":raw,"terms":terms}).encode()
 key=open("/etc/speektome-fleet/worker.token").read().strip();out=[]
 for i in range(6):
  start=time.perf_counter()
- request=urllib.request.Request("https://[WORKER_IPV6]:80/v1/vocabulary/final",data=payload,headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"})
+ request=urllib.request.Request("https://127.0.0.1:80/v1/vocabulary/final",data=payload,headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"})
  result=json.load(urllib.request.urlopen(request,context=ssl._create_unverified_context(),timeout=5))
  assert result["raw_transcript"]==raw and result["schema_version"]==1 and not result.get("matcher_error")
  out.append({"round":i,"words":len(raw.split()),"terms":len(terms),"choices":len(result["choices"]),"matcher_version":result["matcher_version"],"match_ms":result["match_ms"],"request_ms":(time.perf_counter()-start)*1000})

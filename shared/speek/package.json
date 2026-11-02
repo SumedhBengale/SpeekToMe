@@ -1,6 +1,7 @@
 {
   "name": "@speektome/speek",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "main": "speek.js",
   "scripts": {

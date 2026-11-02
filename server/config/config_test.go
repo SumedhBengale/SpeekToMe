@@ -90,6 +90,7 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 		_ = os.Remove(dbFile)
 	}()
 
+	t.Setenv("SPEEKTOME_SELF_HOSTED_STREAM_URL", "ws://gpu.example.test:80/v1/stream")
 	SyncConfigsFromDB(database, nil)
 	active := ConfigManager.Get()
 
@@ -107,8 +108,8 @@ func TestSyncConfigsFromDBDefaultSeed(t *testing.T) {
 			t.Errorf("retired config %s exists", key)
 		}
 	}
-	if active.Models.StreamingProviders["self_hosted_nemotron_3_5"].BaseURL != "ws://GPU_HOST_IP:80/v1/stream" {
-		t.Errorf("Expected self_hosted_nemotron_3_5 BaseURL to be ws://GPU_HOST_IP:80/v1/stream; got %s", active.Models.StreamingProviders["self_hosted_nemotron_3_5"].BaseURL)
+	if active.Models.StreamingProviders["self_hosted_nemotron_3_5"].BaseURL != "ws://gpu.example.test:80/v1/stream" {
+		t.Errorf("Expected self_hosted_nemotron_3_5 BaseURL to be ws://gpu.example.test:80/v1/stream; got %s", active.Models.StreamingProviders["self_hosted_nemotron_3_5"].BaseURL)
 	}
 }
 
